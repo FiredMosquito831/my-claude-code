@@ -314,7 +314,7 @@ The legacy `fcc-*` names were retired in 7.0.0: `fcc-claude`, `fcc-codex`, `fcc-
 | [NaraRoute](https://router.bynara.id/) | `NARAROUTE_API_KEY` | `nararoute/kimi-k3-free` |
 | [HyperCharm](https://hyper.charm.land) | `HYPERCHARM_API_KEY` | `hypercharm/kimi-k3` |
 | [B.AI](https://chat.b.ai/key) | `BAI_API_KEY` | `bai/glm-5.3-flash` |
-| [InferHub](https://inferhub.dev/dashboard) — price marketplace; set a [Marketplace profile](docs/USAGE.md#inferhub-marketplace-profiles) or it picks a seller regardless of price | `INFERHUB_API_KEY` | `inferhub/cc/claude-opus-4-6` |
+| [InferHub](https://inferhub.dev/dashboard) — price marketplace; set a [Marketplace profile](docs/USAGE.md#inferhub-marketplace-profiles) on its own [InferHub page](docs/USAGE.md#the-inferhub-page) or it picks a seller regardless of price | `INFERHUB_API_KEY` | `inferhub/cc/claude-opus-4-6` |
 | [xAI (Grok)](https://console.x.ai/team/default/api-keys) | `XAI_API_KEY` | `xai/grok-4.5` |
 | [Together AI](https://api.together.ai/settings/api-keys) | `TOGETHER_API_KEY` | `together/zai-org/GLM-5.2` |
 | [DeepInfra](https://deepinfra.com/dash/api_keys) | `DEEPINFRA_API_KEY` | `deepinfra/deepseek-ai/DeepSeek-V4-Flash` |

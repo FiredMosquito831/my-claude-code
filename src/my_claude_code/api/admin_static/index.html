@@ -554,7 +554,7 @@
                 <strong>How you can be overcharged.</strong>
                 With no ceiling, InferHub routes to the best-scoring seller
                 <em>regardless of price</em>: any live ask, up to its platform
-                cap of half the official price. A conversation keeps its seller
+                cap of 50&nbsp;% of the official price. A conversation keeps its seller
                 for up to 30 minutes, then pays that seller's <em>current</em>
                 ask &mdash; which may have been raised meanwhile.
               </p>
@@ -3469,17 +3469,33 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <strong>marketplace profile</strong>.
                 </p>
                 <ol>
-                  <li>Add <code>INFERHUB_API_KEY</code> on the InferHub card.</li>
-                  <li>Write your profiles into <code>marketplace_profiles.json</code> in
-                    the config folder &mdash; for example
-                    <code>{"version": 1, "profiles": {"opus-cap": {"kind": "pct_of_official", "percent": 10}}}</code>
-                    (at most 10&nbsp;% of each model's official price).</li>
-                  <li>On the <strong>Models</strong> page, open InferHub's provider
-                    table and set its <strong>marketplace profile</strong> row to
-                    <em>Force value</em> &rarr; your profile. A model's own row can name
-                    another profile, or <em>Force unset</em> &mdash; "InferHub decides",
-                    shown in red.</li>
+                  <li>Add <code>INFERHUB_API_KEY</code> on the InferHub card. An
+                    <strong>InferHub</strong> link appears in the left nav (only while
+                    a key is set).</li>
+                  <li>Open the <strong>InferHub</strong> page and press
+                    <strong>New profile</strong>: for example <em>At most N % of
+                    official</em> with 10 (at most 10&nbsp;% of each model's official
+                    price), named <code>opus-cap</code>. The editor checks it before
+                    anything is saved; profiles are kept in
+                    <code>marketplace_profiles.json</code> in the config folder.</li>
+                  <li>Under <strong>Assignments</strong>, set the provider default to
+                    your profile and press <strong>Save</strong>. A model's own row
+                    can name another profile, or <em>InferHub decides</em> &mdash; no
+                    ceiling, shown in red. This is the same
+                    <strong>marketplace profile</strong> row the Models page shows.</li>
+                  <li>Pick a model in the <strong>Offer explorer</strong>: its price
+                    ladder, with your ceiling drawn as a dashed line, how many seller
+                    accounts ask at or under it, and its speed, success and cache
+                    hit. <em>Would match now</em> under each profile says the same for
+                    every model it applies to.</li>
+                  <li>After some requests, <strong>Last requests</strong> shows what
+                    InferHub said served each one, the ceiling sent and the charge it
+                    reported; <strong>Fetch the charged ask</strong> reads InferHub's
+                    usage log for the price each was actually charged at.</li>
                 </ol>
+                <img class="guide-shot" src="/admin/img/admin-inferhub.png"
+                     alt="The InferHub page: the warning block with each route's note, the account block marked not verified, a profile with would match now, the provider default assignment and the offer explorer's price ladder with the ceiling drawn on it"
+                     loading="lazy">
                 <p>
                   The kinds: <code>pct_of_official</code>, <code>max_price</code>
                   (dollars per million tokens), <code>cheapest_level_now</code> and
@@ -3489,8 +3505,10 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   market is under your ceiling, the request ends with a short 400 that
                   names your ceiling and the cheapest price &mdash; MCC never sends it
                   without a ceiling and never raises yours by itself. Each InferHub
-                  model's table also shows its <strong>offers</strong> and the route's
-                  own <strong>route note</strong>. Not verified on a real account yet.
+                  model's table on the Models page also shows its
+                  <strong>offers</strong> and the route's own <strong>route
+                  note</strong>. InferHub's own budgets and combos are shown read-only;
+                  MCC does not write them. Not verified on a real account yet.
                 </p>
 
                 <h3 id="guide-cli">Point Claude Code here</h3>
