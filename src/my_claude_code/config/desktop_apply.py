@@ -84,6 +84,7 @@ from my_claude_code.config.document_codecs import (
     apply_edits,
     mask_json_text,
     parse_document,
+    root_scalar_line,
 )
 from my_claude_code.config.mcp_media import opencode_permission_keys
 from my_claude_code.config.paths import config_dir_path
@@ -1085,6 +1086,7 @@ def _remove_from_object(
     document_spec: DesktopDocument,
     *,
     restore: Mapping[str, object] | None,
+    keep_overwritten: bool = False,
 ) -> object:
     if document_spec.document_format is DocumentFormat.JSON_ARRAY:
         elements = list(document) if isinstance(document, list) else []
@@ -1108,7 +1110,8 @@ def _remove_from_object(
     if document_spec.owned_key_path:
         _delete_in(result, document_spec.owned_key_path)
         _prune_empty_ancestors(result, document_spec.owned_key_path)
-    for key_path in document_spec.overwritten_keys:
+    # ``keep_overwritten``: see :func:`_holds_nothing_of_mccs` (7.111.4).
+    for key_path in () if keep_overwritten else document_spec.overwritten_keys:
         label = ".".join(key_path)
         if restore is not None and label in restore:
             _set_in(result, key_path, restore[label])
@@ -1577,7 +1580,18 @@ def apply(
     if document is None:
         raise DesktopApplyError(f"cannot parse {path}: {error}")
 
-    overwritten = capture_overwritten(document, spec.document.overwritten_keys)
+    # 7.111.4: and, where the document is edited as lines, the user's own line
+    # for each key, so Undo gives back their comment and spelling rather than
+    # a re-rendering of the value. ``root_scalar_line`` answers "" for every
+    # format but TOML, so no other document's record changes.
+    overwritten = capture_overwritten(
+        document,
+        spec.document.overwritten_keys,
+        prior_lines={
+            tuple(key_path): root_scalar_line(before_text, document_format, key_path)
+            for key_path in spec.document.overwritten_keys
+        },
+    )
 
     if edits_the_text(spec.document, before_text):
         after_text = apply_edits(
@@ -1635,6 +1649,30 @@ def apply(
     )
 
 
+def _holds_nothing_of_mccs(
+    document: object, document_spec: DesktopDocument, entry: RestoreEntry | None
+) -> bool:
+    """Return whether a document carries nothing of MCC's for Undo to take out.
+
+    Decided only where it can be decided: the document has a key MCC owns
+    outright -- Codex's ``[model_providers.mcc]`` -- that is distinct from the
+    keys MCC replaces. When that key is absent and there is no record of a
+    Configure still in place (none at all, or one Undo already stamped), a
+    replaceable key in the file is the user's: MCC never wrote it, or already
+    took its value back out. Every other shape answers False and keeps the
+    behaviour it had -- an app whose whole footprint is its scalars (Goose)
+    cannot tell its own value from the user's this way.
+    """
+
+    owned = document_spec.owned_key_path
+    if not owned or owned in document_spec.overwritten_keys:
+        return False
+    if entry is not None and not entry.undone_at:
+        return False
+    _value, present = value_at(document, owned)
+    return not present
+
+
 def undo(
     spec: DesktopAppSpec,
     *,
@@ -1663,7 +1701,11 @@ def undo(
         raise DesktopApplyError(f"cannot parse {path}: {error}")
 
     restore: dict[str, object] | None = None
+    #: The user's own line per restored key, where the record kept one
+    #: (7.111.4). A record written before that has none and restores by value.
+    restore_lines: dict[str, str] = {}
     restored_keys: list[str] = []
+    entry: RestoreEntry | None = None
     if mode is UndoMode.KEYS_ONLY and spec.document.overwritten_keys:
         # The data-loss fix. "Remove MCC's keys only" used to delete every key
         # in ``overwritten_keys`` outright -- including one that had held the
@@ -1683,7 +1725,21 @@ def undo(
             for value in entry.overwritten:
                 if value.prior_present:
                     restore[".".join(value.key_path)] = value.prior_value
+                    restore_lines[".".join(value.key_path)] = value.prior_line
                     restored_keys.append(".".join(value.key_path))
+    # 7.111.4: a document holding nothing of MCC's -- no owned key, and no
+    # record of a Configure still in place -- has nothing for this mode to
+    # take out. Without this it deleted every replaceable key there, and on a
+    # never-configured Codex those are the user's own ``model`` and
+    # ``model_provider`` lines. The result is ``changed=False``, which the
+    # card and ``mcc-apps`` already report as "Nothing of MCC's was in that
+    # file."
+    leave_user_keys = mode is UndoMode.KEYS_ONLY and _holds_nothing_of_mccs(
+        document, spec.document, entry
+    )
+    if leave_user_keys:
+        restore = None
+        restored_keys = []
     if mode is UndoMode.RESTORE and spec.document.overwritten_keys:
         # An app whose spec overwrites nothing has nothing to restore, and for
         # it the two modes are the same operation. Only an app that *can* have
@@ -1708,6 +1764,7 @@ def undo(
         for value in entry.overwritten:
             if value.prior_present:
                 restore[".".join(value.key_path)] = value.prior_value
+                restore_lines[".".join(value.key_path)] = value.prior_line
                 restored_keys.append(".".join(value.key_path))
 
     # 7.100.0: MCC's media server entry, when MCC added one to this app's
@@ -1724,10 +1781,16 @@ def undo(
         edits: list[SetTable | SetScalar | DeleteKey] = []
         if spec.document.owned_key_path:
             edits.append(DeleteKey(spec.document.owned_key_path))
-        for key_path in spec.document.overwritten_keys:
+        for key_path in () if leave_user_keys else spec.document.overwritten_keys:
             label = ".".join(key_path)
             if restore is not None and label in restore:
-                edits.append(SetScalar(key_path, restore[label]))
+                edits.append(
+                    SetScalar(
+                        key_path,
+                        restore[label],
+                        prior_line=restore_lines.get(label, ""),
+                    )
+                )
             else:
                 edits.append(DeleteKey(key_path))
         if mcp_here and mcp_record is not None:
@@ -1746,7 +1809,12 @@ def undo(
         else:
             after_text = apply_edits(before_text, document_format, edits)
     else:
-        stripped = _remove_from_object(document, spec.document, restore=restore)
+        stripped = _remove_from_object(
+            document,
+            spec.document,
+            restore=restore,
+            keep_overwritten=leave_user_keys,
+        )
         after_text = _json_text(stripped, before_text)
         if not before_text:
             after_text = before_text

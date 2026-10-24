@@ -23,7 +23,11 @@ prior value and whether the key was present at all; and Undo offers two modes:
 ``KEYS_ONLY``
     Delete what MCC *created*, put back what MCC *replaced*, and leave every
     foreign byte identical. The default, and the mode that never refuses: with
-    no record it can only delete, and it says so rather than erroring.
+    no record it can only delete, and it says so rather than erroring. Since
+    7.111.4 it does not delete a replaceable key from a document that holds
+    nothing of MCC's -- no owned key and no live record -- because there that
+    key can only be the user's (it used to delete a never-configured Codex
+    user's ``model`` line).
 
 ``RESTORE``
     The same, guaranteed: it requires the record and refuses when the document
@@ -95,13 +99,24 @@ class OverwrittenValue:
     prior_value: object
     #: Whether the key existed at all. A restore deletes when this is False.
     prior_present: bool
+    #: The user's own line for the key, verbatim, where the document is edited
+    #: as lines (a TOML top-level scalar, 7.111.4) -- so Undo puts back their
+    #: comment and spelling, not a re-rendering of ``prior_value``. "" where
+    #: there is no such line, and in every record written before 7.111.4:
+    #: those still undo, by value, exactly as they did.
+    prior_line: str = ""
 
     def as_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "key_path": list(self.key_path),
             "prior_value": self.prior_value,
             "prior_present": self.prior_present,
         }
+        # Only when there is one, so every record without a line -- every
+        # JSON and YAML document's -- is written exactly as before.
+        if self.prior_line:
+            payload["prior_line"] = self.prior_line
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,22 +185,29 @@ def value_at(document: object, key_path: Sequence[str]) -> tuple[object, bool]:
 
 
 def capture_overwritten(
-    document: object, key_paths: Sequence[Sequence[str]]
+    document: object,
+    key_paths: Sequence[Sequence[str]],
+    *,
+    prior_lines: Mapping[tuple[str, ...], str] | None = None,
 ) -> tuple[OverwrittenValue, ...]:
     """Return the pre-edit state of every key a merge is about to replace.
 
     Called *before* the write, on the document as it was read off disk, which
-    is the only moment the prior value still exists.
+    is the only moment the prior value still exists. ``prior_lines`` carries
+    the user's own line per key for a document edited as lines (7.111.4); a
+    key it does not name records none.
     """
 
     captured: list[OverwrittenValue] = []
     for key_path in key_paths:
         prior_value, prior_present = value_at(document, key_path)
+        prior_line = (prior_lines or {}).get(tuple(key_path), "")
         captured.append(
             OverwrittenValue(
                 key_path=tuple(key_path),
                 prior_value=prior_value,
                 prior_present=prior_present,
+                prior_line=prior_line if prior_present else "",
             )
         )
     return tuple(captured)
@@ -276,11 +298,14 @@ def read_entry(subject: str, *, path: Path | None = None) -> RestoreEntry | None
             key_path = item.get("key_path")
             if not isinstance(key_path, list):
                 continue
+            # Absent from every record written before 7.111.4.
+            prior_line = item.get("prior_line")
             values.append(
                 OverwrittenValue(
                     key_path=tuple(str(part) for part in key_path),
                     prior_value=item.get("prior_value"),
                     prior_present=bool(item.get("prior_present")),
+                    prior_line=prior_line if isinstance(prior_line, str) else "",
                 )
             )
 
