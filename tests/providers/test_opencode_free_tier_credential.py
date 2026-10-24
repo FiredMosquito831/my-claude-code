@@ -44,8 +44,7 @@ from my_claude_code.application.errors import (
     ModelRateLimited,
 )
 from my_claude_code.application.model_metadata import ProviderModelInfo
-from my_claude_code.config import settings as config_settings
-from my_claude_code.config.settings import Settings
+from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.credential_attribution import (
     current_credential,
@@ -235,11 +234,9 @@ def _fresh_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator
         "OPENCODE_CLIENT_IDENTITY",
     ):
         monkeypatch.delenv(name, raising=False)
-    # Through the module, never ``get_settings`` by name: a by-name binding
-    # clears a cache production may no longer read (#267).
-    config_settings.get_settings.cache_clear()
+    get_settings.cache_clear()
     yield
-    config_settings.get_settings.cache_clear()
+    get_settings.cache_clear()
 
 
 def _request(model: str) -> MessagesRequest:
