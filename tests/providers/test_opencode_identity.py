@@ -12,7 +12,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from openai._models import FinalRequestOptions
 
-from my_claude_code.config.settings import Settings, get_settings
+# Through the module, never ``get_settings`` by name: a by-name binding clears
+# a cache production may no longer read (#267).
+from my_claude_code.config import settings as config_settings
+from my_claude_code.config.settings import Settings
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
     OPENAI_CHAT_PROFILES,
@@ -374,11 +377,11 @@ def test_a_session_id_head_is_the_clock_at_first_sight_not_a_constant() -> None:
 
 def test_the_truthful_opt_out_names_mcc(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", "mcc")
-    get_settings.cache_clear()
+    config_settings.get_settings.cache_clear()
     try:
         headers = opencode_constant_headers()
     finally:
-        get_settings.cache_clear()
+        config_settings.get_settings.cache_clear()
     assert headers[USER_AGENT_HEADER].startswith("my-claude-code/")
     assert headers[OPENCODE_CLIENT_HEADER] == MCC_CLIENT_VALUE
     assert headers[OPENCODE_PROJECT_HEADER] == MCC_CLIENT_VALUE
@@ -414,7 +417,7 @@ def test_the_session_id_header_carries_the_session_value_under_either_identity(
     one value. MCC does the same on every request, in either identity mode:
     like ``x-opencode-session`` it is functional, not a claim."""
     monkeypatch.setenv("OPENCODE_CLIENT_IDENTITY", mode)
-    get_settings.cache_clear()
+    config_settings.get_settings.cache_clear()
     try:
         identity = OPENAI_CHAT_PROFILES[provider_id].client_identity
         assert identity is not None
@@ -422,7 +425,7 @@ def test_the_session_id_header_carries_the_session_value_under_either_identity(
         per_request = identity_headers_for_body(identity, body, None)
         sent = _outbound_headers(provider_id)
     finally:
-        get_settings.cache_clear()
+        config_settings.get_settings.cache_clear()
     assert (
         per_request[OPENCODE_SESSION_ID_HEADER] == per_request[OPENCODE_SESSION_HEADER]
     )

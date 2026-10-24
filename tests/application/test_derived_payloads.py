@@ -21,6 +21,10 @@ from my_claude_code.application.derived_payloads import (
 from my_claude_code.core.derived_cache import DerivedCache
 from my_claude_code.core.request_log import RequestLogStore, RequestRecord
 
+#: How early a bounded wait may read back on Windows, whose system timer ticks
+#: every 15.6 ms (WORKING-NOTES IX.3), rounded up.
+_CLOCK_GRANULARITY_SECONDS = 0.02
+
 
 def _record(request_id: str, **overrides: Any) -> RequestRecord:
     defaults: dict[str, Any] = {
@@ -399,9 +403,11 @@ def test_a_second_caller_waits_for_the_first_only_up_to_the_bound() -> None:
 
     answers = derived_payloads.RecentAnswers(max_age_seconds=60.0, wait_seconds=0.2)
     owner = object()
+    computing = threading.Event()
     release = threading.Event()
 
     def stuck() -> dict[str, Any]:
+        computing.set()
         release.wait(10.0)
         return {"total": 7}
 
@@ -410,7 +416,8 @@ def test_a_second_caller_waits_for_the_first_only_up_to_the_bound() -> None:
         target=lambda: first.append(answers.answer(owner, ("stats",), stuck))
     )
     holder.start()
-    time.sleep(0.1)
+    # The first caller is computing -- not "probably, after 0.1 s".
+    assert computing.wait(10.0)
     started = time.perf_counter()
     second = answers.answer(owner, ("stats",), lambda: {"total": 7})
     waited = time.perf_counter() - started
@@ -418,7 +425,10 @@ def test_a_second_caller_waits_for_the_first_only_up_to_the_bound() -> None:
     holder.join(10.0)
 
     assert second["total"] == 7
-    assert 0.2 <= waited < 1.0
+    # A wait bounded at exactly 0.2 s read back 0.19994 s on a Windows runner
+    # (v7.110.0 suite): the timer under the bound ticks every ~15.6 ms there,
+    # so the lower bound allows one tick early. The upper bound is unchanged.
+    assert 0.2 - _CLOCK_GRANULARITY_SECONDS <= waited < 1.0
     assert first and first[0]["total"] == 7
 
 

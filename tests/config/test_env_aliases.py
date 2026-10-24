@@ -10,8 +10,6 @@ named in a warning, and a leftover ``FCC_*`` in the managed ``.env`` is renamed
 by ``config.legacy_env_rewrite`` before anything reads the file.
 """
 
-import importlib
-
 from my_claude_code.config import settings
 
 
@@ -44,7 +42,12 @@ def test_fcc_env_file_no_longer_selects_an_explicit_dotenv(monkeypatch) -> None:
 def test_a_leftover_fcc_env_name_is_named_in_a_warning(monkeypatch, caplog) -> None:
     """Removing an alias silently is how a setting stops working unnoticed."""
 
-    importlib.reload(settings)
+    # The warning is once per process; re-arm that one flag. This used to
+    # ``importlib.reload`` the whole settings module, which left a NEW
+    # ``get_settings`` (and ``Settings``) in place for every later test on the
+    # worker: a test holding the old one by name cleared a cache production no
+    # longer read (#267, the v7.92.3 suite).
+    monkeypatch.setattr(settings, "_LEGACY_FCC_ENV_LOGGED", False)
     monkeypatch.setitem(settings.Settings.model_config, "env_file", ())
     monkeypatch.setenv("FCC_OPEN_BROWSER", "false")
 

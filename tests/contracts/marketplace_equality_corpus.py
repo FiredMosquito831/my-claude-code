@@ -181,6 +181,12 @@ async def chat_call(
         raise _Stop()
 
     _patch(provider._client.chat.completions, "create", create)
+    if hasattr(provider, "_loaded_context_length"):
+        # LM Studio's preflight asks its REST API for the loaded context with a
+        # real ``httpx.get`` to the corpus host -- a DNS query for
+        # ``corpus.invalid`` on every recorded call. Its offline answer is
+        # "unknown" (None: no budget check), which is what every recording saw.
+        _patch(provider, "_loaded_context_length", lambda: None)
     try:
         provider.preflight_stream(request, reasoning=policy)
     except Exception as exc:

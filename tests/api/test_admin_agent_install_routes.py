@@ -20,6 +20,7 @@ from my_claude_code.config.harnesses import harness_spec
 from my_claude_code.config.install_methods import InstallOs
 from tests.api.support import create_test_app
 from tests.support.fake_programs import launcher_name, write_fake_program
+from tests.support.install_jobs import wait_for_job
 
 LOCAL_ORIGIN = {"Origin": "http://127.0.0.1:8082"}
 NODE_OK = NodeStatus(
@@ -166,6 +167,10 @@ def test_agent_install_run_refuses_a_changed_plan(machine, tmp_path, monkeypatch
             headers=LOCAL_ORIGIN,
         )
         assert ok.status_code == 200
+        # The job this started is this test's: it must end here, not in the
+        # next test (its thread resolved the config directory while HOME was
+        # being put back, and the next test wrote into the real home).
+        wait_for_job(agent_installer.job(ok.json()["job_id"]))
 
 
 def test_a_second_run_while_one_is_running_is_409(machine, monkeypatch):

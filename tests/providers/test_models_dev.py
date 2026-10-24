@@ -20,6 +20,7 @@ from my_claude_code.providers.runtime.models_dev import (
     enrich_provider_model_infos,
     read_models_dev_cache,
     refresh_models_dev_cache,
+    schedule_models_dev_refresh,
     write_models_dev_cache,
 )
 
@@ -157,6 +158,12 @@ async def test_enrich_without_cache_schedules_refresh_and_passes_through(
         return models_dev.ModelsDevFetch(index=_INDEX)
 
     monkeypatch.setattr(models_dev, "fetch_models_dev_index", _fake_fetch)
+    # The schedule is this test's subject: put back the real one the
+    # suite-wide ``_isolate_models_dev_refresh`` replaced (the fetch under it
+    # is the fake above, so nothing leaves the machine).
+    monkeypatch.setattr(
+        models_dev, "schedule_models_dev_refresh", schedule_models_dev_refresh
+    )
 
     enriched = await enrich_provider_model_infos(
         [ProviderModelInfo(model_id="acme/llama-3.3-70b")], path

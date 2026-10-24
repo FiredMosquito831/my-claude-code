@@ -480,7 +480,14 @@ async def test_progress_counts_every_row_read_before_the_first_match(
     running = [s for s in samples if not s["finished"] and s["read"] > 0]
     assert len(running) >= 3, samples
     assert all(s["matched"] == 0 for s in running)
-    assert all(0 < s["read"] < total for s in running)
+    # ``read == total`` with ``finished`` still false is a real state, not an
+    # over-count: the pass has read its last row and not yet made the append
+    # that marks the window finished. A loaded runner deschedules the worker
+    # there long enough for a sample to land (v7.108.0 suite) -- the mechanism
+    # #266 found on the progress-route twin of this test. Mid-pass is still
+    # required of the first running sample.
+    assert all(0 < s["read"] <= total for s in running), samples
+    assert running[0]["read"] < total, samples
     assert all(s["total"] == total for s in samples)
     reads = [s["read"] for s in samples]
     assert reads == sorted(reads)

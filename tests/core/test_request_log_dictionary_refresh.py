@@ -26,6 +26,14 @@ from my_claude_code.core.request_log import (
     RouteAttempt,
     RouteAttemptOutcome,
 )
+from tests.support.request_log_writes import close_and_drain
+
+# Every store here is closed with ``close_and_drain``: the next store, or a
+# plain sqlite3 read, must see every row the closed one was handed. ``close()``
+# alone returns after max(10 s, backlog x 10 ms) with the writer still
+# draining, and on a loaded runner the relearn test's samples were not all
+# written yet when the next store counted them ("275 records unwritten";
+# ``[] == ['prompt', 'rest']`` on the v7.92.3, v7.102.5 and v7.109.0 suites).
 
 _DAY = 86_400.0
 _AGE = request_log_module._DICT_REFRESH_AGE_SECONDS
@@ -133,7 +141,7 @@ def _fill(path: Path, count: int, ts: float, *, prefix: str = "r") -> None:
     store = RequestLogStore(path, max_rows=0)
     for index in range(count):
         store.enqueue(_record(index, ts + index * 0.001, prefix=prefix))
-    store.close()
+    close_and_drain(store)
 
 
 # ------------------------------------------------------------------ the rule
@@ -142,7 +150,7 @@ def _fill(path: Path, count: int, ts: float, *, prefix: str = "r") -> None:
 def _rule_store(tmp_path: Path) -> RequestLogStore:
     store = RequestLogStore(tmp_path / "requests.db", max_rows=0)
     _settle(store)
-    store.close()
+    close_and_drain(store)
     return store
 
 
@@ -170,7 +178,7 @@ def test_a_stale_dictionary_is_relearned_only_from_1024_samples_of_its_kind(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "requests.db"
-    RequestLogStore(path, max_rows=0).close()
+    close_and_drain(RequestLogStore(path, max_rows=0))
     now = time.time()
     legacy = _seed_dictionary(path, "body_dictionaries", now - _AGE - _DAY)
     wire = _seed_dictionary(path, "wire_dictionaries", now - _AGE - _DAY)
@@ -179,13 +187,13 @@ def test_a_stale_dictionary_is_relearned_only_from_1024_samples_of_its_kind(
     _fill(path, _MIN - 1, now - _DAY)
     store = RequestLogStore(path, max_rows=0)
     _settle(store)
-    store.close()
+    close_and_drain(store)
     assert _dictionaries(path) == {"body": [(legacy, None)], "wire": [(wire, None)]}
 
     _fill(path, _MIN, now - _DAY, prefix="more")
     store = RequestLogStore(path, max_rows=0)
     _settle(store)
-    store.close()
+    close_and_drain(store)
     found = _dictionaries(path)
     assert found["body"][0] == (legacy, None)
     assert sorted(kind for _, kind in found["body"][1:]) == ["prompt", "rest"]
@@ -193,7 +201,7 @@ def test_a_stale_dictionary_is_relearned_only_from_1024_samples_of_its_kind(
     # And new rows use them.
     store = RequestLogStore(path, max_rows=0)
     store.enqueue(_record(99_999, time.time(), prefix="new"))
-    store.close()
+    close_and_drain(store)
     with closing(sqlite3.connect(path)) as conn:
         prompt_dict = conn.execute(
             "SELECT b.dict_id FROM request_bodies r JOIN body_blobs b"
@@ -233,7 +241,7 @@ def test_training_runs_on_its_own_thread_never_the_writer_or_the_loop(
             await asyncio.sleep(0.001)
             gaps.append(time.perf_counter() - started)
         _settle(store)
-        store.close()
+        close_and_drain(store)
         return gaps
 
     asyncio.run(serve())
@@ -250,7 +258,7 @@ def test_named_dictionaries_survive_prune_and_a_whole_table_sweep(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "requests.db"
-    RequestLogStore(path, max_rows=0).close()
+    close_and_drain(RequestLogStore(path, max_rows=0))
     future = time.time() + 365 * _DAY  # fresh: no refresh while this runs
     body_ids = [
         _seed_dictionary(path, "body_dictionaries", future, kind)
@@ -261,7 +269,7 @@ def test_named_dictionaries_survive_prune_and_a_whole_table_sweep(
     before = _dictionaries(path)
 
     store = RequestLogStore(path, max_rows=5)
-    store.close()
+    close_and_drain(store)
     store._owe_full_sweeps(*request_log_module._ORPHAN_SWEEP_TABLES)
     assert store.prune() > 0
     store._owe_full_sweeps(*request_log_module._ORPHAN_SWEEP_TABLES)
@@ -271,14 +279,14 @@ def test_named_dictionaries_survive_prune_and_a_whole_table_sweep(
     assert [i for i, _ in before["wire"]] == wire_ids
     # Even with every row gone, nothing names them, and they still stay.
     store = RequestLogStore(path, max_rows=1)
-    store.close()
+    close_and_drain(store)
     store.prune()
     assert _dictionaries(path) == before
 
 
 def test_dictionary_ids_are_never_handed_out_twice(tmp_path: Path) -> None:
     path = tmp_path / "requests.db"
-    RequestLogStore(path, max_rows=0).close()
+    close_and_drain(RequestLogStore(path, max_rows=0))
     for table in ("body_dictionaries", "wire_dictionaries"):
         first = _seed_dictionary(path, table, 1.0)
         with closing(sqlite3.connect(path)) as conn, conn:
@@ -302,7 +310,7 @@ def test_a_failed_training_changes_nothing(
     store = RequestLogStore(path, max_rows=0)
     _settle(store)
     store.enqueue(_record(77_777, time.time(), prefix="x"))
-    store.close()
+    close_and_drain(store)
     assert _dictionaries(path) == before == {"body": [], "wire": []}
     assert store._kind_dicts == {}
     assert set(store._dict_train_failed_at) == {"wire", "prompt", "rest"}
@@ -330,7 +338,7 @@ def test_a_store_closed_mid_training_stores_nothing(
     before = _dictionaries(path)
     store = RequestLogStore(path, max_rows=0)
     assert entered.wait(60)
-    store.close()
+    close_and_drain(store)
     release.set()
     trainer = store._trainer
     assert trainer is not None
@@ -340,7 +348,7 @@ def test_a_store_closed_mid_training_stores_nothing(
     monkeypatch.setattr(request_log_module.zstd, "train_dict", real)
     reopened = RequestLogStore(path, max_rows=0)
     _settle(reopened)
-    reopened.close()
+    close_and_drain(reopened)
     assert len(_dictionaries(path)["wire"]) == 1
 
 
@@ -351,7 +359,7 @@ def test_rows_written_with_dictionary_n_read_after_n_plus_1_and_n_plus_2(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "requests.db"
-    RequestLogStore(path, max_rows=0).close()
+    close_and_drain(RequestLogStore(path, max_rows=0))
     future = time.time() + 365 * _DAY
     generations = []
     for generation in range(3):
@@ -363,9 +371,9 @@ def test_rows_written_with_dictionary_n_read_after_n_plus_1_and_n_plus_2(
         assert store._kind_dicts["prompt"][0] == body  # a restart picks it up
         assert store._kind_dicts["wire"][0] == wire
         store.enqueue(_record(generation, time.time(), prefix=f"g{generation}-"))
-        store.close()
+        close_and_drain(store)
     store = RequestLogStore(path, max_rows=0)
-    store.close()
+    close_and_drain(store)
     with closing(sqlite3.connect(path)) as conn:
         for generation, (body, wire) in enumerate(generations):
             request_id = f"g{generation}-{generation:05d}"
@@ -392,12 +400,12 @@ def test_a_kind_falls_back_to_the_dictionary_from_before_kinds(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "requests.db"
-    RequestLogStore(path, max_rows=0).close()
+    close_and_drain(RequestLogStore(path, max_rows=0))
     future = time.time() + 365 * _DAY
     legacy = _seed_dictionary(path, "body_dictionaries", future)
     prompt = _seed_dictionary(path, "body_dictionaries", future, "prompt")
     store = RequestLogStore(path, max_rows=0)
-    store.close()
+    close_and_drain(store)
     assert store._kind_dicts["prompt"][0] == prompt
     assert store._kind_dicts["rest"][0] == legacy
     assert "wire" not in store._kind_dicts
@@ -409,7 +417,7 @@ def test_an_older_version_decodes_bodies_written_with_kind_dictionaries(
 ) -> None:
     """7.72.2 looked a blob's dictionary up by id alone, ignoring kinds."""
     path = tmp_path / "requests.db"
-    RequestLogStore(path, max_rows=0).close()
+    close_and_drain(RequestLogStore(path, max_rows=0))
     future = time.time() + 365 * _DAY
     _seed_dictionary(path, "body_dictionaries", future)
     _seed_dictionary(path, "body_dictionaries", future, "prompt")
@@ -417,7 +425,7 @@ def test_an_older_version_decodes_bodies_written_with_kind_dictionaries(
     store = RequestLogStore(path, max_rows=0)
     for index in range(5):
         store.enqueue(_record(index, time.time()))
-    store.close()
+    close_and_drain(store)
     with closing(sqlite3.connect(path)) as conn:
         dictionaries = {
             int(row[0]): zstd.ZstdDict(bytes(row[1]))

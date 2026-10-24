@@ -439,6 +439,222 @@ def test_binding_the_default_server_port_fails_the_run(tmp_path: Path) -> None:
     _assert_refused(completed, "bind to port 8082 refused")
 
 
+# ------------------------------------------------------------------ network
+#
+# Every case below is refused BEFORE anything leaves the machine: the gate
+# raises ahead of the real lookup or ``connect``. 203.0.113.0/24 is TEST-NET-3
+# (RFC 5737) and ``example.com`` is reserved (RFC 2606); neither would be
+# contacted even if a gate were missing for the instant it takes to fail.
+
+
+def test_a_name_lookup_past_this_machine_fails_the_run(tmp_path: Path) -> None:
+    completed = _run_child(
+        tmp_path,
+        """
+        def test_leaks():
+            socket.getaddrinfo("example.com", 443)
+        """,
+    )
+    _assert_refused(completed, "name lookup of 'example.com' refused")
+
+
+def test_a_connection_past_this_machine_fails_the_run(tmp_path: Path) -> None:
+    """A literal needs no lookup, so the connection itself is what is refused."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        def test_leaks():
+            socket.create_connection(("203.0.113.7", 443), timeout=1)
+        """,
+    )
+    _assert_refused(completed, "connection to ('203.0.113.7', 443) refused")
+
+
+def test_an_asyncio_connection_past_this_machine_fails_the_run(
+    tmp_path: Path,
+) -> None:
+    """The proactor loop connects with ConnectEx and raises no ``socket.connect``
+    audit event: the gate sits on its ``sock_connect`` (the selector loop's goes
+    through ``socket.connect``)."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        import asyncio
+
+        def test_leaks():
+            asyncio.run(asyncio.open_connection("203.0.113.7", 443))
+        """,
+    )
+    _assert_refused(completed, "connection to ('203.0.113.7', 443) refused")
+
+
+def test_an_httpx_request_past_this_machine_fails_the_run(tmp_path: Path) -> None:
+    """What the providers use, sync and async, through anyio's resolver."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        import asyncio
+
+        import httpx
+
+        def test_sync_leaks():
+            httpx.get("https://example.com/", timeout=1)
+
+        def test_async_leaks():
+            async def fetch():
+                async with httpx.AsyncClient(timeout=1) as client:
+                    await client.get("https://example.com/")
+
+            asyncio.run(fetch())
+        """,
+    )
+    _assert_refused(completed, "name lookup of 'example.com' refused")
+    assert "2 failed" in completed.stdout, completed.stdout
+
+
+def test_a_ddgs_search_past_this_machine_fails_the_run(tmp_path: Path) -> None:
+    """``primp`` is Rust with its own resolver; its one caller is gated."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        from ddgs.http_client import HttpClient
+
+        def test_leaks():
+            HttpClient(timeout=1).get("https://example.com/")
+        """,
+    )
+    _assert_refused(completed, "ddgs (primp) request to 'https://example.com/'")
+
+
+def test_a_swallowed_refusal_still_fails_the_run(tmp_path: Path) -> None:
+    """``except BaseException`` and a dead worker thread cannot hide a lookup."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        import threading
+
+        def test_swallowed():
+            try:
+                socket.getaddrinfo("example.com", 443)
+            except BaseException:
+                pass
+
+        def test_in_a_thread():
+            worker = threading.Thread(
+                target=lambda: socket.gethostbyname("example.com")
+            )
+            worker.start()
+            worker.join()
+        """,
+    )
+    _assert_refused(completed, "tried to reach past this machine")
+    assert "2 failed" in completed.stdout or "2 errors" in completed.stdout, (
+        completed.stdout
+    )
+
+
+def test_this_machine_stays_reachable(tmp_path: Path) -> None:
+    """The suite's fake upstreams live on loopback: the gate must not see them."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        import asyncio
+
+        def test_loopback():
+            assert socket.getaddrinfo("localhost", 80)
+            assert socket.getaddrinfo("127.0.0.1", 80)
+            # A literal is not a lookup, whatever address it names.
+            assert socket.getaddrinfo("203.0.113.7", 443)
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                port = listener.getsockname()[1]
+                with socket.create_connection(("127.0.0.1", port), timeout=5):
+                    pass
+                with socket.create_connection(("localhost", port), timeout=5):
+                    pass
+
+                async def connect():
+                    _reader, writer = await asyncio.open_connection(
+                        "127.0.0.1", port
+                    )
+                    writer.close()
+                    await writer.wait_closed()
+
+                asyncio.run(connect())
+        """,
+    )
+    _assert_green(completed)
+
+
+def test_the_opt_out_marker_opens_the_gate_for_its_own_test_only(
+    tmp_path: Path,
+) -> None:
+    """Checked on the gate's state: a test of the opt-out makes no live call."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        from tests.support import hermetic
+
+        @pytest.mark.reaches_network
+        def test_marked():
+            assert hermetic._gates["network"] is True
+
+        def test_unmarked_after_it():
+            assert hermetic._gates["network"] is False
+        """,
+    )
+    _assert_green(completed)
+
+
+# ------------------------------------------------------- one leak, one failure
+
+
+def test_a_teardown_violation_does_not_fail_the_tests_after_it(
+    tmp_path: Path,
+) -> None:
+    """The config-dir check used to raise from a plain ``tryfirst`` teardown
+    hook, which skipped pytest's own teardown of the item: every later test on
+    the worker then failed setup ("previous item was not torn down properly")
+    -- 10,000-13,000 errors on three Windows suite runs from one leak."""
+
+    completed = _run_child(
+        tmp_path,
+        """
+        from my_claude_code.config import paths
+
+        @pytest.fixture(autouse=True)
+        def forget_the_config_dir():
+            # What the suite's conftest does around every test.
+            paths.reset_config_dir_cache()
+            yield
+            paths.reset_config_dir_cache()
+
+        def test_leaks(monkeypatch):
+            monkeypatch.setenv("HOME", str(PROFILE))
+            monkeypatch.setenv("USERPROFILE", str(PROFILE))
+            paths.reset_config_dir_cache()
+            paths.config_dir_path()
+
+        def test_after_it():
+            pass
+
+        def test_and_after_that():
+            pass
+        """,
+    )
+    _assert_refused(completed, "resolved the config directory to")
+    assert "AssertionError: previous item" not in completed.stdout, completed.stdout
+    assert "3 passed, 1 error" in completed.stdout, completed.stdout
+
+
 # ------------------------------------------------------- config-dir teardown
 
 

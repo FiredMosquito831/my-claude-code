@@ -44,16 +44,51 @@ def test_status_says_what_the_index_covers(
     assert body["bytes"] > 0
 
 
+class _FakeClock:
+    """``admin_routes``' view of ``time``: a clock only the test moves.
+
+    The reuse window is ten times what the count measured, and the count was
+    measured with ``perf_counter`` around a real 0.1 s sleep: a loaded runner
+    measured more than that, the window outgrew the 1.2 s the test waited, and
+    the third ask was answered from the cache (v7.106.0 suite, ``1 == 2``).
+    Every reading here is one the test chose.
+    """
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def perf_counter(self) -> float:
+        return self.now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return 1_800_000_000.0 + self.now
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
 def _counting_coverage(
-    store: RequestLogStore, monkeypatch: pytest.MonkeyPatch, seconds: float = 0.0
+    store: RequestLogStore,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    advance: tuple[_FakeClock, float] | None = None,
 ) -> list[float]:
+    """Count the coverage reads; ``advance`` makes each one take that long."""
+
     counted: list[float] = []
     original = store.search_index_coverage
 
     def counting() -> dict[str, int] | None:
         counted.append(time.time())
-        if seconds:
-            time.sleep(seconds)
+        if advance is not None:
+            clock, seconds = advance
+            clock.advance(seconds)
         return original()
 
     monkeypatch.setattr(store, "search_index_coverage", counting)
@@ -84,13 +119,15 @@ def test_a_count_from_before_a_build_finished_is_not_the_final_answer(
 def test_a_slow_count_is_reused_for_ten_times_as_long_as_it_took(
     client: TestClient, store: RequestLogStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    clock = _FakeClock()
+    monkeypatch.setattr(admin_routes, "time", clock)
     monkeypatch.setattr(admin_routes, "SEARCH_COVERAGE_MAX_AGE_SECONDS", 0.05)
-    counted = _counting_coverage(store, monkeypatch, seconds=0.1)
+    counted = _counting_coverage(store, monkeypatch, advance=(clock, 0.1))
     client.get("/admin/api/requests/search-index")
-    time.sleep(0.2)  # older than the floor, younger than 10 x 0.1 s
+    clock.advance(0.2)  # older than the floor, younger than 10 x 0.1 s
     client.get("/admin/api/requests/search-index")
     assert len(counted) == 1
-    time.sleep(1.0)
+    clock.advance(1.0)
     client.get("/admin/api/requests/search-index")
     assert len(counted) == 2
 

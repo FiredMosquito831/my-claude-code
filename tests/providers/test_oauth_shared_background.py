@@ -392,6 +392,9 @@ async def _failure_of(stream: AsyncIterator[str]) -> BaseException | None:
 
 
 @pytest.mark.asyncio
+# The real sweep over a real provider is the subject (its upstream and token
+# endpoint are this file's fakes): no offline stand-in from tests/conftest.py.
+@pytest.mark.real_model_sweep
 async def test_the_discovery_timer_never_refreshes_a_shared_credential(
     claude: ClaudeCodeDir, token_endpoint: TokenEndpoint, upstream: Upstream
 ) -> None:
@@ -433,6 +436,8 @@ async def test_the_discovery_timer_never_refreshes_a_shared_credential(
 
 
 @pytest.mark.asyncio
+# As above: the real start-up validator over a real provider is the subject.
+@pytest.mark.real_model_sweep
 async def test_startup_validation_never_refreshes_a_shared_credential(
     claude: ClaudeCodeDir, token_endpoint: TokenEndpoint, upstream: Upstream
 ) -> None:

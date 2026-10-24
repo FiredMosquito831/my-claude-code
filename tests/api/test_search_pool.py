@@ -20,7 +20,7 @@ import json
 import random
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any
@@ -56,18 +56,47 @@ SEARCH_ROUTES = (
 
 
 class Reads:
-    """Counts (and can slow) the body predicate, and says where it ran."""
+    """Counts (and can slow) the body predicate, and says where it ran.
 
-    def __init__(self, store: RequestLogStore, delay: float = 0.0) -> None:
+    ``gate``, when given, holds every read until it is set, and ``entered`` is
+    set by the first read that reaches it: a scan that must still be running
+    when something else happens is parked on the gate, not raced against a
+    sleep.
+    """
+
+    def __init__(
+        self,
+        store: RequestLogStore,
+        delay: float = 0.0,
+        gate: threading.Event | None = None,
+    ) -> None:
         self.threads: set[str] = set()
         self.delay = delay
+        self.gate = gate
+        self.entered = threading.Event()
         self._real = store._bodies_match
 
     def __call__(self, *args: Any) -> int:
         self.threads.add(threading.current_thread().name)
+        if self.gate is not None:
+            self.entered.set()
+            self.gate.wait(_HANG_BOUND_SECONDS)
         if self.delay:
             time.sleep(self.delay)
         return self._real(*args)
+
+
+#: A hang guard for the parked scans, never a timing.
+_HANG_BOUND_SECONDS = 120.0
+
+
+async def _until(condition: Callable[[], bool]) -> None:
+    """Return once ``condition()`` holds; the bound only guards a hang."""
+
+    deadline = time.monotonic() + _HANG_BOUND_SECONDS
+    while not condition():
+        assert time.monotonic() < deadline, "the awaited state never came"
+        await asyncio.sleep(0.01)
 
 
 @pytest.fixture
@@ -212,23 +241,38 @@ async def test_a_stream_closes_while_scans_fill_the_search_pool(
 
     first, _ = build_search_log(tmp_path / "a.db", rows=120)
     second, _ = build_search_log(tmp_path / "b.db", rows=120, seed=8)
-    for one in (first, second):
-        monkeypatch.setattr(one, "_bodies_match", Reads(one, delay=0.05))
+    # Both scans park inside a read -- each holding a search worker -- until
+    # the stream has been read. They used to be kept busy by 0.05 s per row
+    # instead (6 s a scan), and a loaded runner needed 36 s to reach the
+    # stream: the scans had finished and ``still_scanning`` read 0.
+    gate = threading.Event()
+    reads = [Reads(one, delay=0.05, gate=gate) for one in (first, second)]
+    for one, read in zip((first, second), reads, strict=True):
+        monkeypatch.setattr(one, "_bodies_match", read)
     scans = [_scan(first), _scan(second)]
-    await asyncio.sleep(0.3)
-    assert len(search_jobs().running()) == 2
-    rows: list[RequestRecord] = []
-    finisher = RequestLogStore(tmp_path / "c.db")
-    monkeypatch.setattr(finisher, "enqueue", rows.append)
+    closing: asyncio.Task[None] | None = None
+    try:
+        await _until(lambda: all(read.entered.is_set() for read in reads))
+        assert len(search_jobs().running()) == 2
+        rows: list[RequestRecord] = []
+        finisher = RequestLogStore(tmp_path / "c.db")
+        monkeypatch.setattr(finisher, "enqueue", rows.append)
 
-    async def read_to_the_end() -> list[str]:
-        return [chunk async for chunk in _capture(finisher).wrap(_body())]
+        async def read_to_the_end() -> list[str]:
+            return [chunk async for chunk in _capture(finisher).wrap(_body())]
 
-    started = time.perf_counter()
-    chunks = await asyncio.wait_for(read_to_the_end(), 2.0)
-    closed_after = time.perf_counter() - started
-    still_scanning = len(search_jobs().running())
-    await close_search_pool()
+        started = time.perf_counter()
+        chunks = await asyncio.wait_for(read_to_the_end(), 2.0)
+        closed_after = time.perf_counter() - started
+        still_scanning = len(search_jobs().running())
+        # The close stops every pass before its first await; only then are the
+        # parked reads let go, so each worker returns into a stopped pass.
+        closing = asyncio.ensure_future(close_search_pool())
+        await _until(lambda: not search_jobs().running())
+    finally:
+        gate.set()
+    assert closing is not None
+    await closing
     for scan in scans:
         # Stopped by the close, and told so.
         with pytest.raises(SearchStopped):

@@ -184,6 +184,11 @@ from tests.support.masking_harness import (
     start_masking_rig,
 )
 
+# The ``discovery_sweep`` rows ARE a real provider's listing through a sweep --
+# over the rig's own loopback proxies and host -- so the suite-wide offline
+# sweep (``_isolate_model_sweeps`` in tests/conftest.py) steps aside here.
+pytestmark = pytest.mark.real_model_sweep
+
 #: The custom provider every custom-card row probes.
 CUSTOM_NAME = "Mask Co"
 #: The built-in provider whose profile declares a client identity -- the only

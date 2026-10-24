@@ -7,8 +7,7 @@ of it can cost the client an answer.
 """
 
 import json
-import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -24,6 +23,7 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.core.request_log import store_from_settings
+from tests.support.request_log_writes import FlushWatch
 
 # 1x1 PNG, base64. Small enough to inline, real enough to hash.
 PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -209,19 +209,30 @@ async def _drain(response: object) -> str:
     return json.dumps(response, default=str)
 
 
+#: The writer's commits in the running test (set by ``_watch_flushes``).
+_flushes: list[FlushWatch] = []
+
+
+@pytest.fixture(autouse=True)
+def _watch_flushes(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    _flushes.append(FlushWatch().install(monkeypatch))
+    yield
+    _flushes.clear()
+
+
 def _row(settings: Settings, request_id: str) -> dict[str, Any]:
     store = store_from_settings(settings)
     assert store is not None
     # The writer is a background thread; the row lands a beat after the
-    # response does. Polling beats sleeping a fixed amount and beats closing
-    # the store, which the caching tests still need open.
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        row = store.get_request(request_id)
-        if row is not None:
-            return row
-        time.sleep(0.02)
-    raise AssertionError(f"{request_id} was never written to the request log")
+    # response does -- and on a loaded machine a fresh log's first commit
+    # took longer than the 5 s this used to poll for (eight Windows suite
+    # hits). So wait for the writer to say it committed this id, rather than
+    # for a clock; closing the store is no option, the caching tests still
+    # need it open.
+    _flushes[-1].wait(request_id)
+    row = store.get_request(request_id)
+    assert row is not None, f"{request_id} was committed but reads back as nothing"
+    return row
 
 
 # ------------------------------------------------------------------ route ---

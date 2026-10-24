@@ -426,12 +426,17 @@ async def test_a_failure_on_both_surfaces_raises_the_hosts_own_failure() -> None
     provider = _provider()
     fake = _FakeResponses(probe_error=_error(500, BARE_500_BODY))
     provider._responses_transport = fake
+    # The other surface fails the same way. Left real, its probe went to
+    # opencode.ai itself (the network gate's find, 2026-10-24).
+    messages = _FakeMessages(probe_error=_error(500, BARE_500_BODY))
+    provider._messages_transport = messages
     _chat_raises(provider, _error(500, BARE_500_BODY))
 
     with pytest.raises(ExecutionFailure):
         await _drain(provider.stream_response(_request("m")))
 
     assert fake.probes == ["m"]
+    assert messages.probes == ["m"]
     assert fake.streamed == []
     assert learned_fact_store().facts_for_model("opencode", "m") == ()
     # Still resolvable, still routable: nothing was withheld.
@@ -488,12 +493,13 @@ def _know_chat_door(source: str, monkeypatch) -> None:
 class _FakeMessages:
     """A Messages transport whose probe is counted and refused."""
 
-    def __init__(self) -> None:
+    def __init__(self, probe_error: Exception | None = None) -> None:
         self.probes: list[str] = []
+        self.probe_error = probe_error
 
     async def probe(self, model_id: str) -> None:
         self.probes.append(model_id)
-        raise _error(403, REGION_BODY)
+        raise self.probe_error or _error(403, REGION_BODY)
 
     def stream(self, request, **_: Any):
         raise AssertionError("the Messages door is never streamed here")
