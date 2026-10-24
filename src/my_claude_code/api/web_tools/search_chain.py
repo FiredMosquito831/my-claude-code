@@ -228,7 +228,9 @@ async def run_search_chain(
         entry = entries[position]
         is_last = slot + 1 >= len(order)
         if deadline is not None and time.monotonic() >= deadline:
-            spent = _budget_spent_error(entry, settings.fallback_total_timeout)
+            # Starting another entry with no time left only delays the error
+            # the caller is already going to see; every entry from here on is
+            # unreachable for the same reason, so each says so.
             _skip_rows(
                 trace,
                 entries,
@@ -237,7 +239,8 @@ async def run_search_chain(
                 query,
                 context,
             )
-            last_error = spent
+            if last_error is None:
+                last_error = _budget_spent_error(entry, settings.fallback_total_timeout)
             break
         started_ts = time.time()
         started = time.perf_counter()
@@ -373,10 +376,12 @@ async def run_search_chain(
             len(entries),
             result.error,
         )
+        if result.budget_spent:
+            # The deadline check at the top of the loop ends the walk and
+            # records every entry it leaves untried.
+            continue
         kind = failure_kind(result.failure)
-        if result.budget_spent or (
-            policy_skip and kind is not None and kind in policy_skip
-        ):
+        if policy_skip and kind is not None and kind in policy_skip:
             # The model rule: a kind the operator listed in
             # FALLBACK_SKIP_KINDS ends the route -- nothing behind it would
             # be asked anything different.

@@ -253,7 +253,11 @@ def test_the_websearch_pool_never_reads_the_routing_toggle() -> None:
     deliberately not plumbed into ``WEBSEARCH_TUNING`` or the websearch
     manifest, and neither is ``PROVIDER_RETRY_ATTEMPTS``: the search path has
     its own retry policy and reaches the shared engine only through
-    ``KeyPool.report_rate_limit`` -> ``note_rate_limit()``.
+    ``KeyPool.report_rate_limit`` -> ``note_rate_limit()``. The web search
+    chain (7.112.0, ``WEB_SEARCH_CHAIN``) does read ``PROVIDER_RETRY_ATTEMPTS``
+    -- outside this package, in ``api/web_tools/search_books.py``, where the
+    model path's own limiter runs it (always with ``routes_around_model``
+    off); nothing in ``websearch/`` does, which is what this test pins.
     """
     import inspect
     from pathlib import Path
