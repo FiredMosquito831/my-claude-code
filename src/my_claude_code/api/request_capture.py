@@ -1311,19 +1311,31 @@ class RequestCapture:
             return
         try:
             reported = self._reported_cost
+            usage = TokenUsage(
+                tokens_in=record.tokens_in,
+                tokens_out=record.tokens_out,
+                cache_read_tokens=record.cache_read_tokens,
+                cache_write_tokens=record.cache_write_tokens,
+                reasoning_tokens=(
+                    None if reported is None else reported.reasoning_tokens
+                ),
+                cache_write_1h_tokens=record.cache_write_1h_tokens,
+            )
+            if not usage.one_hour_write_tokens:
+                # Every row that wrote no 1-hour cache entries -- the split
+                # absent, or 0 -- takes the very call it took before 7.111.0.
+                record.cost_usd, record.cost_source = self._price(
+                    record.provider,
+                    record.resolved_model,
+                    usage,
+                    reported_usd=None if reported is None else reported.total_usd,
+                )
+                self._price_attempts()
+                return
             price = price_request(
                 record.provider,
                 record.resolved_model,
-                TokenUsage(
-                    tokens_in=record.tokens_in,
-                    tokens_out=record.tokens_out,
-                    cache_read_tokens=record.cache_read_tokens,
-                    cache_write_tokens=record.cache_write_tokens,
-                    reasoning_tokens=(
-                        None if reported is None else reported.reasoning_tokens
-                    ),
-                    cache_write_1h_tokens=record.cache_write_1h_tokens,
-                ),
+                usage,
                 reported_usd=None if reported is None else reported.total_usd,
                 mode=self._cost_mode,
                 litellm_enabled=self._cost_litellm_enabled,
