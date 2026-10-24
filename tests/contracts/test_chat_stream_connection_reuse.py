@@ -219,6 +219,57 @@ async def test_a_stream_abandoned_mid_answer_is_not_read_any_further():
     assert not body.exhausted
 
 
+@pytest.mark.asyncio
+async def test_closing_an_abandoned_chunk_stream_does_not_read_on():
+    """The other way a stream is abandoned: closed while parked at a chunk.
+
+    That is how the Chat door's stream ends when a client hangs up between
+    two chunks (the request is closed from the top and the stream is
+    finalized, ``INVESTIGATION-ABANDONED-UPSTREAM.md`` ordering B). It must
+    close the response at once, whatever is still on its way.
+    """
+
+    fixture = next(f for f in FIXTURES if f["name"] == "groq_text_stream")
+    pieces = _frames(fixture["sse"])
+    body = _RecordingBody(pieces)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=body,
+            request=request,
+        )
+
+    client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="http://sse.invalid/v1",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        stream = chunks.adopt_chat_stream(
+            await client.chat.completions.create(
+                model="fixture-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+        )
+        assert isinstance(stream, chunks.MccChatChunkStream)
+        iterator = stream._iterator
+        await anext(iterator)
+        await anext(iterator)
+        served = body.served
+        await iterator.aclose()
+    finally:
+        await client.close()
+
+    assert served < len(pieces)
+    assert body.served == served
+    assert body.closed
+    assert not body.exhausted
+
+
 async def _chunked_sse_server(
     log: list[str],
 ) -> tuple[asyncio.Server, int]:

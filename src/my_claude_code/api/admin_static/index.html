@@ -4544,9 +4544,9 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                     TLS handshake before the first byte; through a free proxy that alone
                     can take tens of seconds. <strong>Set 60</strong>: requests up to a
                     minute apart through the same exit then reuse its connection
-                    &mdash; Responses and Messages streams and requests that are not
-                    streamed; a Chat Completions stream closes its connection when it
-                    ends, so it gains nothing. It
+                    &mdash; Chat Completions, Responses and Messages streams and requests
+                    that are not streamed (a Chat Completions stream closed its
+                    connection at its end, and so gained nothing, until 7.111.1). It
                     reaches only the proxy entries of a chain with two or more entries
                     &mdash; no chain, a single fixed proxy, Direct entries and the Direct
                     fallback are untouched. A proxy that silently drops an idle
