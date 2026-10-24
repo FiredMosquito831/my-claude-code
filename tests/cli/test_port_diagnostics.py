@@ -1,9 +1,11 @@
 """Tests for bounded port-availability and ownership diagnostics."""
 
 import socket
+import sys
 
 import pytest
 
+from my_claude_code.cli import port_diagnostics
 from my_claude_code.cli.port_diagnostics import (
     diagnose_port_owner,
     is_address_in_use,
@@ -46,6 +48,9 @@ def test_probe_never_sends_data(monkeypatch) -> None:
             pass
 
         def settimeout(self, _t):
+            pass
+
+        def setsockopt(self, *_a):
             pass
 
         def bind(self, _addr):
@@ -208,3 +213,139 @@ def test_wait_for_port_free_true_after_a_real_release() -> None:
 
     threading.Thread(target=_release_later, daemon=True).start()
     assert wait_for_port_free("127.0.0.1", port, timeout=2.0, interval=0.02) is True
+
+
+@pytest.mark.local_serial
+def test_probe_reports_a_port_in_time_wait_as_available() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    served, _ = listener.accept()
+    served.close()
+    client.close()
+    listener.close()
+
+    assert probe_port_available("127.0.0.1", port) is True
+
+
+# ------------------------------------------- #284: the probe's platform branch
+#
+# Off Windows the probe sets ``SO_REUSEADDR`` before it binds, as the POSIX
+# listener in ``commands._bind_listening_socket`` does, so a port that holds
+# only TIME_WAIT entries reads as free -- the listener can bind it. On Windows
+# it sets nothing: there ``SO_REUSEADDR`` lets a second socket bind over a live
+# ``SO_REUSEADDR`` listener (measured 2026-10-24), so a reuse probe would call
+# a held port free, and TIME_WAIT never blocks a plain bind there anyway. The
+# test above passes on Windows with or without the change; the tests below are
+# the ones that fail when either half of the branch is lost.
+
+
+class _RecordingSocket:
+    """Stands in for ``socket.socket``: records each call the probe makes."""
+
+    def __init__(self, calls: list[tuple[object, ...]]) -> None:
+        self._calls = calls
+
+    def settimeout(self, timeout: float) -> None:
+        self._calls.append(("settimeout", timeout))
+
+    def setsockopt(self, *args: object) -> None:
+        self._calls.append(("setsockopt", *args))
+
+    def bind(self, address: tuple[str, int]) -> None:
+        self._calls.append(("bind", address))
+
+    def close(self) -> None:
+        self._calls.append(("close",))
+
+
+def _probe_calls(monkeypatch, platform: str) -> list[tuple[object, ...]]:
+    """Run the probe with ``_PLATFORM`` pinned and return what it did."""
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(port_diagnostics, "_PLATFORM", platform)
+    monkeypatch.setattr(socket, "socket", lambda *_a, **_k: _RecordingSocket(calls))
+    assert probe_port_available("127.0.0.1", 18082) is True
+    return calls
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_the_posix_probe_sets_reuseaddr_before_it_binds(
+    monkeypatch, platform: str
+) -> None:
+    assert _probe_calls(monkeypatch, platform) == [
+        ("settimeout", 2.0),
+        ("setsockopt", socket.SOL_SOCKET, socket.SO_REUSEADDR, 1),
+        ("bind", ("127.0.0.1", 18082)),
+        ("close",),
+    ]
+
+
+def test_the_windows_probe_sets_no_socket_option(monkeypatch) -> None:
+    """Byte-identical to the probe before #284: a plain bind, nothing else."""
+    assert _probe_calls(monkeypatch, "win32") == [
+        ("settimeout", 2.0),
+        ("bind", ("127.0.0.1", 18082)),
+        ("close",),
+    ]
+
+
+@pytest.mark.local_serial
+def test_a_live_reuseaddr_listener_still_reads_as_taken() -> None:
+    """MCC's own POSIX listener sets ``SO_REUSEADDR``; the probe never binds over it.
+
+    On every platform: on Linux and macOS the kernel refuses a reuse bind over a
+    live listener; on Windows only the missing option keeps the probe from
+    binding over it.
+    """
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        assert probe_port_available("127.0.0.1", port) is False
+    finally:
+        listener.close()
+
+
+@pytest.mark.local_serial
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Linux kernel rule; macOS lets a reuse bind take a specific address under a wildcard",
+)
+def test_a_live_wildcard_reuseaddr_listener_still_reads_as_taken_on_linux() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("0.0.0.0", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        assert probe_port_available("127.0.0.1", port) is False
+        assert probe_port_available("0.0.0.0", port) is False
+    finally:
+        listener.close()
+
+
+@pytest.mark.local_serial
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="TIME_WAIT never blocks a bind on Windows (measured 2026-10-24)",
+)
+def test_a_posix_port_reads_taken_while_listened_on_and_free_in_time_wait() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    served, _ = listener.accept()
+    assert probe_port_available("127.0.0.1", port) is False
+    served.close()  # the server side closes first, so TIME_WAIT is on its port
+    assert client.recv(1) == b""  # the FIN has arrived
+    client.close()
+    listener.close()
+
+    assert probe_port_available("127.0.0.1", port) is True
