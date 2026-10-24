@@ -1,0 +1,381 @@
+{
+  "base_commit": "a5d21717d130e8f9275d3f6f8b0d8fb34afd25e0",
+  "cases": {
+    "linux_both_timeout": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_neither": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_net_tools_only_absent": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_net_tools_only_listening": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_net_tools_only_time_wait": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_ss_absent": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": {
+        "command": null,
+        "name": "systemd-resolve",
+        "pid": 612,
+        "type": "PortOwner"
+      },
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_ss_and_net_tools": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": {
+        "command": null,
+        "name": "systemd-resolve",
+        "pid": 612,
+        "type": "PortOwner"
+      },
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_ss_dual_stack": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": {
+        "command": null,
+        "name": "python3",
+        "pid": 4321,
+        "type": "PortOwner"
+      },
+      "8082": {
+        "command": null,
+        "name": "python3",
+        "pid": 4321,
+        "type": "PortOwner"
+      }
+    },
+    "linux_ss_empty": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_ss_failed_net_tools_listening": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_ss_listening_v4": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": {
+        "command": null,
+        "name": "systemd-resolve",
+        "pid": 612,
+        "type": "PortOwner"
+      },
+      "631": null,
+      "808": {
+        "command": null,
+        "name": "python3",
+        "pid": 4321,
+        "type": "PortOwner"
+      },
+      "8082": {
+        "command": null,
+        "name": "python3",
+        "pid": 4321,
+        "type": "PortOwner"
+      }
+    },
+    "linux_ss_listening_v6": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": {
+        "command": null,
+        "name": "mcc-server",
+        "pid": 5150,
+        "type": "PortOwner"
+      },
+      "8082": {
+        "command": null,
+        "name": "mcc-server",
+        "pid": 5150,
+        "type": "PortOwner"
+      }
+    },
+    "linux_ss_no_process_column": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "linux_ss_other_pid": {
+      "135": null,
+      "18082": {
+        "command": null,
+        "name": "nginx",
+        "pid": 777,
+        "type": "PortOwner"
+      },
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": {
+        "command": null,
+        "name": "node",
+        "pid": 9001,
+        "type": "PortOwner"
+      },
+      "8082": {
+        "command": null,
+        "name": "node",
+        "pid": 9001,
+        "type": "PortOwner"
+      }
+    },
+    "linux_ss_timeout_net_tools_listening": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "macos_illegal_option": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "macos_listening": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "macos_netstat_timeout": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "macos_time_wait_only": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "windows_absent": {
+      "135": {
+        "command": null,
+        "name": null,
+        "pid": 1160,
+        "type": "PortOwner"
+      },
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "windows_listening_v4": {
+      "135": {
+        "command": null,
+        "name": null,
+        "pid": 1160,
+        "type": "PortOwner"
+      },
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": {
+        "command": null,
+        "name": null,
+        "pid": 4321,
+        "type": "PortOwner"
+      },
+      "8082": {
+        "command": null,
+        "name": null,
+        "pid": 4321,
+        "type": "PortOwner"
+      }
+    },
+    "windows_listening_v6": {
+      "135": {
+        "command": null,
+        "name": null,
+        "pid": 1160,
+        "type": "PortOwner"
+      },
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": {
+        "command": null,
+        "name": null,
+        "pid": 5150,
+        "type": "PortOwner"
+      },
+      "8082": {
+        "command": null,
+        "name": null,
+        "pid": 5150,
+        "type": "PortOwner"
+      }
+    },
+    "windows_localised": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "windows_netstat_nonzero": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "windows_netstat_os_error": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "windows_netstat_timeout": {
+      "135": null,
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    },
+    "windows_other_pid": {
+      "135": null,
+      "18082": {
+        "command": null,
+        "name": null,
+        "pid": 777,
+        "type": "PortOwner"
+      },
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": {
+        "command": null,
+        "name": null,
+        "pid": 9001,
+        "type": "PortOwner"
+      },
+      "8082": {
+        "command": null,
+        "name": null,
+        "pid": 9001,
+        "type": "PortOwner"
+      }
+    },
+    "windows_time_wait_only": {
+      "135": {
+        "command": null,
+        "name": null,
+        "pid": 1160,
+        "type": "PortOwner"
+      },
+      "18082": null,
+      "51234": null,
+      "53": null,
+      "631": null,
+      "808": null,
+      "8082": null
+    }
+  },
+  "ports": [
+    8082,
+    808,
+    18082,
+    53,
+    135,
+    631,
+    51234
+  ]
+}
