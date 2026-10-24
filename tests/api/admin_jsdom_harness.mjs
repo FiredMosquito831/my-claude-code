@@ -12665,6 +12665,56 @@ const requestMedia = {};
   window.eval("closeRequestDetail()");
 }
 
+/* 7.111.0: the request detail's cache-write lines and the cost cell of a row
+   whose 1-hour writes no source prices, through the real functions. A row
+   whose host reported no split gets no line at all. */
+const costWriteSplit = {};
+{
+  const oneHourNote = {
+    usd_per_million: 6,
+    source: "litellm",
+    label: "LiteLLM, prefixed key (anthropic/claude-sonnet-5-5)",
+  };
+  const rows = {
+    noSplit: { cache_write_tokens: 900, cost_usd: 0.01, cost_source: "models_dev" },
+    fiveOnly: {
+      cache_write_tokens: 900,
+      cache_write_5m_tokens: 900,
+      cache_write_1h_tokens: 0,
+      cost_usd: 0.01,
+      cost_source: "models_dev",
+    },
+    oneHour: {
+      cache_write_tokens: 900,
+      cache_write_5m_tokens: 600,
+      cache_write_1h_tokens: 300,
+      cost_usd: 0.02,
+      cost_source: "litellm",
+      params: { cost_write_1h: oneHourNote },
+    },
+    unpriced: {
+      provider: "anthropic",
+      resolved_model: "claude-sonnet-5-5",
+      cache_write_tokens: 900,
+      cache_write_5m_tokens: 600,
+      cache_write_1h_tokens: 300,
+      cost_usd: null,
+      cost_source: "unpriced_1h_write",
+    },
+    plainUnpriced: { cache_write_tokens: 900, cost_usd: null, cost_source: null },
+  };
+  for (const [name, row] of Object.entries(rows)) {
+    const text = JSON.stringify(row);
+    const cell = window.eval(`buildCostCell(${text})`);
+    costWriteSplit[name] = {
+      split: window.eval(`formatCacheWriteSplit(${text})`),
+      rate: window.eval(`cacheWriteRateText(${text})`),
+      cellText: cell.textContent,
+      cellTitle: cell.title,
+    };
+  }
+}
+
 /* The Turn column's chips (7.95.0): a media row says what it did from the
    list's media columns; every chat row's chips stay exactly as they were.
    Driven through the real buildTurnShapeCell(). */
@@ -14601,6 +14651,7 @@ console.log(
       imageRail,
       describedImages,
       requestMedia,
+      costWriteSplit,
       turnChips,
       mediaUploads,
       analytics,

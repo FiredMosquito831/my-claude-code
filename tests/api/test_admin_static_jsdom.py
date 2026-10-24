@@ -31,6 +31,7 @@ from my_claude_code.api.marketplace_page import (
     reset_market_memory,
 )
 from my_claude_code.api.model_admin import (
+    PROMPT_CACHE_WRITE_1H_NOTE,
     prompt_cache_gateway_models,
     prompt_cache_lifetimes_payload,
 )
@@ -8698,6 +8699,33 @@ def test_requests_table_labels_media_rows(rendered) -> None:
     assert not any(row["empty"] for row in media.values())
 
 
+def test_request_detail_names_the_rate_each_cache_write_took(rendered) -> None:
+    """7.111.0: the 5 min / 1 h split and the rate each part was priced at.
+
+    A row whose host reported no split shows no new line and the cost cell it
+    always had; a row whose 1-hour writes no source prices says why.
+    """
+    split = rendered["costWriteSplit"]
+    assert split["noSplit"]["split"] is None
+    assert split["noSplit"]["rate"] is None
+    assert split["fiveOnly"]["split"] == "5 min: 900 · 1 h: 0"
+    assert split["fiveOnly"]["rate"] == "Cache writes: 900 at the 5 min rate."
+    assert split["oneHour"]["split"] == "5 min: 600 · 1 h: 300"
+    assert split["oneHour"]["rate"] == (
+        "Cache writes: 600 at the 5 min rate, 300 at the 1 h rate from "
+        "LiteLLM, prefixed key (anthropic/claude-sonnet-5-5) ($6.0000 / 1M tokens)."
+    )
+    assert split["unpriced"]["cellText"] == "—"
+    # The provider as the dashboard labels it everywhere else.
+    assert split["unpriced"]["cellTitle"].startswith(
+        "not priced: no source states the 1 h write rate for claude-sonnet-5-5 on "
+    )
+    # An ordinary unpriced row keeps the tooltip it always had.
+    assert split["plainUnpriced"]["cellTitle"] == (
+        "not priced — no source published a rate for this model"
+    )
+
+
 def test_chat_row_turn_chips_unchanged(rendered) -> None:
     """Equality: a chat row's Turn cell is exactly what it was before 7.95.0."""
     chat = rendered["turnChips"]["chat"]
@@ -10682,6 +10710,25 @@ def _prompt_cache_table() -> dict:
         "PROMPT_CACHE_TTL_SONNET": "inherit",
         "PROMPT_CACHE_TTL_HAIKU": "inherit",
     }
+    # 7.111.0: the 1-hour write rates the server lists beside the table, in
+    # its own shape (``write_1h_price_statements``): two sources for one
+    # model, none for another; every other model is not listed at all.
+    table["write_1h_prices"] = {
+        "anthropic_oauth/claude-sonnet-5-5": [
+            {
+                "usd_per_million": 6.0,
+                "source": "litellm",
+                "label": "LiteLLM, bare (claude-sonnet-5-5)",
+            },
+            {
+                "usd_per_million": 4.0,
+                "source": "openrouter_live",
+                "label": "OpenRouter live, bare model (anthropic/claude-sonnet-5-5)",
+            },
+        ],
+        "anthropic_oauth/claude-opus-5-5": [],
+    }
+    table["write_1h_note"] = PROMPT_CACHE_WRITE_1H_NOTE
     return table
 
 
@@ -10847,6 +10894,25 @@ def test_jsdom_force_unset_on_a_model_row_is_from_client(prompt_cache) -> None:
     assert unset["defaults"][0] == (
         "default From client — PROMPT_CACHE_TTL; the client's own markers go as sent"
     )
+
+
+def test_jsdom_the_lifetime_row_names_the_one_hour_write_price(prompt_cache) -> None:
+    """7.111.0: the 1-hour write price and its source, last under the control."""
+    unset = prompt_cache["models"]["unset"]["row"]
+    assert unset["defaults"][-1] == (
+        "1 h write price: $6.0000 / 1M tokens — from LiteLLM, bare "
+        "(claude-sonnet-5-5); also stated: $4.0000 by OpenRouter live, bare model "
+        "(anthropic/claude-sonnet-5-5)."
+    )
+    refused = prompt_cache["models"]["refused"]["row"]
+    assert refused["defaults"][-1].startswith(
+        "1 h write price: no source states it — a request that writes 1-hour "
+        "cache entries here is stored as not priced"
+    )
+    # A model the server did not list carries no such line.
+    for name in ("plain", "undeclared"):
+        row = prompt_cache["models"][name]["row"]
+        assert not any(line.startswith("1 h write price") for line in row["defaults"])
 
 
 def test_jsdom_an_undeclared_host_says_lifetime_control_is_not_known(
