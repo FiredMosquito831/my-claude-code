@@ -4587,11 +4587,15 @@ WEB_SEARCH_CHAIN_PAUSED=            # optional: chain entries to skip
 
 **`WEB_SEARCH_CHAIN` (7.112.0, optional).** An ordered list of search services, tried in turn; a service listed twice is tried again at its place, and `legacy` is the old DuckDuckGo scraper. Unset, the two settings above route every search exactly as before. Set, it replaces them for routing (`WEB_SEARCH_PROVIDER=disabled` still disables), and each service's keys follow the model providers' key rules (see [Multi-key rotation](#12-multi-key-rotation)): a key is benched only for a rejected key, a 429 or an out-of-credits message, a server error or a timeout moves to the next service, each key gets `PROVIDER_RETRY_ATTEMPTS` tries, and an only key is never benched into an outage. An entry without its key is skipped and named on its attempt row; `WEB_SEARCH_CHAIN_PAUSED` skips entries without removing them.
 
-**`auto` works with zero configuration.** With no keys set it falls back to keyless DuckDuckGo, so search works out of the box. Set any provider key and `auto` prefers it.
+**The Search chain card (7.113.0).** Admin → Web Search → **Search chain** edits both settings with the model chain editor: **Add search service**, a picker per row, arrows and drag (with Undo), a `×2` chip for a repeat, **Pause** per service (written to `WEB_SEARCH_CHAIN_PAUSED`), and *no key configured* on a row that will be skipped. **Apply** saves them like any setting. While a chain is set the route summary shows it and names the two settings it replaces; a provider card's **Manage keys** shows its keys' health from the pool that serves today's route, in the model rules' words (*benched 60 s: rate limited*, *out of credits*, *locked out, tier 2 of 3*), with **Reset** on a benched key; Analytics adds **Position**, **Key tries** (expands to every try on every key) and **Failure kind** once a chain has written rows, `—` on rows without them.
+
+**`CONTEXT7_API_KEY` (7.113.0).** Context7 answers a search with **library documentation** — two calls (the best-matching library, then its documentation), one result per snippet titled *library — section*, its URL the source Context7 cites, its excerpt cut at 1,000 characters with a marker. **`auto` never picks it**; use `WEB_SEARCH_PROVIDER=context7` or, better, a place in `WEB_SEARCH_CHAIN`. Several keys rotate with `CONTEXT7_API_KEY_ROTATION` like any provider. Not verified on a real key. See [docs/WEB-SEARCH.md](WEB-SEARCH.md).
+
+**`auto` works with zero configuration.** With no keys set it falls back to keyless DuckDuckGo, so search works out of the box. Set any provider key and `auto` prefers it (except Context7).
 
 A missing API key on an explicitly selected provider **fails visibly** rather than silently degrading — an unconfigured provider is an operator mistake, not an outage.
 
-14 backends are supported. Free tiers worth knowing: Exa ($10/month ongoing), Tavily (1,000 credits/month), Brave ($5/month), Serper (2,500 one-time), Linkup ($20 topped up monthly), and DuckDuckGo (keyless, unlimited, lower quality).
+15 backends are supported (14 web search services plus Context7's library documentation). Free tiers worth knowing: Exa ($10/month ongoing), Tavily (1,000 credits/month), Brave ($5/month), Serper (2,500 one-time), Linkup ($20 topped up monthly), and DuckDuckGo (keyless, unlimited, lower quality).
 
 ### The setting most worth changing
 
@@ -5454,7 +5458,7 @@ Since 6.19.0 that bench is also scoped to the **model** it happened on. Gateways
 
 Per-key state, usage and health are visible in the Admin UI, including which key served which request; the ladder and the no-header cooldown are the **Credential health** card on [Limits and resilience](#13-limits-and-resilience).
 
-**Web search keys** follow these rules only while `WEB_SEARCH_CHAIN` is set (7.112.0). Without a chain they keep their own: each key is tried once per search, and any failure — a 5xx, a timeout, a 429, a 401/403/402 — benches it (10 s up to 5 minutes), so a single-key search provider is out of service until the bench ends. See [Web search](#10-web-search).
+**Web search keys** follow these rules fully while `WEB_SEARCH_CHAIN` is set (7.112.0). Without a chain, since 7.112.1, the same three signals are the only ones that charge a key (a 5xx, a timeout or a refused connection leaves it usable) and a one-key or keyless provider is never benched into an outage, but each key is tried once per search and the bench lengths are the search pool's own (a rejected key 5 minutes doubling to an hour). Since 7.113.0 the Web Search page shows each key's bench in these words, with a Reset. See [Web search](#10-web-search).
 
 <a id="tutorial-why-my-key-was-benched"></a>
 

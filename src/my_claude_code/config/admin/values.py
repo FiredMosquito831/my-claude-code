@@ -65,7 +65,15 @@ def normalize_field_value(field: ConfigFieldSpec, value: Any) -> str:
 # Settings model already stores as "" or maps to None, so writing ``KEY=`` for
 # them says "deliberately nothing" rather than "unparseable".
 _BLANK_TOLERANT_FIELD_TYPES = frozenset(
-    {"text", "secret", "model", "optional_model", "model_chain", "textarea"}
+    {
+        "text",
+        "secret",
+        "model",
+        "optional_model",
+        "model_chain",
+        "websearch_chain",
+        "textarea",
+    }
 )
 
 

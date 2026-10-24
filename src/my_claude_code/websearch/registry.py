@@ -112,6 +112,10 @@ def resolve_provider_id(settings: Settings) -> str | None:
         if provider_id == "ddgs":
             continue
         descriptor = WEBSEARCH_CATALOG[provider_id]
+        if not descriptor.auto_select:
+            # Context7 answers with library documentation, not web results:
+            # chosen by name or as a chain entry only (7.113.0).
+            continue
         if _descriptor_is_configured(descriptor, settings):
             return provider_id
     return "ddgs"

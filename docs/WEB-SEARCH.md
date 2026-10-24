@@ -1,6 +1,6 @@
 # Web search
 
-Claude Code's official `web_search` server tool, fulfilled at the proxy by 14 search providers. Moved out of the README in 6.57.0; nothing here changed.
+Claude Code's official `web_search` server tool, fulfilled at the proxy by 15 search providers (Context7's library documentation since 7.113.0). Moved out of the README in 6.57.0.
 
 Claude Code's `web_search` is an Anthropic **server tool**: normally Anthropic's servers execute the search and bill you for it. MCC fulfills that server tool at the proxy level instead — the client emits a `web_search` tool-use block, MCC runs the search against a provider you choose (or the keyless default), and streams the results back as a regular text block. No Anthropic search credits are used, and the whole flow works with any model provider.
 
@@ -11,7 +11,7 @@ Claude Code's `web_search` is an Anthropic **server tool**: normally Anthropic's
 
 ### Search Providers
 
-MCC supports 14 search backends, resolved by `WEB_SEARCH_PROVIDER`:
+MCC supports 15 search backends, resolved by `WEB_SEARCH_PROVIDER`:
 
 | Provider | Env var | Free tier | Get a key |
 | --- | --- | --- | --- |
@@ -29,10 +29,11 @@ MCC supports 14 search backends, resolved by `WEB_SEARCH_PROVIDER`:
 | Parallel | `PARALLEL_API_KEY` | Pay-per-use from $0.005 per 10 results | [platform.parallel.ai](https://platform.parallel.ai/) |
 | SearchAPI.io | `SEARCHAPI_API_KEY` | 100 free one-time requests | [searchapi.io](https://www.searchapi.io/) |
 | SerpAPI | `SERPAPI_API_KEY` | 250 free searches/month | [serpapi.com/manage-api-key](https://serpapi.com/manage-api-key) |
+| Context7 (library docs) | `CONTEXT7_API_KEY` | Free key from the dashboard; paid plans raise the limits | [context7.com/dashboard](https://context7.com/dashboard) |
 
-`WEB_SEARCH_PROVIDER` accepts `auto` (default), `off`, `disabled`, or one of the provider IDs `ddgs | ollama | exa | tavily | brave | searxng | jina | serper | firecrawl | linkup | perplexity | parallel | searchapi | serpapi`:
+`WEB_SEARCH_PROVIDER` accepts `auto` (default), `off`, `disabled`, or one of the provider IDs `ddgs | ollama | exa | tavily | brave | searxng | jina | serper | firecrawl | linkup | perplexity | parallel | searchapi | serpapi | context7`:
 
-- **`auto`** picks the first configured provider in catalog order; with no keys set it falls back to keyless `ddgs`, so search works **zero-config out of the box**.
+- **`auto`** picks the first configured provider in catalog order — never `context7`, which answers with library documentation rather than web pages; with no keys set it falls back to keyless `ddgs`, so search works **zero-config out of the box**.
 - **`off`** preserves the legacy DuckDuckGo HTML scraper without using the provider registry.
 - **`disabled`** rejects web searches without making an outbound search request.
 - An explicit ID pins that provider and is strict by default: missing credentials or upstream failure are surfaced instead of silently changing providers.
@@ -85,6 +86,25 @@ WEB_SEARCH_CHAIN_PAUSED=                  # entries to skip without removing the
 ```
 
 Unset, nothing changes: `WEB_SEARCH_PROVIDER` and `WEB_SEARCH_FALLBACK_POLICY` route every search exactly as before. Set, the chain replaces both for routing (`WEB_SEARCH_PROVIDER=disabled` still disables search). Entries are the provider IDs above plus `legacy` (the old DuckDuckGo scraper). An entry whose key is not set is skipped and its attempt row names the variable; a paused entry is skipped; an entry whose every key is cooling down for at least `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` is stepped over unless it is the last one. A 400 from one service moves on to the next (each builds its own request); a failure kind listed in `FALLBACK_SKIP_KINDS` ends the search; `FALLBACK_TOTAL_TIMEOUT` (0 = none) bounds the whole search. No proxy chains apply to search; `WEBSEARCH_PROXY` and the system proxy behave as before.
+
+**On the dashboard (7.113.0).** **Admin → Web Search → Search chain** draws the chain with the same editor as a model fallback chain: **Add search service** adds a row with a picker of every service above plus the old scraper; the arrows and the grip reorder it (a drag says what it moved and offers **Undo**); a service you list twice shows a `×2` chip and is tried again at its place; **Pause** on a row pauses that service at every place it is listed (`WEB_SEARCH_CHAIN_PAUSED`); a row whose service has no key says *no key configured* — the search skips it. Nothing is written until **Apply**, through the same save as every other setting. With a chain set, the route summary at the top of the page shows the chain instead of the provider route and says plainly that Web Search Provider and Fallback Policy are not used while it is; each provider card says where it sits in the chain (`Search chain #1, #3`) or that it is not in it.
+
+<div align="center">
+  <img src="../assets/admin-websearch-chain.png" alt="The Search chain card: three rows Exa, Context7 and Tavily, each with a drag grip, a number, a service picker, Pause and move buttons, an Add search service button and the setting's help text" width="820">
+  <p><em>The Search chain card: one row per service, in try order.</em></p>
+</div>
+
+**Key health on the page.** A provider card's **Manage keys** shows each key's health from the pool that serves today's route — the chain's books when the chain lists that service (the card says so), otherwise the provider's own pool — in the model rules' words: *benched 60 s: rate limited*, *benched 30 s: out of credits*, *locked out, tier 2 of 3 (1h left)*. A benched key has a **Reset** button that puts it back in service at once (nothing is saved; on the chain it is the model pool's own reset).
+
+**In Analytics.** Once a chain has written rows, the Recent requests table gains **Position** (the entry's place in the chain), **Key tries** (expands to every try on every key — status, time, the wait slept, and what the pool decided: *benched 300s (auth) → next key*) and **Failure kind**; the **View** dialog shows the same tries under *Key tries*. A row written without a chain, or before 7.112.0, shows `—` in them — not measured, never 0.
+
+### Context7: library documentation as a search service (7.113.0)
+
+Context7 returns up-to-date **documentation and code examples for software libraries**, not web pages. Add `CONTEXT7_API_KEY` (keys start with `ctx7sk`; a comma list rotates like every other provider, with `CONTEXT7_API_KEY_ROTATION`), then either choose it by name (`WEB_SEARCH_PROVIDER=context7`) or — more useful — put it in the search chain where you want documentation answers, e.g. `WEB_SEARCH_CHAIN=context7,exa,tavily`. **`auto` never picks it**, so a key you set for it (or export for another tool) never turns every web search into a documentation lookup.
+
+One search is two calls with `Authorization: Bearer <key>`: `GET https://context7.com/api/v2/libs/search` resolves the query to the best-matching library, then `GET /v2/context` returns that library's documentation for the query. Each snippet becomes one result: the title is the library and the section (*Next.js — Cache a fetch request*), the URL is the source Context7 cites, and the excerpt is the description followed by the code, cut at 1,000 characters with a visible `…[excerpt truncated]` marker (the digest's page-text cap, `WEBSEARCH_DIGEST_CONTENT_CHARS`, reads a longer form). No matching library is an empty answer, not an error. A rejected key, a 429 (with Context7's `Retry-After`), a 5xx or an unreadable answer are handled exactly as for every other provider, with or without a chain. Context7 has no advanced options and no domain filters.
+
+The API was read from Context7's own clients (`@upstash/context7-mcp` and `@upstash/context7-sdk`); MCC's adapter has been proven against recorded responses of that shape, **not verified on a real key**.
 
 ### Advanced options
 
@@ -213,7 +233,7 @@ Every logical search and each provider attempt are recorded by a non-blocking ba
   <p><em>Web search analytics: the chart and the first table count logical searches; the tables below them count provider attempts, which is why the numbers differ.</em></p>
 </div>
 
-The Admin UI keeps the two levels explicit: top cards and the main trend chart report logical searches, route success/fallback rate, average attempts, and end-to-end latency, while provider/key tables and recent rows report individual attempts. Each recent row has an accessible **View** dialog with effective configuration, tool input, a readable answer/result summary, and the complete normalized output JSON. Filtering searches captured input/output as well as query previews, and JSON export includes the captured detail payloads. Existing pre-4.12 attempt history remains visible, but logical-route metrics begin with 4.12:
+The Admin UI keeps the two levels explicit: top cards and the main trend chart report logical searches, route success/fallback rate, average attempts, and end-to-end latency, while provider/key tables and recent rows report individual attempts. Each recent row has an accessible **View** dialog with effective configuration, tool input, a readable answer/result summary, and the complete normalized output JSON (and, for a search chain row, its position, outcome, failure kind and per-key tries, as described under Search chain above). Filtering searches captured input/output as well as query previews, and JSON export includes the captured detail payloads. Existing pre-4.12 attempt history remains visible, but logical-route metrics begin with 4.12:
 
 ```bash
 WEBSEARCH_LOG_ENABLED=true

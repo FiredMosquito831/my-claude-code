@@ -9,6 +9,7 @@ from my_claude_code.config.admin.manifest import (
     ConfigFieldSpec,
     ConfigOptionSpec,
 )
+from my_claude_code.config.admin.values import blank_is_accepted
 from my_claude_code.config.admin.websearch_manifest import (
     ROTATION_POLICY_OPTIONS,
     websearch_field_specs,
@@ -115,7 +116,8 @@ def test_secret_fields_generated_for_every_keyed_catalog_provider() -> None:
         for descriptor in WEBSEARCH_CATALOG.values()
         if descriptor.credential_env is not None
     ]
-    assert len(keyed) == 12
+    # 7.113.0: Context7 is the 13th.
+    assert len(keyed) == 13
     for descriptor in keyed:
         field = FIELD_BY_KEY.get(descriptor.credential_env)
         assert field is not None, f"{descriptor.credential_env} missing from manifest"
@@ -155,6 +157,17 @@ def test_searxng_base_url_field() -> None:
     assert field.section_id == "websearch"
     assert field.settings_attr == "searxng_base_url"
     assert field.secret is False
+
+
+def test_the_search_chain_is_drawn_by_its_editor_and_may_be_emptied() -> None:
+    """7.113.0: the Search chain card; an empty value is a legal "no chain"."""
+
+    chain = FIELD_BY_KEY["WEB_SEARCH_CHAIN"]
+    assert chain.field_type == "websearch_chain"
+    assert blank_is_accepted(chain)
+    # Pauses are edited by the card's rows; the field itself stays plain text.
+    assert FIELD_BY_KEY["WEB_SEARCH_CHAIN_PAUSED"].field_type == "text"
+    assert "context7" in chain.description
 
 
 def test_websearch_field_specs_cover_section_fields() -> None:

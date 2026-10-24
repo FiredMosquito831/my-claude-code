@@ -272,7 +272,11 @@ _REQUEST_COLUMNS = (
     "id, ts_epoch, ts_iso, provider, key_index, key_label, query, results_count,"
     " duration_ms, status, error_kind, error_message, cost_usd, route_id,"
     " attempt_number, input_chars, output_chars, input_sha256, output_sha256,"
-    " content_captured"
+    " content_captured,"
+    # 7.113.0: the search chain's four columns (7.112.0), read for the
+    # Analytics table and its ladder. NULL on every row a search without a
+    # chain wrote, and on every row from before 7.112.0.
+    " chain_position, outcome, failure_kind, tries_json"
 )
 
 _REQUEST_DETAIL_COLUMNS = (

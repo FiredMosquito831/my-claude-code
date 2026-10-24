@@ -392,6 +392,17 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "country refusal (7.96.0); region_refusal_on_cause_chain is that "
         "pool's own reader, read here, never restated."
     ),
+    # 7.113.0: the Web Search page shows the chain's books in the pool
+    # snapshot's shape (specs/INVESTIGATION-WEBSEARCH-ROUTING.md §3.5).
+    (
+        "my_claude_code.api.web_tools.search_key_health",
+        "my_claude_code.providers.credential_rotation",
+    ): (
+        "Owner: the Web Search page's key health projection. "
+        "Reason: a key the model pool benched for an exhausted balance is "
+        "named by that pool's own QUOTA_BENCH_REASON, read here, never "
+        "restated; the books' CredentialRotationState is read, never edited."
+    ),
     (
         "my_claude_code.api.admin_custom_routes",
         "my_claude_code.providers.runtime.rotating",

@@ -4729,6 +4729,14 @@ if (process.env.MCC_JSDOM_SCENARIO === "marketplaces") {
   const { prepareMarketplacesScenario } = await import("./admin_jsdom_marketplaces.mjs");
   scenario = prepareMarketplacesScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=websearch_chain (7.113.0): the Web Search page with no
+   chain (its DOM, for the base-tree equality), the Search chain card, key
+   health words and Reset, the Context7 card, the Analytics tries ladder
+   (admin_jsdom_websearch_chain.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "websearch_chain") {
+  const { prepareWebSearchChainScenario } = await import("./admin_jsdom_websearch_chain.mjs");
+  scenario = prepareWebSearchChainScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
