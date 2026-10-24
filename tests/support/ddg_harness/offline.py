@@ -14,6 +14,7 @@ import asyncio.proactor_events
 import contextlib
 import ipaddress
 import socket
+import sys
 from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlsplit
@@ -57,19 +58,32 @@ def _refuse(what: str, target: object) -> None:
     raise OfflineViolation(f"DDG harness: {what} {target!r} refused (offline only)")
 
 
+#: Whether a ``guard()`` is active (the audit hook below is process-lifetime).
+_active = [False]
+_hook_installed = [False]
+
+
+def _lookup_hook(event: str, args: tuple[Any, ...]) -> None:
+    # ``socket.getaddrinfo`` raises this audit event before it resolves. The
+    # guard listens here rather than rebinding ``socket.getaddrinfo``: only
+    # tests/support/hermetic.py and token_host_block.py may rebind that
+    # (tests/test_no_live_token_hosts.py), and an audit hook rebinds nothing.
+    if _active[0] and event == "socket.getaddrinfo" and args:
+        host = args[0]
+        if not (_local(host) or _literal(host)):
+            _refuse("name lookup of", host)
+
+
 @contextlib.contextmanager
 def guard() -> Iterator[None]:
-    real_getaddrinfo = socket.getaddrinfo
+    if not _hook_installed[0]:
+        sys.addaudithook(_lookup_hook)
+        _hook_installed[0] = True
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
     proactor = asyncio.proactor_events.BaseProactorEventLoop
     real_sock_connect = proactor.sock_connect
     real_ddgs_request = ddgs_http_client.HttpClient.request
-
-    def getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
-        if not (_local(host) or _literal(host)):
-            _refuse("name lookup of", host)
-        return real_getaddrinfo(host, *args, **kwargs)
 
     def connect(self: socket.socket, address: Any) -> None:
         if isinstance(address, tuple) and address and not _local(address[0]):
@@ -93,9 +107,12 @@ def guard() -> Iterator[None]:
         return real_ddgs_request(self, *args, **kwargs)
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(socket, "getaddrinfo", getaddrinfo)
         patch.setattr(socket.socket, "connect", connect)
         patch.setattr(socket.socket, "connect_ex", connect_ex)
         patch.setattr(proactor, "sock_connect", sock_connect)
         patch.setattr(ddgs_http_client.HttpClient, "request", ddgs_request)
-        yield
+        _active[0] = True
+        try:
+            yield
+        finally:
+            _active[0] = False
