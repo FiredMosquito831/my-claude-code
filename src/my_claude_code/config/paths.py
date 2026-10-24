@@ -59,6 +59,8 @@ LEARNED_FACTS_FILENAME = "learned_facts.json"
 MEDIA_REQUEST_FIELDS_FILENAME = "media_request_fields.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 PROXY_CHAINS_FILENAME = "proxy_chains.json"
+# 7.109.0: the marketplace selection profiles an override row names by name.
+MARKETPLACE_PROFILES_FILENAME = "marketplace_profiles.json"
 CREDENTIAL_NAMES_FILENAME = "credential_names.json"
 PROXY_FETCH_STATUS_FILENAME = "proxy_fetch_status.json"
 PROXY_SPEED_FILENAME = "proxy_speed.json"
@@ -591,6 +593,18 @@ def credential_names_path() -> Path:
     """
 
     return config_dir_path() / CREDENTIAL_NAMES_FILENAME
+
+
+def marketplace_profiles_path() -> Path:
+    """Return the marketplace selection profile store (7.109.0).
+
+    Its own document beside ``model_overrides.json`` rather than rows in it:
+    a profile is an object, and that file refuses objects -- its allow-list is
+    a body-injection boundary. An override row names a profile; the profile
+    lives here, written owner-only like ``proxy_chains.json``.
+    """
+
+    return config_dir_path() / MARKETPLACE_PROFILES_FILENAME
 
 
 def proxy_chains_path() -> Path:

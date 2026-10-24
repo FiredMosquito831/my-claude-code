@@ -5,6 +5,7 @@ from typing import Any
 
 from loguru import logger
 
+from my_claude_code.application.marketplace import MarketplaceChoice
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
@@ -108,8 +109,14 @@ class MistralProvider(OpenAIChatProvider):
         *,
         surface_label: str = "",
         wire_notes: Mapping[str, str] | None = None,
+        marketplace: MarketplaceChoice | None = None,
     ) -> tuple[Any, dict]:
+        # ``marketplace`` is passed through untouched (7.109.0); Mistral
+        # declares no marketplace, so it is always ``None`` here.
         stream, final_body = await super()._create_stream(
-            body, surface_label=surface_label, wire_notes=wire_notes
+            body,
+            surface_label=surface_label,
+            wire_notes=wire_notes,
+            marketplace=marketplace,
         )
         return normalize_mistral_stream(stream), final_body

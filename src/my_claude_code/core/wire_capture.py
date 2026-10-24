@@ -689,6 +689,11 @@ class WireTrace:
     # never opened a stream -- which is a different statement from an empty
     # tally.
     responses: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # 7.109.0: what a price marketplace reported about each attempt -- its
+    # own response headers, verbatim, and the charge it named. Written only
+    # by a provider whose profile declares a marketplace, so for every other
+    # attempt there is no entry and the request log carries no such key.
+    marketplace: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     def record(self, body: Mapping[str, Any]) -> None:
         # Last write wins: a create-level retry rewrites the body (dropping
@@ -744,6 +749,31 @@ def record_wire_request(body: Mapping[str, Any], **extra: Any) -> None:
     if slot is None:
         return
     slot.record({**body, **extra} if extra else body)
+
+
+def record_marketplace_readback(
+    *,
+    headers: Mapping[str, str] | None = None,
+    charged_usd: float | None = None,
+) -> None:
+    """Keep what a marketplace said about the current attempt (7.109.0).
+
+    ``headers`` are its allow-listed response headers, verbatim; a later
+    response of the same attempt (a create-level retry) replaces them, as the
+    last body sent replaces the first. ``charged_usd`` is the cost it
+    reported. Absent stays absent -- never a zero standing in for silence.
+    A no-op outside a tracked request.
+    """
+    slot = _WIRE_TRACE.get()
+    if slot is None:
+        return
+    entry = slot.marketplace.setdefault(slot.current_attempt, {})
+    if headers:
+        entry["headers"] = {str(name): str(value) for name, value in headers.items()}
+    if charged_usd is not None:
+        entry["charged_usd"] = charged_usd
+    if not entry:
+        slot.marketplace.pop(slot.current_attempt, None)
 
 
 def record_reasoning_adaptation(kind: ReasoningAdaptationKind, message: str) -> None:

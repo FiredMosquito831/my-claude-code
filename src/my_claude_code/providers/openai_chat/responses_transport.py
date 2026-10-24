@@ -35,6 +35,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from my_claude_code.config.marketplaces import MarketplaceDialect
 from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import EMPTY_TOOL_CATALOGUE
@@ -88,6 +89,12 @@ from my_claude_code.providers.recovery import (
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .client_identity import ClientIdentity, identity_headers_for_body
+from .marketplace import (
+    current_marketplace_attempt,
+    no_offer_failure,
+    record_marketplace_error_headers,
+    record_marketplace_headers,
+)
 from .opencode_catalogue import STAND_IN_INPUT_SCHEMA
 from .opencode_identity import identity_wire_record
 
@@ -245,8 +252,13 @@ class ResponsesTransport:
         ) = None,
         memory: RecoveryMemory | None = None,
         tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
+        marketplace: MarketplaceDialect | None = None,
     ) -> None:
         self._config = config
+        # The price marketplace this host is (7.109.0), or ``None`` -- every
+        # host but InferHub -- for which every header set, every send and
+        # every failure below is exactly 7.108.0's.
+        self._marketplace = marketplace
         self._declared_tool_name_max_length = tool_name_max_length
         # What this host's validator refuses in a tool schema. The Responses
         # default unless the profile declared another vocabulary -- never
@@ -365,6 +377,11 @@ class ResponsesTransport:
             "Content-Type": "application/json",
         }
         headers.update(self.identity_headers(body))
+        if self._marketplace is not None:
+            # 7.109.0: the attempt's ceiling, after the identity.
+            attempt = current_marketplace_attempt()
+            if attempt is not None:
+                headers.update(attempt.headers)
         return headers
 
     def identity_headers(self, body: Mapping[str, Any]) -> dict[str, str]:
@@ -676,6 +693,19 @@ class ResponsesTransport:
                     self.send, body=current, headers=headers
                 )
             except Exception as error:
+                if self._marketplace is not None:
+                    # 7.109.0: what the refusal said, and the one 402 that is
+                    # not out of credits as the door's short 400.
+                    record_marketplace_error_headers(self._marketplace, error)
+                    attempt = current_marketplace_attempt()
+                    refusal = no_offer_failure(
+                        self._marketplace,
+                        error,
+                        model_id=request.model,
+                        choice=None if attempt is None else attempt.choice,
+                    )
+                    if refusal is not None:
+                        raise refusal from error
                 learning = _next_responses_recovery(
                     request, error, current, used, self.tool_catalogue(request)
                 )
@@ -722,6 +752,8 @@ class ResponsesTransport:
                 continue
             for learned in pending:
                 self._remember(request, learned)
+            if self._marketplace is not None:
+                record_marketplace_headers(self._marketplace, response.headers)
             return response
 
     def _remember(self, request: MessagesRequest, learning: _ResponsesLearning) -> None:

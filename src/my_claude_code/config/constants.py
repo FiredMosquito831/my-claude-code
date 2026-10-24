@@ -391,6 +391,10 @@ MODEL_PROBE_NEW_MODELS_DEFAULT = False
 # (7.84.0). On: the user asked for the rung (2026-10-08 21:00). Display, kind
 # lists and agent catalogues only -- routing never reads it.
 MODEL_METADATA_OPENROUTER_LIVE_DEFAULT = True
+# InferHub's keyless public market pages as a source of its market snapshot
+# (7.109.0, the user's Q8): read hourly and on a models refresh, only while
+# InferHub has a key. Off: the snapshot uses the keyed list's levels alone.
+MARKETPLACE_PUBLIC_MARKET_DEFAULT = True
 # Escalating bench for a credential the provider keeps rejecting with 401/403,
 # indexed by consecutive auth failures and clamped at the last entry. Auth is
 # the one failure a key can own outright, so it is the one ladder that stays.

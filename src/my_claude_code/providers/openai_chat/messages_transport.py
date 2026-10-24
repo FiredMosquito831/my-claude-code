@@ -68,7 +68,10 @@ from typing import Any
 
 from loguru import logger
 
+from my_claude_code.application.marketplace import MarketplaceChoice
+from my_claude_code.config.marketplaces import MarketplaceDialect
 from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_gateway_family
+from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
     EMPTY_TOOL_CATALOGUE,
@@ -94,6 +97,16 @@ from my_claude_code.providers.recovery import (
 )
 
 from .client_identity import ClientIdentity, identity_headers_for_body
+from .marketplace import (
+    current_marketplace_attempt,
+    no_offer_failure,
+    record_marketplace_headers,
+)
+
+
+def _attempt_choice() -> MarketplaceChoice | None:
+    attempt = current_marketplace_attempt()
+    return None if attempt is None else attempt.choice
 
 #: The two rungs this surface adds, named once so the ladder row, the log line
 #: and the learning all agree on the word the operator reads. Spelled for the
@@ -272,8 +285,14 @@ class MessagesTransport:
             Callable[[MessagesRequest], Mapping[str, str]] | None
         ) = None,
         memory: RecoveryMemory | None = None,
+        marketplace: MarketplaceDialect | None = None,
     ) -> None:
         self._identity = identity
+        # The price marketplace this host is (7.109.0), or ``None`` -- every
+        # host but InferHub -- in which case nothing below differs from the
+        # transport 7.108.0 built: the same header provider, no observer, no
+        # failure override, no refusal read.
+        self._marketplace = marketplace
         # What this host has taught MCC about its own request validator. The
         # same memory the other two doors write to, under the same fact kinds,
         # because the facts are statements about the *host*: a deployment that
@@ -297,7 +316,11 @@ class MessagesTransport:
             provider_name=provider_name,
             rate_limiter=rate_limiter,
             auth=GatewayMessagesAuth(api_key, api_key_provider=api_key_provider),
-            header_provider=self.identity_headers,
+            header_provider=(
+                self.identity_headers
+                if marketplace is None
+                else self._identity_and_ceiling_headers
+            ),
             # The same catalogue id the gateway's other surfaces use: what this
             # host said about a model does not stop being true because the
             # request reached it through a different door.
@@ -306,6 +329,34 @@ class MessagesTransport:
             # no cache lifetime (7.105.0): a lifetime only where this
             # provider's or model's override row sets one.
             prompt_cache_family=prompt_cache_gateway_family(),
+        )
+        if marketplace is not None:
+            dialect = marketplace
+            self._provider.set_response_observer(
+                lambda headers, _status: record_marketplace_headers(dialect, headers)
+            )
+            self._provider.set_failure_override(self._no_offer_override)
+
+    def _identity_and_ceiling_headers(self, body: Mapping[str, Any]) -> dict[str, str]:
+        """The identity, then the attempt's ceiling headers (a marketplace only)."""
+
+        headers = self.identity_headers(body)
+        attempt = current_marketplace_attempt()
+        if attempt is not None and attempt.headers:
+            headers = {**headers, **attempt.headers}
+        return headers
+
+    def _no_offer_override(self, error: Exception) -> ExecutionFailure | None:
+        """Agree with the door about the one 402 that is not out of credits."""
+
+        if self._marketplace is None:
+            return None
+        attempt = current_marketplace_attempt()
+        return no_offer_failure(
+            self._marketplace,
+            error,
+            model_id="" if attempt is None else attempt.model_id,
+            choice=None if attempt is None else attempt.choice,
         )
 
     @property
@@ -457,6 +508,17 @@ class MessagesTransport:
             except Exception as error:
                 if committed:
                     raise
+                if self._marketplace is not None:
+                    # 7.109.0: the marketplace's "nothing under your ceiling",
+                    # and only that code, as the door's short 400.
+                    refusal = no_offer_failure(
+                        self._marketplace,
+                        error,
+                        model_id=current.model,
+                        choice=_attempt_choice(),
+                    )
+                    if refusal is not None:
+                        raise refusal from error
                 learning = _next_messages_recovery(
                     current, _stated_rejection(error), codec, used, self._codec_for
                 )

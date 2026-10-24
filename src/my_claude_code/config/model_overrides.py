@@ -61,6 +61,7 @@ from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_MAX_MINUTES,
     PROMPT_CACHE_TTL_MIN_MINUTES,
 )
+from my_claude_code.config.marketplace_profiles import profile_name_problem
 from my_claude_code.config.paths import model_overrides_path
 
 PROVIDERS_KEY = "providers"
@@ -124,6 +125,16 @@ ALLOWED_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
 #: that level, so MCC sets no lifetime for the model even where a Model Config
 #: tier asks for one; absent inherits the next level down. It never reaches a
 #: body as itself: the provider writes the host's own lifetime field instead.
+#:
+#: ``marketplace_profile`` (7.109.0) names the marketplace selection profile
+#: (``marketplace_profiles.json``) that decides the price ceiling a
+#: marketplace gateway is sent for this model, on a provider row or a model
+#: row -- a request choice like the lifetime above. A profile *name*, never
+#: the profile: objects are refused here. A name forces that profile;
+#: ``null`` forces "the marketplace decides" (no ceiling) at that level;
+#: absent inherits. It never reaches a body: the provider sends the ceiling
+#: as the marketplace's own request headers, and only for a provider whose
+#: profile declares a marketplace.
 NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
     {
         "response_surface",
@@ -131,6 +142,7 @@ NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
         "max_output_tokens",
         "context_length",
         "prompt_cache_ttl",
+        "marketplace_profile",
     }
 )
 
@@ -139,6 +151,7 @@ REASONING_PREFERENCE_OVERRIDE = "reasoning_preference"
 MAX_OUTPUT_TOKENS_OVERRIDE = "max_output_tokens"
 CONTEXT_LENGTH_OVERRIDE = "context_length"
 PROMPT_CACHE_TTL_OVERRIDE = "prompt_cache_ttl"
+MARKETPLACE_PROFILE_OVERRIDE = "marketplace_profile"
 
 #: The two non-body keys the Models page editor may write. A strict subset of
 #: :data:`NON_BODY_OVERRIDE_PARAMETERS`: ``response_surface`` is written by the
@@ -227,6 +240,31 @@ def prompt_cache_ttl_problem(value: object) -> str | None:
             f"{PROMPT_CACHE_TTL_MAX_MINUTES} minutes"
         )
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class StatedMarketplaceProfile:
+    """One override row's marketplace profile: a name, or ``None``.
+
+    ``None`` is the force-unset state -- "the marketplace decides" at this
+    row: no ceiling is sent, whatever the level below names. "Nothing stated"
+    is not this object at all;
+    :meth:`ModelParameterOverrides.marketplace_profile_rows` returns ``None``
+    for it.
+    """
+
+    name: str | None
+
+
+def marketplace_profile_problem(value: object) -> str | None:
+    """Why ``value`` cannot name a marketplace profile, or ``None`` if it can.
+
+    Only the name's shape is checked here; whether a profile of that name
+    exists is the store's question, asked where a row is saved and again on
+    every request (a row naming a deleted profile refuses the request).
+    """
+
+    return profile_name_problem(value)
 
 
 def normalize_override_key(raw: str) -> str:
@@ -408,6 +446,28 @@ class ModelParameterOverrides:
             stated(self.providers.get(normalize_override_key(provider_id), {})),
         )
 
+    def marketplace_profile_rows(
+        self, provider_id: str, model_ref: str
+    ) -> tuple[StatedMarketplaceProfile | None, StatedMarketplaceProfile | None]:
+        """The model row's and the provider row's marketplace profile (7.109.0).
+
+        Kept apart for the reason :meth:`prompt_cache_ttl_rows` is: the
+        request records which row decided, and the Models page draws each.
+        ``None`` at a level means that row says nothing; a
+        :class:`StatedMarketplaceProfile` whose ``name`` is ``None`` means the
+        row says ``null`` -- "the marketplace decides" there.
+        """
+
+        def stated(row: Mapping[str, Any]) -> StatedMarketplaceProfile | None:
+            if MARKETPLACE_PROFILE_OVERRIDE not in row:
+                return None
+            return StatedMarketplaceProfile(row[MARKETPLACE_PROFILE_OVERRIDE])
+
+        return (
+            stated(self.models.get(normalize_override_key(model_ref), {})),
+            stated(self.providers.get(normalize_override_key(provider_id), {})),
+        )
+
     def as_document(self) -> dict[str, dict[str, dict[str, Any]]]:
         """Render back to the on-disk shape."""
 
@@ -499,6 +559,18 @@ def _parse_parameters(
                     where,
                     name,
                     lifetime_problem,
+                )
+                continue
+        if name == MARKETPLACE_PROFILE_OVERRIDE and value is not None:
+            # ``null`` is the force-"marketplace decides" state and always
+            # well-formed; a provider row is as valid as a model row.
+            profile_problem = marketplace_profile_problem(value)
+            if profile_problem is not None:
+                logger.warning(
+                    "MODEL OVERRIDES: '{}.{}' {}; ignoring it",
+                    where,
+                    name,
+                    profile_problem,
                 )
                 continue
         parameters[name] = value
