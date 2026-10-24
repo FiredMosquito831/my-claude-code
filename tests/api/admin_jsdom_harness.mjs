@@ -4721,6 +4721,14 @@ if (process.env.MCC_JSDOM_SCENARIO === "prompt_cache") {
   const { preparePromptCacheScenario } = await import("./admin_jsdom_prompt_cache.mjs");
   scenario = preparePromptCacheScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=marketplaces (7.110.0): the InferHub page -- sidebar
+   link, every block from the server's own payloads, the editor's checks,
+   one assignment write path, the ladder's ceiling line, NULL as a dash, the
+   no-key state (admin_jsdom_marketplaces.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "marketplaces") {
+  const { prepareMarketplacesScenario } = await import("./admin_jsdom_marketplaces.mjs");
+  scenario = prepareMarketplacesScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

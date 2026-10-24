@@ -16,14 +16,26 @@ import shutil
 import subprocess
 from itertools import pairwise
 from pathlib import Path
-from typing import NoReturn
+from types import SimpleNamespace
+from typing import Any, NoReturn, cast
 
 import pytest
 
+from my_claude_code.api.marketplace_page import (
+    match_charged,
+    offers_payload,
+    page_payload,
+    recent_rows,
+    remember_account,
+    reset_account_memory,
+    reset_market_memory,
+)
 from my_claude_code.api.model_admin import (
     prompt_cache_gateway_models,
     prompt_cache_lifetimes_payload,
 )
+from my_claude_code.application import marketplace as application_marketplace
+from my_claude_code.application.marketplace import market_snapshot_from_payload
 from my_claude_code.application.prompt_cache import adapt_prompt_cache_minutes
 from my_claude_code.config.admin.manifest import (
     FIELD_BY_KEY,
@@ -31,11 +43,17 @@ from my_claude_code.config.admin.manifest import (
     SECTIONS,
     ConfigOptionSpec,
 )
+from my_claude_code.config.marketplace_profiles import (
+    MarketplaceProfiles,
+    parse_profile,
+)
+from my_claude_code.config.model_overrides import ModelParameterOverrides
 from my_claude_code.config.model_refs import ConfiguredChatModelRef
 from my_claude_code.config.prompt_cache_lifetimes import (
     ANTHROPIC_MESSAGES_LIFETIMES,
     PROMPT_CACHE_LIFETIME_FAMILIES,
 )
+from my_claude_code.config.settings import Settings
 from my_claude_code.core.upstream_ladder import _TIMES
 
 HARNESS = Path(__file__).with_name("admin_jsdom_harness.mjs")
@@ -11112,3 +11130,548 @@ def test_jsdom_the_14th_key_moves_no_other_row_body_or_block(
     assert _without_the_lifetime(_capture(run)) == _capture(MODELS_FIELDS_7_104_0)
     assert run["mediaSection"] == MODELS_FIELDS_7_104_0["mediaSection"]
     assert run["mcpNotes"] == MODELS_FIELDS_7_104_0["mcpNotes"]
+
+
+# --------------------------------------------------------------------------
+# 7.110.0: the InferHub page. One run of admin_jsdom_marketplaces.mjs
+# (MCC_JSDOM_SCENARIO=marketplaces) on payloads the real page builders
+# (api/marketplace_page.py) produce from in-memory stores -- no file, no
+# network. The snapshot reader the ceiling computation asks is pointed at the
+# same in-memory snapshot for the length of the build.
+
+MKT_KEY = "sk-airo-" + "j" * 24
+MKT_OPUS = "cc/claude-opus-4-6"
+MKT_ASTRA = "cx/gpt-6-astra"
+MKT_THINKING = "ag/claude-opus-4-6-thinking"
+MKT_SNAPSHOT: dict[str, Any] = {
+    "fetched_at": "2026-10-24T01:07:35Z",
+    "sources": {
+        "listing": "ok",
+        "market": "ok",
+        "status": "ok",
+        "pricing_cache": "ok",
+        "pricing_config": "ok",
+        "catalog": "ok",
+        "combos": "ok",
+    },
+    "platform": {"max_ask_pct_of_official": 0.5},
+    "notes": {
+        "cc": "A one-line Claude Code client header is added. <b>bold?</b>",
+        "cx": "Your system prompt is sent as a developer message.",
+    },
+    "combos": [
+        {"id": "combo/fast", "members": [MKT_OPUS, MKT_ASTRA], "selection": "fastest"}
+    ],
+    "models": {
+        MKT_OPUS: {
+            "official": [5.0, 25.0],
+            "levels_in": [[0.75, 38], [1.0, 10], [2.5, 3]],
+            "levels_out": [[3.75, 38], [5.0, 10], [12.5, 3]],
+            "min": [0.75, 3.75],
+            "max": [2.5, 12.5],
+            "last": 1.9,
+            "perf": {"success_pct": 99.1, "ttft_ms": 812.0, "tps": 61.5},
+            "cache_hit": 0.62,
+        },
+        MKT_ASTRA: {
+            "official": [1.25, 10.0],
+            "levels_in": [[0.3, 10], [0.6, 4]],
+            "levels_out": [[2.4, 10], [4.8, 4]],
+            "min": [0.3, 2.4],
+        },
+        MKT_THINKING: {
+            "official": [5.0, 25.0],
+            "levels_in": [[0.005, 1052], [2.5, 3]],
+            "levels_out": [[0.025, 1052], [12.5, 3]],
+        },
+    },
+}
+MKT_PROFILES = {
+    "cap20": {"kind": "pct_of_official", "percent": 20},
+    "tight": {"kind": "max_price", "max_input_usd": 0.5, "max_output_usd": 2.5},
+    "follow": {"kind": "cheapest_level_now"},
+}
+MKT_ACCOUNT = {
+    "state": "read",
+    "reads": {
+        "usage": {
+            "status": "ok",
+            "body": {
+                "currency": "USDC",
+                "balance": {"amount_usdc": "1.000000"},
+                "window": {"kind": "day", "spend_usdc": "0.012000", "requests": 3},
+                "all_time": {"spend_usdc": "0.500000", "requests": 40},
+            },
+        },
+        "keys": {"status": "ok"},
+        "budgets": {"status": "http_403", "code": "insufficient_key_scope"},
+        "budget_aliases": {"status": "http_403", "code": "insufficient_key_scope"},
+        "budget_default": {"status": "http_403", "code": "insufficient_key_scope"},
+    },
+    "key_kind": {"kind": "inference", "how": "key_list"},
+}
+
+
+def _mkt_profiles(documents: dict[str, Any]) -> MarketplaceProfiles:
+    parsed = {}
+    for name, document in documents.items():
+        profile, problem = parse_profile(name, document)
+        assert profile is not None, problem
+        parsed[name] = profile
+    return MarketplaceProfiles(profiles=parsed)
+
+
+def _mkt_recent() -> list[dict[str, Any]]:
+    ceiling = {
+        "profile": "cap20",
+        "kind": "pct_of_official",
+        "sent": {"x-max-input-price": "1", "x-max-output-price": "5"},
+    }
+    headers = {
+        "x-inferhub-model": MKT_OPUS,
+        "x-inferhub-publisher": "6b652a8e5328",
+        "x-inferhub-request-id": "08a9befdcacfb82b",
+        "x-inferhub-attempt": "1",
+    }
+
+    def request(request_id: str, ts: float) -> dict[str, Any]:
+        return {
+            "id": request_id,
+            "ts_epoch": ts,
+            "ts_iso": "2026-10-24T01:20:00Z",
+            "resolved_model": f"inferhub/{MKT_OPUS}",
+            "status": "success",
+            "tokens_in": 1000,
+            "tokens_out": 200,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+        }
+
+    def attempt(request_id: str, marketplace: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "request_id": request_id,
+            "attempt": 1,
+            "attempt_provider": "inferhub",
+            "outcome": "succeeded",
+            "_attempt_params": {"marketplace": marketplace},
+        }
+
+    return recent_rows(
+        "inferhub",
+        [
+            request("req-over", 1792800300.0),
+            request("req-silent", 1792800200.0),
+            request("req-bare", 1792800100.0),
+        ],
+        [
+            attempt(
+                "req-over",
+                {"ceiling": ceiling, "headers": headers, "charged_usd": 0.0031},
+            ),
+            attempt("req-silent", {"ceiling": ceiling}),
+            attempt("req-bare", {"headers": {"x-inferhub-model": MKT_OPUS}}),
+        ],
+        "_attempt_params",
+    )
+
+
+def _marketplaces_fixture() -> dict[str, Any]:
+    snapshot = market_snapshot_from_payload(MKT_SNAPSHOT)
+    profiles = _mkt_profiles(MKT_PROFILES)
+    overrides = ModelParameterOverrides(
+        providers={"inferhub": {"marketplace_profile": "cap20"}},
+        models={
+            f"inferhub/{MKT_ASTRA}": {"marketplace_profile": "tight"},
+            f"inferhub/{MKT_THINKING}": {"marketplace_profile": None},
+        },
+    )
+    catalogue = {"inferhub": frozenset({MKT_OPUS, MKT_ASTRA, MKT_THINKING})}
+    store_raw = json.dumps(profiles.as_document()).encode("utf-8")
+    keyed = cast(
+        Settings,
+        SimpleNamespace(inferhub_api_key=MKT_KEY, marketplace_public_market=True),
+    )
+    bare = cast(
+        Settings, SimpleNamespace(inferhub_api_key="", marketplace_public_market=True)
+    )
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            application_marketplace,
+            "current_market_snapshot",
+            lambda *_args, **_kwargs: snapshot,
+        )
+        reset_account_memory()
+        reset_market_memory()
+        remember_account("inferhub", MKT_ACCOUNT)
+
+        def page(settings: Settings, documents: dict[str, Any]) -> dict[str, Any]:
+            chosen = _mkt_profiles(documents)
+            return page_payload(
+                settings=settings,
+                profiles=chosen,
+                store_raw=json.dumps(chosen.as_document()).encode("utf-8"),
+                overrides=overrides,
+                catalogue=catalogue,
+                snapshots={"inferhub_bid_headers": snapshot},
+            )
+
+        keyed_page = page_payload(
+            settings=keyed,
+            profiles=profiles,
+            store_raw=store_raw,
+            overrides=overrides,
+            catalogue=catalogue,
+            snapshots={"inferhub_bid_headers": snapshot},
+        )
+        account = keyed_page["providers"][0]["account"]
+        offers = {
+            model: offers_payload(
+                provider_id="inferhub",
+                model_id=model,
+                profiles=profiles,
+                overrides=overrides,
+                snapshot=snapshot,
+                account=account,
+            )
+            for model in (MKT_OPUS, MKT_ASTRA, MKT_THINKING)
+        }
+        rows = _mkt_recent()
+        logs = [
+            {
+                "id": "08a9befdcacfb82b",
+                "ts": "2026-10-24T01:25:00Z",
+                "model": MKT_OPUS,
+                "completion_tokens": 200,
+                "ask_input_per_mtok": "0.750000",
+                "ask_output_per_mtok": "3.750000",
+                "cost_consumer_usdc": "0.001500",
+            }
+        ]
+        saved = page(
+            keyed,
+            {**MKT_PROFILES, "opus-cap": {"kind": "pct_of_official", "percent": 10}},
+        )
+        reset_account_memory()
+        reset_market_memory()
+        nokey_page = page(bare, MKT_PROFILES)
+        reset_account_memory()
+        reset_market_memory()
+    views = keyed_page["providers"]
+    return {
+        "models": {"cc": MKT_OPUS, "cx": MKT_ASTRA, "ag": MKT_THINKING},
+        "keyed": {
+            "summary": {
+                "views": [
+                    {
+                        k: v
+                        for k, v in views[0].items()
+                        if k
+                        in (
+                            "provider_id",
+                            "dialect_id",
+                            "label",
+                            "display_name",
+                            "has_key",
+                            "account_reads",
+                        )
+                    }
+                ]
+            },
+            "page": keyed_page,
+            "saved": saved,
+            "offers": offers,
+            "recent": {"enabled": True, "rows": rows, "limit": 20},
+            "charged": {
+                "state": "read",
+                "words": "Read 1 usage-log rows (1 pages); InferHub keeps them 7 days.",
+                "rows": match_charged(rows, logs),
+            },
+        },
+        "nokey": {
+            "summary": {
+                "views": [
+                    {
+                        **{
+                            k: v
+                            for k, v in nokey_page["providers"][0].items()
+                            if k
+                            in (
+                                "provider_id",
+                                "dialect_id",
+                                "label",
+                                "display_name",
+                                "has_key",
+                                "account_reads",
+                            )
+                        }
+                    }
+                ]
+            },
+            "page": nokey_page,
+            "recent": {"enabled": True, "rows": [], "limit": 20},
+        },
+    }
+
+
+@pytest.fixture(scope="module")
+def marketplaces(tmp_path_factory: pytest.TempPathFactory) -> dict:
+    path = tmp_path_factory.mktemp("marketplaces") / "fixture.json"
+    path.write_text(json.dumps(_marketplaces_fixture()), encoding="utf-8")
+    return _run(
+        MCC_JSDOM_SCENARIO="marketplaces", MCC_JSDOM_MARKETPLACES_FIXTURE=str(path)
+    )
+
+
+def test_jsdom_the_marketplaces_scenario_runs_clean(marketplaces) -> None:
+    assert marketplaces["fatal"] is None
+    assert marketplaces["scenarioFatal"] is None
+    assert marketplaces["scriptErrors"] == []
+    assert marketplaces["consoleErrors"] == []
+
+
+def test_jsdom_the_page_is_in_the_sidebar_only_while_a_key_is_set(marketplaces) -> None:
+    assert marketplaces["nav"] == {"hidden": False, "label": "InferHub"}
+    assert marketplaces["view"]["hidden"] is False
+    assert marketplaces["view"]["title"] == "InferHub"
+    assert marketplaces["noKeyNav"] == {"hidden": True}
+    # Opening the page is what reads the account (and nothing on its own).
+    assert "/admin/api/marketplaces?account=true" in marketplaces["gets"]
+    assert "/admin/api/marketplaces?summary=true" in marketplaces["gets"]
+
+
+def test_jsdom_the_blocks_render_in_the_specified_order(marketplaces) -> None:
+    assert marketplaces["view"]["blockOrder"] == [
+        "marketplaceHonesty",
+        "marketplaceAccount",
+        "marketplaceProfiles",
+        "marketplaceAssignments",
+        "marketplaceExplorer",
+        "marketplaceRecent",
+        "marketplaceSnapshot",
+    ]
+
+
+def test_jsdom_route_notes_are_quoted_as_text_never_markup(marketplaces) -> None:
+    notes = marketplaces["routeNotes"]
+    assert notes["markupInside"] == 0
+    assert notes["quotes"] == [
+        "cc/ A one-line Claude Code client header is added. <b>bold?</b>",
+        "cx/ Your system prompt is sent as a developer message.",
+    ]
+    honesty = marketplaces["honesty"]
+    assert "run by an individual" in honesty
+    assert "regardless of price" in honesty
+    assert "x-max-input-price" in honesty and "x-max-output-price" in honesty
+    assert "current ask" in honesty
+    assert "Not verified on a real account" in honesty
+
+
+def test_jsdom_the_account_says_unverified_and_not_readable_never_zero(
+    marketplaces,
+) -> None:
+    facts = marketplaces["account"]["facts"]
+    assert (
+        facts["Balance"] == "1.000000 USDC UNVERIFIED — not verified on a real account"
+    )
+    assert facts["Spend (day)"] == "0.012000 USDC 3 requests"
+    assert facts["Key kind"] == "inference (inference + management) from your key list"
+    assert facts["InferHub budgets"].startswith("not readable with this key (403")
+    assert facts["Alias groups"].startswith("not readable with this key (403")
+    assert facts["Combos"] == "combo/fast (fastest)"
+    no_key = marketplaces["noKey"]["account"]
+    assert no_key["text"].startswith("No InferHub key is set: nothing is read.")
+    assert no_key["facts"] == {}
+    assert not re.search(r"\b0(?:\.0+)? USDC", no_key["text"])
+
+
+def test_jsdom_profiles_show_would_match_now_and_follow_the_market_warning(
+    marketplaces,
+) -> None:
+    profiles = {profile["name"]: profile for profile in marketplaces["profiles"]}
+    cap = profiles["cap20"]
+    assert cap["rows"] == "Named on: provider inferhub"
+    assert cap["counts"].startswith("Would match now: 1 match · 0 match nothing")
+    assert cap["matches"] == [
+        {
+            "cls": "mkt-match mkt-match-matches",
+            "text": "cc/claude-opus-4-6 $1 / $5 per Mtok: 48 of 51 accounts ask at or "
+            "under it (cheapest $0.75, 38 accounts)",
+        }
+    ]
+    assert profiles["tight"]["matches"][0]["text"].startswith(
+        "cx/gpt-6-astra $0.5 / $2.5"
+    )
+    assert profiles["follow"]["follows"] == "follows the market — add a cap to be sure"
+    assert profiles["follow"]["rows"] == "Not assigned to any row yet."
+
+
+def test_jsdom_the_editor_validates_before_sending_and_saves_the_whole_store(
+    marketplaces,
+) -> None:
+    assert marketplaces["editorOpened"]["hidden"] is False
+    invalid = marketplaces["editorInvalid"]["problems"]
+    assert any(problem.startswith("Name: 1-64 characters") for problem in invalid)
+    assert "At most N % of official needs the percent." in invalid
+    assert marketplaces["invalidSaveSent"] == 0
+    assert marketplaces["editorFollows"]["follows"] == (
+        "follows the market — add a cap to be sure"
+    )
+    assert marketplaces["editorFollows"]["fields"] == [
+        "cap_input_usd",
+        "cap_output_usd",
+        "cap_percent",
+        "exclude_upstreams",
+        "max_usd_per_request",
+    ]
+    assert marketplaces["editorCapped"]["follows"] == ""
+    assert marketplaces["editorValid"]["problems"] == []
+    put = marketplaces["savedPut"]
+    assert put["path"] == "/admin/api/marketplaces/profiles"
+    assert put["body"]["profiles"] == {
+        **MKT_PROFILES,
+        "opus-cap": {"kind": "pct_of_official", "percent": 10},
+    }
+    assert put["body"]["drop_unusable"] is False
+    assert put["body"]["confirm_removal"] is False
+    assert marketplaces["editorAfterSave"]["hidden"] is True
+    assert marketplaces["statusAfterSave"] == "Saved profile opus-cap."
+
+
+def test_jsdom_assignments_post_the_15th_key_through_the_models_route(
+    marketplaces,
+) -> None:
+    rows = {row["key"]: row for row in marketplaces["assignments"]}
+    assert rows["inferhub"]["value"] == "cap20"
+    assert rows[f"inferhub/{MKT_ASTRA}"]["value"] == "tight"
+    assert rows[f"inferhub/{MKT_THINKING}"]["value"] == "__decides__"
+    assert (
+        rows[f"inferhub/{MKT_THINKING}"]["note"]
+        == "Forced: InferHub decides — no ceiling."
+    )
+    assert marketplaces["assignPosts"] == [
+        {
+            "scope": "provider",
+            "key": "inferhub",
+            "updates": {"marketplace_profile": "cap20"},
+        },
+        {
+            "scope": "provider",
+            "key": "inferhub",
+            "updates": {"marketplace_profile": "inherit"},
+        },
+        # The first model row in ref order is the forced-unset one; its
+        # select already says "InferHub decides", and a Save sends null.
+        {
+            "scope": "model",
+            "key": f"inferhub/{MKT_THINKING}",
+            "updates": {"marketplace_profile": None},
+        },
+    ]
+
+
+def test_jsdom_the_explorer_draws_the_ceiling_line_on_the_ladder(marketplaces) -> None:
+    assert marketplaces["groups"] == ["ag", "cc", "cx"]
+    assert marketplaces["searchedGroups"] == [["cx", 1]]
+    cc = marketplaces["explorerCc"]
+    assert cc["title"] == MKT_OPUS
+    assert cc["who"] == "Ceiling: profile cap20 (from the provider row)."
+    assert [entry["cls"] for entry in cc["ladder"]] == [
+        "mkt-ladder-level",
+        "mkt-ladder-level",
+        "mkt-ladder-ceiling",
+        "mkt-ladder-level mkt-ladder-over",
+    ]
+    assert cc["ladder"][2]["text"] == (
+        "Your ceiling $1 / $5 — 48 of 51 accounts at or under it"
+    )
+    assert cc["ladder"][0]["width"] == "100%"
+    assert cc["facts"]["Platform cap"] == "50 % of official = $2.5 / $12.5"
+    assert cc["facts"]["Success"] == "99.1 % last 30 min, this model"
+    assert cc["facts"]["In your combos"] == "combo/fast (fastest)"
+    assert cc["facts"]["In alias groups"].startswith("not readable with this key")
+    assert cc["note"].startswith("cc/ A one-line Claude Code client header")
+    cx = marketplaces["explorerCx"]
+    assert cx["who"] == "Ceiling: profile tight (from this model's row)."
+    assert [entry["cls"] for entry in cx["ladder"]] == [
+        "mkt-ladder-level",
+        "mkt-ladder-ceiling",
+        "mkt-ladder-level mkt-ladder-over",
+    ]
+    assert cx["facts"]["Dearest now"] == "—"
+    assert cx["facts"]["Prompt-cache hit"] == "— 24 h, all traffic"
+
+
+def test_jsdom_the_last_requests_draw_null_as_a_dash_never_zero(marketplaces) -> None:
+    recent = marketplaces["recent"]
+    assert recent["headers"] == [
+        "Time",
+        "Model",
+        "X-Inferhub-Model",
+        "X-Inferhub-Publisher",
+        "Attempt",
+        "Ceiling sent",
+        "Charged",
+        "vs ceiling",
+        "Charged ask",
+    ]
+    rows = {row["id"]: row for row in recent["rows"]}
+    over = rows["req-over"]["cells"]
+    assert over[2:8] == [
+        MKT_OPUS,
+        "6b652a8e5328",
+        "1 (InferHub hop 1)",
+        "$1 / $5 (cap20)",
+        "$0.003100",
+        "over the ceiling",
+    ]
+    assert rows["req-over"]["classes"][7] == "mkt-flag-over"
+    silent = rows["req-silent"]["cells"]
+    assert silent[6] == "—" and silent[7] == "—" and silent[3] == "—"
+    assert rows["req-bare"]["cells"][5] == "none"
+    assert all(
+        "$0.000000" not in cell for row in recent["rows"] for cell in row["cells"]
+    )
+
+
+def test_jsdom_the_charged_ask_arrives_only_on_its_button(marketplaces) -> None:
+    assert marketplaces["chargedBeforePress"] == 0
+    assert marketplaces["chargedPosts"] == [
+        {"request_ids": ["req-over", "req-silent", "req-bare"]}
+    ]
+    after = {
+        row["id"]: row["cells"][8] for row in marketplaces["recentAfterCharged"]["rows"]
+    }
+    assert after["req-over"] == "$0.750000 / $3.750000 (by request id)"
+    assert after["req-silent"] == "not in InferHub's log"
+    assert marketplaces["recentAfterCharged"]["words"].startswith(
+        "Read 1 usage-log rows"
+    )
+
+
+def test_jsdom_the_snapshot_block_names_each_source_and_the_setting(
+    marketplaces,
+) -> None:
+    sources = {
+        entry["name"]: entry["cells"] for entry in marketplaces["snapshot"]["sources"]
+    }
+    assert sources["listing"][1:] == [
+        "your key",
+        "your key's model list (price levels, official prices)",
+        "read",
+    ]
+    assert sources["market"][1] == "public"
+    assert marketplaces["snapshot"]["publicMarket"] is True
+    assert "MARKETPLACE_PUBLIC_MARKET" in marketplaces["snapshot"]["text"]
+    assert (
+        "Platform cap on any ask: 50 % of official" in marketplaces["snapshot"]["text"]
+    )
+
+
+def test_jsdom_with_no_key_every_keyed_control_is_off(marketplaces) -> None:
+    no_key = marketplaces["noKey"]
+    assert no_key["warningHidden"] is True
+    assert no_key["refreshDisabled"] is True
+    assert no_key["chargedDisabled"] is True
+    assert no_key["recent"]["text"].endswith(
+        "No request has been served by InferHub yet."
+    )
