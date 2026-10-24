@@ -191,9 +191,8 @@ _AGENT_HELP = (
 )
 
 #: Commands whose ``--help`` is NOT MCC's, on purpose. Each must be a launcher.
-PASS_THROUGH: dict[str, str] = {
-    name: _AGENT_HELP
-    for name in (
+PASS_THROUGH: dict[str, str] = dict.fromkeys(
+    (
         "mcc-claude",
         "mcc-claude-old",
         "mcc-codex",
@@ -210,8 +209,9 @@ PASS_THROUGH: dict[str, str] = {
         "mcc-aider",
         "mcc-droid",
         "mcc-gemini",
-    )
-}
+    ),
+    _AGENT_HELP,
+)
 
 
 def _installed_commands() -> dict[str, str]:
@@ -252,7 +252,9 @@ def test_every_help_case_names_the_installed_entry_point() -> None:
 def test_only_launchers_may_pass_help_through() -> None:
     installed = _installed_commands()
     not_launchers = sorted(
-        name for name in PASS_THROUGH if not installed[name].startswith(LAUNCHER_PACKAGE)
+        name
+        for name in PASS_THROUGH
+        if not installed[name].startswith(LAUNCHER_PACKAGE)
     )
     assert not_launchers == []
     assert all(len(reason) >= 40 for reason in PASS_THROUGH.values())
