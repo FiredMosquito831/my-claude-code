@@ -69,6 +69,7 @@ from typing import Any
 import pytest
 from ddgs import http_client as ddgs_http_client
 
+from tests.support.offline_tokenizer import install_offline_tokenizer
 from tests.support.token_host_block import (
     HermeticityViolation,
     install_token_host_block,
@@ -1093,6 +1094,9 @@ def pytest_configure(config: pytest.Config) -> None:
         "(tests/conftest.py _isolate_model_sweeps)",
     )
     _install_interceptors()
+    # The token estimator's BPE file, from the repository: without it every
+    # CI run downloaded it from openaipublic.blob.core.windows.net.
+    install_offline_tokenizer()
     # 2026-10-21: no test may resolve or connect past this machine. Before the
     # token-host block, so the block's wrappers stay outermost.
     _install_network_gate()
