@@ -42,7 +42,10 @@ from typing import Any
 #: connection back to the pool; closed before it, the connection is thrown
 #: away (7.111.1). A body that is already complete ends at once and never
 #: comes near this; a host that holds its body open after ``[DONE]`` is
-#: waited for this long and then closed exactly as before.
+#: waited for this long and then closed exactly as before. Half a second
+#: covers a terminator that travels in its own segment behind a delayed ACK
+#: (200 ms on Windows) through a slow proxy, and is the most a host that
+#: never ends its body can add to the end of a reply.
 END_OF_BODY_WAIT_SECONDS = 0.5
 
 #: Shared empty extras. Never mutated: ``model_extra`` is read-only to every
