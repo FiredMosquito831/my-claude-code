@@ -251,7 +251,9 @@ async def test_with_no_profile_the_chat_call_carries_no_header() -> None:
     create = AsyncMock(return_value=_answer())
     with patch.object(provider._client.chat.completions, "create", create):
         await _drain(provider.stream_response(make_messages_request(model=OTHER)))
-    assert "extra_headers" not in create.await_args.kwargs
+    call = create.await_args
+    assert call is not None
+    assert "extra_headers" not in call.kwargs
 
 
 @pytest.mark.parametrize(
@@ -289,7 +291,9 @@ async def test_each_kind_sends_exactly_its_headers_on_chat(
     create = AsyncMock(return_value=_answer())
     with patch.object(provider._client.chat.completions, "create", create):
         await _drain(provider.stream_response(make_messages_request(model=OTHER)))
-    assert create.await_args.kwargs["extra_headers"] == expected
+    call = create.await_args
+    assert call is not None
+    assert call.kwargs["extra_headers"] == expected
 
 
 @pytest.mark.asyncio
