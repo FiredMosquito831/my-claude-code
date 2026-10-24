@@ -142,6 +142,17 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "the same reason. Read-only."
     ),
     (
+        "my_claude_code.api.request_pricing",
+        "my_claude_code.providers.runtime.openrouter_catalogue",
+    ): (
+        "Owner: per-request cost estimation, 1-hour cache write rate (7.111.0). "
+        "Reason: OpenRouter's live list is one of the sources that state a "
+        "1-hour prompt-cache write price; it is the cached catalogue the "
+        "7.84.0 rung already reads, matched by that rung's own matcher, and "
+        "consulted from the same module as the other two price sources. Read "
+        "only for a request that reported 1-hour writes. Read-only."
+    ),
+    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.anthropic_oauth.credentials",
     ): (

@@ -78,6 +78,16 @@ BACKFILL_COST_SOURCES: tuple[str, ...] = (
 #: log's life. NULL survives, because NULL is still the honest cost.
 SOURCE_UNPRICED = "unpriced"
 
+#: 7.111.0: stored on a row that wrote 1-hour prompt-cache entries when every
+#: other token it used has a price but no source states the 1-hour write rate
+#: for its model on its host. ``cost_usd`` stays NULL: pricing those writes at
+#: the 5-minute rate -- what every row before 7.111.0 did, because models.dev
+#: states only that one -- would be a number no source ever stated. Like
+#: ``unpriced`` it is the record of an answer, not a price, and nothing sums
+#: it. A row that could not be priced anyway keeps NULL/NULL, exactly as
+#: before.
+SOURCE_UNPRICED_1H_WRITE = "unpriced_1h_write"
+
 #: Every value that may appear in the stored ``cost_source`` column: a closed
 #: set, so a reader can enumerate it and a renderer can be held to labelling
 #: all of it.
@@ -85,6 +95,7 @@ ALL_COST_SOURCES: tuple[str, ...] = (
     *COST_SOURCES,
     *BACKFILL_COST_SOURCES,
     SOURCE_UNPRICED,
+    SOURCE_UNPRICED_1H_WRITE,
 )
 
 
@@ -131,6 +142,25 @@ class TokenUsage:
     #: host's count. An estimated token count feeding a price is a double
     #: estimate and the modal says so.
     reasoning_estimated: bool = False
+    #: 7.111.0: how many of ``cache_write_tokens`` the host says it wrote with
+    #: a 1-hour lifetime (Anthropic's ``usage.cache_creation
+    #: .ephemeral_1h_input_tokens``). Part of ``cache_write_tokens``, not an
+    #: addition to it. ``None`` -- the host did not report the split -- and 0
+    #: both leave the row priced exactly as before this field existed.
+    cache_write_1h_tokens: int | None = None
+
+    @property
+    def one_hour_write_tokens(self) -> int:
+        """The 1-hour writes to price at their own rate: 0 unless the host said so.
+
+        Bounded by the write total, so a split that disagrees with the total
+        can never price more writes than the host counted.
+        """
+        one_hour = self.cache_write_1h_tokens or 0
+        total = self.cache_write_tokens or 0
+        if one_hour <= 0 or total <= 0:
+            return 0
+        return min(one_hour, total)
 
     @property
     def is_empty(self) -> bool:
@@ -143,6 +173,20 @@ class TokenUsage:
                 self.cache_write_tokens,
             )
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OneHourWriteRate:
+    """A 1-hour prompt-cache write rate, in USD per single token, and who stated it (7.111.0).
+
+    ``source`` is a short stable word (``litellm``, ``provider_list``,
+    ``openrouter_live``) stored with the row; ``label`` is the human line the
+    request detail prints ("LiteLLM, prefixed key (anthropic/claude-x)").
+    """
+
+    price: float
+    source: str
+    label: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,12 +217,19 @@ class RateCard:
     #: ``ResolutionTier`` name for a tiered lookup, the key shape for a flat
     #: one. Rendered in the modal beside the "est." badge.
     tier_label: str | None = None
+    #: 7.111.0: the 1-hour write rate, where a source states one. Read only for
+    #: a usage that reports 1-hour writes; ``cache_write_price`` stays the
+    #: 5-minute rate every other write is priced at.
+    cache_write_1h: OneHourWriteRate | None = None
 
     def covers(self, usage: TokenUsage) -> bool:
         """Whether this card states every rate this usage actually needs.
 
         A counter of zero needs no rate: a request that read nothing from cache
-        is fully priced by a card that says nothing about cache reads.
+        is fully priced by a card that says nothing about cache reads. Since
+        7.111.0 a request that wrote 1-hour cache entries also needs a 1-hour
+        write rate; one that wrote none (or whose host did not say) needs
+        exactly what it needed before.
         """
         if usage.tokens_in and self.input_price is None:
             return False
@@ -186,7 +237,9 @@ class RateCard:
             return False
         if usage.cache_read_tokens and self.cache_read_price is None:
             return False
-        return not (usage.cache_write_tokens and self.cache_write_price is None)
+        if usage.cache_write_tokens and self.cache_write_price is None:
+            return False
+        return not (usage.one_hour_write_tokens and self.cache_write_1h is None)
 
     @property
     def is_empty(self) -> bool:
@@ -212,6 +265,9 @@ class CostResult:
     tier_label: str | None = None
     #: True when the priced reasoning tokens were MCC's estimate.
     reasoning_estimated: bool = False
+    #: 7.111.0: the 1-hour write rate this price used, when the usage reported
+    #: 1-hour writes and a card priced them. ``None`` on every other answer.
+    cache_write_1h: OneHourWriteRate | None = None
 
     @property
     def is_priced(self) -> bool:
@@ -237,7 +293,18 @@ def compute_from_rates(usage: TokenUsage, card: RateCard) -> float | None:
     if usage.cache_read_tokens and card.cache_read_price is not None:
         total += usage.cache_read_tokens * card.cache_read_price
     if usage.cache_write_tokens and card.cache_write_price is not None:
-        total += usage.cache_write_tokens * card.cache_write_price
+        one_hour = usage.one_hour_write_tokens
+        if one_hour and card.cache_write_1h is not None:
+            # 7.111.0: the host said how many writes had a 1-hour lifetime.
+            # Those take the 1-hour rate a source stated; the rest stay at the
+            # 5-minute rate. Only this branch is new: a row with no 1-hour
+            # writes takes the very same expression it always did.
+            five_minute = usage.cache_write_tokens - one_hour
+            if five_minute:
+                total += five_minute * card.cache_write_price
+            total += one_hour * card.cache_write_1h.price
+        else:
+            total += usage.cache_write_tokens * card.cache_write_price
     output = usage.tokens_out or 0
     reasoning = usage.reasoning_tokens or 0
     if card.reasoning_price is not None and reasoning:
@@ -294,6 +361,9 @@ def resolve_cost(
                 and card.reasoning_price is not None
                 and bool(usage.reasoning_tokens)
             ),
+            cache_write_1h=(
+                card.cache_write_1h if usage.one_hour_write_tokens else None
+            ),
         )
     return CostResult()
 
@@ -314,7 +384,9 @@ __all__ = [
     "SOURCE_MODELS_DEV_BACKFILL",
     "SOURCE_PROVIDER",
     "SOURCE_UNPRICED",
+    "SOURCE_UNPRICED_1H_WRITE",
     "CostResult",
+    "OneHourWriteRate",
     "RateCard",
     "TokenUsage",
     "compute_from_rates",

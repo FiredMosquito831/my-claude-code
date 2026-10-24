@@ -25939,7 +25939,36 @@ const COST_SOURCE_LABELS = {
   litellm_backfill: "LiteLLM, priced later",
   cross_provider_backfill: "a cross-provider vote, priced later",
   unpriced: "nobody publishes a rate",
+  unpriced_1h_write: "no source states the 1 h cache write rate",
 };
+
+/* 7.111.0: why a row that wrote 1-hour cache entries carries no price. Its
+   other tokens had a rate; the 1-hour writes did not, and pricing them at the
+   5-minute rate would be a number no source stated. */
+/* 7.111.0: which rate the cache writes took, for a row whose host reported
+   the 5 min / 1 h split. null on every other row, whose cost line reads as it
+   always did. The 1-hour rate's source is the one stored with the price
+   (`params.cost_write_1h`). */
+function cacheWriteRateText(row) {
+  if (row.cache_write_5m_tokens == null && row.cache_write_1h_tokens == null) return null;
+  const total = Number(row.cache_write_tokens || 0);
+  if (!total) return null;
+  const oneHour = Math.min(Math.max(Number(row.cache_write_1h_tokens || 0), 0), total);
+  if (!oneHour) return `Cache writes: ${total.toLocaleString()} at the 5 min rate.`;
+  const fiveMinute = total - oneHour;
+  const stated = row.params && row.params.cost_write_1h;
+  const from = stated
+    ? ` from ${stated.label} ($${Number(stated.usd_per_million).toFixed(4)} / 1M tokens)`
+    : "";
+  const shorter = fiveMinute ? `${fiveMinute.toLocaleString()} at the 5 min rate, ` : "";
+  return `Cache writes: ${shorter}${oneHour.toLocaleString()} at the 1 h rate${from}.`;
+}
+
+function oneHourWriteUnpricedText(row) {
+  const model = row.resolved_model || "this model";
+  const provider = providerDisplayLabel(row.provider, row.optimization) || row.provider || "this host";
+  return `not priced: no source states the 1 h write rate for ${model} on ${provider}`;
+}
 
 /* A dash, not a zero. `cost_usd` is NULL when nothing priced the request, and
    "$0.00" is a claim that the request was free -- a claim only a source that
@@ -25971,7 +26000,10 @@ function buildCostCell(row) {
   if (row.cost_usd === null || row.cost_usd === undefined) {
     td.className = "cost-unpriced";
     td.textContent = "—";
-    td.title = "not priced — no source published a rate for this model";
+    td.title =
+      row.cost_source === "unpriced_1h_write"
+        ? oneHourWriteUnpricedText(row)
+        : "not priced — no source published a rate for this model";
     return td;
   }
   const amount = document.createElement("span");
@@ -26534,6 +26566,9 @@ async function openRequestDetail(requestId) {
     ["Input (uncached)", formatOptionalNumber(row.tokens_in)],
     ["Cached input", formatOptionalNumber(row.cache_read_tokens)],
     ["Cache writes", formatOptionalNumber(row.cache_write_tokens)],
+    // 7.111.0: Anthropic's split of those writes by lifetime. Absent unless
+    // the host reported it, so every other row reads as it always did.
+    ["Cache writes by lifetime", formatCacheWriteSplit(row)],
     ["Cache hit", formatRowCacheHit(row)],
     ["Tokens out", formatOptionalNumber(row.tokens_out)],
     ["+ adapter (in/out)", formatAdapterTokens(row)],
@@ -26594,6 +26629,15 @@ async function openRequestDetail(requestId) {
 
    A request that carried tools but has no hash predates the recording; it says
    so rather than showing nothing, which would read as "no tools". */
+/* 7.111.0: how many of the cache writes kept the cache five minutes and how
+   many an hour, as the host reported them (`usage.cache_creation`). null --
+   no line at all -- when it reported no split, which is every non-Anthropic
+   host and every row written before 7.111.0. */
+function formatCacheWriteSplit(row) {
+  if (row.cache_write_5m_tokens == null && row.cache_write_1h_tokens == null) return null;
+  return `5 min: ${formatOptionalNumber(row.cache_write_5m_tokens)} · 1 h: ${formatOptionalNumber(row.cache_write_1h_tokens)}`;
+}
+
 function formatKeepaliveFrames(row) {
   if (row.keepalive_frames == null) return null;
   const count = Number(row.keepalive_frames);
@@ -26813,8 +26857,10 @@ function appendRequestCostDetail(meta, row) {
     const why = document.createElement("span");
     why.className = "cost-note";
     why.textContent =
-      "No source published a rate for this model, so nothing was stored. " +
-      "A zero here would be a claim that the request was free.";
+      row.cost_source === "unpriced_1h_write"
+        ? `${oneHourWriteUnpricedText(row)}. This request wrote ${formatOptionalNumber(row.cache_write_1h_tokens)} cache tokens with a 1-hour lifetime, which bill at their own rate; pricing them at the 5 min rate would be a number no source stated.`
+        : "No source published a rate for this model, so nothing was stored. " +
+          "A zero here would be a claim that the request was free.";
     dd.appendChild(why);
     meta.append(dt, dd);
     return;
@@ -26838,6 +26884,13 @@ function appendRequestCostDetail(meta, row) {
     note.className = "cost-note";
     note.textContent = `estimated from ${source}`;
     dd.appendChild(note);
+    const writes = cacheWriteRateText(row);
+    if (writes) {
+      const rate = document.createElement("span");
+      rate.className = "cost-note";
+      rate.textContent = writes;
+      dd.appendChild(rate);
+    }
   }
   const describes = (row.route_attempts || []).filter(
     (attempt) => attempt && attempt.params && attempt.params.kind === "describe",
@@ -35006,6 +35059,32 @@ function appendPromptCacheForgets(sourceCell, model, refusals) {
   });
 }
 
+/* 7.111.0: what a 1-hour cache write on this model is priced at, and who
+   says so -- the rates the server found for each model whose host takes a
+   1-hour lifetime (`write_1h_prices`, beside the page), in the order pricing
+   reads them. null (no line) for every other model and on an older server. */
+function promptCacheWrite1hLine(table, model) {
+  const prices = table && table.write_1h_prices;
+  if (!prices || !model || !Object.prototype.hasOwnProperty.call(prices, model.model_ref)) {
+    return null;
+  }
+  const stated = prices[model.model_ref] || [];
+  const line = document.createElement("p");
+  line.className = "models-fields-default";
+  if (!stated.length) {
+    line.textContent =
+      "1 h write price: no source states it — a request that writes 1-hour cache entries here is stored as not priced (never at the 5 min rate).";
+  } else {
+    const [first, ...rest] = stated;
+    const also = rest.length
+      ? `; also stated: ${rest.map((entry) => `$${Number(entry.usd_per_million).toFixed(4)} by ${entry.label}`).join(", ")}`
+      : "";
+    line.textContent = `1 h write price: $${Number(first.usd_per_million).toFixed(4)} / 1M tokens — from ${first.label}${also}.`;
+  }
+  if (table.write_1h_note) line.title = table.write_1h_note;
+  return line;
+}
+
 function buildPromptCacheLifetimeField(ctx, name) {
   const spec = ctx.preferences[name];
   const boxId = fieldsBoxId("pref", ctx.scope, ctx.key, name);
@@ -35177,6 +35256,8 @@ function buildPromptCacheLifetimeField(ctx, name) {
         lines = asks.map((ask) => promptCacheDefaultLine(ask, usable));
         if (table.route_note) lines.push(fieldsNoteLine(table.route_note));
       }
+      const oneHourPrice = promptCacheWrite1hLine(table, model);
+      if (oneHourPrice) lines.push(oneHourPrice);
       writeDefaultLines(shell.defaults, lines);
     },
   };

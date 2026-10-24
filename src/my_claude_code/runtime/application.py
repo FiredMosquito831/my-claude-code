@@ -18,7 +18,10 @@ import my_claude_code.messaging.session as messaging_session
 import my_claude_code.messaging.workflow as messaging_workflow_module
 from my_claude_code.api.admin_proxy_routes import republish_chains
 from my_claude_code.api.finalize_pool import close_finalize_pool
-from my_claude_code.api.request_pricing import backfill_pricer
+from my_claude_code.api.request_pricing import (
+    backfill_pricer,
+    set_published_row_lookup,
+)
 from my_claude_code.api.search_pool import close_search_pool
 from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import ProviderModelRefreshResult
@@ -463,6 +466,10 @@ class ApplicationRuntime:
             # readiness exactly as it did, and overwrites what it learns.
             state.mark("stored-catalogue")
             await asyncio.to_thread(self.provider_manager.load_stored_catalogue)
+            # 7.111.0: where a request that wrote 1-hour cache entries may read
+            # its provider's own list row (a 1-hour write price). A reference,
+            # no I/O: nothing reads it until such a request is priced.
+            set_published_row_lookup(self.provider_manager.model_published_row)
             state.mark("catalogue")
             self.provider_manager.start_model_list_refresh()
             state.mark("rediscovery")
@@ -1551,6 +1558,9 @@ class ApplicationRuntime:
         if watchdog is not None:
             await watchdog.close()
         request_tasks.reset()
+        # 7.111.0: the provider manager below is closing; nothing may read its
+        # rows through the pricing lookup afterwards.
+        set_published_row_lookup(None)
         # Cancelled before the provider manager closes, so a probe in flight is
         # abandoned rather than racing the shutdown that asked for it. Same
         # reason as the discovery timer below, and for the same task shape.

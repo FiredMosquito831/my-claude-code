@@ -317,9 +317,15 @@ def _isolate_request_log(monkeypatch, tmp_path):
     # leave the next test's store quietly rewriting its rows -- the house rule
     # for a singleton is that a test never inherits another test's copy of it.
     request_log.set_cost_backfill_pricer(None)
+    # 7.111.0: the provider-row lookup a 1-hour write price may read is
+    # process-wide too, registered by the composition root.
+    from my_claude_code.api import request_pricing
+
+    request_pricing.set_published_row_lookup(None)
     yield
     request_log.set_request_log_path(None)
     request_log.set_cost_backfill_pricer(None)
+    request_pricing.set_published_row_lookup(None)
     request_log.reset_request_log_stores()
 
 
