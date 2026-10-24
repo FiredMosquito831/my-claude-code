@@ -15,6 +15,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [The Linux desktop-app installers](#the-linux-desktop-app-installers)
   - [The macOS desktop-app disk image](#the-macos-desktop-app-disk-image)
 - [3. First run](#3-first-run)
+  - [Every command and its help flag](#every-command-and-its-help-flag)
   - [Where your configuration lives](#where-your-configuration-lives)
   - [Migrating from `~/.fcc`](#migrating-from-fcc)
   - [Pinning a directory with `MCC_CONFIG_DIR`](#pinning-a-directory-with-mcc_config_dir)
@@ -567,6 +568,30 @@ There is also a **Guide** tab inside the dashboard with a condensed version of t
 
 On first run, the dashboard opens straight to a **Get Started** checklist instead of the Providers tab. It walks through configuring a provider, mapping model tiers, connecting Claude Code, and then points at the optional web search and analytics pages. Dismiss it once you're set up — the Get Started tab stays in the nav if you want it back.
 
+### Every command and its help flag
+
+`mcc-help` prints the command reference. Since 7.113.1 every MCC command answers
+`--help` (or `-h`) without doing anything else — it starts nothing, writes nothing
+and opens nothing:
+
+| Command | `--help` / `-h` | `--version` |
+| --- | --- | --- |
+| `mcc-server`, `my-claude-code` | the command reference; no server starts (since 7.111.5) | the version |
+| `mcc-init` | the command reference; no `.env` is written (until 7.113.1 it created one) | the version |
+| `mcc-compact-log` | the command reference; the request log is not touched (until 7.113.1 it was rewritten and vacuumed) | the version |
+| `mcc-migrate` | the command reference; nothing is moved (until 7.113.1 the migration ran) | the version |
+| `mcc-help` | the command reference | the command reference |
+| `mcc-chatgpt-oauth-login`, `mcc-anthropic-oauth-login` | their own usage, before any sign-in starts | the version |
+| `mcc-apps`, `mcc-rtk`, `mcc-mcp` | their own usage | not an option: usage and an error exit |
+| `mcc-desktop` | its usage, exit 2; nothing starts | the same |
+| `mcc-claude`, `mcc-codex` and the other agent commands | **handed to the agent**, so you see the agent's own help (Claude Code's for `mcc-claude`), not MCC's | the agent's version |
+| the retired `fcc-*` names | the `mcc-*` name that replaced it, exit 1 | the same |
+
+The agent commands pass `--help` on deliberately: everything after `mcc-claude`
+is an argument for Claude Code. `mcc-claude`, `mcc-claude-old` and `mcc-codex`
+check that the server is running before they hand anything over; the others pass
+`--help` and `--version` straight to the agent.
+
 ### Where your configuration lives
 
 Everything MCC keeps for you sits in one directory: the `.env` above, your
@@ -626,7 +651,8 @@ mcc-server
 ```
 
 Windows PowerShell is identical — the command is on your `PATH` after any
-install.
+install. `mcc-migrate --help` prints the command reference and moves nothing
+(until 7.113.1 it ran the migration).
 
 What you should see:
 
@@ -4953,6 +4979,8 @@ Compression only ever applies to **newly written** requests, so a database carri
 # stop the server first, or the final vacuum cannot reclaim the space
 mcc-compact-log
 ```
+
+`mcc-compact-log --help` prints the command reference and leaves the log alone (until 7.113.1 it compacted it).
 
 Measured on a copy of that 1.7 GB database: **1.73 GB → 0.29 GB in 4.9 minutes**, and all 49,934 bodies verified byte-identical against the original afterwards. It is safe to interrupt — each batch commits on its own and a row is converted only after its body is stored, so a kill leaves a consistent database with the work merely unfinished. Running it again resumes.
 

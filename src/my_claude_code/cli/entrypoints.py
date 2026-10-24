@@ -50,6 +50,8 @@ Start the proxy:
   my-claude-code          Same as mcc-server (full command name)
 
 Use a coding agent through the proxy:
+  (Arguments after an agent command go to the agent itself: mcc-claude --help
+  shows Claude Code's own help, not this reference.)
 {_harness_command_lines()}
 
 Manage and inspect:
@@ -65,6 +67,8 @@ Manage and inspect:
   mcc-mcp                 Media tools for MCP apps (started by the app; add it
                           with Add MCP server on the Coding agents page)
   mcc-help                Show this command reference
+  mcc-migrate             Move a legacy ~/.fcc home to ~/.mcc (stop the server
+                          and the tray first)
 
 The legacy fcc-* commands were retired in 7.0.0. They are still installed for
 this major version, but each one now prints the mcc-* name that replaced it and
@@ -130,6 +134,11 @@ def serve(argv: Sequence[str] | None = None) -> None:
 def init(argv: Sequence[str] | None = None) -> None:
     """Scaffold config at the resolved config directory's .env."""
     if _print_version_if_requested(argv):
+        return
+
+    # Before the config directory is resolved: ``mcc-init --help`` used to
+    # write ``.env`` (7.113.1).
+    if _print_help_if_requested(argv):
         return
 
     _bootstrap_config_paths()
@@ -214,6 +223,11 @@ def compact_log(argv: Sequence[str] | None = None) -> None:
     if _print_version_if_requested(argv):
         return
 
+    # Before the request log is found: ``mcc-compact-log --help`` used to
+    # rewrite and vacuum it (7.113.1).
+    if _print_help_if_requested(argv):
+        return
+
     _bootstrap_config_paths()
 
     from my_claude_code.cli.commands import compact_log as run_compaction
@@ -236,8 +250,13 @@ def apps(argv: Sequence[str] | None = None) -> None:
 
 
 def migrate_config_dir(argv: Sequence[str] | None = None) -> int:
-    """Move the legacy ``~/.mcc`` home to ``~/.mcc`` (opt-in)."""
+    """Move the legacy ``~/.fcc`` home to ``~/.mcc`` (opt-in)."""
     if _print_version_if_requested(argv):
+        return 0
+
+    # Before the migration module is even imported: ``mcc-migrate --help``
+    # used to move the config home (7.113.1).
+    if _print_help_if_requested(argv):
         return 0
 
     from my_claude_code.cli.migrate_config_dir import main
