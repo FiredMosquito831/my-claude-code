@@ -82,6 +82,10 @@ class MarketplaceAccountReads:
     #: MCC's own bound on one press of "fetch the charged ask": at most this
     #: many pages are read. A bound on MCC's work, not on the marketplace.
     usage_logs_max_pages: int
+    #: The smallest charge of any billed request, USD ("at least $0.00001 for
+    #: any billed request"). The page's charged-vs-ceiling check never calls a
+    #: tiny request over its ceiling for paying this floor.
+    minimum_charge_usd: float
     source: str
 
     def read(self, name: str) -> MarketplaceRead | None:
@@ -146,6 +150,8 @@ INFERHUB_ACCOUNT_READS = MarketplaceAccountReads(
     usage_logs_retention_days=7,
     usage_logs_page_size=100,
     usage_logs_max_pages=5,
+    # CONFIRMED: GET /usage/logs cost_consumer_usdc, and docs line 143 (RES §6.1).
+    minimum_charge_usd=0.00001,
     source=_OPENAPI,
 )
 

@@ -11754,6 +11754,28 @@ audio.req-media-preview {
   overflow-x: auto;
 }
 
+.mkt-recent-table th {
+  white-space: nowrap;
+}
+
+.mkt-card select,
+.mkt-card input[type="text"],
+.mkt-card input[type="search"] {
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--input);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.mkt-assign-table th,
+.mkt-assign-table td {
+  vertical-align: middle;
+}
+
 .mkt-unusable {
   display: flex;
   flex-direction: column;
@@ -11965,6 +11987,10 @@ audio.req-media-preview {
 
 .mkt-explorer-picker input[type="search"] {
   min-width: 220px;
+}
+
+.mkt-explorer-picker {
+  margin: 0 0 var(--space-3);
 }
 
 .mkt-offers {

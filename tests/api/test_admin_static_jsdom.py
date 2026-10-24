@@ -11250,7 +11250,8 @@ def _mkt_recent() -> list[dict[str, Any]]:
     def attempt(request_id: str, marketplace: dict[str, Any]) -> dict[str, Any]:
         return {
             "request_id": request_id,
-            "attempt": 1,
+            # The request log counts attempts from 0: the primary is 0.
+            "attempt": 0,
             "attempt_provider": "inferhub",
             "outcome": "succeeded",
             "_attempt_params": {"marketplace": marketplace},
@@ -11619,7 +11620,7 @@ def test_jsdom_the_last_requests_draw_null_as_a_dash_never_zero(marketplaces) ->
     assert over[2:8] == [
         MKT_OPUS,
         "6b652a8e5328",
-        "1 (InferHub hop 1)",
+        "#1 (InferHub hop 1)",
         "$1 / $5 (cap20)",
         "$0.003100",
         "over the ceiling",

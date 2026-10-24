@@ -560,6 +560,27 @@ def test_the_recent_rows_flag_a_charge_above_the_ceiling_and_keep_null_as_none()
     assert by_id["bare"]["charged_vs_ceiling"] is None
 
 
+def test_a_tiny_request_paying_the_minimum_charge_is_not_over_its_ceiling():
+    ceiling = {"sent": {"x-max-input-price": "1", "x-max-output-price": "5"}}
+    # 1 token in, 1 out: $0.000006 at the ceiling, under the $0.00001 minimum.
+    rows = recent_rows(
+        "inferhub",
+        [
+            _request("tiny", tokens_in=1, tokens_out=1),
+            _request("big", tokens_in=1, tokens_out=1),
+        ],
+        [
+            _attempt("tiny", {"ceiling": ceiling, "charged_usd": 0.00001}),
+            _attempt("big", {"ceiling": ceiling, "charged_usd": 0.00002}),
+        ],
+        "_attempt_params",
+    )
+    by_id = {row["request_id"]: row for row in rows}
+    assert by_id["tiny"]["bound_usd"] == pytest.approx(0.00001)
+    assert by_id["tiny"]["charged_vs_ceiling"] == "within"
+    assert by_id["big"]["charged_vs_ceiling"] == "over"
+
+
 def test_the_recent_route_is_bounded_and_reads_the_log_off_the_loop(home, monkeypatch):
     asked: dict[str, Any] = {}
 
@@ -738,3 +759,19 @@ def test_the_account_block_shows_what_was_read_and_never_a_zero(home, monkeypatc
     assert account["aliases"]["state"] == "not_readable"
     assert account["budgets"]["default"]["state"] == "failed"
     assert "not verified on a real account" in account["unverified"]
+
+
+def test_refresh_says_when_the_market_did_not_change(home, monkeypatch):
+    """The store keeps its time when a read finds the same market; Refresh says so."""
+
+    _snapshot()
+
+    async def reads(self, provider_id, names, params=None):
+        assert names[0] == "snapshot"
+        return {"snapshot_built": True, "state": "read", "reads": {}, "key_kind": None}
+
+    monkeypatch.setattr(ApplicationRuntime, "marketplace_reads", reads)
+    answer = _client(_app()).post("/admin/api/marketplaces/refresh").json()
+    assert answer["refresh"]["snapshot_built"] is True
+    assert "nothing in the market changed" in answer["refresh"]["words"]
+    assert answer["providers"][0]["snapshot"]["stamp"] == "2026-10-24 01:07Z"

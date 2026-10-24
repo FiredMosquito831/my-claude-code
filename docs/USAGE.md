@@ -3572,7 +3572,8 @@ bottom:
    `X-Inferhub-Model`, `X-Inferhub-Publisher`, the attempt (and InferHub's own
    hop), the ceiling sent, the charge InferHub reported and *over the
    ceiling* when that charge is above every token at the ceiling sent (cached
-   tokens counted at the input price, the worst case) — evidence, never an
+   tokens counted at the input price, the worst case; never below InferHub's
+   minimum charge of $0.00001 per billed request) — evidence, never an
    action. A dash means not reported. **Fetch the charged ask** reads
    InferHub's usage log for these rows (it keeps 7 days; an `inference_only`
    key may not read it) and shows the ask each was charged at — only when

@@ -1252,7 +1252,7 @@ function renderMarketplaceAccount(current) {
     facts,
     "Alias groups",
     aliases.state === "read"
-      ? `${(aliases.groups || []).length} groups`
+      ? `${(aliases.groups || []).length} alias group${(aliases.groups || []).length === 1 ? "" : "s"}`
       : aliases.words || "not read",
   );
   body.appendChild(facts);
@@ -2242,7 +2242,7 @@ function renderMarketplaceRecent(current) {
     const attempt =
       row.attempt === null || row.attempt === undefined
         ? "—"
-        : `${row.attempt}${row.inferhub_attempt ? ` (InferHub hop ${row.inferhub_attempt})` : ""}`;
+        : `#${Number(row.attempt) + 1}${row.inferhub_attempt ? ` (InferHub hop ${row.inferhub_attempt})` : ""}`;
     const ceiling = row.ceiling
       ? `${mktPrice(row.ceiling.in)} / ${mktPrice(row.ceiling.out)}${row.ceiling.profile ? ` (${row.ceiling.profile})` : ""}`
       : "none";
@@ -2289,7 +2289,7 @@ function renderMarketplaceSnapshot(current) {
       "p",
       "mkt-snapshot-age",
       snapshot.fetched_at
-        ? `Read ${snapshot.stamp} (${age}), ${snapshot.models} models.`
+        ? `Market as of ${snapshot.stamp} (${age}; a later read that finds the same market keeps this time), ${snapshot.models} models.`
         : "No snapshot yet: it is read after a models refresh while the provider has a key.",
     ),
   );

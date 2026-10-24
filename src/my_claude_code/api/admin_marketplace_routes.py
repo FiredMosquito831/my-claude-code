@@ -266,6 +266,7 @@ async def refresh_marketplaces(
 
     require_loopback_admin(request)
     built = False
+    before = {key: (s.fetched_at if s else None) for key, s in _snapshots().items()}
     for view in marketplace_views(settings):
         if not view["has_key"]:
             continue
@@ -277,15 +278,20 @@ async def refresh_marketplaces(
         if view["account_reads"]:
             remember_account(view["provider_id"], answer)
     catalogue = services.admin.cached_model_ids()
+    after = {key: (s.fetched_at if s else None) for key, s in _snapshots().items()}
     page = await asyncio.to_thread(_page, settings, catalogue)
-    page["refresh"] = {
-        "snapshot_built": built,
-        "words": (
-            "Snapshot rebuilt and account re-read."
-            if built
-            else "Nothing was read: no marketplace provider has a key."
-        ),
-    }
+    if not built:
+        words = "Nothing was read: no marketplace provider has a key."
+    elif after != before:
+        words = "Snapshot rebuilt and account re-read."
+    else:
+        # The store is rewritten only when what it says changed, so the time
+        # shown stays the last read that changed anything.
+        words = (
+            "Market re-read and account re-read: nothing in the market changed, "
+            "so the snapshot keeps the time of the last read that did."
+        )
+    page["refresh"] = {"snapshot_built": built, "words": words}
     return page
 
 
@@ -448,7 +454,7 @@ async def fetch_marketplace_charged(
     return {
         "state": "read",
         "words": (
-            f"Read {len(log_rows)} usage-log rows ({read.get('pages_read', 0)} pages"
+            f"Read {len(log_rows)} usage-log row(s) ({read.get('pages_read', 0)} page(s)"
             + (", more were not read" if read.get("truncated") else "")
             + f"); InferHub keeps them {table.usage_logs_retention_days} days."
         ),

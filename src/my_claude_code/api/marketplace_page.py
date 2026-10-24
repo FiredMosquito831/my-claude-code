@@ -1168,7 +1168,8 @@ def recent_rows(
     ``charged_vs_ceiling`` is evidence, never an action (IV.8): ``over`` when
     InferHub's reported charge is above every token at the ceiling that was
     sent (cached and cache-written tokens counted at the input rate, the
-    worst case); ``within`` when it is not; ``None`` when it cannot be said
+    worst case; never below the marketplace's declared minimum charge);
+    ``within`` when it is not; ``None`` when it cannot be said
     -- no charge reported, no ceiling sent, an uncapped side, or a token
     count not recorded.
     """
@@ -1176,6 +1177,8 @@ def recent_rows(
     dialect = marketplace_for_provider(provider_id)
     if dialect is None:
         return []
+    table = account_reads_for(dialect.dialect_id)
+    floor = table.minimum_charge_usd if table is not None else 0.0
     by_request: dict[str, Mapping[str, Any]] = {}
     for attempt in attempts:
         if attempt.get("attempt_provider") != provider_id:
@@ -1218,7 +1221,11 @@ def recent_rows(
             and tokens_out is not None
         ):
             input_tokens = tokens_in + (cache_read or 0) + (cache_write or 0)
-            bound = (input_tokens * ceil_in + tokens_out * ceil_out) / 1_000_000
+            # A billed request costs at least the marketplace's minimum charge,
+            # whatever its tokens: a tiny request paying it is not "over".
+            bound = max(
+                (input_tokens * ceil_in + tokens_out * ceil_out) / 1_000_000, floor
+            )
             if charged is not None:
                 flag = "over" if charged > bound + _EPSILON else "within"
         rows.append(
