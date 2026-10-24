@@ -43,6 +43,7 @@ from .egress import (
     get_validated_stream_addrinfos_for_egress,
 )
 from .parsers import HTMLTextParser, SearchResultParser
+from .search_chain import run_search_chain
 from .search_providers import runtime_provider
 
 _LEGACY_PROVIDER_ID = "legacy"
@@ -288,6 +289,13 @@ async def _run_web_search(
     """
 
     settings = settings if settings is not None else get_settings()
+    if settings.web_search_chain:
+        return await _chain_route_search(
+            query,
+            settings,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )
     trace = _SearchRouteTrace(
         route_id=uuid4().hex,
         ts_epoch=time.time(),
@@ -333,6 +341,47 @@ async def _run_web_search(
         )
         trace.fail(trace.terminal_provider, error)
         raise error
+    except asyncio.CancelledError as error:
+        trace.fail(trace.terminal_provider, error)
+        raise
+    except Exception as error:
+        trace.fail(trace.terminal_provider, error)
+        raise
+    finally:
+        emit_route_outcome(trace.outcome())
+
+
+async def _chain_route_search(
+    query: str,
+    settings: Settings,
+    *,
+    allowed_domains: tuple[str, ...],
+    blocked_domains: tuple[str, ...],
+) -> list[dict[str, str]]:
+    """``WEB_SEARCH_CHAIN`` is set: the chain door, with today's route trace.
+
+    The trace, the route row it emits and the results' shape are the ones the
+    route above uses; only the walk is the chain's (``search_chain.py``).
+    """
+
+    trace = _SearchRouteTrace(
+        route_id=uuid4().hex,
+        ts_epoch=time.time(),
+        query=query,
+        started=time.perf_counter(),
+    )
+    try:
+        return await run_search_chain(
+            query,
+            settings,
+            trace,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            # Looked up per call, so a test that replaces the scraper on this
+            # module replaces it for the chain too.
+            legacy_scrape=lambda text: _legacy_web_search_scrape(text),
+            response_items=_web_search_response_items,
+        )
     except asyncio.CancelledError as error:
         trace.fail(trace.terminal_provider, error)
         raise

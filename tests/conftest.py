@@ -562,6 +562,16 @@ def _isolate_route_health():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_search_chain_books():
+    """The web search chain keeps its own key books and benches (7.112.0)."""
+    from my_claude_code.api.web_tools import search_books
+
+    search_books.reset_search_books()
+    yield
+    search_books.reset_search_books()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_media_books():
     """Media keeps its own route, key and proxy books (7.60.0); reset them too."""
     from my_claude_code.application.media import executor as media_executor

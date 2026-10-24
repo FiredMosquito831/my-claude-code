@@ -4581,7 +4581,11 @@ No model answers that request, so Analytics records it as a local answer: since 
 ```bash
 WEB_SEARCH_PROVIDER=auto            # auto | off | disabled | <provider id>
 WEB_SEARCH_FALLBACK_POLICY=auto     # auto | none | ddgs | legacy
+WEB_SEARCH_CHAIN=                   # optional: exa,tavily,ddgs,legacy (7.112.0)
+WEB_SEARCH_CHAIN_PAUSED=            # optional: chain entries to skip
 ```
+
+**`WEB_SEARCH_CHAIN` (7.112.0, optional).** An ordered list of search services, tried in turn; a service listed twice is tried again at its place, and `legacy` is the old DuckDuckGo scraper. Unset, the two settings above route every search exactly as before. Set, it replaces them for routing (`WEB_SEARCH_PROVIDER=disabled` still disables), and each service's keys follow the model providers' key rules (see [Multi-key rotation](#12-multi-key-rotation)): a key is benched only for a rejected key, a 429 or an out-of-credits message, a server error or a timeout moves to the next service, each key gets `PROVIDER_RETRY_ATTEMPTS` tries, and an only key is never benched into an outage. An entry without its key is skipped and named on its attempt row; `WEB_SEARCH_CHAIN_PAUSED` skips entries without removing them.
 
 **`auto` works with zero configuration.** With no keys set it falls back to keyless DuckDuckGo, so search works out of the box. Set any provider key and `auto` prefers it.
 
@@ -5449,6 +5453,8 @@ A **rate-limited key is benched for exactly as long as the provider says** — p
 Since 6.19.0 that bench is also scoped to the **model** it happened on. Gateways that front many models rate-limit them separately: measured on NVIDIA NIM on 2026-08-31, `moonshotai/kimi-k3` returned 429 on all three keys inside 0.1 s while `nvidia/nemotron-3-ultra` and a MiniMax model answered on those same keys in the same second — and NIM sends no `Retry-After` at all. Charging the whole key for that took **every** NIM model off the route for a full minute. Now the pair is benched, the key stays `HEALTHY`, and the key itself is benched only once `CREDENTIAL_MODEL_BENCH_ESCALATION` (default 2) different models are limited on it at once — which is what a genuinely key-wide limit looks like, one extra 429 later.
 
 Per-key state, usage and health are visible in the Admin UI, including which key served which request; the ladder and the no-header cooldown are the **Credential health** card on [Limits and resilience](#13-limits-and-resilience).
+
+**Web search keys** follow these rules only while `WEB_SEARCH_CHAIN` is set (7.112.0). Without a chain they keep their own: each key is tried once per search, and any failure — a 5xx, a timeout, a 429, a 401/403/402 — benches it (10 s up to 5 minutes), so a single-key search provider is out of service until the bench ends. See [Web search](#10-web-search).
 
 <a id="tutorial-why-my-key-was-benched"></a>
 

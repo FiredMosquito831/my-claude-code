@@ -332,6 +332,46 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     # through the same ``key_health`` method, so ``admin_routes`` duck-types
     # the reporter instead of naming one wrapper class. The custom-provider
     # listing below still holds a real ``isinstance``.
+    # 7.112.0: the web search chain (``WEB_SEARCH_CHAIN``). The user asked for
+    # the model path's own rules on search keys, by reuse and not by a copy
+    # (specs/INVESTIGATION-WEBSEARCH-ROUTING.md, decision Q10).
+    (
+        "my_claude_code.api.web_tools.search_books",
+        "my_claude_code.providers.credential_rotation",
+    ): (
+        "Owner: the web search chain's key books. "
+        "Reason: the search door must decide with the model path's own objects; "
+        "a mirror in api would be a second copy of the rules. "
+        "CredentialRotationState is instantiated for search keys, never edited."
+    ),
+    (
+        "my_claude_code.api.web_tools.search_books",
+        "my_claude_code.providers.rate_limit",
+    ): (
+        "Owner: the web search chain's key books. "
+        "Reason: the search door must decide with the model path's own objects; "
+        "a mirror in api would be a second copy of the rules. One "
+        "ProviderRateLimiter per search key runs PROVIDER_RETRY_ATTEMPTS."
+    ),
+    (
+        "my_claude_code.api.web_tools.search_books",
+        "my_claude_code.providers.failure_policy",
+    ): (
+        "Owner: the web search chain's key books. "
+        "Reason: the search door must decide with the model path's own objects; "
+        "a mirror in api would be a second copy of the rules. The credits "
+        "phrase list is read through quota_failure, never restated."
+    ),
+    (
+        "my_claude_code.api.web_tools.search_chain",
+        "my_claude_code.providers.failure_policy",
+    ): (
+        "Owner: the web search chain door. "
+        "Reason: the search door must decide with the model path's own objects; "
+        "a mirror in api would be a second copy of the rules. The legacy "
+        "scraper's raw httpx failures are classified by the model path's own "
+        "classify_provider_failure."
+    ),
     (
         "my_claude_code.api.admin_custom_routes",
         "my_claude_code.providers.runtime.rotating",

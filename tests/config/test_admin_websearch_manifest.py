@@ -162,6 +162,8 @@ def test_websearch_field_specs_cover_section_fields() -> None:
     expected = {
         "WEB_SEARCH_PROVIDER",
         "WEB_SEARCH_FALLBACK_POLICY",
+        "WEB_SEARCH_CHAIN",
+        "WEB_SEARCH_CHAIN_PAUSED",
         "WEBSEARCH_LOG_ENABLED",
         "WEBSEARCH_LOG_CAPTURE_CONTENT",
         "WEBSEARCH_LOG_CONTENT_MAX_CHARS",

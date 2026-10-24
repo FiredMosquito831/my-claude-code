@@ -6,6 +6,15 @@ rotation (auth -> lockout, rate_limit -> cooldown, etc.) and by analytics.
 
 from typing import ClassVar
 
+#: What kind of ``upstream`` failure carried no HTTP status: the request timed
+#: out, the connection itself failed, or the provider answered a body that is
+#: not JSON. ``None`` on every other error. Read only by the search chain's
+#: translation (``api/web_tools/search_books.py``), which needs the same facts
+#: the model path's classifier sees; nothing on the default route reads it.
+KIND_DETAIL_TIMEOUT = "timeout"
+KIND_DETAIL_TRANSPORT = "transport"
+KIND_DETAIL_BAD_JSON = "bad_json"
+
 
 class WebSearchError(Exception):
     """Base error for all web search provider failures."""
@@ -18,6 +27,8 @@ class WebSearchError(Exception):
         message: str,
         *,
         status_code: int | None = None,
+        kind_detail: str | None = None,
+        upstream_body: object = None,
     ) -> None:
         super().__init__(message)
         self.provider = provider
@@ -25,6 +36,12 @@ class WebSearchError(Exception):
         self.status_code = status_code
         # Filled in by the rotation loop when a specific key produced the error.
         self.key_index: int | None = None
+        # 7.112.0, additive: see ``KIND_DETAIL_*`` above.
+        self.kind_detail = kind_detail
+        # 7.112.0, additive: the provider's own error body (parsed JSON when it
+        # was JSON, else its text), so the quota phrase reader and the
+        # Retry-After body reader see what the model path's classifier sees.
+        self.upstream_body = upstream_body
 
     def __str__(self) -> str:
         return f"{self.provider}: {self.message}"
@@ -54,8 +71,16 @@ class WebSearchRateLimitError(WebSearchError):
         *,
         status_code: int | None = None,
         retry_after_seconds: float | None = None,
+        kind_detail: str | None = None,
+        upstream_body: object = None,
     ) -> None:
-        super().__init__(provider, message, status_code=status_code)
+        super().__init__(
+            provider,
+            message,
+            status_code=status_code,
+            kind_detail=kind_detail,
+            upstream_body=upstream_body,
+        )
         # What the provider itself said about when the limit resets. None means
         # it stayed silent, which is different from "reset immediately".
         self.retry_after_seconds = retry_after_seconds
