@@ -149,8 +149,9 @@ def test_the_usage_log_read_pages_and_stops_at_the_declared_bound(
     calls: list[dict[str, Any]] = []
 
     async def fetch(url, *, proxy, timeout, key, params=None):
-        calls.append(dict(params or {}))
-        page = int(params["page"])
+        query = dict(params or {})
+        calls.append(query)
+        page = int(query["page"])
         return 200, {
             "rows": [{"id": f"{page}-{n}"} for n in range(100)],
             "total": 10_000,
