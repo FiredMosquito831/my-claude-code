@@ -72,6 +72,9 @@ def _header_names(provider_id: str) -> frozenset[str]:
 ADDED_SINCE_RECORDING: dict[str, str] = {
     # 7.58.0: B.AI, the generic custom-provider profile under its own name.
     "bai": "hypercharm",
+    # 7.109.0: InferHub, the generic profile plus declared doors and a
+    # marketplace; its price ceiling is a per-call header, not an identity.
+    "inferhub": "hypercharm",
 }
 
 

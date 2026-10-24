@@ -451,7 +451,7 @@ def _has_thinking(fixture: str) -> bool:
 def test_the_snapshot_covers_every_family_fixture_and_policy() -> None:
     """A snapshot that quietly stopped covering something proves nothing."""
 
-    assert set(_now()) == set(DIGESTS)
+    assert set(_now()) - set(_added_keys()) == set(DIGESTS)
     families = {key.split("/", 1)[0] for key in _now()}
     assert families == {"anthropic_messages", "openai_chat", "responses"}
     chat_profiles = {
@@ -460,6 +460,34 @@ def test_the_snapshot_covers_every_family_fixture_and_policy() -> None:
     assert len(chat_profiles) >= len(OPENAI_CHAT_PROFILES) + len(
         STANDALONE_PROFILE_MODULES
     )
+
+
+#: Chat profiles added after the recording, each mapped to the recorded
+#: profile whose bodies it must build byte for byte. The baseline is frozen.
+ADDED_SINCE_RECORDING: dict[str, str] = {
+    # 7.109.0: InferHub runs the generic profile B.AI runs on.
+    "inferhub": "bai",
+}
+
+
+def _added_keys() -> dict[str, str]:
+    """``added key -> recorded key`` for every body of an added profile."""
+
+    out: dict[str, str] = {}
+    for key in _now():
+        family, _sep, rest = key.partition("/")
+        profile, _sep, tail = rest.partition("/")
+        recorded = ADDED_SINCE_RECORDING.get(profile)
+        if family == "openai_chat" and recorded is not None:
+            out[key] = f"{family}/{recorded}/{tail}"
+    return out
+
+
+def test_an_added_profile_builds_exactly_what_its_recorded_twin_built() -> None:
+    added = _added_keys()
+    assert added
+    for key, recorded in added.items():
+        assert digest(_now()[key]) == DIGESTS[recorded], key
 
 
 NON_RESPONSES = sorted(key for key in DIGESTS if not key.startswith(RESPONSES_PREFIXES))

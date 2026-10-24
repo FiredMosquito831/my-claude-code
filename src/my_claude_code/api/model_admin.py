@@ -28,6 +28,7 @@ from decimal import Decimal, InvalidOperation
 from fnmatch import fnmatchcase
 from typing import Any
 
+from my_claude_code.api.marketplace_admin import marketplace_profile_update_problem
 from my_claude_code.application.litellm_model_map import (
     LITELLM_SOURCE,
     LITELLM_SOURCE_LABEL,
@@ -94,7 +95,6 @@ from my_claude_code.application.openrouter_live import (
     live_fills_gap,
     live_wins_intrinsic,
 )
-from my_claude_code.api.marketplace_admin import marketplace_profile_update_problem
 from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_MAX_MINUTES,
     PROMPT_CACHE_TTL_MIN_MINUTES,

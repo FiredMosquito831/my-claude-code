@@ -7,12 +7,18 @@ import pytest
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
-from my_claude_code.providers.openai_chat import OpenAIChatProvider
+from my_claude_code.providers.openai_chat import (
+    GENERIC_OPENAI_PROFILE,
+    OpenAIChatProvider,
+)
 
 
 class RecordingOpenAIProvider(OpenAIChatProvider):
     def __init__(self) -> None:
         self.build_calls: list[tuple[MessagesRequest, ReasoningPolicy]] = []
+        # 7.109.0: preflight asks the profile whether the host is a price
+        # marketplace; the generic profile declares none.
+        self._profile = GENERIC_OPENAI_PROFILE
 
     def _build_request_body(
         self,

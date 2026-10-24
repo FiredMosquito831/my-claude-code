@@ -14,6 +14,7 @@ from my_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
+    GENERIC_OPENAI_PROFILE,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
@@ -228,7 +229,11 @@ class TestPromptCacheUsage:
     """OpenAI-compatible upstreams report cache hits in prompt_tokens_details."""
 
     def _provider(self):
-        return OpenAIChatProvider.__new__(OpenAIChatProvider)
+        provider = OpenAIChatProvider.__new__(OpenAIChatProvider)
+        # 7.109.0: the usage read asks the profile whether the host is a
+        # marketplace; the generic profile says no.
+        vars(provider)["_profile"] = GENERIC_OPENAI_PROFILE
+        return provider
 
     def test_cached_tokens_become_cache_read_input_tokens(self) -> None:
         """Verified against a live NVIDIA NIM response, which reports this."""

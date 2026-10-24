@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from my_claude_code.api.credential_display import credential_name_index
 from my_claude_code.api.docs_content import available_documents
 from my_claude_code.api.docs_render import render_document
+from my_claude_code.api.marketplace_admin import marketplaces_payload
 from my_claude_code.api.model_admin import (
     INHERIT_SENTINEL,
     MODEL_SCOPE,
@@ -54,7 +55,6 @@ from my_claude_code.api.model_admin import (
     with_override_row,
     with_surface_override_row,
 )
-from my_claude_code.api.marketplace_admin import marketplaces_payload
 from my_claude_code.api.model_catalog import settings_model_visibility
 from my_claude_code.api.models_page_cache import (
     MODELS_PAGE_ENTRY,

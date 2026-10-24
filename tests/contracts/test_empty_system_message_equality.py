@@ -475,6 +475,13 @@ def _baseline() -> dict[str, dict[str, str]]:
 
 CASES = [(case, kind) for case, kind, _body in corpus()]
 
+#: Chat builders added after the baseline was written, each mapped to the
+#: recorded builder it must equal. The baseline file is frozen.
+ADDED_SINCE_RECORDING: dict[str, str] = {
+    # 7.109.0: InferHub runs the generic profile B.AI runs on.
+    "chat_inferhub": "chat_bai",
+}
+
 
 @pytest.mark.skipif(bool(WRITE_BASELINE), reason="baseline is being written")
 def test_the_corpus_is_the_one_the_baseline_was_written_from() -> None:
@@ -490,6 +497,10 @@ def test_every_body_that_converted_before_is_byte_identical(
     base = _baseline()
     before = base[case]
     now = surfaces(body)
+    # Builders added after the recording, held to a recorded one: the same
+    # request must give exactly the recorded builder's answer.
+    for added, recorded in ADDED_SINCE_RECORDING.items():
+        assert now.pop(added) == now[recorded], (case, added)
     assert list(now) == list(before)
     for surface, was in before.items():
         if surface in ANTHROPIC_FORMAT or kind != "marker":

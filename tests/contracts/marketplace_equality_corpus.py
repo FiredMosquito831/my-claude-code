@@ -47,10 +47,10 @@ from my_claude_code.providers.openai_chat import (
     GENERIC_OPENAI_PROFILE,
     OPENAI_CHAT_PROFILES,
     OpenAIChatProvider,
+    client_identity,
     create_openai_chat_provider,
     profile_with_declared_surfaces,
 )
-from my_claude_code.providers.openai_chat import client_identity
 from my_claude_code.providers.runtime import factory
 from tests.contracts.test_anthropic_foreign_thinking_equality import corpus
 from tests.providers.support import passthrough_rate_limiter
@@ -127,11 +127,13 @@ def chat_hosts() -> dict[str, Callable[[], Any]]:
     )
     hosts: dict[str, Callable[[], Any]] = {}
     for provider_id in sorted(OPENAI_CHAT_PROFILES):
-        hosts[provider_id] = lambda provider_id=provider_id: create_openai_chat_provider(
-            provider_id,
-            _config(),
-            passthrough_rate_limiter(),
-            profile=OPENAI_CHAT_PROFILES[provider_id],
+        hosts[provider_id] = lambda provider_id=provider_id: (
+            create_openai_chat_provider(
+                provider_id,
+                _config(),
+                passthrough_rate_limiter(),
+                profile=OPENAI_CHAT_PROFILES[provider_id],
+            )
         )
     for provider_id in SPECIAL_CHAT_HOSTS:
         make = factory._SPECIAL_PROVIDER_FACTORIES[provider_id]

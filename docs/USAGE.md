@@ -3424,6 +3424,96 @@ request body — and an unrecognised value is ignored with a log line rather
 than obeyed. `reasoning_preference` and `max_output_tokens` are the other two
 keys of that kind; see **Per-model reasoning and output preferences** below.
 
+### InferHub marketplace profiles
+
+[InferHub](https://inferhub.dev) (`INFERHUB_API_KEY`, keys look like
+`sk-airo-…`) is not one seller. It is a marketplace that pools many people's
+upstream subscriptions — Claude Code (`cc/…`), Codex (`cx/…`), Antigravity
+(`ag/…`) and about twenty more — behind one OpenAI- and Anthropic-shaped API
+at `api.inferhub.dev`. For one model there can be thousands of seller
+accounts, grouped into a handful of **price levels** (each level is a price
+per million tokens and how many accounts ask it). Every price is a percent off
+InferHub's "official" price for that model, the same on input and output, and
+never more than half of it.
+
+**How you can be overcharged.** With no ceiling, InferHub routes to "the
+best-scoring provider regardless of price": any live ask, up to that half of
+official — for `cc/claude-opus-4-6` that was 3.33× the cheapest ask when the
+research was done. And a conversation stays with its seller for up to 30
+minutes; after that it pays the seller's *current* ask, which may have been
+raised meanwhile. The only protection a client has is a ceiling sent with
+**every** request: the headers `x-max-input-price` and `x-max-output-price`
+(USD per million tokens). MCC sends them on every attempt and every retry, on
+all three doors, whenever a profile with a ceiling applies.
+
+**Choosing a profile.** On the **Models** page, InferHub's provider table and
+each InferHub model's table have a **marketplace profile** row (the 15th
+override key, `marketplace_profile`): *Inherit*, *Force value* (a profile's
+name) or *Force unset* — "InferHub decides", no ceiling, shown in red. The
+model's row wins over the provider row. Profiles live in
+`marketplace_profiles.json` in the config folder:
+
+```json
+{"version": 1, "profiles": {
+  "opus-cap": {"kind": "pct_of_official", "percent": 10},
+  "tight":    {"kind": "max_price", "max_input_usd": 0.5, "max_output_usd": 2.5,
+               "max_usd_per_request": 0.2},
+  "follow":   {"kind": "cheapest_level_now", "cap_percent": 20,
+               "exclude_upstreams": ["kiro"]},
+  "deep":     {"kind": "cheapest_level_min_accounts", "min_accounts": 10}
+}}
+```
+
+| Kind | What it sends |
+| --- | --- |
+| `inferhub_decides` | nothing — today's request, no ceiling (the default) |
+| `pct_of_official` | `percent` % of the model's own official price, both sides |
+| `max_price` | your `max_input_usd` / `max_output_usd`; a side left out is not capped |
+| `cheapest_level_now` | the cheapest level right now, re-read on every request; optional cap (`cap_percent`, or `cap_input_usd` / `cap_output_usd`) — without one it follows the market, so add a cap to be sure |
+| `cheapest_level_min_accounts` | the cheapest level with at least `min_accounts` accounts at or below it; same optional cap |
+
+Two modifiers on every kind but the first: `exclude_upstreams` (prefixes sent
+as `x-ignore-upstream`) and `max_usd_per_request` (MCC refuses a request whose
+worst case — every input token at the input ceiling plus the whole output
+allowance at the output ceiling — is above it).
+
+**When nothing fits.** MCC never sends an InferHub request uncapped once a
+profile is set, and never raises your ceiling by itself. It answers with a
+short `400` in the client's own error shape, before any upstream call, when
+the profile no longer exists, when it cannot compute a number (a
+`pct_of_official` profile on a model with no official price — an alias), when
+it excludes the model's own upstream, or when the market snapshot already
+shows the cheapest level above your ceiling. If InferHub itself answers `402`
+with the code `no_provider_under_bid`, MCC turns it into the same short `400`
+naming the cheapest price InferHub stated. A `402` without that code (a
+balance that ran out) stays "out of credits", exactly as on every other
+provider.
+
+**The market snapshot.** While InferHub has a key, MCC reads, hourly and on
+every models refresh: your key's model list (each model's levels, regrouped
+from one entry per account into one per level), and — while
+`MARKETPLACE_PUBLIC_MARKET` is on — InferHub's keyless public pages (cheapest
+and dearest ask, speed and success per model, cache hit rate, the platform
+cap), plus your combos and each upstream's prompt note with your key. It is
+stored beside the model catalogue (`cache/derived/marketplace-inferhub.json`)
+and read through the InferHub proxy chain; `INFERHUB_MARKET_BASE_URL` says
+where. No key, nothing is read. The Models page shows each model's **offers**
+and **route note** rows from it; the route note is the upstream's own words
+about what it does to your system prompt.
+
+**Doors.** InferHub serves every model on Chat Completions, Claude Code's
+`cc/…` natively on Anthropic Messages (which keeps cache markers and signed
+thinking) and Codex's `cx/…` natively on Responses; MCC picks those by
+default and you can pin any model's endpoint on its row. InferHub's
+`usage.cost` on Chat Completions is recorded as the whole bill; each attempt's
+request detail keeps the ceiling sent (`params.wire.marketplace`) and InferHub's
+own `X-Inferhub-*` headers and charge (`params.marketplace`).
+
+> **Not verified on a real account.** Everything above is built from InferHub's
+> documentation and public pages; nothing keyed has been observed yet — the
+> exact `402` body, the header values, and `usage.cost` on the Messages and
+> Responses doors are still unknown.
+
 ### Local providers
 
 LM Studio, llama.cpp and Ollama need a base URL rather than a key:
@@ -4274,6 +4364,18 @@ a log line if written by hand. It is never a body field: the provider writes
 the host's own lifetime instead, adapted as [Prompt cache
 lifetime](#prompt-cache-lifetime) describes. An untouched lifetime leaves the
 file byte for byte as it was.
+
+**New in 7.109.0: a marketplace profile, the 15th key.** On a marketplace
+provider (InferHub) a provider row or a model row may carry
+`marketplace_profile` -- the *name* of a profile in `marketplace_profiles.json`
+(an object is refused here, as for every key):
+`{"providers": {"inferhub": {"marketplace_profile": "opus-cap"}}, "models": {"inferhub/cx/gpt-6-astra": {"marketplace_profile": null}}}`.
+Absent inherits; a name forces that profile; `null` forces "InferHub decides"
+(no ceiling) at that row. A name with no profile behind it is refused with a
+422 by the page's save; written by hand, it makes that model's requests refuse
+with a 400 rather than go out uncapped. It is never a body field and means
+nothing on any other provider. See [InferHub marketplace
+profiles](#inferhub-marketplace-profiles).
 
 > **Downgrading.** An MCC below 7.25.0 does not know these two keys: it reads
 > the file, logs that they are not known request parameters, and ignores them,
