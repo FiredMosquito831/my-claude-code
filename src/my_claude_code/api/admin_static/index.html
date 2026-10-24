@@ -4282,6 +4282,38 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Advanced options drawers, which are open when the page loads, and each
                   states what leaving it blank does.
                 </p>
+                <h4>Set a search chain</h4>
+                <p>
+                  On <strong>Web Search</strong>, the <strong>Search chain</strong> card
+                  lists the search services a web search tries, top first. Press
+                  <strong>Add search service</strong> and pick one per row &mdash; for
+                  example Exa, then Context7, then Tavily &mdash; reorder with the arrows
+                  or the grip, and press <strong>Apply</strong>. A service may be listed
+                  twice (it is tried again at its place); <strong>Pause</strong> skips a
+                  service everywhere it is listed without removing it; a row whose
+                  service has no key says so and is skipped.
+                </p>
+                <img class="guide-shot" src="/admin/img/admin-websearch-chain.png"
+                     alt="The Search chain card with Exa, Context7 and Tavily in order"
+                     loading="lazy">
+                <p>
+                  While a chain is set, the route summary shows it and says that Web
+                  Search Provider and Fallback Policy are not used; Disabled still
+                  disables search. Each service's keys follow your model providers'
+                  rules: a key is benched only for a rejected key, a 429 or an
+                  out-of-credits message, and <strong>Manage keys</strong> on its card
+                  shows why (<em>benched 60 s: rate limited</em>, <em>locked out, tier 1
+                  of 3</em>) with a <strong>Reset</strong> button. In Analytics, the
+                  <em>Key tries</em> column expands to every try on every key. Empty the
+                  card and Apply to go back to the provider route above.
+                </p>
+                <p>
+                  <strong>Context7</strong> answers with library documentation rather
+                  than web pages, so Auto never picks it: add
+                  <code>CONTEXT7_API_KEY</code> and put it in the chain where a
+                  documentation answer helps (for example first, ahead of a web search
+                  service). It has not been verified on a real key.
+                </p>
 
                 <h3 id="guide-vpn-tor">Use a VPN, WARP or Tor</h3>
                 <p>

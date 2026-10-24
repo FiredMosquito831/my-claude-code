@@ -11829,7 +11829,10 @@ def test_jsdom_the_search_chain_card_sits_above_the_grid_and_owns_both_settings(
     assert chain["pausedType"] == "hidden"
     assert "WEB_SEARCH_CHAIN" not in chain["gridKeys"]
     assert "WEB_SEARCH_CHAIN_PAUSED" not in chain["gridKeys"]
-    assert chain["gridKeys"][:2] == ["WEB_SEARCH_PROVIDER", "WEB_SEARCH_FALLBACK_POLICY"]
+    assert chain["gridKeys"][:2] == [
+        "WEB_SEARCH_PROVIDER",
+        "WEB_SEARCH_FALLBACK_POLICY",
+    ]
 
 
 def test_jsdom_the_chain_editor_keeps_order_and_repeats(websearch_chain) -> None:
@@ -11842,7 +11845,9 @@ def test_jsdom_the_chain_editor_keeps_order_and_repeats(websearch_chain) -> None
         "tavily",
         "exa",
     ]
-    assert [row["repeat"] for row in edited["rows"]] == ["×2", "", "", "×2"]
+    # The chip reads "x2" with a multiplication sign (U+00D7).
+    twice = chr(0xD7) + "2"
+    assert [row["repeat"] for row in edited["rows"]] == [twice, "", "", twice]
     assert [row["index"] for row in edited["rows"]] == ["1", "2", "3", "4"]
     assert all(row["grip"] for row in edited["rows"])
     # Every catalogue provider and the old scraper, nothing else.
@@ -11949,7 +11954,7 @@ def test_jsdom_key_health_speaks_the_model_rules_words(websearch_chain) -> None:
     assert [row["health"] for row in words["rows"]] == [
         "benched 60 s: rate limited · 4 req · 1 err",
         "benched 30 s: out of credits · 4 req · 1 err",
-        "locked out, tier 2 of 3: key rejected (1h left) · 4 req · 1 err",
+        "locked out, tier 2 of 3 (1h left) · 4 req · 1 err",
         "benched 45 s: circuit open after repeated failures · 4 req · 1 err",
         "healthy · 3 req · 0 err",
     ]
@@ -12038,8 +12043,7 @@ def test_jsdom_the_key_tries_expand_to_the_request_ladder(websearch_chain) -> No
         "req-chain-try is-served",
     ]
     assert lines[0]["decision"] == (
-        f"key 0 {WS_PROBE} — benched 7s (rate_limit): "
-        "429 with Retry-After 7 → next key"
+        f"key 0 {WS_PROBE} — benched 7s (rate_limit): 429 with Retry-After 7 → next key"
     )
     assert lines[1]["text"] == "#2 · key 1 exa-…0002 · 503 · 13ms"
     assert lines[2]["text"] == "#3 · key 1 exa-…0002 · served · 30ms · waited 500ms"

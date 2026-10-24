@@ -49,7 +49,9 @@ from my_claude_code.websearch.registry import (
 from tests.support.websearch_credentials import forget_web_search_credentials
 from tests.websearch.support import attach_mock_client, build_config
 
-FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "context7" / "responses.json"
+FIXTURE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "context7" / "responses.json"
+)
 #: Context7 keys start with ``ctx7sk`` (both clients say so); this one is fake.
 KEY_1 = "ctx7sk-fake0000-0000-4000-8000-000000000001"
 KEY_2 = "ctx7sk-fake0000-0000-4000-8000-000000000002"
@@ -117,7 +119,9 @@ async def test_one_search_is_the_library_search_then_its_documentation() -> None
         "/api/v2/context",
     ]
     assert all(request.method == "GET" for request in requests)
-    assert all(request.headers["authorization"] == f"Bearer {KEY_1}" for request in requests)
+    assert all(
+        request.headers["authorization"] == f"Bearer {KEY_1}" for request in requests
+    )
     assert dict(requests[0].url.params) == {"query": QUERY, "libraryName": QUERY}
     # The best (first) match is the one whose documentation is read.
     assert dict(requests[1].url.params) == {
@@ -132,7 +136,9 @@ async def test_one_search_is_the_library_search_then_its_documentation() -> None
 
 
 @pytest.mark.asyncio
-async def test_results_are_library_plus_section_the_source_url_and_the_excerpt() -> None:
+async def test_results_are_library_plus_section_the_source_url_and_the_excerpt() -> (
+    None
+):
     provider = _provider()
     attach_mock_client(provider, _route("libs_search_ok"))
     response = await _search(provider, max_results=10)
@@ -160,11 +166,15 @@ async def test_results_are_library_plus_section_the_source_url_and_the_excerpt()
     assert info.url == (
         "https://github.com/vercel/next.js/blob/canary/docs/revalidate.mdx"
     )
-    assert info.snippet == "Revalidation refreshes cached data on an interval (invented)."
+    assert (
+        info.snippet == "Revalidation refreshes cached data on an interval (invented)."
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_long_excerpt_is_cut_with_a_marker_and_its_content_kept_longer() -> None:
+async def test_a_long_excerpt_is_cut_with_a_marker_and_its_content_kept_longer() -> (
+    None
+):
     provider = _provider()
     attach_mock_client(provider, _route("libs_search_ok"))
     response = await _search(provider, max_results=10)
@@ -230,7 +240,9 @@ async def test_a_401_is_a_rejected_key() -> None:
 @pytest.mark.parametrize("step", ["search", "context"])
 async def test_a_429_is_a_rate_limit_with_the_published_wait(step: str) -> None:
     error = await (
-        _error("rate_limited") if step == "search" else _error("libs_search_ok", "rate_limited")
+        _error("rate_limited")
+        if step == "search"
+        else _error("libs_search_ok", "rate_limited")
     )
     # Not "upstream": the key pool and the chain read the wait from here.
     assert isinstance(error, WebSearchRateLimitError)
@@ -270,7 +282,9 @@ async def test_an_unreadable_answer_is_a_bad_body(search: str, context: str) -> 
 
 
 @pytest.mark.asyncio
-async def test_the_failure_kinds_read_through_the_chain_and_the_judge_unchanged() -> None:
+async def test_the_failure_kinds_read_through_the_chain_and_the_judge_unchanged() -> (
+    None
+):
     cases = {
         "unauthorized": (FailureKind.AUTHENTICATION, "auth"),
         "rate_limited": (FailureKind.RATE_LIMIT, "rate_limit"),

@@ -17066,8 +17066,9 @@ function keyBenchWords(facts) {
   if (facts.reason === "rejected") {
     const tier = Number(facts.lockout_tier) || 1;
     const tiers = Number(facts.lockout_tiers) || tier;
+    // A rejected key: the lockout ladder's step says how long the next one is.
     return (
-      `locked out, tier ${tier} of ${tiers}: key rejected` +
+      `locked out, tier ${tier} of ${tiers}` +
       (Number(facts.remaining_s) > 0 ? ` (${left} left)` : "")
     );
   }

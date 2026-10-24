@@ -2904,9 +2904,7 @@ async def reset_websearch_credential_key(
             restored = await books.state.reset_key(index)
     else:
         restored = reset_cached_pool_key(descriptor.provider_id, index)
-    health, key_health = _websearch_key_health(
-        settings, descriptor.provider_id, keys
-    )
+    health, key_health = _websearch_key_health(settings, descriptor.provider_id, keys)
     return {
         "provider_id": descriptor.provider_id,
         "env_key": env_key,

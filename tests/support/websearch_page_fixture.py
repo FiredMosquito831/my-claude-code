@@ -31,7 +31,9 @@ PROBE = "<img src=x onerror=window.__wsXss=1>probe <b>bold</b>"
 def served_field(field: Any, value: str | None = None) -> dict[str, Any]:
     """One manifest field as ``/admin/api/config`` serves it."""
 
-    configured = field.key in CONFIGURED if field.secret else bool(value or field.default)
+    configured = (
+        field.key in CONFIGURED if field.secret else bool(value or field.default)
+    )
     if field.secret:
         # The server never sends a secret: a configured one is the mask.
         served = MASKED_SECRET if configured else ""

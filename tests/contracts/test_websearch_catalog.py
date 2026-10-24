@@ -209,6 +209,7 @@ def test_only_context7_is_kept_out_of_auto() -> None:
         if not desc.auto_select
     ] == ["context7"]
 
+
 _FIELD_TYPES = frozenset({"select", "text", "number", "boolean"})
 
 
