@@ -17,6 +17,7 @@ from my_claude_code.application.cost import (
     COST_SOURCES,
     SOURCE_PROVIDER,
     SOURCE_UNPRICED,
+    SOURCE_UNPRICED_1H_WRITE,
     retroactive_source,
 )
 from my_claude_code.core import request_log as request_log_module
@@ -47,6 +48,8 @@ def test_cost_sources_are_a_closed_set() -> None:
         *COST_SOURCES,
         *BACKFILL_COST_SOURCES,
         SOURCE_UNPRICED,
+        # 7.111.0: 1-hour cache writes no source states a rate for.
+        SOURCE_UNPRICED_1H_WRITE,
     }
 
 
@@ -79,6 +82,12 @@ def test_core_and_application_agree_on_the_unpriced_marker() -> None:
     copy honest.
     """
     assert request_log_module._UNPRICED_COST_SOURCE == SOURCE_UNPRICED
+    assert request_log_module._UNPRICED_1H_WRITE_COST_SOURCE == SOURCE_UNPRICED_1H_WRITE
+
+
+def test_no_unpriced_marker_has_a_retroactive_label() -> None:
+    """Neither marker is a rung, so neither is ever re-spelled as one."""
+    assert retroactive_source(SOURCE_UNPRICED_1H_WRITE) is None
 
 
 def test_every_cost_source_has_a_label() -> None:

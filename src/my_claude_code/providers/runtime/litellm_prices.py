@@ -49,7 +49,11 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from my_claude_code.application.cost import SOURCE_LITELLM, RateCard
+from my_claude_code.application.cost import (
+    SOURCE_LITELLM,
+    OneHourWriteRate,
+    RateCard,
+)
 from my_claude_code.application.litellm_model_map import (
     LiteLLMCatalogue,
     LiteLLMModel,
@@ -405,8 +409,32 @@ def _rate_card(key: str, entry: Mapping[str, Any], label: str) -> RateCard | Non
         # Already USD per single token. models.dev divides by 1e6 here; this
         # is the other half of the pair the unit test pins together.
         rates[card_field] = float(value)
-    card = RateCard(source=SOURCE_LITELLM, tier_label=f"{label} ({key})", **rates)
+    card = RateCard(
+        source=SOURCE_LITELLM,
+        tier_label=f"{label} ({key})",
+        cache_write_1h=_one_hour_write_rate(key, entry, label),
+        **rates,
+    )
     return None if card.is_empty else card
+
+
+#: 7.111.0: LiteLLM's 1-hour prompt-cache write rate, USD per token like every
+#: other LiteLLM rate. Read beside ``cache_creation_input_token_cost`` (the
+#: 5-minute rate); priced only for a request whose host reported 1-hour writes.
+_ONE_HOUR_WRITE_FIELD = "cache_creation_input_token_cost_above_1hr"
+
+
+def _one_hour_write_rate(
+    key: str, entry: Mapping[str, Any], label: str
+) -> OneHourWriteRate | None:
+    value = entry.get(_ONE_HOUR_WRITE_FIELD)
+    if isinstance(value, bool) or not isinstance(value, int | float) or value < 0:
+        return None
+    return OneHourWriteRate(
+        price=float(value),
+        source=SOURCE_LITELLM,
+        label=f"LiteLLM, {label} ({key})",
+    )
 
 
 def _candidate_entries(

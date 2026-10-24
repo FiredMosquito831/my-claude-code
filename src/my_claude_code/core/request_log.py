@@ -466,6 +466,11 @@ _PROMPT_HEAD_CHARS = PROMPT_SCAN_MAX_CHARS
 #: spelled here because ``cost_breakdown`` has to keep it out of the list of
 #: sources that priced something.
 _UNPRICED_COST_SOURCE = "unpriced"
+#: 7.111.0: ``application.cost.SOURCE_UNPRICED_1H_WRITE``, pinned the same
+#: way: a row that wrote 1-hour cache entries no source states a rate for.
+#: Also the record of an answer rather than a price, so "priced by" leaves it
+#: out exactly as it leaves out ``unpriced``.
+_UNPRICED_1H_WRITE_COST_SOURCE = "unpriced_1h_write"
 _HOUR_SECONDS = 3_600
 
 # A request answered by a local optimization rule never reached a provider, so
@@ -2220,6 +2225,22 @@ _ADDED_COLUMNS = (
     ("headers_ref", "ALTER TABLE requests ADD COLUMN headers_ref INTEGER"),
     ("route_chain_ref", "ALTER TABLE requests ADD COLUMN route_chain_ref INTEGER"),
     ("params_ref", "ALTER TABLE requests ADD COLUMN params_ref INTEGER"),
+    # 7.111.0: Anthropic's split of ``cache_write_tokens`` by lifetime -- the
+    # writes that keep the cache five minutes and those that keep it an hour
+    # (``usage.cache_creation.ephemeral_5m_input_tokens`` /
+    # ``ephemeral_1h_input_tokens``), which bill at different rates. Part of
+    # ``cache_write_tokens``, never an addition to it. NULL = the host did not
+    # report the split (every non-Anthropic-shaped host, and every row before
+    # 7.111.0); 0 = it reported none of that lifetime. Not backfillable:
+    # nothing recorded the split before.
+    (
+        "cache_write_5m_tokens",
+        "ALTER TABLE requests ADD COLUMN cache_write_5m_tokens INTEGER",
+    ),
+    (
+        "cache_write_1h_tokens",
+        "ALTER TABLE requests ADD COLUMN cache_write_1h_tokens INTEGER",
+    ),
 )
 
 # Indexes over post-release columns, created only once those columns exist.
@@ -2374,6 +2395,8 @@ _REQUEST_INSERT_COLUMNS = (
     "media_job_id",
     "output_video_seconds",
     "credential_event",
+    "cache_write_5m_tokens",
+    "cache_write_1h_tokens",
     "headers_ref",
     "route_chain_ref",
     "params_ref",
@@ -3259,6 +3282,11 @@ class RequestRecord:
     #: The OAuth credential decision this request triggered (7.69.1), or
     #: ``None`` for a plain use.
     credential_event: str | None = None
+    #: 7.111.0: how many of ``cache_write_tokens`` the host says kept the
+    #: cache five minutes and how many an hour. ``None`` unless the host
+    #: reported Anthropic's ``usage.cache_creation`` split.
+    cache_write_5m_tokens: int | None = None
+    cache_write_1h_tokens: int | None = None
     #: Generated outputs to link in ``request_media`` (sha256, mime, bytes,
     #: stored). Written by the writer thread with the row.
     media_outputs: tuple[MediaOutputRecord, ...] = ()
@@ -6110,7 +6138,14 @@ class RequestLogStore:
                 "SELECT id, provider, resolved_model, tokens_in, tokens_out,"
                 " cache_read_tokens, cache_write_tokens FROM requests"
                 " WHERE ts_epoch >= ? AND ts_epoch < ?"
-                " AND cost_usd IS NULL AND cost_source IS NULL LIMIT ?",
+                " AND cost_usd IS NULL AND cost_source IS NULL"
+                # 7.111.0: a row that wrote 1-hour cache entries is never
+                # backfilled. The pricer is handed one write count, and pricing
+                # 1-hour writes at the 5-minute rate is the error 7.111.0
+                # removed. Every row written before 7.111.0 has NULL here, so
+                # the walk selects exactly what it always did.
+                " AND (cache_write_1h_tokens IS NULL OR cache_write_1h_tokens <= 0)"
+                " LIMIT ?",
                 (start, end, _COST_CHUNK_ROWS),
             ).fetchall()
             if not rows:
@@ -8719,6 +8754,8 @@ class RequestLogStore:
             record.media_job_id,
             record.output_video_seconds,
             record.credential_event,
+            record.cache_write_5m_tokens,
+            record.cache_write_1h_tokens,
             # The refs: filled inside the write transaction, once the values
             # are in ``request_values``; see ``_store_request_values``.
             None,
@@ -9355,6 +9392,7 @@ class RequestLogStore:
                     # did not. Counting it here would put "nobody" at the top
                     # of the list of who priced this month.
                     f" AND cost_source <> '{_UNPRICED_COST_SOURCE}'"
+                    f" AND cost_source <> '{_UNPRICED_1H_WRITE_COST_SOURCE}'"
                     " GROUP BY cost_source ORDER BY cost_source",
                     args,
                 ).fetchall()

@@ -424,6 +424,14 @@ def openrouter_live_rows(
     if not openrouter_live_enabled(settings):
         return None
     cache_path = path if path is not None else openrouter_live_cache_path()
+    return _raw_live_rows(cache_path, slugs)
+
+
+def _raw_live_rows(
+    cache_path: Path, slugs: Iterable[str]
+) -> tuple[str | None, tuple[tuple[str, Mapping[str, Any]], ...]] | None:
+    """:func:`openrouter_live_rows` once the rung is known to be on."""
+
     mark = _file_mark(cache_path)
     if mark is None:
         return None
@@ -446,6 +454,72 @@ def openrouter_live_rows(
     _mark, by_id, fetched_at = cached
     return fetched_at, tuple(
         (slug, by_id[slug]) for slug in dict.fromkeys(slugs) if slug in by_id
+    )
+
+
+#: 7.111.0: the key OpenRouter-dialect lists state the 1-hour prompt-cache
+#: write price under (``input_cache_write`` is the 5-minute one).
+LISTED_WRITE_1H_KEY = "input_cache_write_1h"
+
+
+def listed_write_1h_per_million(row: Mapping[str, Any]) -> float | None:
+    """One OpenRouter-dialect row's 1-hour write price, USD per million, or ``None``.
+
+    The dialect's own unit rule (``listed_price_per_million``). Never raises.
+    """
+
+    pricing = row.get("pricing")
+    if not isinstance(pricing, Mapping):
+        return None
+    return listed_price_per_million(pricing.get(LISTED_WRITE_1H_KEY))
+
+
+@dataclass(frozen=True, slots=True)
+class LiveWrite1hPrice:
+    """What OpenRouter's live list states as one route's 1-hour write price (7.111.0)."""
+
+    per_million: float
+    #: The rows' ids and how the asking id met them -- the rung's own words.
+    slugs: tuple[str, ...]
+    match: str
+    #: True when the asking provider IS OpenRouter: the price is its own list's.
+    own_list: bool
+
+
+def openrouter_live_write_1h_price(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> LiveWrite1hPrice | None:
+    """The stored live list's 1-hour write price for one asking route, or ``None``.
+
+    The caller decides whether the rung is on (``MODEL_METADATA_OPENROUTER_LIVE``).
+    Matched by the rung's own matcher; when the asking id met several rows,
+    a price only where every one of them states the same one, as every other
+    field of this rung is merged. Read for pricing only on a request that
+    reported 1-hour cache writes, and for the Models page.
+    """
+
+    cache_path = path if path is not None else openrouter_live_cache_path()
+    stored = _stored_generation(cache_path)
+    if stored is None or not stored.index:
+        return None
+    found = match_live_model(stored.index, provider_id, model_id)
+    if found is None:
+        return None
+    read = _raw_live_rows(cache_path, found.slugs)
+    if read is None:
+        return None
+    _fetched_at, rows = read
+    prices = {listed_write_1h_per_million(row) for _slug, row in rows}
+    if len(rows) != len(found.slugs) or len(prices) != 1:
+        return None
+    (price,) = prices
+    if price is None:
+        return None
+    return LiveWrite1hPrice(
+        per_million=price,
+        slugs=found.slugs,
+        match=found.match,
+        own_list=found.own_list,
     )
 
 
@@ -562,12 +636,15 @@ async def refresh_openrouter_live(
 
 
 __all__ = [
+    "LISTED_WRITE_1H_KEY",
     "OPENROUTER_LIVE_CACHE_FILENAME",
     "OPENROUTER_LIVE_URL",
     "OPENROUTER_PROVIDER_ID",
+    "LiveWrite1hPrice",
     "OpenRouterLiveRefresh",
     "build_live_index",
     "fetch_openrouter_live",
+    "listed_write_1h_per_million",
     "live_model_from_row",
     "match_live_model",
     "openrouter_live_cache_path",
@@ -575,6 +652,7 @@ __all__ = [
     "openrouter_live_enabled",
     "openrouter_live_is_due",
     "openrouter_live_rows",
+    "openrouter_live_write_1h_price",
     "payload_passes_integrity",
     "read_openrouter_live_rows",
     "refresh_openrouter_live",

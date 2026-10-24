@@ -17,7 +17,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from my_claude_code.api.finalize_pool import run_on_finalize_pool
-from my_claude_code.api.request_pricing import rate_cards
+from my_claude_code.api.request_pricing import price_request, rate_cards
 from my_claude_code.application.cost import MODE_AUTO, TokenUsage, resolve_cost
 from my_claude_code.application.execution import RouteAttemptRecord
 from my_claude_code.application.routing import (
@@ -167,6 +167,7 @@ class RequestCapture:
         origin: OriginInputs | None = None,
         capture_session: bool = True,
         capture_folder: bool = True,
+        cost_openrouter_live_enabled: bool = False,
     ) -> None:
         self._store = store
         # What the request offered about where it came from, and whether the
@@ -180,6 +181,10 @@ class RequestCapture:
         self._cost_enabled = cost_enabled
         self._cost_mode = cost_mode
         self._cost_litellm_enabled = cost_litellm_enabled
+        # 7.111.0: whether OpenRouter's live list may state a 1-hour write
+        # rate (``MODEL_METADATA_OPENROUTER_LIVE``). Read only for a request
+        # whose host reported 1-hour cache writes.
+        self._cost_openrouter_live_enabled = cost_openrouter_live_enabled
         # Held undecoded until the request is over. Thumbnailing is real CPU
         # work and there is no reason for it to sit between the client and its
         # first token, so it happens at finalize time instead.
@@ -245,6 +250,10 @@ class RequestCapture:
         self._tokens_in: int | None = None
         self._cache_read_tokens: int | None = None
         self._cache_write_tokens: int | None = None
+        # 7.111.0: Anthropic's own split of the write total by lifetime
+        # (``usage.cache_creation``). None unless the host reported it.
+        self._cache_write_5m_tokens: int | None = None
+        self._cache_write_1h_tokens: int | None = None
         self._tokens_out: int | None = None
         self._primary_model_ref: str | None = None
         self._error: tuple[str | None, str | None] | None = None
@@ -1187,6 +1196,18 @@ class RequestCapture:
         cache_write = _int_or_none(usage.get("cache_creation_input_tokens"))
         if cache_write is not None:
             self._cache_write_tokens = cache_write
+        # 7.111.0: Anthropic says how many of those writes keep the cache for
+        # five minutes and how many for an hour, which bill at different
+        # rates. Read beside the total, never instead of it; a host that
+        # reports only the total leaves both NULL ("not reported"), never 0.
+        split = usage.get("cache_creation")
+        if isinstance(split, dict):
+            five_minute = _int_or_none(split.get("ephemeral_5m_input_tokens"))
+            if five_minute is not None:
+                self._cache_write_5m_tokens = five_minute
+            one_hour = _int_or_none(split.get("ephemeral_1h_input_tokens"))
+            if one_hour is not None:
+                self._cache_write_1h_tokens = one_hour
 
     def _append_output(self, text: str) -> None:
         self._output_chars += len(text)
@@ -1290,20 +1311,49 @@ class RequestCapture:
             return
         try:
             reported = self._reported_cost
-            record.cost_usd, record.cost_source = self._price(
+            usage = TokenUsage(
+                tokens_in=record.tokens_in,
+                tokens_out=record.tokens_out,
+                cache_read_tokens=record.cache_read_tokens,
+                cache_write_tokens=record.cache_write_tokens,
+                reasoning_tokens=(
+                    None if reported is None else reported.reasoning_tokens
+                ),
+                cache_write_1h_tokens=record.cache_write_1h_tokens,
+            )
+            if not usage.one_hour_write_tokens:
+                # Every row that wrote no 1-hour cache entries -- the split
+                # absent, or 0 -- takes the very call it took before 7.111.0.
+                record.cost_usd, record.cost_source = self._price(
+                    record.provider,
+                    record.resolved_model,
+                    usage,
+                    reported_usd=None if reported is None else reported.total_usd,
+                )
+                self._price_attempts()
+                return
+            price = price_request(
                 record.provider,
                 record.resolved_model,
-                TokenUsage(
-                    tokens_in=record.tokens_in,
-                    tokens_out=record.tokens_out,
-                    cache_read_tokens=record.cache_read_tokens,
-                    cache_write_tokens=record.cache_write_tokens,
-                    reasoning_tokens=(
-                        None if reported is None else reported.reasoning_tokens
-                    ),
-                ),
+                usage,
                 reported_usd=None if reported is None else reported.total_usd,
+                mode=self._cost_mode,
+                litellm_enabled=self._cost_litellm_enabled,
+                openrouter_live_enabled=self._cost_openrouter_live_enabled,
             )
+            record.cost_usd, record.cost_source = price.cost_usd, price.cost_source
+            if price.cache_write_1h is not None:
+                # 7.111.0: which source stated the 1-hour write rate, so the
+                # request detail can say so. In ``params`` rather than a
+                # column, and only on a row that wrote 1-hour entries, so no
+                # other row and no export changes shape.
+                params = dict(record.params or {})
+                params["cost_write_1h"] = {
+                    "usd_per_million": price.cache_write_1h.price * 1_000_000,
+                    "source": price.cache_write_1h.source,
+                    "label": price.cache_write_1h.label,
+                }
+                record.params = params
             self._price_attempts()
         except Exception as exc:
             logger.debug("Request cost skipped: {}", exc)
@@ -1507,6 +1557,8 @@ class RequestCapture:
         record.tokens_out = self._tokens_out
         record.cache_read_tokens = self._cache_read_tokens
         record.cache_write_tokens = self._cache_write_tokens
+        record.cache_write_5m_tokens = self._cache_write_5m_tokens
+        record.cache_write_1h_tokens = self._cache_write_1h_tokens
         output_text = "".join(self._output_parts)
         record.output_chars = self._output_chars
         if self._capture_bodies:
@@ -1758,6 +1810,9 @@ def build_capture(
         harness=harness,
         cost_enabled=bool(getattr(settings, "cost_estimation_enabled", True)),
         cost_mode=str(getattr(settings, "cost_estimation_mode", MODE_AUTO)),
+        cost_openrouter_live_enabled=bool(
+            getattr(settings, "model_metadata_openrouter_live", False)
+        ),
         cost_litellm_enabled=bool(
             getattr(settings, "cost_source_litellm_enabled", False)
         ),

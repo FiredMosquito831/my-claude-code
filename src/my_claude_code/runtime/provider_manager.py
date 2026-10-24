@@ -824,6 +824,40 @@ class ProviderRuntimeManager:
             )
         return tuple(found)
 
+    def model_published_row(
+        self, provider_id: str, model_id: str
+    ) -> dict[str, Any] | None:
+        """The provider's own list row for one model, or ``None`` (7.111.0).
+
+        The live record's copy (exact id, then tag stripped -- the model's own
+        host, never a stranger's list), else the copy stored beside the
+        catalogue, which is what a restart has until its first sweep. Read
+        only to price a request that reported 1-hour prompt-cache writes (its
+        ``pricing.input_cache_write_1h``) and for the Models page; never
+        raises.
+        """
+
+        model_key = model_id
+        try:
+            found = self._model_cache.cached_model_info_tiered(provider_id, model_id)
+        except Exception:
+            found = None
+        if found is not None:
+            info, _tier = found
+            model_key = info.model_id
+            if info.published_row:
+                try:
+                    row = json.loads(info.published_row)
+                except ValueError:
+                    row = None
+                if isinstance(row, dict):
+                    return {str(key): value for key, value in row.items()}
+        stored = self._stored_provider_rows()
+        if stored is None:
+            return None
+        row = stored[0].get(provider_id, {}).get(model_key)
+        return row if isinstance(row, dict) else None
+
     def _stored_provider_rows(
         self,
     ) -> tuple[dict[str, dict[str, Any]], float] | None:

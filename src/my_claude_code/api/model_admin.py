@@ -29,6 +29,7 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 from my_claude_code.api.marketplace_admin import marketplace_profile_update_problem
+from my_claude_code.api.request_pricing import write_1h_price_statements
 from my_claude_code.application.litellm_model_map import (
     LITELLM_SOURCE,
     LITELLM_SOURCE_LABEL,
@@ -132,6 +133,7 @@ from my_claude_code.config.prompt_cache_lifetimes import (
     UPSTREAM_ALIAS_PREFIX,
     UPSTREAM_PROMPT_CACHE_FAMILY,
     PromptCacheLifetimeFamily,
+    chat_prompt_cache_family_id,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.reasoning import ReasoningPreference
@@ -392,6 +394,61 @@ def prompt_cache_gateway_models(page: Mapping[str, Any]) -> dict[str, str]:
             on_messages = surface.get("value") == ResponseSurface.MESSAGES.value
             if on_messages or (rule is not None and rule(model_id)):
                 found[model_ref] = MESSAGES_GATEWAY_PROMPT_CACHE_FAMILY
+    return found
+
+
+#: 7.111.0: the lifetime word whose write price the Models page shows.
+_ONE_HOUR_WIRE = "1h"
+
+PROMPT_CACHE_WRITE_1H_NOTE = (
+    "What a request that writes 1-hour cache entries is priced at: the first "
+    "source here that states the rate, in the order pricing reads them (this "
+    "provider's own list, LiteLLM when its pricing is on, OpenRouter live). "
+    "Where none does, such a request is stored as not priced rather than at "
+    "the 5 min rate. Requests logged before 7.111.0 priced 1-hour writes at "
+    "the 5 min rate and keep that price."
+)
+
+
+def prompt_cache_write_1h_prices(
+    page: Mapping[str, Any],
+    settings: Settings | None,
+    gateway_models: Mapping[str, str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Each page model whose host takes a 1-hour lifetime -> the 1-hour write rates stated for it (7.111.0).
+
+    Served beside the page (inside ``prompt_cache_lifetimes``), never inside
+    its cached capability half. Only models of a family that sends ``1h`` are
+    listed; an empty list means no source states the rate. USD per million.
+    """
+
+    litellm = bool(getattr(settings, "cost_source_litellm_enabled", False))
+    live = bool(getattr(settings, "model_metadata_openrouter_live", False))
+    gateways = gateway_models or {}
+    found: dict[str, list[dict[str, Any]]] = {}
+    for provider in page.get("providers", []) or []:
+        provider_id = str(provider.get("provider_id") or "")
+        for model in provider.get("models", []) or []:
+            model_ref = str(model.get("model_ref") or "")
+            model_id = str(model.get("model_id") or "")
+            if not provider_id or not model_id:
+                continue
+            family_id = (
+                gateways.get(model_ref)
+                or PROVIDER_PROMPT_CACHE_FAMILY.get(provider_id)
+                or chat_prompt_cache_family_id(provider_id, model_id)
+            )
+            family = PROMPT_CACHE_LIFETIME_FAMILIES.get(family_id or "")
+            if family is None or not any(
+                lifetime.wire == _ONE_HOUR_WIRE for lifetime in family.lifetimes
+            ):
+                continue
+            found[model_ref] = write_1h_price_statements(
+                provider_id,
+                model_id,
+                litellm_enabled=litellm,
+                openrouter_live_enabled=live,
+            )
     return found
 
 

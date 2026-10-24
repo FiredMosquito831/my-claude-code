@@ -35,6 +35,7 @@ from my_claude_code.api.model_admin import (
     INHERIT_SENTINEL,
     MODEL_SCOPE,
     MODEL_VISIBILITY_BULK_LIMIT,
+    PROMPT_CACHE_WRITE_1H_NOTE,
     PROVIDER_SCOPE,
     REASONING_MEASUREMENT_DAYS,
     GlobMigration,
@@ -49,6 +50,7 @@ from my_claude_code.api.model_admin import (
     override_update_problem,
     prompt_cache_gateway_models,
     prompt_cache_lifetimes_payload,
+    prompt_cache_write_1h_prices,
     render_patterns,
     speakable_surfaces,
     visibility_payload,
@@ -1756,11 +1758,20 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     # ladder's cached and pinned output is exactly what it was. Since 7.105.0
     # it also names the gateways' Messages models and carries the Model Config
     # lifetimes each route reads, which a settings save moves.
+    gateway_models = prompt_cache_gateway_models(merged)
     merged["prompt_cache_lifetimes"] = prompt_cache_lifetimes_payload(
         settings,
         configured,
-        prompt_cache_gateway_models(merged),
+        gateway_models,
     )
+    # 7.111.0, appended: the 1-hour write rate each source states for every
+    # model whose host takes a 1-hour lifetime, and the sentence that says
+    # which one a request is priced at. Beside the cached half, like the rest
+    # of the table.
+    merged["prompt_cache_lifetimes"]["write_1h_prices"] = prompt_cache_write_1h_prices(
+        merged, settings, gateway_models
+    )
+    merged["prompt_cache_lifetimes"]["write_1h_note"] = PROMPT_CACHE_WRITE_1H_NOTE
     # 7.109.0: the marketplace profile row and the read-only offers and
     # route-note rows, beside the cached half for the same reason: the market
     # snapshot moves hourly and the pinned half must not.
