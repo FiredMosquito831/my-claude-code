@@ -35,7 +35,12 @@ _PER_MILLION = 1_000_000
 _LITELLM_SONNET_5_5 = corpus.LITELLM_INDEX["anthropic/claude-sonnet-5-5"]
 _LITELLM_SONNET_5 = corpus.LITELLM_INDEX["claude-sonnet-5"]
 # models.dev's anthropic bucket, claude-sonnet-5 (USD per million).
-_MODELS_DEV_SONNET_5 = {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5}
+_MODELS_DEV_SONNET_5 = {
+    "input": 2.0,
+    "output": 10.0,
+    "cache_read": 0.2,
+    "cache_write": 2.5,
+}
 _LIVE_ONE_HOUR = float(corpus.LIVE_ONE_HOUR_PRICE)
 
 
@@ -97,10 +102,16 @@ def _split(five: int, hour: int) -> dict[str, int]:
 class TestTheSplitIsRecorded:
     def test_beside_the_total_never_instead_of_it(self, store) -> None:
         row = _finish(
-            store, provider="anthropic_oauth", model="claude-sonnet-5", split=_split(600, 300)
+            store,
+            provider="anthropic_oauth",
+            model="claude-sonnet-5",
+            split=_split(600, 300),
         )
         assert row["cache_write_tokens"] == 900
-        assert (row["cache_write_5m_tokens"], row["cache_write_1h_tokens"]) == (600, 300)
+        assert (row["cache_write_5m_tokens"], row["cache_write_1h_tokens"]) == (
+            600,
+            300,
+        )
         # Every other counter exactly as the host reported it.
         assert (row["tokens_in"], row["cache_read_tokens"], row["tokens_out"]) == (
             1200,
@@ -109,7 +120,9 @@ class TestTheSplitIsRecorded:
         )
 
     def test_a_host_reporting_only_the_total_leaves_it_null(self, store) -> None:
-        row = _finish(store, provider="anthropic_oauth", model="claude-sonnet-5", split=None)
+        row = _finish(
+            store, provider="anthropic_oauth", model="claude-sonnet-5", split=None
+        )
         assert row["cache_write_5m_tokens"] is None
         assert row["cache_write_1h_tokens"] is None
 
@@ -126,7 +139,10 @@ class TestTheSplitIsRecorded:
 
     def test_a_reported_zero_is_a_zero(self, store) -> None:
         row = _finish(
-            store, provider="anthropic_oauth", model="claude-sonnet-5", split=_split(900, 0)
+            store,
+            provider="anthropic_oauth",
+            model="claude-sonnet-5",
+            split=_split(900, 0),
         )
         assert (row["cache_write_5m_tokens"], row["cache_write_1h_tokens"]) == (900, 0)
         assert row["params"] is None
@@ -174,9 +190,14 @@ class TestTheRate:
         )
         assert row["cost_usd"] != pytest.approx(as_before)
 
-    def test_no_source_states_it_so_the_row_is_not_priced_and_says_why(self, store) -> None:
+    def test_no_source_states_it_so_the_row_is_not_priced_and_says_why(
+        self, store
+    ) -> None:
         row = _finish(
-            store, provider="anthropic", model="claude-sonnet-5-5", split=_split(600, 300)
+            store,
+            provider="anthropic",
+            model="claude-sonnet-5-5",
+            split=_split(600, 300),
         )
         assert row["cost_usd"] is None
         assert row["cost_source"] == SOURCE_UNPRICED_1H_WRITE
@@ -214,14 +235,17 @@ class TestTheRate:
         )
         assert row["cost_source"] == SOURCE_LITELLM
         assert row["params"]["cost_write_1h"]["usd_per_million"] == pytest.approx(
-            _LITELLM_SONNET_5["cache_creation_input_token_cost_above_1hr"] * _PER_MILLION
+            _LITELLM_SONNET_5["cache_creation_input_token_cost_above_1hr"]
+            * _PER_MILLION
         )
 
     def test_the_providers_own_list_comes_first(self, store) -> None:
         request_pricing.set_published_row_lookup(
-            lambda provider, model: {"pricing": {"input_cache_write_1h": "0.000005"}}
-            if (provider, model) == ("anthropic_oauth", "claude-sonnet-5")
-            else None
+            lambda provider, model: (
+                {"pricing": {"input_cache_write_1h": "0.000005"}}
+                if (provider, model) == ("anthropic_oauth", "claude-sonnet-5")
+                else None
+            )
         )
         row = _finish(
             store,
@@ -237,12 +261,17 @@ class TestTheRate:
         assert note["usd_per_million"] == pytest.approx(5.0)
 
     def test_a_row_nothing_could_price_stays_null(self, store) -> None:
-        row = _finish(store, provider="nowhere", model="unknown-model", split=_split(600, 300))
+        row = _finish(
+            store, provider="nowhere", model="unknown-model", split=_split(600, 300)
+        )
         assert (row["cost_usd"], row["cost_source"]) == (None, None)
 
     def test_five_minute_writes_only_price_as_before(self, store) -> None:
         row = _finish(
-            store, provider="anthropic_oauth", model="claude-sonnet-5", split=_split(900, 0)
+            store,
+            provider="anthropic_oauth",
+            model="claude-sonnet-5",
+            split=_split(900, 0),
         )
         rates = _MODELS_DEV_SONNET_5
         expected = (
@@ -262,7 +291,11 @@ class TestTheLadderEntryPoint:
 
     def test_a_reported_cost_still_wins(self) -> None:
         answer = request_pricing.price_request(
-            "anthropic", "claude-sonnet-5-5", self._USAGE, reported_usd=0.5, litellm_enabled=False
+            "anthropic",
+            "claude-sonnet-5-5",
+            self._USAGE,
+            reported_usd=0.5,
+            litellm_enabled=False,
         )
         assert (answer.cost_usd, answer.cost_source) == (0.5, SOURCE_PROVIDER)
 
@@ -281,7 +314,11 @@ class TestTheLadderEntryPoint:
         usage = TokenUsage(cache_write_tokens=100, cache_write_1h_tokens=900)
         assert usage.one_hour_write_tokens == 100
         answer = request_pricing.price_request(
-            "anthropic", "claude-sonnet-5-5", usage, reported_usd=None, litellm_enabled=True
+            "anthropic",
+            "claude-sonnet-5-5",
+            usage,
+            reported_usd=None,
+            litellm_enabled=True,
         )
         assert answer.cost_usd == pytest.approx(
             100 * _LITELLM_SONNET_5_5["cache_creation_input_token_cost_above_1hr"]
@@ -290,25 +327,42 @@ class TestTheLadderEntryPoint:
 
 def test_the_models_page_lists_the_rate_for_hosts_that_take_one_hour() -> None:
     settings = Settings.model_validate(
-        {"COST_SOURCE_LITELLM_ENABLED": "true", "MODEL_METADATA_OPENROUTER_LIVE": "true"}
+        {
+            "COST_SOURCE_LITELLM_ENABLED": "true",
+            "MODEL_METADATA_OPENROUTER_LIVE": "true",
+        }
     )
     page = {
         "providers": [
             {
                 "provider_id": "anthropic_oauth",
                 "models": [
-                    {"model_ref": "anthropic_oauth/claude-sonnet-5", "model_id": "claude-sonnet-5"},
-                    {"model_ref": "anthropic_oauth/claude-unknown", "model_id": "claude-unknown"},
+                    {
+                        "model_ref": "anthropic_oauth/claude-sonnet-5",
+                        "model_id": "claude-sonnet-5",
+                    },
+                    {
+                        "model_ref": "anthropic_oauth/claude-unknown",
+                        "model_id": "claude-unknown",
+                    },
                 ],
             },
             {
                 "provider_id": "nvidia_nim",
-                "models": [{"model_ref": "nvidia_nim/z-ai/glm-5.3-flash", "model_id": "z-ai/glm-5.3-flash"}],
+                "models": [
+                    {
+                        "model_ref": "nvidia_nim/z-ai/glm-5.3-flash",
+                        "model_id": "z-ai/glm-5.3-flash",
+                    }
+                ],
             },
         ]
     }
     found = prompt_cache_write_1h_prices(page, settings)
-    assert set(found) == {"anthropic_oauth/claude-sonnet-5", "anthropic_oauth/claude-unknown"}
+    assert set(found) == {
+        "anthropic_oauth/claude-sonnet-5",
+        "anthropic_oauth/claude-unknown",
+    }
     sonnet = found["anthropic_oauth/claude-sonnet-5"]
     assert [entry["source"] for entry in sonnet] == ["litellm", "openrouter_live"]
     assert sonnet[0]["usd_per_million"] == pytest.approx(6.0)

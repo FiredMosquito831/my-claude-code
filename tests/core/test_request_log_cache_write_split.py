@@ -50,7 +50,9 @@ def _record(request_id: str, **overrides: Any) -> RequestRecord:
 def _columns(path: Path) -> list[str]:
     connection = sqlite3.connect(path)
     try:
-        return [str(row[1]) for row in connection.execute("PRAGMA table_info(requests)")]
+        return [
+            str(row[1]) for row in connection.execute("PRAGMA table_info(requests)")
+        ]
     finally:
         connection.close()
 
