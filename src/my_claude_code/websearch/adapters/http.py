@@ -14,6 +14,9 @@ import httpx
 from my_claude_code.core.rate_limit import retry_after_seconds
 
 from ..errors import (
+    KIND_DETAIL_BAD_JSON,
+    KIND_DETAIL_TIMEOUT,
+    KIND_DETAIL_TRANSPORT,
     WebSearchAuthError,
     WebSearchError,
     WebSearchInvalidRequestError,
@@ -61,9 +64,14 @@ def map_status_error(
     """Map an HTTP error response to the websearch error hierarchy."""
 
     status = response.status_code
-    message = extract_error_message(_try_parse_json(response), fallback=response.text)
+    parsed = _try_parse_json(response)
+    message = extract_error_message(parsed, fallback=response.text)
     if not message:
         message = f"HTTP {status}"
+    # The body as the provider sent it, for the search chain's translation
+    # (quota phrase, body-stated wait). Additive: nothing on the default route
+    # reads it, and the message above is computed exactly as before.
+    body = parsed if parsed is not None else response.text
     error_type = _error_type_for_status(status, extra_status_errors)
     if issubclass(error_type, WebSearchRateLimitError):
         # Providers publish the real reset on a 429; carrying it forward lets
@@ -73,8 +81,9 @@ def map_status_error(
             message,
             status_code=status,
             retry_after_seconds=retry_after_seconds(response.headers),
+            upstream_body=body,
         )
-    return error_type(provider_id, message, status_code=status)
+    return error_type(provider_id, message, status_code=status, upstream_body=body)
 
 
 async def request_json(
@@ -96,11 +105,15 @@ async def request_json(
         )
     except httpx.TimeoutException as exc:
         raise WebSearchUpstreamError(
-            provider_id, f"request timed out ({type(exc).__name__})"
+            provider_id,
+            f"request timed out ({type(exc).__name__})",
+            kind_detail=KIND_DETAIL_TIMEOUT,
         ) from exc
     except httpx.TransportError as exc:
         raise WebSearchUpstreamError(
-            provider_id, f"transport error ({type(exc).__name__})"
+            provider_id,
+            f"transport error ({type(exc).__name__})",
+            kind_detail=KIND_DETAIL_TRANSPORT,
         ) from exc
     if response.status_code >= 400:
         raise map_status_error(
@@ -110,7 +123,9 @@ async def request_json(
         return response.json()
     except json.JSONDecodeError as exc:
         raise WebSearchUpstreamError(
-            provider_id, "response body is not valid JSON"
+            provider_id,
+            "response body is not valid JSON",
+            kind_detail=KIND_DETAIL_BAD_JSON,
         ) from exc
 
 

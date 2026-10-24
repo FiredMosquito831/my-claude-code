@@ -138,7 +138,11 @@ CREATE TABLE IF NOT EXISTS search_log (
     output_chars INTEGER,
     input_sha256 TEXT,
     output_sha256 TEXT,
-    content_captured INTEGER NOT NULL DEFAULT 0
+    content_captured INTEGER NOT NULL DEFAULT 0,
+    chain_position INTEGER,
+    outcome TEXT,
+    failure_kind TEXT,
+    tries_json TEXT
 );
 CREATE TABLE IF NOT EXISTS search_route_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,14 +178,56 @@ _POST_MIGRATION_SCHEMA = """
 CREATE INDEX IF NOT EXISTS idx_search_log_route_id ON search_log (route_id);
 """
 
-_INSERT_SQL = """
-INSERT INTO search_log (
-    ts_epoch, ts_iso, provider, key_index, key_label, query,
-    results_count, duration_ms, status, error_kind, error_message, cost_usd,
-    route_id, attempt_number, input_json, output_json, provider_config_json,
-    input_chars, output_chars, input_sha256, output_sha256, content_captured
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-"""
+#: The search-chain attempt columns (7.112.0). Nullable, ALTER-only, NULL on
+#: every row a search without ``WEB_SEARCH_CHAIN`` writes (III.8: NULL is "not
+#: measured"). Each is added by :func:`_initialize_schema` behind a
+#: ``PRAGMA table_info`` guard, so a database an older version created -- or
+#: one a kill left between two ALTERs -- is completed on the next open.
+_CHAIN_ATTEMPT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("chain_position", "INTEGER"),
+    ("outcome", "TEXT"),
+    ("failure_kind", "TEXT"),
+    ("tries_json", "TEXT"),
+)
+
+#: The INSERT column list, in :func:`_row_tuple` order. The statement and its
+#: placeholders are generated from this one tuple, so the two cannot drift
+#: (III.8: 43 columns once met 42 placeholders).
+_INSERT_COLUMNS: tuple[str, ...] = (
+    "ts_epoch",
+    "ts_iso",
+    "provider",
+    "key_index",
+    "key_label",
+    "query",
+    "results_count",
+    "duration_ms",
+    "status",
+    "error_kind",
+    "error_message",
+    "cost_usd",
+    "route_id",
+    "attempt_number",
+    "input_json",
+    "output_json",
+    "provider_config_json",
+    "input_chars",
+    "output_chars",
+    "input_sha256",
+    "output_sha256",
+    "content_captured",
+    *(name for name, _type in _CHAIN_ATTEMPT_COLUMNS),
+)
+
+_INSERT_SQL = (
+    f"INSERT INTO search_log ({', '.join(_INSERT_COLUMNS)})"
+    f" VALUES ({', '.join('?' for _ in _INSERT_COLUMNS)})"
+)
+
+#: ``status`` of a chain entry that was not attempted (paused, not configured,
+#: stepped over while its keys cool down). Kept out of every success/error
+#: count, so the stats count exactly what they counted before 7.112.0.
+SKIPPED_STATUS = "skipped"
 
 _INSERT_ROUTE_SQL = """
 INSERT INTO search_route_log (
@@ -401,6 +447,7 @@ class WebSearchLogStore:
             q=q,
             since_epoch=since_epoch,
             until_epoch=until_epoch,
+            counted_only=True,
         )
         route_where, route_params = _route_filter_where(
             provider=provider,
@@ -588,6 +635,7 @@ class WebSearchLogStore:
             q=q,
             since_epoch=since_epoch,
             until_epoch=until_epoch,
+            counted_only=True,
         )
         group_sql = ", ".join(group_by)
         order_sql = ", ".join(group_by)
@@ -1202,6 +1250,12 @@ def _row_tuple(
         input_capture.sha256,
         output_capture.sha256,
         int(capture_content),
+        # ``_CHAIN_ATTEMPT_COLUMNS``: passed through as given, so a row from a
+        # search without a chain stores NULL in each -- never a 0 or "".
+        outcome.chain_position,
+        outcome.outcome,
+        outcome.failure_kind,
+        outcome.tries_json,
     )
 
 
@@ -1505,9 +1559,16 @@ def _attempt_filter_where(
     q: str | None,
     since_epoch: float | None,
     until_epoch: float | None,
+    counted_only: bool = False,
 ) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
+    if counted_only:
+        # Aggregates count attempts. A chain entry that was skipped (7.112.0)
+        # was never attempted, so it is listed but never counted: with no
+        # chain set there are no such rows and every number is what it was.
+        clauses.append("status != ?")
+        params.append(SKIPPED_STATUS)
     if provider:
         # Comma-separated values mean "any of these providers" (multi-select).
         providers = [part for part in provider.split(",") if part]
@@ -1916,6 +1977,15 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         ),
     ):
         _ensure_column(connection, "search_log", column, alter_sql)
+    for column, column_type in _CHAIN_ATTEMPT_COLUMNS:
+        # Nullable with no default: a row written before 7.112.0 reads back
+        # NULL ("not measured"), which is what it is.
+        _ensure_column(
+            connection,
+            "search_log",
+            column,
+            f"ALTER TABLE search_log ADD COLUMN {column} {column_type}",
+        )
     connection.executescript(_POST_MIGRATION_SCHEMA)
     connection.commit()
 

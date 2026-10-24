@@ -70,7 +70,21 @@ EXA_API_KEY="exa-key-a,exa-key-b,exa-key-c"
 EXA_API_KEY_ROTATION=failover   # single | round_robin | least_used | failover (on_error)
 ```
 
-The default is `failover` when multiple keys are set, `single` otherwise. Web search keys share the same engine and health semantics as model provider keys — see [Model Providers → Multi-Key Rotation](#model-provider-key-rotation).
+The default is `failover` when multiple keys are set, `single` otherwise; `on_error` is accepted as another name for `failover` (since 7.112.0, as on model providers).
+
+Web search keys run on the same rotation engine as model provider keys, but **which rules apply depends on whether a search chain is set**:
+
+- **No `WEB_SEARCH_CHAIN` (the default):** search keys keep their own health rules. Each key is tried at most once per search, with no retry on the same key. Any failure benches the key: a 5xx, a timeout, a refused connection or an unreadable body for 10 s (rising to 30, 60 and 120 s, with a 60 s circuit at the fourth in a row), a 429 for the wait the provider published (60 s if it gave none), and a 401, 403 or 402 for 5 minutes (doubling up to an hour). A provider with **one** key, or a keyless one, then answers every search with no call made until the bench ends.
+- **`WEB_SEARCH_CHAIN` set (7.112.0):** each service's keys follow the model provider rules — see [Model Providers → Multi-Key Rotation](#model-provider-key-rotation). A key is benched only for a rejected key (`CREDENTIAL_LOCKOUT_TIERS`), a 429 (`RATE_LIMIT_COOLDOWN_MODE/SECONDS/MAX_SECONDS`) or an out-of-credits message (a bare 402 benches nothing). A 5xx, a timeout or an unreadable body moves the search to the next service without touching the key; a refused connection tries the next key. Each key gets `PROVIDER_RETRY_ATTEMPTS` tries with `PROVIDER_RETRY_BACKOFF_*` backoff, and an only key is never benched into an outage. Every key try is recorded on the attempt row.
+
+#### Search chain (`WEB_SEARCH_CHAIN`, 7.112.0)
+
+```bash
+WEB_SEARCH_CHAIN=exa,tavily,ddgs,legacy   # ordered; a service listed twice is tried again at its place
+WEB_SEARCH_CHAIN_PAUSED=                  # entries to skip without removing them
+```
+
+Unset, nothing changes: `WEB_SEARCH_PROVIDER` and `WEB_SEARCH_FALLBACK_POLICY` route every search exactly as before. Set, the chain replaces both for routing (`WEB_SEARCH_PROVIDER=disabled` still disables search). Entries are the provider IDs above plus `legacy` (the old DuckDuckGo scraper). An entry whose key is not set is skipped and its attempt row names the variable; a paused entry is skipped; an entry whose every key is cooling down for at least `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` is stepped over unless it is the last one. A 400 from one service moves on to the next (each builds its own request); a failure kind listed in `FALLBACK_SKIP_KINDS` ends the search; `FALLBACK_TOTAL_TIMEOUT` (0 = none) bounds the whole search. No proxy chains apply to search; `WEBSEARCH_PROXY` and the system proxy behave as before.
 
 ### Advanced options
 

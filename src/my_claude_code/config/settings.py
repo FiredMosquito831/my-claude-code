@@ -291,6 +291,8 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "model_tts_paused",
     "model_asr_paused",
     "model_video_paused",
+    "web_search_chain",
+    "web_search_chain_paused",
     "ollama_search_api_key",
     "exa_api_key",
     "tavily_api_key",
@@ -380,6 +382,37 @@ def _canonical_model_ref_text(model_refs: tuple[str, ...]) -> str | None:
     for model_ref in model_refs:
         _require_provider_prefixed_model_ref(model_ref)
     return format_model_ref_list(model_refs)
+
+
+#: The one chain entry that is not a catalogue provider: the old DuckDuckGo
+#: HTML scraper, the last hop of today's ``legacy`` fallback policy.
+WEB_SEARCH_CHAIN_LEGACY_ENTRY = "legacy"
+
+
+def _canonical_web_search_chain_text(entries: tuple[str, ...]) -> str | None:
+    """Validate web search chain entries and render them back.
+
+    ``None`` when there are none. A ``:`` is refused on its own sentence:
+    per-entry profiles (``exa:deep``) are not part of this version, and
+    refusing the separator now is what lets them be added later without a
+    migration of anyone's ``.env``.
+    """
+
+    if not entries:
+        return None
+    allowed = (*SUPPORTED_WEBSEARCH_PROVIDER_IDS, WEB_SEARCH_CHAIN_LEGACY_ENTRY)
+    for entry in entries:
+        if ":" in entry:
+            raise ValueError(
+                f"web search chain entry {entry!r}: per-entry settings "
+                "(provider:profile) are not supported; list provider ids only"
+            )
+        if entry not in allowed:
+            raise ValueError(
+                f"unknown web search chain entry {entry!r}; expected one of "
+                f"{', '.join(allowed)}"
+            )
+    return format_model_ref_list(entries)
 
 
 def _no_ceiling_when_zero(value: int | None) -> int | None:
@@ -1945,6 +1978,18 @@ class Settings(BaseSettings):
     web_search_fallback_policy: str = Field(
         default="auto", validation_alias="WEB_SEARCH_FALLBACK_POLICY"
     )
+    # Ordered search chain (7.112.0): provider ids from the catalogue plus
+    # "legacy", comma-separated, a repeat tried again at its place. Unset is
+    # the route above, untouched. Set, it replaces the two settings above for
+    # routing (WEB_SEARCH_PROVIDER=disabled still disables) and its keys follow
+    # the model providers' key, 429, lockout and retry rules.
+    web_search_chain: str | None = Field(
+        default=None, validation_alias="WEB_SEARCH_CHAIN"
+    )
+    # Entries of WEB_SEARCH_CHAIN that are paused (a set: every occurrence).
+    web_search_chain_paused: str | None = Field(
+        default=None, validation_alias="WEB_SEARCH_CHAIN_PAUSED"
+    )
     # One optional credential per provider; comma-separate multiple keys for rotation.
     ollama_search_api_key: str | None = Field(
         default=None, validation_alias="OLLAMA_SEARCH_API_KEY"
@@ -2535,6 +2580,22 @@ class Settings(BaseSettings):
                 f"{SUPPORTED_WEBSEARCH_PROVIDER_IDS}, got {v!r}"
             )
         return value
+
+    @field_validator("web_search_chain")
+    @classmethod
+    def validate_web_search_chain(cls, v: str | None) -> str | None:
+        """Every entry a catalogue provider id or ``legacy``; repeats kept."""
+        if v is None:
+            return None
+        return _canonical_web_search_chain_text(parse_model_ref_chain(v.lower()))
+
+    @field_validator("web_search_chain_paused")
+    @classmethod
+    def validate_web_search_chain_paused(cls, v: str | None) -> str | None:
+        """A pause names an entry, so an entry named twice is stored once."""
+        if v is None:
+            return None
+        return _canonical_web_search_chain_text(parse_model_ref_list(v.lower()))
 
     @field_validator("web_search_fallback_policy")
     @classmethod

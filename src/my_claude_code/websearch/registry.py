@@ -36,6 +36,7 @@ from .rotation import (
 
 DEFAULT_HTTP_TIMEOUT = 20.0
 ROTATION_ENV_SUFFIX = "_ROTATION"
+ON_ERROR_ROTATION_ALIAS = "on_error"
 WEBSEARCH_PROXY_ENV = "WEBSEARCH_PROXY"
 _QUERY_LOG_CHARS = 256
 _ERROR_MESSAGE_LOG_CHARS = 500
@@ -173,7 +174,7 @@ class SearchOutcome:
     query: str
     results_count: int
     duration_ms: float
-    status: str  # "success" | "error"
+    status: str  # "success" | "error" | "skipped" (chain rows only)
     error_kind: str | None
     error_message: str | None
     cost_usd: float | None
@@ -182,6 +183,17 @@ class SearchOutcome:
     input_payload: Mapping[str, object] | None = None
     output_payload: Mapping[str, object] | None = None
     provider_config: Mapping[str, object] | None = None
+    # 7.112.0, written only by the web search chain (``WEB_SEARCH_CHAIN``);
+    # ``None`` on every row a search without a chain writes -- "not measured",
+    # never a zero (III.8).
+    chain_position: int | None = None
+    #: ``succeeded`` | ``failed`` | ``skipped``. A skipped entry's row also
+    #: carries ``status="skipped"`` so the stats keep counting what they did.
+    outcome: str | None = None
+    #: The ``FailureKind`` value the chain decided this attempt on.
+    failure_kind: str | None = None
+    #: The per-key tries behind this attempt, as JSON text.
+    tries_json: str | None = None
 
 
 SearchRecorder = Callable[[SearchOutcome], None]
@@ -516,6 +528,11 @@ def _resolve_rotation_policy(descriptor: WebSearchDescriptor, key_count: int) ->
     if not raw:
         return default_rotation_policy(key_count)
     value = raw.strip().lower()
+    if value == ON_ERROR_ROTATION_ALIAS:
+        # The model side's spelling of ``failover``
+        # (``providers/credential_rotation.py``), which docs/WEB-SEARCH.md
+        # has always promised search keys accept too (7.112.0, user Q12).
+        value = "failover"
     if value not in ROTATION_POLICIES:
         logger.warning(
             "Invalid {} value {!r}; falling back to default rotation policy",

@@ -35,6 +35,7 @@ def websearch_field_specs() -> tuple[dict[str, Any], ...]:
     return (
         _provider_select_spec(),
         _fallback_policy_spec(),
+        *_search_chain_field_specs(),
         *_analytics_field_specs(),
         _searxng_base_url_spec(),
         *_credential_field_specs(),
@@ -162,7 +163,9 @@ def _provider_select_spec() -> dict[str, Any]:
             "Backend for Claude Code's web_search server tool. Auto selects the "
             "first configured provider (or keyless DDGS). A named provider is "
             "strict unless the fallback policy below explicitly allows fallback. "
-            "Legacy uses only the old HTML scrape; Disabled performs no search."
+            "Legacy uses only the old HTML scrape; Disabled performs no search. "
+            "Not used for routing while a Search Chain is set (Disabled still "
+            "disables)."
         ),
     }
 
@@ -187,9 +190,48 @@ def _fallback_policy_spec() -> dict[str, Any]:
         "description": (
             "Controls failures after the selected provider. Auto preserves the "
             "resilient DDGS-to-legacy chain only for auto-selection; a named "
-            "provider fails visibly. Missing credentials always fail visibly."
+            "provider fails visibly. Missing credentials always fail visibly. "
+            "Not used while a Search Chain is set."
         ),
     }
+
+
+def _search_chain_field_specs() -> tuple[dict[str, Any], ...]:
+    """The search chain (7.112.0), as plain text fields until its editor ships."""
+
+    entries = " | ".join((*WEBSEARCH_CATALOG, "legacy"))
+    return (
+        {
+            "key": "WEB_SEARCH_CHAIN",
+            "label": "Search Chain",
+            "section_id": "websearch",
+            "settings_attr": "web_search_chain",
+            "description": (
+                "Optional ordered list of search services, comma-separated, "
+                "e.g. exa,tavily,ddgs,legacy; an entry listed twice is tried "
+                "again at its place. Empty keeps the route above exactly as it "
+                "is. Set, it replaces Web Search Provider and Fallback Policy "
+                "for routing (Disabled still disables), and each service's keys "
+                "follow your model providers' rules: a key is benched only for "
+                "a rejected key, a 429 or an out-of-credits message, a server "
+                "error or timeout moves to the next service without touching "
+                "the key, retries use PROVIDER_RETRY_ATTEMPTS, and an only key "
+                f"is never benched into an outage. Entries: {entries}."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_CHAIN_PAUSED",
+            "label": "Paused Search Chain Entries",
+            "section_id": "websearch",
+            "settings_attr": "web_search_chain_paused",
+            "description": (
+                "Comma-separated services of the Search Chain to skip without "
+                "removing them from it (every place a service is listed). A "
+                "search whose every entry is paused answers an error naming "
+                "this setting."
+            ),
+        },
+    )
 
 
 def _searxng_base_url_spec() -> dict[str, Any]:

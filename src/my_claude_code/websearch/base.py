@@ -2,6 +2,8 @@
 
 Concrete adapters implement :meth:`BaseWebSearchProvider._search_with_key`;
 ``search`` owns acquire -> try -> report semantics and domain-flag enforcement.
+``search_once`` is one try on one named key, for a caller that owns key
+selection itself (the web search chain).
 """
 
 from abc import ABC, abstractmethod
@@ -126,6 +128,38 @@ class BaseWebSearchProvider(ABC):
             raise last_error
         raise WebSearchUpstreamError(
             self.provider_id, "no API keys available to serve the search"
+        )
+
+    async def search_once(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int = 10,
+        allowed_domains: tuple[str, ...] = (),
+        blocked_domains: tuple[str, ...] = (),
+    ) -> WebSearchResponse:
+        """One search with one named key: no pool, no rotation, no health.
+
+        For a caller that owns key selection itself -- the web search chain
+        (``api/web_tools/search_chain.py``, 7.112.0) drives the keys with the
+        model path's own rotation and retry objects. The domain-flag rule is
+        the same one :meth:`search` applies; :meth:`search` and its
+        :class:`KeyPool` are untouched and still serve every search made
+        without a chain.
+        """
+
+        if not self.SUPPORTS_DOMAINS:
+            allowed_domains = ()
+            blocked_domains = ()
+        return await self._search_with_key(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
         )
 
     @abstractmethod

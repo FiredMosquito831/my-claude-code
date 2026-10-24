@@ -16,7 +16,11 @@ from my_claude_code.core.websearch.models import (
 )
 
 from ..base import BaseWebSearchProvider
-from ..errors import WebSearchRateLimitError, WebSearchUpstreamError
+from ..errors import (
+    KIND_DETAIL_TIMEOUT,
+    WebSearchRateLimitError,
+    WebSearchUpstreamError,
+)
 
 
 class DdgsWebSearchProvider(BaseWebSearchProvider):
@@ -43,7 +47,9 @@ class DdgsWebSearchProvider(BaseWebSearchProvider):
             ) from exc
         except TimeoutException as exc:
             raise WebSearchUpstreamError(
-                self.provider_id, f"ddgs search timed out: {exc}"
+                self.provider_id,
+                f"ddgs search timed out: {exc}",
+                kind_detail=KIND_DETAIL_TIMEOUT,
             ) from exc
         except DDGSException as exc:
             raise WebSearchUpstreamError(
