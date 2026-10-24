@@ -33833,10 +33833,12 @@ function buildMarketplaceProfileField(ctx, name, market) {
       const inherited = providerRow[name];
       const lines = [];
       if (inherited && typeof inherited === "object" && inherited.state === "value") {
+        const named = String(inherited.value);
+        const found = ((table && table.profiles) || []).find((profile) => profile.name === named);
         lines.push(
           fieldsDefaultLine(
-            String(inherited.value),
-            `the provider row → ${marketplaceProfileWords(table, String(inherited.value))}`,
+            named,
+            `from the provider row: ${found ? found.summary : "no such profile: its requests are refused until it exists"}`,
           ),
         );
       } else {

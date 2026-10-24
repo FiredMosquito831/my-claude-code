@@ -115,6 +115,21 @@ def test_a_failed_source_keeps_what_it_said_last() -> None:
     assert document["sources"]["status"] == "failed:ConnectError"
 
 
+def test_no_list_rows_at_hand_keeps_the_last_levels() -> None:
+    """A catalogue restored at start has no rows yet; the levels must not vanish."""
+
+    previous = build_snapshot(
+        DIALECT, ROWS, PUBLIC, {**ALL_OK, "listing": "ok"}, None, at="T0"
+    )
+    document = build_snapshot(
+        DIALECT, {}, PUBLIC, {**ALL_OK, "listing": "empty"}, previous, at="T1"
+    )
+    opus = document["models"]["cc/claude-opus-4-6"]
+    assert opus["official"] == [5.0, 25.0]
+    assert opus["levels_in"] == [[0.75, 38], [2.5, 3]]
+    assert opus["min"] == [0.75, 3.75]
+
+
 def test_the_document_stays_small_at_the_worst_case() -> None:
     """270 models x 29 levels each side (spec §8: about 0.3 MB at most)."""
 

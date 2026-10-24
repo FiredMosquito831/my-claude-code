@@ -312,13 +312,20 @@ def _short_model(model_id: str) -> str:
     )
 
 
-def bounded_refusal(text: str) -> str:
-    """One refusal sentence, never longer than :data:`MAX_REFUSAL_BYTES`."""
+def bounded_refusal(text: str, limit: int = MAX_REFUSAL_BYTES) -> str:
+    """One refusal sentence, never longer than ``limit`` bytes."""
 
     encoded = text.encode("utf-8")
-    if len(encoded) <= MAX_REFUSAL_BYTES:
+    if len(encoded) <= limit:
         return text
-    return encoded[: MAX_REFUSAL_BYTES - 3].decode("utf-8", errors="ignore") + "..."
+    return encoded[: limit - 3].decode("utf-8", errors="ignore") + "..."
+
+
+#: What a failure classified from the upstream's answer gains on its way to
+#: the client: ``"\n\nRequest ID: req_<32 hex>"``. The marketplace's own
+#: refusal is bounded short of it, so what the client reads stays within
+#: :data:`MAX_REFUSAL_BYTES` too.
+REQUEST_ID_LINE_BYTES = len("\n\nRequest ID: req_") + 32
 
 
 def _refuse(text: str) -> InvalidRequestError:
@@ -566,7 +573,8 @@ def no_offer_message(
         f"{dialect.label} has no offer under {whose} for "
         f"{_short_model(model_id)}; it says the cheapest now is "
         f"{_usd(minimums[0])} / {_usd(minimums[1])} per Mtok. MCC does not "
-        "re-bid: raise the ceiling or pick another profile."
+        "re-bid: raise the ceiling or pick another profile.",
+        MAX_REFUSAL_BYTES - REQUEST_ID_LINE_BYTES,
     )
 
 

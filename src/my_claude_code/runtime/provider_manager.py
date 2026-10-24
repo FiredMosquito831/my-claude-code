@@ -690,6 +690,13 @@ class ProviderRuntimeManager:
                         continue
                     if isinstance(row, dict):
                         rows[info.model_id] = row
+                if not rows:
+                    # A catalogue restored at start carries no list rows until
+                    # the next sweep; the rows stored beside it are the same
+                    # rows, already summarised.
+                    stored = await asyncio.to_thread(self._stored_provider_rows)
+                    if stored is not None:
+                        rows = dict(stored[0].get(provider_id, {}))
                 previous = await asyncio.to_thread(read_market_snapshot, dialect)
                 outcome = await refresh_market_snapshot(
                     settings, provider_id, dialect, rows, previous

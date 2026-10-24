@@ -3506,8 +3506,13 @@ about what it does to your system prompt.
 thinking) and Codex's `cx/…` natively on Responses; MCC picks those by
 default and you can pin any model's endpoint on its row. InferHub's
 `usage.cost` on Chat Completions is recorded as the whole bill; each attempt's
-request detail keeps the ceiling sent (`params.wire.marketplace`) and InferHub's
-own `X-Inferhub-*` headers and charge (`params.marketplace`).
+request detail keeps, under `params.marketplace`, the ceiling sent (`ceiling`:
+profile, which row named it, the headers, how the numbers were reached),
+InferHub's own `X-Inferhub-*` and rate-limit headers verbatim (`headers`) and
+the charge it reported (`charged_usd`, recorded whatever the cost setting says;
+absent when not reported, never 0). The Chat door also notes the ceiling beside
+its body (`params.wire.marketplace`). Requests to every other provider carry no
+`marketplace` key at all.
 
 > **Not verified on a real account.** Everything above is built from InferHub's
 > documentation and public pages; nothing keyed has been observed yet — the

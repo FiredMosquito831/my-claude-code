@@ -53,6 +53,8 @@ from .config import masked_exit_for, string_setting
 #: Fields each source contributes to a model's entry, so a failed source's
 #: part can be carried over from the previous document.
 _MODEL_FIELDS_BY_SOURCE: Mapping[str, tuple[str, ...]] = {
+    # The keyed list's own part: carried over when no list rows were at hand.
+    "listing": ("official", "levels_in", "levels_out", "listing_min"),
     "market": ("market_min", "max", "last"),
     "status": ("perf",),
     "pricing_cache": ("cache_hit",),

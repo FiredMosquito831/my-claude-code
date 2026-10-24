@@ -325,9 +325,38 @@ async def test_a_refused_ceiling_never_reaches_the_upstream() -> None:
     create = AsyncMock(return_value=_answer())
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(InvalidRequestError),
+        pytest.raises(ExecutionFailure) as streamed,
     ):
         await _drain(provider.stream_response(request))
+    # Inside the stream the same refusal travels as the classified failure
+    # (a bare InvalidRequestError raised there would answer 500).
+    assert streamed.value.kind is FailureKind.INVALID_REQUEST
+    assert streamed.value.status_code == 400
+    assert streamed.value.message == preflight.value.message
+    create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_the_per_request_limit_refuses_inside_the_stream_as_a_400() -> None:
+    _set_profile(
+        {
+            "kind": "max_price",
+            "max_input_usd": 1,
+            "max_output_usd": 5,
+            "max_usd_per_request": 0.01,
+        }
+    )
+    provider = _provider()
+    create = AsyncMock(return_value=_answer())
+    request = make_messages_request(model=OTHER, max_tokens=60_000)
+    with (
+        patch.object(provider._client.chat.completions, "create", create),
+        pytest.raises(ExecutionFailure) as raised,
+    ):
+        await _drain(provider.stream_response(request, input_tokens=20))
+    assert raised.value.kind is FailureKind.INVALID_REQUEST
+    assert raised.value.status_code == 400
+    assert "could cost up to $0.30002" in raised.value.message
     create.assert_not_awaited()
 
 
@@ -456,10 +485,12 @@ async def test_the_other_two_doors_send_the_ceiling(model: str, door: str) -> No
         else provider._responses._client
     )
     seen = _capture_send(client)
+    trace = install_wire_trace()
     with pytest.raises(ExecutionFailure):
         await _drain(provider.stream_response(make_messages_request(model=model)))
     assert seen, door
     assert seen[0].url.path.endswith(f"/{door}")
+    assert trace.marketplace[0]["ceiling"]["sent"] == CEILING
     sent = {name.lower(): value for name, value in seen[0].headers.items()}
     assert sent["x-max-input-price"] == "1"
     assert sent["x-max-output-price"] == "5"

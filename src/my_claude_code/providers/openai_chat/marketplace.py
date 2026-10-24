@@ -260,6 +260,24 @@ def no_offer_failure(
     )
 
 
+def refusal_failure(message: str) -> ExecutionFailure:
+    """A refusal decided while a stream is already running, as the door's 400.
+
+    Before streaming, a refusal is an ``InvalidRequestError`` raised from the
+    preflight and answered by the door's own error shape. Once the attempt's
+    stream has started (the per-request worst case needs the token count the
+    stream is handed), the same refusal must travel as the classified failure
+    every stream raises, or the door answers 500.
+    """
+
+    return ExecutionFailure(
+        kind=FailureKind.INVALID_REQUEST,
+        status_code=NO_OFFER_REFUSAL_STATUS,
+        message=message,
+        retryable=False,
+    )
+
+
 # ------------------------------------------------------------ the read-back
 
 
@@ -310,6 +328,7 @@ __all__ = [
     "no_offer_failure",
     "record_marketplace_error_headers",
     "record_marketplace_headers",
+    "refusal_failure",
     "summarise_asks",
     "summarise_listing_payload",
 ]

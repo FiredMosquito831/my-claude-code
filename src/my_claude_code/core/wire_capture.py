@@ -755,19 +755,24 @@ def record_marketplace_readback(
     *,
     headers: Mapping[str, str] | None = None,
     charged_usd: float | None = None,
+    ceiling: Mapping[str, Any] | None = None,
 ) -> None:
     """Keep what a marketplace said about the current attempt (7.109.0).
 
     ``headers`` are its allow-listed response headers, verbatim; a later
     response of the same attempt (a create-level retry) replaces them, as the
     last body sent replaces the first. ``charged_usd`` is the cost it
-    reported. Absent stays absent -- never a zero standing in for silence.
-    A no-op outside a tracked request.
+    reported. ``ceiling`` is the price ceiling MCC sent on the attempt, on
+    whichever door (the Chat door also records it beside its body). Absent
+    stays absent -- never a zero standing in for silence. A no-op outside a
+    tracked request.
     """
     slot = _WIRE_TRACE.get()
     if slot is None:
         return
     entry = slot.marketplace.setdefault(slot.current_attempt, {})
+    if ceiling:
+        entry["ceiling"] = dict(ceiling)
     if headers:
         entry["headers"] = {str(name): str(value) for name, value in headers.items()}
     if charged_usd is not None:

@@ -129,6 +129,7 @@ from .marketplace import (
     no_offer_failure,
     record_marketplace_error_headers,
     record_marketplace_headers,
+    refusal_failure,
     summarise_listing_payload,
 )
 from .messages_transport import MessagesTransport
@@ -1105,13 +1106,22 @@ class OpenAIChatProvider(BaseProvider):
         flight. Everything else is :meth:`_stream_across_surfaces` unchanged.
         """
 
-        choice = self.marketplace_choice_for(request.model)
-        check_request_cost(
-            choice,
-            model_id=request.model,
-            input_tokens=input_tokens,
-            max_tokens=request.max_tokens,
-        )
+        try:
+            choice = self.marketplace_choice_for(request.model)
+            check_request_cost(
+                choice,
+                model_id=request.model,
+                input_tokens=input_tokens,
+                max_tokens=request.max_tokens,
+            )
+        except InvalidRequestError as refused:
+            # Inside the stream now: the classified failure, so the door
+            # answers its short 400 rather than a 500.
+            raise refusal_failure(refused.message) from refused
+        if choice is not None:
+            # The ceiling this attempt carries, on the attempt's own record,
+            # whichever door ends up sending it.
+            record_marketplace_readback(ceiling=choice.wire_note()["marketplace"])
         with marketplace_attempt(MarketplaceAttempt(request.model, choice)):
             async for event in self._stream_across_surfaces(
                 request,
@@ -1513,11 +1523,13 @@ class _OpenAIChatStreamRunner:
         self._marketplace: MarketplaceChoice | None = None
         if provider._profile.marketplace is not None:
             attempt = current_marketplace_attempt()
-            self._marketplace = (
-                attempt.choice
-                if attempt is not None and attempt.model_id == request.model
-                else provider.marketplace_choice_for(request.model)
-            )
+            if attempt is not None and attempt.model_id == request.model:
+                self._marketplace = attempt.choice
+            else:
+                try:
+                    self._marketplace = provider.marketplace_choice_for(request.model)
+                except InvalidRequestError as refused:
+                    raise refusal_failure(refused.message) from refused
             if self._marketplace is not None:
                 self._wire_notes.update(self._marketplace.wire_note())
         self._input_tokens = input_tokens
