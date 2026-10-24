@@ -321,5 +321,31 @@ def test_skipped_rows_are_listed_but_never_counted(tmp_path: Path) -> None:
     assert statuses == ["error", "skipped", "success"]
 
 
+def test_a_database_no_chain_wrote_to_runs_the_old_aggregate_sql(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No skipped row ever written -> no extra predicate, the pre-7.112 SQL."""
+    seen: list[str] = []
+    real = analytics._attempt_stats
+
+    def spy(connection, where, params, period):
+        seen.append(where)
+        return real(connection, where, params, period)
+
+    monkeypatch.setattr(analytics, "_attempt_stats", spy)
+    store = WebSearchLogStore(tmp_path / "websearch.db")
+    store.record(_outcome())
+    store.record(_outcome(status="error"))
+    store.flush()
+    try:
+        store.stats("daily")
+        store.record(_outcome(status=SKIPPED_STATUS, outcome="skipped"))
+        store.flush()
+        store.stats("daily")
+    finally:
+        store.close()
+    assert seen == ["", "WHERE status != ?"]
+
+
 def test_the_skipped_status_has_one_spelling() -> None:
     assert search_chain.SKIPPED_STATUS == analytics.SKIPPED_STATUS

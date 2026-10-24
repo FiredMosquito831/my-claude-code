@@ -228,6 +228,15 @@ _INSERT_SQL = (
 #: stepped over while its keys cool down). Kept out of every success/error
 #: count, so the stats count exactly what they counted before 7.112.0.
 SKIPPED_STATUS = "skipped"
+_STATUS_POSITION = _INSERT_COLUMNS.index("status")
+#: Set in ``search_log_meta`` by the first skipped row ever written. Until it
+#: exists no row can be skipped, so the aggregates run exactly the SQL they
+#: ran before 7.112.0 -- no extra predicate, no cost -- and a database no
+#: chain ever wrote to is read exactly as before.
+_SKIPPED_ROWS_KEY = "chain_skipped_rows_v1"
+_MARK_SKIPPED_ROWS_SQL = (
+    "INSERT OR IGNORE INTO search_log_meta (key, value) VALUES (?, '1')"
+)
 
 _INSERT_ROUTE_SQL = """
 INSERT INTO search_route_log (
@@ -441,14 +450,6 @@ class WebSearchLogStore:
 
         if period not in STATS_PERIODS:
             raise ValueError(f"unknown stats period: {period!r}")
-        attempt_where, attempt_params = _attempt_filter_where(
-            provider=provider,
-            status=status,
-            q=q,
-            since_epoch=since_epoch,
-            until_epoch=until_epoch,
-            counted_only=True,
-        )
         route_where, route_params = _route_filter_where(
             provider=provider,
             status=status,
@@ -458,6 +459,14 @@ class WebSearchLogStore:
         )
         connection = self._connect_reader()
         try:
+            attempt_where, attempt_params = _attempt_filter_where(
+                provider=provider,
+                status=status,
+                q=q,
+                since_epoch=since_epoch,
+                until_epoch=until_epoch,
+                counted_only=_may_hold_skipped_rows(connection),
+            )
             attempts = _attempt_stats(connection, attempt_where, attempt_params, period)
             routes = _route_stats(connection, route_where, route_params, period)
         finally:
@@ -629,22 +638,22 @@ class WebSearchLogStore:
         until_epoch: float | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield the aggregated (grouped) websearch records for an export."""
-        where, params = _attempt_filter_where(
-            provider=provider,
-            status=status,
-            q=q,
-            since_epoch=since_epoch,
-            until_epoch=until_epoch,
-            counted_only=True,
-        )
-        group_sql = ", ".join(group_by)
-        order_sql = ", ".join(group_by)
-        sql = (
-            f"SELECT {select} FROM search_log {where}"
-            f" GROUP BY {group_sql} ORDER BY {order_sql}"
-        )
         connection = self._connect_reader()
         try:
+            where, params = _attempt_filter_where(
+                provider=provider,
+                status=status,
+                q=q,
+                since_epoch=since_epoch,
+                until_epoch=until_epoch,
+                counted_only=_may_hold_skipped_rows(connection),
+            )
+            group_sql = ", ".join(group_by)
+            order_sql = ", ".join(group_by)
+            sql = (
+                f"SELECT {select} FROM search_log {where}"
+                f" GROUP BY {group_sql} ORDER BY {order_sql}"
+            )
             for row in connection.execute(sql, params).fetchall():
                 yield {name: row[name] for name in names}
         finally:
@@ -752,6 +761,10 @@ class WebSearchLogStore:
         try:
             if attempt_rows:
                 connection.executemany(_INSERT_SQL, attempt_rows)
+                if any(row[_STATUS_POSITION] == SKIPPED_STATUS for row in attempt_rows):
+                    # In the same transaction as the row: from now on the
+                    # aggregates leave skipped rows out (see ``_counts_skipped``).
+                    connection.execute(_MARK_SKIPPED_ROWS_SQL, (_SKIPPED_ROWS_KEY,))
             if route_rows:
                 connection.executemany(_INSERT_ROUTE_SQL, route_rows)
             connection.commit()
@@ -1550,6 +1563,21 @@ def _decode_json(value: object) -> object | None:
         return json.loads(value)
     except json.JSONDecodeError:
         return {"_invalid_json": True, "raw": value}
+
+
+def _may_hold_skipped_rows(connection: sqlite3.Connection) -> bool:
+    """Whether a search chain ever wrote a skipped row into this database.
+
+    One primary-key lookup. False on every database no chain wrote to, which
+    keeps the aggregates' SQL exactly what it was before 7.112.0.
+    """
+    try:
+        row = connection.execute(
+            "SELECT 1 FROM search_log_meta WHERE key = ?", (_SKIPPED_ROWS_KEY,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None
 
 
 def _attempt_filter_where(
