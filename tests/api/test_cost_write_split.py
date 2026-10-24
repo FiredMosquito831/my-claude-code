@@ -176,19 +176,24 @@ class TestTheRate:
         """The error 7.111.0 removed: the same row priced as if every write were 5 min."""
         row = _finish(
             store,
-            provider="anthropic",
-            model="claude-sonnet-5-5",
+            provider="anthropic_oauth",
+            model="claude-sonnet-5",
             split=_split(600, 300),
-            litellm=True,
+            live=True,
         )
-        rates = _LITELLM_SONNET_5_5
+        rates = _MODELS_DEV_SONNET_5
         as_before = (
-            1200 * rates["input_cost_per_token"]
-            + 4000 * rates["cache_read_input_token_cost"]
-            + 900 * rates["cache_creation_input_token_cost"]
-            + 300 * rates["output_cost_per_token"]
-        )
+            1200 * rates["input"]
+            + 4000 * rates["cache_read"]
+            + 900 * rates["cache_write"]
+            + 300 * rates["output"]
+        ) / _PER_MILLION
+        assert row["cost_source"] == SOURCE_MODELS_DEV
         assert row["cost_usd"] != pytest.approx(as_before)
+        # Exactly the 300 one-hour tokens moved, from the 5 min to the 1 h rate.
+        assert row["cost_usd"] - as_before == pytest.approx(
+            300 * (_LIVE_ONE_HOUR - rates["cache_write"] / _PER_MILLION)
+        )
 
     def test_no_source_states_it_so_the_row_is_not_priced_and_says_why(
         self, store
