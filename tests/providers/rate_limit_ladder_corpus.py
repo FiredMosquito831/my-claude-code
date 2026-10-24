@@ -76,9 +76,7 @@ def _response(
 ) -> httpx.Response:
     if body is None:
         return httpx.Response(status, headers=headers or {}, request=_request())
-    return httpx.Response(
-        status, headers=headers or {}, json=body, request=_request()
-    )
+    return httpx.Response(status, headers=headers or {}, json=body, request=_request())
 
 
 def _sdk(
@@ -156,9 +154,7 @@ ERRORS: dict[str, Callable[[], BaseException]] = {
     "transport/httpx-connect": lambda: httpx.ConnectError(
         "refused", request=_request()
     ),
-    "transport/sdk-connection": lambda: openai.APIConnectionError(
-        request=_request()
-    ),
+    "transport/sdk-connection": lambda: openai.APIConnectionError(request=_request()),
     "timeout/httpx-read": lambda: httpx.ReadTimeout("slow", request=_request()),
     "timeout/sdk": lambda: openai.APITimeoutError(request=_request()),
     "400/sdk-bad-request": _sdk(openai.BadRequestError, 400),
@@ -349,16 +345,22 @@ def cell_key(
 def cells() -> Iterator[tuple[str, dict[str, Any]]]:
     """Every combination, keyed; the draw is varied only when jitter > 0."""
 
-    for limiter, error, sequence, cooldown, routes, attempts, backoff in (
-        itertools.product(
-            LIMITERS,
-            ERRORS,
-            SEQUENCES,
-            COOLDOWNS,
-            ROUTES_AROUND,
-            RETRY_ATTEMPTS,
-            BACKOFFS,
-        )
+    for (
+        limiter,
+        error,
+        sequence,
+        cooldown,
+        routes,
+        attempts,
+        backoff,
+    ) in itertools.product(
+        LIMITERS,
+        ERRORS,
+        SEQUENCES,
+        COOLDOWNS,
+        ROUTES_AROUND,
+        RETRY_ATTEMPTS,
+        BACKOFFS,
     ):
         for draw in DRAWS if backoff[2] > 0 else (0.0,):
             spec = {
@@ -417,7 +419,7 @@ async def _record_cell(spec: dict[str, Any], *, epsilon: float) -> dict[str, Any
         outcome = f"raise:{type(exc).__name__}"
         which = next((i for i, e in enumerate(raised) if e is exc), -1)
     task = asyncio.current_task()
-    record = dict(_CURRENT.events)
+    record: dict[str, Any] = dict(_CURRENT.events)
     record["calls"] = len(raised) + (1 if outcome.startswith("ok:") else 0)
     record["outcome"] = outcome
     record["raised_try"] = which
