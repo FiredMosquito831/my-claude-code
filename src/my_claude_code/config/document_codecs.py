@@ -91,6 +91,12 @@ class SetScalar:
 
     key_path: tuple[str, ...]
     value: object
+    #: TOML only (7.111.4): the user's own line for this key, as Configure
+    #: found it, for Undo to put back verbatim -- comment, indentation, key
+    #: spelling and quoting included. Used only when it still says exactly
+    #: ``key = value``; otherwise the value alone is edited. JSON and YAML
+    #: ignore it.
+    prior_line: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,13 +169,15 @@ def _apply_toml_edits(text: str, edits: Sequence[Edit]) -> str:
         match edit:
             case SetTable(key_path=key_path, value=value):
                 text = _toml_set_table(text, key_path, value)
-            case SetScalar(key_path=key_path, value=value):
+            case SetScalar(key_path=key_path, value=value, prior_line=prior_line):
                 if len(key_path) != 1:
                     raise DocumentFormatError(
                         "TOML scalar edits are top-level only; a nested scalar "
                         "belongs to a table MCC would have to own whole"
                     )
-                text = _toml_set_root_scalar(text, key_path[0], value)
+                text = _toml_set_root_scalar(
+                    text, key_path[0], value, prior_line=prior_line
+                )
             case DeleteKey(key_path=key_path):
                 text = (
                     _toml_delete_root_scalar(text, key_path[0])
@@ -281,19 +289,130 @@ def _toml_root_key_pattern(key: str) -> re.Pattern[str]:
     return re.compile(rf'^\s*"?{re.escape(key)}"?\s*=')
 
 
-def _toml_set_root_scalar(text: str, key: str, value: object) -> str:
+def root_scalar_line(
+    text: str, document_format: DocumentFormat, key_path: Sequence[str]
+) -> str:
+    """Return the user's own line for one top-level scalar, or "".
+
+    What Configure records beside the value it replaces (7.111.4), so Undo can
+    give the line back byte for byte rather than re-render it from the value.
+    TOML only: "" for every other format, a nested key, or a key that is not
+    there -- which is what the record stored before this existed.
+    """
+
+    if document_format is not DocumentFormat.TOML or len(key_path) != 1:
+        return ""
+    lines = text.splitlines()
+    pattern = _toml_root_key_pattern(key_path[0])
+    for index in range(_toml_root_region_end(lines)):
+        if pattern.match(lines[index]):
+            return lines[index]
+    return ""
+
+
+def _toml_set_root_scalar(
+    text: str, key: str, value: object, *, prior_line: str = ""
+) -> str:
+    """Set one top-level scalar, changing only its value on the user's line.
+
+    Until 7.111.4 the matched line was replaced whole by MCC's own rendering,
+    so ``model = "gpt-5.6"   # my default`` lost its comment on Configure and
+    Undo -- in both modes -- re-rendered it from the bare value the restore
+    record kept. Now:
+
+    * ``prior_line`` -- the user's line as Configure found it -- is put back
+      verbatim when it still says exactly ``key = value``. That is Undo.
+    * Otherwise only the value's own characters are replaced: the indentation,
+      the key's spelling, the spacing around ``=``, the whitespace and comment
+      after the value all stay, and a literal-string value stays a literal
+      string where the new value can be one. A line already holding the value
+      is left alone.
+    * A line whose value this cannot find -- one that continues onto the next
+      line -- is rewritten whole, as it always was.
+
+    A key that is not there yet is inserted exactly as before.
+    """
+
     lines = text.splitlines()
     limit = _toml_root_region_end(lines)
     pattern = _toml_root_key_pattern(key)
-    rendered = f"{_toml_key(key)} = {_toml_value(value)}"
+    restored = prior_line if _toml_line_says(prior_line, key, value) else ""
+    rendered = restored or f"{_toml_key(key)} = {_toml_value(value)}"
 
     for index in range(limit):
         if pattern.match(lines[index]):
-            lines[index] = rendered
+            lines[index] = restored or _toml_with_value(lines[index], key, value)
             return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
 
     lines.insert(limit, rendered)
     return "\n".join(lines) + ("\n" if text.endswith("\n") or not text else "")
+
+
+def _toml_same_value(found: object, value: object) -> bool:
+    """Equal and of the same type: ``true`` is not ``1``, though Python says so."""
+
+    return type(found) is type(value) and found == value
+
+
+def _toml_line_says(line: str, key: str, value: object) -> bool:
+    """Return whether one line, read alone, is exactly ``key = value``."""
+
+    if not line or "\n" in line or "\r" in line:
+        return False
+    try:
+        parsed = tomllib.loads(line)
+    except tomllib.TOMLDecodeError:
+        return False
+    return list(parsed) == [key] and _toml_same_value(parsed[key], value)
+
+
+def _toml_with_value(line: str, key: str, value: object) -> str:
+    """Return ``line`` with only its value replaced by ``value``.
+
+    Where the value ends is asked of ``tomllib`` rather than guessed: the line
+    is read up to each ``#`` in turn, and the first prefix that parses is the
+    assignment, so a ``#`` inside a string is never taken for a comment.
+    """
+
+    canonical = f"{_toml_key(key)} = {_toml_value(value)}"
+    match = _toml_root_key_pattern(key).match(line)
+    if match is None:
+        return canonical
+    start = match.end()
+    while start < len(line) and line[start] in " \t":
+        start += 1
+    ends = [index for index, char in enumerate(line) if char == "#" and index > start]
+    for end in (*ends, len(line)):
+        head = line[:end]
+        try:
+            parsed = tomllib.loads(head)
+        except tomllib.TOMLDecodeError:
+            continue
+        if list(parsed) != [key]:
+            return canonical
+        if _toml_same_value(parsed[key], value):
+            return line
+        stop = len(head.rstrip(" \t"))
+        return line[:start] + _toml_value_like(line[start:stop], value) + line[stop:]
+    return canonical
+
+
+def _toml_value_like(previous: str, value: object) -> str:
+    """Render ``value`` in the quoting the user's value was written in, if it can be.
+
+    A literal string (``'…'``) holds no escapes, so it can carry a value only
+    when that value has no ``'`` and no control character other than tab.
+    """
+
+    if (
+        isinstance(value, str)
+        and previous.startswith("'")
+        and not previous.startswith("'''")
+        and "'" not in value
+        and all(char == "\t" or (char >= " " and char != "\x7f") for char in value)
+    ):
+        return f"'{value}'"
+    return _toml_value(value)
 
 
 def _toml_delete_root_scalar(text: str, key: str) -> str:

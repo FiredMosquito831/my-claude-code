@@ -1990,6 +1990,8 @@ mcc-apps undo codex_desktop --restore    # ...and put back the model / model_pro
 
 Use plain undo if you never had `model` set — restoring it would resurrect a key you never wrote. Use `--restore` if you did, and want your own choice back. Both remove `model_providers.mcc` entirely; the `.mcc-backup` stays where it is either way.
 
+Since 7.111.4 your own `model` / `model_provider` lines come back exactly as you wrote them — a comment after the value, the indentation, the quoting: Configure changes only the value, and both undo modes put the original line back. Undo on a Codex that MCC never configured changes nothing and says *Nothing of MCC's was in that file* (until 7.111.4 plain undo deleted your `model` line there).
+
 ### Without a browser: `mcc-apps`
 
 ```
