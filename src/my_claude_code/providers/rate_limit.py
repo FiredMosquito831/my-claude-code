@@ -384,6 +384,9 @@ class ProviderRateLimiter:
                     status == 429
                     and not self._routes_around_model
                     and self._cooldown.benches
+                    # A zero backoff has nothing to block for, and the block
+                    # refuses a zero length: the retry goes ahead unblocked.
+                    and delay > 0
                 ):
                     # Only a rate limit, and only when this limiter is the
                     # thing that answers one. A 5xx is the gateway failing,
