@@ -317,7 +317,7 @@ WIRE_TABLE: tuple[tuple[Any, ...], ...] = (
                 ),
                 profile_dialect(provider_id),
                 ReasoningEffort.MAX,
-                {"reasoning_effort": "high"},
+                {"reasoning_effort": "max" if provider_id == "opencode_go" else "high"},
             ),
             # A model that cannot reason at all: nothing is sent, and the gate
             # is what stopped it -- the encoder was never consulted.

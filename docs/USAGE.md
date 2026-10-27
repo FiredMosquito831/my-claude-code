@@ -3238,11 +3238,27 @@ policy. Everything above is written to be re-measured — one mapping, one
 predicate, three settings — rather than to be clever. The durable paths remain
 a paid Zen key or OpenCode Go.
 
-**OpenCode Go is unverified.** The vendor said on 2026-09-03 that Go requests
+**OpenCode Go's original header probes were inconclusive.** The vendor said on 2026-09-03 that Go requests
 must carry the conversation header and began enforcing it on 2026-09-06. MCC
 sends it, under the same rule as Zen. Both live Go probes were answered
 `401 CreditsError` — the subscription behind the key had run out — so nothing
 here claims to have watched the Go requirement be satisfied.
+
+**Go reasoning (7.113.2).** On Go's Chat Completions endpoint, MCC preserves
+earlier assistant thinking in `reasoning_content` rather than inserting
+`<think>` wrappers into the assistant's answer text. Requested `max` can now
+reach Go as `reasoning_effort: max`; the existing per-model capability and
+refusal checks still decide whether it is used. `xhigh` keeps its previous
+`high` mapping, and no new default effort or off value is invented. The Go
+model registry states `low/high/max` for DeepSeek V4.1 Flash; acceptance of
+every Go model is not implied by that model's entry.
+
+An existing conversation containing thinking changes its serialized prefix
+on the first request after this update, so an earlier prompt-cache hit may be
+lost once. Nothing rewrites the stored conversation or clears a cache.
+Incoming malformed native reasoning is still delivered in the field the
+host sent it in: MCC does not guess that text after `</think>` is an answer,
+and it does not remove arbitrary `<analysis>` or `<summary>` markup.
 
 Two things MCC deliberately does **not** send: `x-parent-session-id`, because
 MCC never forks a session and would be inventing a relationship, and

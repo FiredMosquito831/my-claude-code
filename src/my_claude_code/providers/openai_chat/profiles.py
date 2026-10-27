@@ -130,6 +130,16 @@ OPENAI_STANDARD_REASONING = NamedEffortReasoning(
     _OPENAI_STANDARD_EFFORTS, origin=ReasoningDialectOrigin.DEFAULT
 )
 
+# Go's model registry states a distinct max rung (2026-10-26,
+# opencode-go/deepseek-v4.1-flash). Keep every other existing Go mapping,
+# including xhigh -> high and no OFF/on-default spelling. This declaration
+# is still narrowed by each model's capability and learned refusals; it is
+# not a claim that a live gateway probe verified every Go model.
+_OPENCODE_GO_EFFORTS = tuple(
+    (effort, "max" if effort is ReasoningEffort.MAX else value)
+    for effort, value in _OPENAI_STANDARD_EFFORTS
+)
+
 #: The models.dev bucket carrying OpenCode's own model registry, including the
 #: per-model ``provider.npm`` override that names each model's wire surface.
 #: One name for both OpenCode profiles: Zen and Go are the same vendor, the
@@ -465,11 +475,11 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
     "opencode_go": OpenAIChatProfile(
         _policy(
             "OPENCODE_GO",
-            ReasoningReplayMode.THINK_TAGS,
+            ReasoningReplayMode.REASONING_CONTENT,
             include_extra_body=True,
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
-        OPENAI_STANDARD_REASONING,
+        NamedEffortReasoning(_OPENCODE_GO_EFFORTS),
         client_identity=OPENCODE_CLIENT_IDENTITY,
         # The Go endpoint is the same vendor, the same credential and the same
         # model registry behind a different path prefix, so it is declared the

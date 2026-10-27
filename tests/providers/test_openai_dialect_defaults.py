@@ -235,7 +235,9 @@ def test_every_previously_silent_profile_now_speaks_the_standard(
     body = _profile_body(provider_id, ReasoningPolicy.on(effort=ReasoningEffort.MAX))
     extra_body = body.get("extra_body", {})
 
-    assert body["reasoning_effort"] == "high", provider_id
+    # Go's later declaration adds its stated max rung; the fleet default stays.
+    expected = "max" if provider_id == "opencode_go" else "high"
+    assert body["reasoning_effort"] == expected, provider_id
     for field in ("reasoning", "thinking", "reasoning_split"):
         assert field not in body, provider_id
         assert field not in extra_body, provider_id

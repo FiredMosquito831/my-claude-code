@@ -109,8 +109,10 @@ them the other way round). The ``k3/on/`` entries that moves hold both answers,
 the rule: only those two rows move, only where the provider stated a different
 value, and the value they showed before is the one now beside it.
 
-A diff in this file means the equality contract is broken and the PR must be
-re-cut. It is not a file to regenerate.
+7.113.2 changes Go's host declaration: only its dialect record and four Go
+page fields (max option explanation, effort values and provenance) move.
+Their before/after expectations are recorded separately on the base tree;
+all ladder data and this historical baseline remain intact.
 """
 
 import hashlib
@@ -170,6 +172,7 @@ from my_claude_code.providers.runtime.openrouter_catalogue import (
     write_openrouter_live_cache,
 )
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.contracts.go_reasoning_expectations import corrected_expectation
 
 HERE = Path(__file__).parent
 BASELINE_PATH = HERE / "metadata_ladder_equality_baseline.json"
@@ -830,7 +833,9 @@ def _kinv_answer(value: Any, version: str = AFTER_KINV) -> Any:
     return value[version] if _is_kinv_entry(value) else value
 
 
-def _assert_unchanged(current: dict[str, Any], baseline: dict[str, Any]) -> None:
+def _assert_unchanged(
+    current: dict[str, Any], baseline: dict[str, Any], go_group: str = "metadata"
+) -> None:
     assert set(current) == {
         key
         for key in baseline
@@ -839,7 +844,8 @@ def _assert_unchanged(current: dict[str, Any], baseline: dict[str, Any]) -> None
     differing = [
         key
         for key in sorted(current)
-        if _encoded(current[key]) != _encoded(_expected(key, baseline[key]))
+        if _encoded(current[key])
+        != _encoded(corrected_expectation(go_group, key, _expected(key, baseline[key])))
     ]
     assert not differing, differing
 
@@ -853,7 +859,9 @@ def test_with_the_live_list_switched_off_nothing_changes(monkeypatch, tmp_path) 
     """A stored OpenRouter list and ``MODEL_METADATA_OPENROUTER_LIVE=false``."""
 
     baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    _assert_unchanged(recorded(snapshot(monkeypatch, tmp_path, "off")), baseline)
+    _assert_unchanged(
+        recorded(snapshot(monkeypatch, tmp_path, "off")), baseline, "metadata_off"
+    )
 
 
 def test_with_the_live_list_on_only_the_recorded_entries_move(
@@ -885,6 +893,7 @@ def test_with_the_live_list_on_only_the_recorded_entries_move(
             expected = _expected(key, baseline[key])
         else:
             expected = baseline[key]
+        expected = corrected_expectation("metadata_on", key, expected)
         if _encoded(current[key]) != _encoded(expected):
             differing.append(key)
     assert not differing, differing
