@@ -21,6 +21,10 @@ This release must reproduce every one of those records:
 
 And InferHub itself, with nothing set, makes B.AI's calls exactly: the
 generic profile, on its Chat door, for the same model id.
+
+7.113.2's approved Go reasoning correction moves only the 264 Go Chat calls
+recorded separately before production edits. Their old and corrected records
+are both checked; the original marketplace baseline is never regenerated.
 """
 
 import json
@@ -38,7 +42,8 @@ from my_claude_code.config.model_overrides import (
     ModelParameterOverrides,
     save_model_overrides,
 )
-from tests.contracts.marketplace_equality_corpus import compact, snapshot
+from tests.contracts.go_reasoning_expectations import corrections
+from tests.contracts.marketplace_equality_corpus import compact, record_digest, snapshot
 
 BASELINE_PATH = Path(__file__).with_name("marketplace_equality_baseline.json")
 
@@ -89,7 +94,18 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
     now = compact(records)
     assert now["count"] == base["count"] + 1 + 432  # + chat/inferhub
     assert set(now["groups"]) - set(base["groups"]) == {"chat/inferhub"}
-    assert _moved(now, base) == []
+    expected = corrections("market")
+    changed = {f"chat/opencode_go/{key}" for key in expected}
+    assert set(_moved(now, base)) == changed
+    for index, key in enumerate(base["keys"]):
+        entry = expected.get(key)
+        if entry is None:
+            continue
+        assert (
+            record_digest(entry["before"])
+            == base["groups"]["chat/opencode_go"]["calls"][index]
+        )
+        assert records[f"chat/opencode_go/{key}"] == entry["after"], key
     if scenario == "nothing_set":
         # InferHub unset is B.AI's call, byte for byte, on every request.
         bai = {k: v for k, v in records.items() if k.startswith("chat/bai/")}

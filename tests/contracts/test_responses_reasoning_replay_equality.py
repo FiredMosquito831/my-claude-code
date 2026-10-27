@@ -22,8 +22,9 @@ Three statements, per key:
 * on a history that carries thinking, v7.58.0's Responses body had ``<think>``
   in it and today's has none.
 
-A diff in the first statement means the equality contract is broken and the
-PR must be re-cut. The baseline is not a file to regenerate.
+7.113.2 deliberately corrects twelve Go Chat history cells to native reasoning
+replay. Their finite before/after expectations are recorded separately; every
+other historical comparison and the original baseline remain unchanged.
 """
 
 import copy
@@ -50,6 +51,7 @@ from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
 from my_claude_code.providers.openai_chat.request_policy import (
     build_openai_chat_request_body,
 )
+from tests.contracts.go_reasoning_expectations import corrected_expectation
 from tests.providers.support import passthrough_rate_limiter
 
 BASELINE_PATH = Path(__file__).with_name(
@@ -498,7 +500,10 @@ RESPONSES = sorted(
 
 @pytest.mark.parametrize("key", NON_RESPONSES)
 def test_every_other_surface_is_byte_identical_to_v7_58_0(key: str) -> None:
-    assert digest(_now()[key]) == DIGESTS[key]
+    # 7.113.2: only the twelve approved Go native-history corrections differ.
+    # The v7.58.0 baseline stays intact; every other historical byte is pinned.
+    expected = corrected_expectation("history", key, DIGESTS[key])
+    assert digest(_now()[key]) == expected
 
 
 @pytest.mark.parametrize("key", RESPONSES)

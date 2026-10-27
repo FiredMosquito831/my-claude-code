@@ -30,6 +30,10 @@ What the fixed code must reproduce, per case kind:
 The Anthropic-format surfaces (native, OpenCode's Messages door) never
 refused and must be byte-identical in every case (decision Q3).
 
+7.113.2's Go native-history correction changes one independently recorded
+Chat cell, fold_every_block. Its old baseline stays intact beside the finite
+corrected expectation; the empty-marker behavior and other surfaces stay pinned.
+
 To refresh: copy this file, ``test_tool_change_fold_equality.py`` and
 ``tests/providers/opencode_family_bodies.py`` to a base checkout and run it
 there with ``MCC_EMPTY_SYSTEM_BASELINE_WRITE=<path to the baseline>``.
@@ -71,6 +75,7 @@ from my_claude_code.providers.openai_chat import (
     create_openai_chat_provider,
 )
 from my_claude_code.providers.openai_responses import build_responses_request_body
+from tests.contracts.go_reasoning_expectations import corrected_expectation
 from tests.contracts.test_tool_change_fold_equality import (
     _session_minted,
 )
@@ -503,6 +508,10 @@ def test_every_body_that_converted_before_is_byte_identical(
         assert now.pop(added) == now[recorded], (case, added)
     assert list(now) == list(before)
     for surface, was in before.items():
+        # Go's native-history correction is separate from the empty-marker fix.
+        # Keep the old snapshot and permit only its independently pinned cell.
+        if surface == "chat_opencode_go":
+            was = corrected_expectation("empty", case, was)
         if surface in ANTHROPIC_FORMAT or kind != "marker":
             # Anthropic-format doors never change (Q3); every other case is
             # either unchanged or still refused with the very same words (Q2).

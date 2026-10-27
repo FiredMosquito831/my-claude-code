@@ -2507,6 +2507,14 @@
                   against the provider and shown on <a href="#guide-learned">Models</a>.
                 </p>
                 <p id="guide-opencode-identity">
+                  OpenCode Go's Chat endpoint preserves earlier thinking in its native
+                  <code>reasoning_content</code> field. A requested <code>max</code> is
+                  sent as <code>max</code> when the existing model checks permit it;
+                  <code>xhigh</code> still maps to <code>high</code>. Updating an
+                  existing conversation can lose a prefix-cache hit once because
+                  earlier thinking is no longer replayed as tagged answer text.
+                </p>
+                <p>
                   <strong>What changed in 7.92.2 and 7.92.3.</strong> From 2026-10-13 the
                   Zen free tier refused every request MCC sent with <code>403
                   FreeTierError</code>: it reads a creation time out of the conversation id
