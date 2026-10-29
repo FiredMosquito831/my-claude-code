@@ -501,6 +501,9 @@ class AnthropicMessagesProvider(BaseProvider):
     ) -> AsyncIterator[str]:
         tag = self._provider_name
         req_tag = f" request_id={request_id}" if request_id else ""
+        # Adopted once, like every other setting this stream reads: the flag
+        # says whether a raw frame is worth serializing at all on this request.
+        log_raw_frames = self._config.log_raw_sse_events
         # What the build took out of the client's history, recorded beside
         # every try's body: a retry never changes what the history left out.
         wire_notes: dict[str, Any] = {}
@@ -599,6 +602,16 @@ class AnthropicMessagesProvider(BaseProvider):
                     async for event in iter_anthropic_sse_frames(
                         response.aiter_bytes(), shape
                     ):
+                        if log_raw_frames:
+                            # 7.113.4: the Messages door was the one streaming
+                            # door with no raw wiring at all -- it re-points a
+                            # reader that yields the frame and discards where
+                            # it came from. ``SSE_EVENT:`` is the prefix the
+                            # raw-diagnostics sink recognises, so the frame
+                            # lands in raw-diagnostics.log with the request id
+                            # while LOG_RAW_SSE_EVENTS is on, and nothing is
+                            # written while it is off.
+                            logger.debug("SSE_EVENT: {} {}", tag, event.strip())
                         for held_event in recovery.push(event):
                             yield (
                                 held_event

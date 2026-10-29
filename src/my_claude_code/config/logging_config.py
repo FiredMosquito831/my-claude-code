@@ -11,6 +11,13 @@ caps those together with the 50 MB size rotations under
 ``SERVER_LOG_RETAIN_FILES`` -- which every size rotation applies again while
 the server runs. A restart is the commonest thing anyone needs a log to
 explain, and until 6.58.1 a restart was what destroyed it.
+
+Since 7.113.4 there is a second, narrow file: ``raw-diagnostics.log`` beside
+``server.log``, written only while one of the operator's raw diagnostics
+settings is on (``configure_raw_diagnostics`` at the bottom of this module).
+It exists because the three things those settings promised to log were written
+at DEBUG -- or, for the Responses reader, to stdout -- and so reached no file
+at all at the default ``LOG_LEVEL=INFO``.
 """
 
 import contextlib
@@ -22,6 +29,7 @@ import threading
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -674,6 +682,12 @@ def configure_logging(
 
         logger.remove()
 
+        # ``logger.remove()`` just took the raw-diagnostics sink down with
+        # every other one; forget it rather than leave an id that a later
+        # ``logger.remove(id)`` would be surprised by. ``build_asgi_app``
+        # calls ``configure_raw_diagnostics`` right after this function.
+        _forget_raw_sink()
+
         outcome, rotated = _rotate_current_log(log_path)
 
         if outcome == ROTATE_HELD:
@@ -734,3 +748,234 @@ def current_active_log_path() -> Path | None:
     if _active_sink is not None:
         return _active_sink.active_path
     return _current_path
+
+
+# ============================================================================
+# Raw diagnostics (7.113.4)
+# ============================================================================
+#
+# ``LOG_RAW_SSE_EVENTS``, ``LOG_RAW_API_PAYLOADS`` and the non-JSON half of
+# ``LOG_RAW_CLI_DIAGNOSTICS`` were not durable at the default ``LOG_LEVEL``:
+#
+# * ``core/anthropic/streaming/emitter.py`` wrote ``SSE_EVENT: ...`` at DEBUG;
+# * ``providers/openai_responses/streaming.py`` *printed* every Responses
+#   frame, which reaches no file at all when the server has no console (the
+#   desktop app and the scheduled task both run without one), and that is why
+#   a live Codex ``incomplete_details.reason`` could not be captured;
+# * ``application/execution.py`` wrote each full payload at DEBUG;
+# * ``cli/managed/claude.py`` wrote a managed CLI's non-JSON line at DEBUG.
+#
+# The two survivors of that list that this module does not own are written
+# from call sites this change deliberately does not touch (one is on the
+# frozen retry/rotation boundary, one is in the frozen ``cli/`` package), so
+# the raw file is installed as a *sink* over the records those call sites
+# already emit. A record is raw diagnostics when its message starts with one of
+# the markers below -- a prefix the call site states in its own source and a
+# reader can grep for in the file. Nothing else about any of those settings
+# changes; only where their output lands.
+#
+# ``raw-diagnostics.log`` is bounded exactly like ``server.log``: the same
+# 50 MB size rotation, the same ``SERVER_LOG_RETAIN_FILES`` retention, and the
+# same held-file fallback to ``raw-diagnostics.<pid>.log``. Its sink's own
+# level is DEBUG, so it does not depend on ``LOG_LEVEL``; nothing else in the
+# process may write to it, and no file is created at all unless one of the
+# settings is on.
+
+#: The raw-diagnostics log beside ``server.log``.
+RAW_DIAGNOSTICS_LOG_FILENAME = "raw-diagnostics.log"
+
+#: Marker written in front of every raw line, one per setting that owns it.
+RAW_MARKER_SSE = "RAW_SSE"
+RAW_MARKER_PAYLOAD = "RAW_PAYLOAD"
+RAW_MARKER_CLI = "RAW_CLI"
+
+#: A raw upstream/server-sent event, as every streaming door logs it. The
+#: Anthropic emitter has spelled its line this way since 6.x; the Responses
+#: converter's ``print`` became this same line in 7.113.4, and the Messages
+#: transport (which had no raw logging at all) gained one.
+_RAW_SSE_PREFIX = "SSE_EVENT: "
+
+#: A full API payload, one prefix per client door. The four labels are the
+#: literals ``ProviderExecutor.stream`` is called with, and
+#: ``tests/contracts/test_nvidia_nim_cli_matrix.py`` already pins the first of
+#: them.
+_RAW_PAYLOAD_PREFIXES = (
+    "FULL_PAYLOAD [",
+    "FULL_RESPONSES_PAYLOAD [",
+    "FULL_CHAT_COMPLETIONS_PAYLOAD [",
+    "FULL_GEMINI_PAYLOAD [",
+)
+
+#: A managed Claude CLI line that is not JSON. Module-qualified because the
+#: words are generic enough that another module could plausibly use them.
+_RAW_CLI_PREFIX = "Non-JSON output: "
+_RAW_CLI_MODULE = "my_claude_code.cli.managed.claude"
+
+#: What the last ``configure_raw_diagnostics`` call adopted. ``_raw_path`` is
+#: kept across an off/on cycle so a later admin save can re-enable the same
+#: file without knowing where it is.
+_raw_path: Path | None = None
+_raw_flags: tuple[bool, bool, bool, int] | None = None
+
+
+def _raw_marker(record: Any) -> str | None:
+    """Which raw setting, if any, this record belongs to."""
+
+    message = record["message"]
+    if message.startswith(_RAW_SSE_PREFIX):
+        return RAW_MARKER_SSE
+    if message.startswith(_RAW_PAYLOAD_PREFIXES):
+        return RAW_MARKER_PAYLOAD
+    if record["name"] == _RAW_CLI_MODULE and message.startswith(_RAW_CLI_PREFIX):
+        return RAW_MARKER_CLI
+    return None
+
+
+def _is_raw_record(record: Any) -> bool:
+    """The raw sink's filter: everything that is not raw diagnostics stays out.
+
+    The server log stays the file for ordinary records, and this one holds
+    only what an operator turned a raw setting on to see.
+    """
+
+    return _raw_marker(record) is not None
+
+
+def _format_field(value: str) -> str:
+    """Escape a literal for use inside the template ``_raw_record_format``
+    returns -- loguru treats that return value as a ``str.format_map``
+    template, so an unescaped brace in a request id would be read as a field.
+    """
+
+    return value.replace("{", "{{").replace("}", "}}")
+
+
+def _raw_record_format(record: Any) -> str:
+    """``RAW_<KIND> <request_id> <the record's message>``.
+
+    The marker and the request id are literals in the returned template and
+    ``{message}`` is its only field, so the message -- a JSON payload full of
+    braces, say -- is substituted as a value and never parsed as a template.
+    The request id is the one the request path bound to the logging context
+    (``api.request_ids.RequestCorrelationMiddleware``), which is the same id
+    the client saw; ``-`` when there is no request behind the record, as there
+    is not for a messaging bot or a managed CLI run.
+    """
+
+    marker = _raw_marker(record)
+    request_id = record["extra"].get("request_id") or "-"
+    return f"{marker} {_format_field(str(request_id))} {{message}}\n"
+
+
+class _RawDiagnosticsSink:
+    """One physical line per raw record, into a size-rotated file.
+
+    Wraps :class:`_ServerLogSink`, so the raw file inherits ``server.log``'s
+    whole bounding story -- 50 MB rotation, ``SERVER_LOG_RETAIN_FILES``
+    retention on every rotation, and the per-process fallback when another
+    process holds the file. All this class adds is the line normalization: an
+    SSE frame and a prompt that contains a newline both arrive multi-line, and
+    the file is meant to be one record per line and greppable by marker.
+    """
+
+    def __init__(self, path: Path, *, retain_files: int = _default_retain_files):
+        self._file = _ServerLogSink(path, retain_files=retain_files)
+
+    @property
+    def active_path(self) -> Path:
+        return self._file.active_path
+
+    def write(self, message: object) -> None:
+        text = str(message)
+        if text.endswith("\n"):
+            text = text[:-1]
+        self._file.write(text.replace("\r", "\\r").replace("\n", "\\n") + "\n")
+
+    def flush(self) -> None:
+        self._file.flush()
+
+    def stop(self) -> None:
+        self._file.stop()
+
+
+#: The installed sink and its loguru id, or ``None`` when no raw setting is on.
+_raw_sink_id: int | None = None
+_raw_sink: _RawDiagnosticsSink | None = None
+
+
+def _forget_raw_sink() -> None:
+    """Drop the module's reference without touching loguru.
+
+    Used where ``logger.remove()`` has already stopped the sink, so calling
+    ``logger.remove(id)`` again would raise for an id loguru no longer knows.
+    """
+
+    global _raw_sink_id, _raw_sink
+    _raw_sink_id = None
+    _raw_sink = None
+
+
+def _stop_raw_sink() -> None:
+    global _raw_sink_id, _raw_sink
+    if _raw_sink_id is not None:
+        # A test (or a second ``configure_logging(force=True)``) may have
+        # removed the handler already; the id is ours to remove at most once.
+        with contextlib.suppress(ValueError):
+            logger.remove(_raw_sink_id)
+    _raw_sink_id = None
+    _raw_sink = None
+
+
+def configure_raw_diagnostics(
+    log_file: str | Path | None = None,
+    *,
+    sse: bool = False,
+    payloads: bool = False,
+    cli: bool = False,
+    retain_files: int = _default_retain_files,
+) -> bool:
+    """Point the raw-diagnostics file at the operator's settings.
+
+    Called by ``runtime.bootstrap`` after ``configure_logging`` (which removes
+    every existing sink, this one included) and again by the admin apply path
+    with no path, so a saved change to one of the three settings takes effect
+    without a restart. ``log_file=None`` reuses the path adopted by the first
+    call; before any call with a path this is a no-op and returns ``False``.
+
+    With all three off nothing exists: no sink, no file, no directory, no
+    write on any log path. The file is created by the first call that turns
+    one on, because that is exactly when the operator asked for it.
+
+    Returns whether the settings are now in force (``True``) or there is no
+    path to put them in (``False``).
+    """
+
+    global _raw_path, _raw_flags, _raw_sink_id, _raw_sink
+
+    path = Path(log_file).expanduser().resolve() if log_file is not None else _raw_path
+    if path is None:
+        return False
+    flags = (bool(sse), bool(payloads), bool(cli), max(0, int(retain_files)))
+    if path == _raw_path and flags == _raw_flags:
+        return True
+
+    _stop_raw_sink()
+    _raw_path = path
+    _raw_flags = flags
+    if not any(flags[:3]):
+        return True
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sink = _RawDiagnosticsSink(path, retain_files=flags[3])
+    _raw_sink_id = logger.add(
+        sink,
+        level="DEBUG",
+        format=_raw_record_format,
+        filter=_is_raw_record,
+        enqueue=True,
+    )
+    _raw_sink = sink
+    # A directory left huge by an earlier install is trimmed on the next
+    # start, exactly as ``server.log``'s rotations are.
+    _sweep_rotated_logs(path, flags[3], exclude=sink.active_path)
+    return True

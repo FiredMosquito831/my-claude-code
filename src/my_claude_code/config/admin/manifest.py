@@ -1925,7 +1925,8 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Write the full request and response bodies of every API call to the server "
             "log. The most useful setting for diagnosing a provider that misbehaves, and "
             "the most dangerous: prompts, file contents and tool output all land on disk "
-            "in clear text. Applies on Save."
+            "in clear text. They go to logs/raw-diagnostics.log beside the server log, "
+            "which rotates and is pruned like it. Applies on Save."
         ),
     ),
     ConfigFieldSpec(
@@ -1937,9 +1938,13 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="false",
         advanced=True,
         description=(
-            "Write every raw server-sent event from a streaming provider to the log. Use "
-            "it when a stream truncates or a tool call arrives malformed; the volume is "
-            "large and the events carry the answer text."
+            "Write every raw server-sent event from a streaming provider to "
+            "logs/raw-diagnostics.log, one line per event, tagged with the request id. "
+            "Use it when a stream truncates or a tool call arrives malformed; the volume "
+            "is large and the events carry the answer text. This is the setting to turn "
+            "on when a provider truncates or reports a reason you cannot see: the frames "
+            "are kept even when the server has no console and even at the default log "
+            "level. Applies on Save."
         ),
     ),
     ConfigFieldSpec(
@@ -1991,7 +1996,9 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         restart_scope="messaging",
         description=(
             "Write the managed Claude Code CLI's own stderr diagnostics to the server "
-            "log. Use it when the managed CLI fails to start or exits without saying why. "
+            "log, including its lines that are not JSON, which also go to "
+            "logs/raw-diagnostics.log so they survive a server with no console. Use it "
+            "when the managed CLI fails to start or exits without saying why. "
             "Requires a restart only while a Telegram or Discord bot is running, "
             "because the bot is built once with this value; with no bot running, Save "
             "applies it."

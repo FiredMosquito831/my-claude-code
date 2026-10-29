@@ -710,6 +710,13 @@ runs at startup as well as on each rotation, so lowering the number cleans up a
 backlog on the next restart. `logs/requests.db` is the request-analytics
 database and is never touched by log rotation.
 
+The raw diagnostics settings — `LOG_RAW_SSE_EVENTS`, `LOG_RAW_API_PAYLOADS` and
+the non-JSON lines of `LOG_RAW_CLI_DIAGNOSTICS` — write one line per record to
+`logs/raw-diagnostics.log`, tagged with the request id and rotated and pruned
+exactly like `server.log`; the file is created only while one of those settings
+is on, and it holds prompt text, answer text and tool output in clear text, so
+turn them off again once the problem is captured.
+
 **`server.<pid>.log` appeared next to `server.log`.**
 Since 7.69.6, if the startup rotation or the 50 MB size rotation cannot rename
 `server.log` aside — another My Claude Code process on this machine already

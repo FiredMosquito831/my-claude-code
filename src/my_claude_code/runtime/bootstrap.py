@@ -6,7 +6,11 @@ from pathlib import Path
 
 from my_claude_code.api.app import create_app
 from my_claude_code.api.ports import ApiServices
-from my_claude_code.config.logging_config import configure_logging
+from my_claude_code.config.logging_config import (
+    RAW_DIAGNOSTICS_LOG_FILENAME,
+    configure_logging,
+    configure_raw_diagnostics,
+)
 from my_claude_code.config.paths import server_log_path
 from my_claude_code.config.settings import Settings
 from my_claude_code.messaging.transcription import TranscriptionService
@@ -37,6 +41,16 @@ def build_asgi_app(
         log_path,
         level=settings.log_level,
         verbose_third_party=settings.log_raw_api_payloads,
+        retain_files=settings.server_log_retain_files,
+    )
+    # After ``configure_logging``, which removes every sink and would take this
+    # one with it. Beside the server log, so ``LOG_FILE`` moves both, and inert
+    # -- no file, no sink -- unless one of the three raw settings is on.
+    configure_raw_diagnostics(
+        log_path.with_name(RAW_DIAGNOSTICS_LOG_FILENAME),
+        sse=settings.log_raw_sse_events,
+        payloads=settings.log_raw_api_payloads,
+        cli=settings.log_raw_cli_diagnostics,
         retain_files=settings.server_log_retain_files,
     )
     # After logging, so its one line lands in server.log; before uvicorn makes

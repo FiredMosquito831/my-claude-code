@@ -6964,6 +6964,17 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   start.
                 </p>
                 <p class="guide-note">
+                  <strong>The raw diagnostics settings now write to a file you can
+                  open.</strong> Until 7.113.4 the raw SSE setting printed to a console
+                  the desktop app does not have, and the raw API payload setting logged
+                  at a level the default log level drops, so turning either one on
+                  produced nothing you could read. Both now write one line per event to
+                  <code>logs/raw-diagnostics.log</code> beside
+                  <code>server.log</code>, tagged with the request id and rotated and
+                  pruned the same way, and the file is created only while one of them is
+                  on. It holds prompt text, answer text and tool output in clear text.
+                </p>
+                <p class="guide-note">
                   <strong>An update can no longer race itself.</strong> Until 6.58.3
                   the helper moved every launcher aside before installing,
                   <code>mcc-desktop</code> included &mdash; the one the desktop window

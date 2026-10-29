@@ -12,6 +12,8 @@ import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 
+from loguru import logger
+
 from my_claude_code.core.anthropic.openai_tool_names import OpenAIToolNameCodec
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.anthropic.thinking import (
@@ -150,10 +152,22 @@ class ResponsesStreamConverter:
         self._finished = False
 
     def _log_event(self, event: dict[str, Any]) -> None:
-        if self._log_raw_events:
-            import json
+        """Write one raw upstream frame where an operator can actually read it.
 
-            print(json.dumps({"responses_event": event}, default=str))
+        Until 7.113.4 this was ``print(json.dumps(...))``. With a console that
+        is noise nobody keeps; without one -- the desktop app, the scheduled
+        task, any launched server -- it reaches nowhere at all, which is why a
+        live Codex ``incomplete_details.reason`` survived four reproductions
+        and arrived nowhere. ``SSE_EVENT:`` is the prefix the raw-diagnostics
+        sink in ``config/logging_config.py`` recognises, so with
+        ``LOG_RAW_SSE_EVENTS`` on the frame lands in ``raw-diagnostics.log``
+        tagged with the request id, and with it off nothing is written.
+        """
+
+        if self._log_raw_events:
+            logger.debug(
+                "SSE_EVENT: responses_event {}", json.dumps(event, default=str)
+            )
 
     def feed(self, event: dict[str, Any]) -> Iterator[str]:
         """Yield Anthropic SSE events for one Responses API event."""
