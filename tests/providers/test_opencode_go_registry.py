@@ -235,10 +235,21 @@ def test_an_unknown_provider_falls_through_to_the_floor() -> None:
 
 
 def test_the_page_names_the_same_seven_moves() -> None:
-    """The page reads the same resolver; its labels are the visible receipt."""
+    """The page reads the same resolver; its labels are the visible receipt.
+
+    7.114.0 adds one steady-state move on top of 7.113.5's seven:
+    ``muse-spark-1.3-contributor`` has a measured multi-door set, and the page
+    -- which has no request in flight, so no client preference -- shows the
+    first door the measurement was authored with, Messages. Its sibling
+    ``muse-spark-1.2-contributor`` was never measured and keeps Responses.
+    """
 
     _install()
-    for model_id in MOVED_TO_RESPONSES:
+    first = response_surface_payload("opencode_go", "muse-spark-1.3-contributor")
+    assert first is not None
+    assert first["value"] == "messages"
+    assert first["source"] == "measured"
+    for model_id in ("muse-spark-1.2-contributor",):
         row = response_surface_payload("opencode_go", model_id)
         assert row is not None, model_id
         assert row["label"] == "responses (registry)", model_id

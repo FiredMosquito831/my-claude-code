@@ -24227,6 +24227,20 @@
   "bytes": 6956,
   "sha256": "9ca00cd61aed92417a561ded334d7147f7814525bb3c392b9e153a47c6dbf43f"
  },
+ "ocgo2/opencode_go/muse-spark-1.3-contributor": {
+  "v7.113.5": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  },
+  "v7.114.0": {
+   "detail": "measured 2026-10-29",
+   "label": "messages (measured)",
+   "source": "measured",
+   "surface": "messages"
+  }
+ },
  "page": {
   "v7.113.4": {
    "bytes": 201619,

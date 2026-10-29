@@ -395,7 +395,9 @@ async def test_a_bare_500_on_chat_probes_responses_and_remembers_it() -> None:
     facts = learned_fact_store().facts_for_model("opencode", "m")
     surface_facts = [f for f in facts if f.fact_kind == "response_surface"]
     assert len(surface_facts) == 1
-    assert surface_facts[0].value == "responses"
+    # 7.114.0: a learned row is the *set* of doors still worth trying. For a
+    # model with one known door that is the proved surface and nothing else.
+    assert surface_facts[0].value == ["responses"]
     assert surface_facts[0].source == "probe"
     assert _resolve("m").source is ResponseSurfaceSource.LEARNED
 
@@ -570,7 +572,7 @@ async def test_a_country_refusal_on_a_guessed_door_still_probes_and_learns(
         for fact in learned_fact_store().facts_for_model("opencode", "m")
         if fact.fact_kind == "response_surface"
     ]
-    assert surface_facts == [("responses", "probe")]
+    assert surface_facts == [(["responses"], "probe")]
 
 
 @pytest.mark.asyncio
@@ -635,15 +637,30 @@ async def test_a_registry_responses_model_goes_straight_to_responses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_unservable_model_fails_with_the_reason_and_stays_listed() -> None:
+async def test_an_unservable_model_is_refused_where_the_host_did_not_opt_in() -> None:
+    """7.114.0 moves the refusal behind ``optimistic_first_try``.
+
+    The two OpenCode profiles opt in -- the model is probed instead (see
+    ``test_surface_ladder.py``) -- and every host that does not keeps this
+    sentence, byte for byte.
+    """
+
+    from dataclasses import replace
+
     _write_registry(**{"gemini-3.8-flash": _npm("@ai-sdk/google")})
-    provider = _provider()
+    provider: Any = create_openai_chat_provider(
+        "opencode",
+        ProviderConfig(api_key="sk-test", base_url="https://opencode.ai/zen/v1"),
+        passthrough_rate_limiter(),
+        profile=replace(OPENAI_CHAT_PROFILES["opencode"], optimistic_first_try=False),
+    )
     provider._responses_transport = _FakeResponses()
 
     with pytest.raises(ApplicationUnavailableError) as caught:
         await _drain(provider.stream_response(_request("gemini-3.8-flash")))
 
     assert "Google" in str(caught.value)
+    # The catalogue still lists it, with the same reason.
     assert _resolve("gemini-3.8-flash").surface is ResponseSurface.UNSERVABLE
 
 

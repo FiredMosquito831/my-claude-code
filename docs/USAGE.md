@@ -3421,17 +3421,33 @@ error` that names nothing (the vendor's own open issue
 calls it a missing `WrongEndpointError`). Every MCC release before 6.74.0
 spoke Chat Completions to all of them, which is exactly what those 500s were.
 
-MCC now resolves the endpoint per model, from five sources, strongest first:
+MCC now resolves the endpoint per model, from six sources, strongest first:
 
 | Shown as | Where it came from |
 | --- | --- |
 | `responses (override)` | you wrote `"response_surface"` into `model_overrides.json` |
 | `responses (learned)` | MCC probed this deployment and the endpoint answered |
+| `messages (measured)` | a dated measurement of this deployment, shipped with the build (7.114.0) |
 | `responses (registry)` | the vendor's published registry, already cached from models.dev |
 | `chat_completions (profile)` | nobody said otherwise, and this host serves more than one endpoint, so its profile names the one to knock on first |
 | `chat_completions (default)` | nobody said otherwise, and this host has only one endpoint anyway |
 
-The fourth row is the one a **fresh or keyless install** sees, because its
+Since 7.114.0 a model may be **known to answer on more than one endpoint** —
+`muse-spark-1.3-contributor` on OpenCode Go was measured on Messages and
+Responses both — and the order depends on what your client speaks: an
+Anthropic-format request (`/v1/messages`) asks Messages first, then Responses,
+then Chat Completions; an OpenAI-format one asks Responses first, then Chat
+Completions, then Messages. The order never removes an endpoint, and a model
+with one known endpoint resolves exactly where it did before. A known endpoint
+that answers wrong (a 4xx naming an endpoint, a bare 500, or a 404 on an
+endpoint MCC only guessed at) is dropped from that model's set for seven days
+and the request is served from the next one **inside the same attempt**; the
+Models page's *Forget* re-opens it at once. A 429, a timeout, a credit refusal
+or a country refusal teaches nothing. A model the vendor places on an API this
+proxy cannot speak (`@ai-sdk/google`) is probed once on first use instead of
+being refused, and the answer is remembered.
+
+The `chat_completions (profile)` row is the one a **fresh or keyless install** sees, because its
 models.dev cache has not been fetched yet — as does any install whose fetch
 failed. The note beside it says which silence produced it: *no registry entry
 for this model*, or *no cached copy of the vendor's registry yet*. Both

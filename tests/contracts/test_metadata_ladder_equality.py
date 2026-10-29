@@ -131,6 +131,23 @@ the moved set is exactly those ten entries, the surface row is the only field
 inside a capability panel that moves, and no price, kind, canonical encoding,
 record, routing lookup, harness catalogue, ``/v1/models`` or ``/v1beta/models``
 entry moves at all.
+
+**7.114.0 (OCGO-2) makes a model's known doors a set ordered by the inbound
+client family, on purpose.** ``opencode_go/muse-spark-1.3-contributor``
+carries a dated measurement (2026-10-29) that watched it answer on Messages
+and Responses both, so a ``/v1/messages`` client asks Messages first, an
+OpenAI-format one asks Responses first, and a caller with no request in flight
+-- the Models page -- keeps the measurement's own order and shows Messages.
+That is one model's first door, and it is the only steady-state move in this
+release. The fixture does not carry that model, so nothing in the snapshot can
+move: every entry above is byte-identical to 7.113.5, held by
+``test_every_output_is_byte_identical_to_v7_78_10``. The move itself is
+recorded beside the snapshot under ``ocgo2/`` -- both answers, ``v7.113.5`` and
+``v7.114.0`` -- and
+``test_7_114_0_moves_only_the_muse_row_for_anthropic_clients`` holds the rule:
+that key is the only one of its kind, its two answers are what this tree's
+resolver gives, and the sibling ``muse-spark-1.2-contributor`` (never measured)
+keeps its registry door.
 """
 
 import hashlib
@@ -170,11 +187,13 @@ from my_claude_code.application.model_metadata import (
 from my_claude_code.config.model_overrides import ModelParameterOverrides
 from my_claude_code.config.model_refs import configured_chat_model_refs
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.client_family import ClientFamily
 from my_claude_code.providers.commandcode.models import extract_commandcode_model_infos
 from my_claude_code.providers.model_listing import (
     extract_openai_model_infos,
     extract_openrouter_tool_model_infos,
 )
+from my_claude_code.providers.openai_chat import resolve_surface_ladder
 from my_claude_code.providers.openai_chat.profiles import (
     OPENAI_CHAT_PROFILES,
     OpenAIModelListing,
@@ -182,6 +201,7 @@ from my_claude_code.providers.openai_chat.profiles import (
 from my_claude_code.providers.runtime.models_dev import (
     enrich_model_infos,
     read_models_dev_cache,
+    reset_models_dev_payload_cache,
     write_models_dev_cache,
 )
 from my_claude_code.providers.runtime.openrouter_catalogue import (
@@ -256,6 +276,14 @@ AFTER_K4 = "v7.83.0"
 #: floor to the door Go's registry publishes. See the module docstring.
 BEFORE_OCGO1 = "v7.113.4"
 AFTER_OCGO1 = "v7.113.5"
+
+#: 7.114.0 (OCGO-2): the one row the client-family ladder moves in steady
+#: state, recorded beside the snapshot rather than inside it. The fixture does
+#: not carry this model, so nothing in the snapshot can move -- which is half
+#: the proof -- and the move itself is pinned here, both answers.
+OCGO2_PREFIX = "ocgo2/"
+BEFORE_OCGO2 = "v7.113.5"
+AFTER_OCGO2 = "v7.114.0"
 #: The record fields 7.83.0 fills from the row's own statement.
 K4_RECORD_FIELDS = (
     "context_length",
@@ -826,7 +854,13 @@ def _is_ocgo1_entry(value: Any) -> bool:
     return isinstance(value, dict) and set(value) == {BEFORE_OCGO1, AFTER_OCGO1}
 
 
+def _is_ocgo2_entry(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {BEFORE_OCGO2, AFTER_OCGO2}
+
+
 def _expected(key: str, value: Any) -> Any:
+    if _is_ocgo2_entry(value):
+        return value[AFTER_OCGO2]
     if _is_ocgo1_entry(value):
         return value[AFTER_OCGO1]
     if _is_k4_entry(value):
@@ -854,6 +888,12 @@ def _is_kor_key(key: str) -> bool:
     """An entry that exists only while OpenRouter's live list is on (7.84.0)."""
 
     return key.startswith((KOR_PREFIX, KOR_SUBSTITUTED))
+
+
+def _is_ocgo2_key(key: str) -> bool:
+    """Recorded beside the snapshot, never produced by it (7.114.0)."""
+
+    return key.startswith(OCGO2_PREFIX)
 
 
 def _is_k3_key(key: str) -> bool:
@@ -884,7 +924,10 @@ def _assert_unchanged(
     assert set(current) == {
         key
         for key in baseline
-        if not _is_kor_key(key) and not _is_k3_key(key) and not _is_kinv_key(key)
+        if not _is_kor_key(key)
+        and not _is_k3_key(key)
+        and not _is_kinv_key(key)
+        and not _is_ocgo2_key(key)
     }
     differing = [
         key
@@ -922,7 +965,10 @@ def test_with_the_live_list_on_only_the_recorded_entries_move(
     plain = {
         key
         for key in baseline
-        if not _is_kor_key(key) and not _is_k3_key(key) and not _is_kinv_key(key)
+        if not _is_kor_key(key)
+        and not _is_k3_key(key)
+        and not _is_kinv_key(key)
+        and not _is_ocgo2_key(key)
     }
     assert moved <= plain
     assert set(current) == plain | {
@@ -1550,3 +1596,127 @@ def test_7_113_5_moves_only_the_opencode_go_registry_answers() -> None:
         or key in {"v1/models", "v1beta/models", PICKER_KINDS_KEY}
         or "serialiser/" in key
     ], sorted(moved)
+
+
+#: Where 7.114.0 records the one row the client-family ladder moves.
+OCGO2_MUSE_KEY = OCGO2_PREFIX + "opencode_go/muse-spark-1.3-contributor"
+OCGO2_MUSE = "muse-spark-1.3-contributor"
+#: The Go profile's registry, as the models.dev copy files it (trimmed to the
+#: ``provider.npm`` the resolver reads, in ``tests/providers/``).
+OCGO2_BUCKETS_PATH = HERE.parent / "providers" / "opencode_go_registry_buckets.json"
+
+
+def test_7_114_0_moves_only_the_muse_row_for_anthropic_clients(
+    monkeypatch, tmp_path
+) -> None:
+    """The one steady-state move 7.114.0 makes, over every recorded entry.
+
+    7.113.5 gave OpenCode Go its own registry bucket, so
+    ``muse-spark-1.3-contributor`` resolved to the door the vendor publishes
+    -- Responses. 7.114.0 ships a dated measurement of that model that watched
+    it answer on Messages and Responses both, and the client-family ladder
+    puts Messages first for a ``/v1/messages`` client, Responses first for an
+    OpenAI-format one, and the measurement's own authored order (Messages) for
+    a caller with no request in flight -- the Models page.
+
+    Two halves, and the second is the stronger one:
+
+    * the recorded move is exactly the one entry under ``ocgo2/``, and the
+      stored before and after are what this tree's resolver answers -- so a
+      future move has to add an entry and say so;
+    * **nothing else in the baseline moves**: the fixture does not carry this
+      model, so every other output -- 52 ``response_surface`` panels, every
+      price, kind, canonical encoding, routing lookup, harness catalogue,
+      ``/v1/models`` and ``/v1beta/models`` -- is byte-identical to 7.113.5,
+      which ``test_every_output_is_byte_identical_to_v7_78_10`` re-proves on
+      every run.
+    """
+
+    from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {key: value for key, value in baseline.items() if _is_ocgo2_entry(value)}
+    assert set(moved) == {OCGO2_MUSE_KEY}, sorted(moved)
+
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
+    write_models_dev_cache(json.loads(OCGO2_BUCKETS_PATH.read_text(encoding="utf-8")))
+    reset_models_dev_payload_cache()
+    profile = OPENAI_CHAT_PROFILES["opencode_go"]
+    assert profile.measured_surfaces and profile.optimistic_first_try
+
+    def answer(family: ClientFamily | None, measured: Any) -> dict[str, str]:
+        ladder = resolve_surface_ladder(
+            "opencode_go",
+            OCGO2_MUSE,
+            client_family=family,
+            registry_provider=profile.surface_registry_provider,
+            declared=profile.response_surfaces,
+            no_information=profile.no_information_surface,
+            by_upstream=profile.surface_by_upstream,
+            measured=measured,
+        )
+        primary = ladder.primary
+        return {
+            "surface": primary.surface.value,
+            "source": primary.source.value,
+            "label": primary.label,
+            "detail": primary.detail,
+        }
+
+    before = answer(ClientFamily.UNKNOWN, ())
+    after_page = answer(None, profile.measured_surfaces)
+    after_anthropic = answer(ClientFamily.ANTHROPIC, profile.measured_surfaces)
+    after_openai = answer(ClientFamily.OPENAI, profile.measured_surfaces)
+
+    # The 7.113.5 answer: the vendor's registry, Responses.
+    assert before == {
+        "surface": "responses",
+        "source": "registry",
+        "label": "responses (registry)",
+        "detail": "@ai-sdk/openai",
+    }
+    # The Models page has no client preference: the measurement's own order.
+    assert after_page == {
+        "surface": "messages",
+        "source": "measured",
+        "label": "messages (measured)",
+        "detail": "measured 2026-10-29",
+    }
+    # The move, and who it is for.
+    assert after_anthropic["surface"] == "messages"
+    assert after_anthropic["label"] == "messages (measured)"
+    assert after_openai["surface"] == "responses"
+    assert after_openai["label"] == "responses (measured)"
+
+    entry = moved[OCGO2_MUSE_KEY]
+    assert entry[BEFORE_OCGO2] == before
+    assert entry[AFTER_OCGO2] == after_page
+
+    # One row, and the same three doors offered before and after (the ladder
+    # orders them; it never removes one).
+    ladder = resolve_surface_ladder(
+        "opencode_go",
+        OCGO2_MUSE,
+        client_family=ClientFamily.ANTHROPIC,
+        registry_provider=profile.surface_registry_provider,
+        declared=profile.response_surfaces,
+        no_information=profile.no_information_surface,
+        measured=profile.measured_surfaces,
+    )
+    assert [candidate.surface.value for candidate in ladder.candidates] == [
+        "messages",
+        "responses",
+        "chat_completions",
+    ]
+    # And the sibling that was never measured keeps its registry door.
+    sibling = resolve_surface_ladder(
+        "opencode_go",
+        "muse-spark-1.2-contributor",
+        client_family=ClientFamily.ANTHROPIC,
+        registry_provider=profile.surface_registry_provider,
+        declared=profile.response_surfaces,
+        no_information=profile.no_information_surface,
+        measured=profile.measured_surfaces,
+    )
+    assert len(sibling.candidates) == 1
+    assert sibling.primary.label == "responses (registry)"

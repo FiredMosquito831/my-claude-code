@@ -109,6 +109,7 @@ from my_claude_code.providers.recovery import (
     learned_fact_store,
     region_refusal_on_cause_chain,
     surface_shaped_failure,
+    upstream_status_code,
 )
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 from my_claude_code.providers.stream_recovery import (
@@ -143,9 +144,10 @@ from .prompt_cache import (
 )
 from .request_policy import build_openai_chat_request_body, chat_tool_schema_note
 from .response_surface import (
+    ResolvedSurfaceLadder,
     alternative_surfaces,
-    remember_response_surface,
-    resolve_response_surface,
+    remember_response_surfaces,
+    resolve_surface_ladder,
 )
 from .responses_transport import (
     PROBE_MAX_OUTPUT_TOKENS,
@@ -1134,13 +1136,27 @@ class OpenAIChatProvider(BaseProvider):
     def resolved_surface(self, model_id: str) -> ResolvedResponseSurface:
         """Which endpoint this provider will use for one model, and why."""
 
-        return resolve_response_surface(
+        return self.resolved_surface_ladder(model_id).primary
+
+    def resolved_surface_ladder(self, model_id: str) -> ResolvedSurfaceLadder:
+        """Every door MCC knows serves one model, in the order to try them.
+
+        The client family is read from the request in flight
+        (``core.client_family``), so a Claude Code request and an OpenAI-format
+        one against the same model can start on different doors. Outside a
+        request -- the Models page, an admin call, a probe -- the family is
+        ``UNKNOWN`` and the order is the discovery order, exactly as it was.
+        """
+
+        return resolve_surface_ladder(
             self._provider_id,
             model_id,
             registry_provider=self._profile.surface_registry_provider,
             declared=self._profile.response_surfaces,
             no_information=self._profile.no_information_surface,
             by_upstream=self._profile.surface_by_upstream,
+            measured=self._profile.measured_surfaces,
+            optimistic=self._profile.optimistic_first_try,
         )
 
     async def _stream_across_surfaces(
@@ -1171,26 +1187,92 @@ class OpenAIChatProvider(BaseProvider):
         request goes straight to the right door; a failure on every surface is
         the ordinary upstream failure, raised as it always was, and the model
         keeps its place in the catalogue.
+
+        7.114.0 makes the door a *ladder*. A model can be known to answer on
+        more than one endpoint -- a dated measurement, or a learned set -- and
+        the candidates are tried in the order the inbound client family
+        prefers, **inside this one attempt**, so a wrong door costs a failed
+        call and not the request: the door that answered wrong is pruned from
+        the learned set for seven days and the next candidate carries the
+        client's request. A door MCC is only *guessing* at (a model the vendor
+        places on an API this build cannot speak) is asked one ~16-token probe
+        first, never the client's request. Nothing here changes which model is
+        tried, the retry ladder, the credential pool or ``route_health``.
         """
 
         request = self.with_stand_ins(request)
-        resolved = self.resolved_surface(request.model)
-        if resolved.surface is ResponseSurface.UNSERVABLE:
+        ladder = self.resolved_surface_ladder(request.model)
+        if ladder.primary.surface is ResponseSurface.UNSERVABLE:
+            # Every profile whose ``optimistic_first_try`` is off -- 41 of the
+            # 43 -- keeps this refusal byte for byte. An opted-in host never
+            # reaches it: its ladder is the guess plus the floor (7.114.0).
             raise ApplicationUnavailableError(
                 f"{self._provider_name} cannot serve {request.model}: "
-                f"{resolved.detail or 'no surface this provider speaks'}."
+                f"{ladder.primary.detail or 'no surface this provider speaks'}."
             )
 
+        # The known doors at resolution time, in try order. A fact another
+        # request learns meanwhile cannot change what this one walks.
+        known = [candidate.surface for candidate in ladder.candidates]
         attempted: list[ResponseSurface] = []
-        surface = resolved.surface
-        label = resolved.label
+        index = 0
+        candidate = ladder.candidates[0]
+        surface = candidate.surface
+        label = candidate.label
         # Whether the door being knocked on is one MCC *knows* serves this
-        # model -- the operator named it, a probe proved it, or the vendor's
-        # registry published it -- rather than the profile's guess. Read from
-        # the source the door was chosen by, not re-resolved later, so a fact
-        # another request learns meanwhile cannot change what this one tried.
-        door_known = resolved.source in _KNOWN_SURFACE_SOURCES
+        # model -- the operator named it, a probe proved it, a measurement
+        # watched it answer, or the vendor's registry published it -- rather
+        # than the profile's guess. Read from the source the door was chosen
+        # by, not re-resolved later.
+        door_known = candidate.source in _KNOWN_SURFACE_SOURCES
         while True:
+            if candidate.guessed:
+                # The unservable-probe: the vendor named an API this build
+                # cannot speak, so the door MCC can speak is a guess until it
+                # answers. It is asked one tiny question first -- the client's
+                # tools and context never reach a wrong path -- and the answer
+                # is remembered either way.
+                failure = await self._probe_guessed_surface(request.model, surface)
+                if failure is None:
+                    remember_response_surfaces(
+                        self._provider_id,
+                        request.model,
+                        known,
+                        evidence="a probe of a guessed door answered",
+                    )
+                else:
+                    evidence = _surface_failure_evidence(failure, guessed=True)
+                    if evidence is None:
+                        # 429, timeout, credit 401: an ordinary failure, and
+                        # the ordinary handling. Nothing is learned from it.
+                        raise failure
+                    attempted.append(surface)
+                    logger.warning(
+                        "{}_STREAM: {} does not serve {} on {} either ({}); "
+                        "falling back to {}",
+                        self._provider_name,
+                        surface.value,
+                        request.model,
+                        label,
+                        evidence,
+                        ladder.candidates[index + 1].surface.value
+                        if index + 1 < len(ladder.candidates)
+                        else "nothing",
+                    )
+                    if index + 1 >= len(ladder.candidates):
+                        raise failure
+                    remember_response_surfaces(
+                        self._provider_id,
+                        request.model,
+                        known[index + 1 :],
+                        evidence=evidence,
+                    )
+                    index += 1
+                    candidate = ladder.candidates[index]
+                    surface = candidate.surface
+                    label = candidate.label
+                    door_known = candidate.source in _KNOWN_SURFACE_SOURCES
+                    continue
             attempted.append(surface)
             committed = False
             try:
@@ -1207,7 +1289,9 @@ class OpenAIChatProvider(BaseProvider):
                     yield event
                 return
             except Exception as error:
-                evidence = _surface_failure_evidence(error)
+                # On a guessed door a 404 is wrong-door evidence too: nothing
+                # vouched for the path, so "not here" is a statement about it.
+                evidence = _surface_failure_evidence(error, guessed=not door_known)
                 if committed or evidence is None:
                     raise
                 if door_known and region_refusal_on_cause_chain(error):
@@ -1229,8 +1313,35 @@ class OpenAIChatProvider(BaseProvider):
                         surface.value,
                     )
                     raise
+                if index + 1 < len(ladder.candidates):
+                    # 7.114.0. Another *known* door remains, so the client's
+                    # request moves to it inside this attempt -- no probe, and
+                    # the door that answered wrong is remembered as gone for
+                    # seven days. The last candidate keeps today's probe rung.
+                    logger.warning(
+                        "{}_STREAM: {} refused {} on {} in a way that names the "
+                        "endpoint ({}); serving it from {}",
+                        self._provider_name,
+                        request.model,
+                        surface.value,
+                        label,
+                        evidence,
+                        ladder.candidates[index + 1].label,
+                    )
+                    remember_response_surfaces(
+                        self._provider_id,
+                        request.model,
+                        known[index + 1 :],
+                        evidence=evidence,
+                    )
+                    index += 1
+                    candidate = ladder.candidates[index]
+                    surface = candidate.surface
+                    label = candidate.label
+                    door_known = candidate.source in _KNOWN_SURFACE_SOURCES
+                    continue
                 learned = await self._probe_for_another_surface(
-                    request.model, surface, attempted, evidence
+                    request.model, surface, attempted, evidence, known=known
                 )
                 if learned is None:
                     raise
@@ -1239,6 +1350,32 @@ class OpenAIChatProvider(BaseProvider):
                     learned, ResponseSurfaceSource.LEARNED, "proved by a probe"
                 ).label
                 door_known = True
+
+    async def _probe_guessed_surface(
+        self, model_id: str, surface: ResponseSurface
+    ) -> Exception | None:
+        """Ask a door MCC is guessing at one tiny question.
+
+        ``None`` means it answered and the client's request may follow it.
+        Any exception is returned rather than raised so the caller can decide
+        whether the host's answer was about the endpoint -- the same evidence
+        test every other door goes through -- before it falls back. The probe
+        is MCC's own question, so it carries neither the client's tools nor
+        its context, and it is not counted as a rung of the client's ladder.
+        """
+
+        logger.warning(
+            "{}_STREAM: {} has no known door; asking {} first",
+            self._provider_name,
+            model_id,
+            surface.value,
+        )
+        with paused_wire_trace(), paused_ladder():
+            try:
+                await self._probe_surface(surface, model_id)
+            except Exception as error:
+                return error
+        return None
 
     def _stream_on_surface(
         self,
@@ -1295,12 +1432,20 @@ class OpenAIChatProvider(BaseProvider):
         failed: ResponseSurface,
         attempted: list[ResponseSurface],
         evidence: str,
+        *,
+        known: Iterable[ResponseSurface] = (),
     ) -> ResponseSurface | None:
         """Ask the other endpoint one tiny question, and remember the answer.
 
         ``None`` means nothing else is worth trying, and the caller re-raises
         the host's own failure -- which is the point: a surface MCC could not
         prove never becomes a reason to stop offering a model.
+
+        The fact written is ``(known - attempted) + [proved]``: since 7.114.0
+        a learned row is a set, and every door the ladder knew but never got to
+        is still worth trying on the next request. For a model with one known
+        door -- every model but one -- that is exactly the proved surface and
+        nothing else, which is what 7.113 wrote.
         """
 
         candidates = [
@@ -1337,8 +1482,11 @@ class OpenAIChatProvider(BaseProvider):
                         type(error).__name__,
                     )
                     continue
-            remember_response_surface(
-                self._provider_id, model_id, candidate, evidence=evidence
+            remember_response_surfaces(
+                self._provider_id,
+                model_id,
+                [door for door in known if door not in attempted] + [candidate],
+                evidence=evidence,
             )
             return candidate
         return None
@@ -1450,13 +1598,15 @@ class OpenAIChatProvider(BaseProvider):
 
 
 #: The surface sources that mean MCC *knows* a model's door (7.96.1): the
-#: operator's override, a probe this deployment passed, the vendor's registry.
-#: ``PROFILE`` and ``DEFAULT`` are the door nobody vouched for, where a country
-#: 403 may be the vendor's wrong-door answer and the surface probe still runs.
+#: operator's override, a probe this deployment passed, a dated measurement
+#: (7.114.0), the vendor's registry. ``PROFILE`` and ``DEFAULT`` are the door
+#: nobody vouched for, where a country 403 may be the vendor's wrong-door
+#: answer and the surface probe still runs.
 _KNOWN_SURFACE_SOURCES = frozenset(
     {
         ResponseSurfaceSource.OVERRIDE,
         ResponseSurfaceSource.LEARNED,
+        ResponseSurfaceSource.MEASURED,
         ResponseSurfaceSource.REGISTRY,
     }
 )
@@ -1469,8 +1619,18 @@ _KNOWN_SURFACE_SOURCES = frozenset(
 _SURFACE_CAUSE_DEPTH = 4
 
 
-def _surface_failure_evidence(error: BaseException) -> str | None:
-    """Read the endpoint complaint out of a failure, however it was wrapped."""
+def _surface_failure_evidence(
+    error: BaseException, *, guessed: bool = False
+) -> str | None:
+    """Read the endpoint complaint out of a failure, however it was wrapped.
+
+    ``guessed`` widens the reading by exactly one status (7.114.0). A ``404``
+    from a door MCC *guessed* at is the wrong-door answer: nothing was
+    vouched for, so "no such path" is a statement about the path. A ``404``
+    from a door MCC knows -- override, learned, measured, registry -- stays
+    what ``providers/recovery/surface.py`` has always made it, a statement
+    about the model name, and teaches nothing.
+    """
 
     current: BaseException | None = error
     for _ in range(_SURFACE_CAUSE_DEPTH):
@@ -1480,6 +1640,8 @@ def _surface_failure_evidence(error: BaseException) -> str | None:
             evidence = surface_shaped_failure(current)
             if evidence is not None:
                 return evidence
+            if guessed and upstream_status_code(current) == 404:
+                return "HTTP 404 on a door MCC guessed"
         current = current.__cause__
     return None
 
