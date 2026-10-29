@@ -206,7 +206,9 @@ async def test_the_messages_transport_streams_land_in_the_raw_file(tmp_path) -> 
     path = _arm(tmp_path, sse=True)
     transport = _messages_transport(log_raw_sse_events=True)
     upstream = _MessagesUpstream()
-    transport._provider._client = httpx.AsyncClient(  # type: ignore[attr-defined]
+    # Reaching for the inner provider's client is the narrowest available seam;
+    # the same one ``test_opencode_messages_surface.py`` uses.
+    transport._provider._client = httpx.AsyncClient(
         transport=httpx.MockTransport(upstream)
     )
     request = MessagesRequest(
@@ -243,7 +245,7 @@ async def test_the_messages_transport_writes_nothing_when_the_setting_is_off(
 ) -> None:
     path = _arm(tmp_path)
     transport = _messages_transport(log_raw_sse_events=False)
-    transport._provider._client = httpx.AsyncClient(  # type: ignore[attr-defined]
+    transport._provider._client = httpx.AsyncClient(
         transport=httpx.MockTransport(_MessagesUpstream())
     )
     request = MessagesRequest(
