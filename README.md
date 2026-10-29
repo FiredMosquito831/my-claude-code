@@ -4,7 +4,7 @@
 
 # My Claude Code
 
-**A local multi-provider LLM proxy, model router and control plane for AI coding agents.** Claude Code, Codex, OpenCode, Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, Droid, Pi, Kilo, Roo Code, Antigravity and the desktop apps (Claude Desktop, Codex desktop, LM Studio, Warp, VS Code's Copilot endpoint) all point at one address and share one control panel: routing tiers with fallback chains, reasoning controls, credential rotation and health, a vision adapter, a native web-search tool proxy, learned provider quirks, cost with provenance, and a full request log — in front of 57 model providers. Claude Code is one first-class client here, not the frame around everything else.
+**A local multi-provider LLM proxy, model router and control plane for AI coding agents.** Claude Code, Codex, OpenCode, Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, OpenClaw, Droid, Pi, Kilo, Roo Code, Antigravity and the desktop apps (Claude Desktop, Codex desktop, LM Studio, Warp, VS Code's Copilot endpoint) all point at one address and share one control panel: routing tiers with fallback chains, reasoning controls, credential rotation and health, a vision adapter, a native web-search tool proxy, learned provider quirks, cost with provenance, and a full request log — in front of 57 model providers. Claude Code is one first-class client here, not the frame around everything else.
 
 [![Latest release](https://img.shields.io/github/v/release/FiredMosquito831/my-claude-code?style=for-the-badge&label=release&color=2ea44f)](https://github.com/FiredMosquito831/my-claude-code/releases/latest)
 [![CI](https://img.shields.io/github/actions/workflow/status/FiredMosquito831/my-claude-code/tests.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/FiredMosquito831/my-claude-code/actions/workflows/tests.yml)
@@ -257,6 +257,7 @@ An agent that is not installed gets an **Install** button on its card (since 7.1
 | Kimi Code | `mcc-kimi` | Anthropic Messages |
 | Qwen Code | `mcc-qwen` | Anthropic Messages |
 | Command Code | `mcc-commandcode` | Anthropic Messages |
+| OpenClaw | `mcc-openclaw` | OpenAI Chat Completions |
 | Droid | `mcc-droid` | Anthropic Messages |
 | Pi | `mcc-pi` | Anthropic Messages |
 | Kilo CLI | `mcc-kilo` | Anthropic Messages |

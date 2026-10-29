@@ -47,7 +47,18 @@ VENDORED_SCHEMAS: dict[str, str] = {
     "opencode": "opencode-config.schema.json",
     "kilo": "opencode-config.schema.json",
     "crush": "crush.schema.json",
+    # ``openclaw config schema`` on OpenClaw 2026.10.8 (the CLI generates its
+    # own document schema; 2.5 MB, vendored whole on 2026-10-29).
+    "openclaw": "openclaw.schema.json",
 }
+
+#: Formats validated with the draft-07 validator directly, without
+#: ``jsonschema.validate``'s schema-check pass. OpenClaw's generated schema is
+#: valid for the vendor's own validator, but some of its ``pattern`` strings
+#: use the ECMA-262 ``\p{Cs}`` escape that Python's ``re`` rejects -- and the
+#: schema-check pass compiles every pattern in the document before evaluating
+#: one. Same schema, same rules; only the compile-all pass is skipped.
+FORMATS_WITHOUT_A_SCHEMA_CHECK = frozenset({"openclaw"})
 
 #: The published schemas set ``additionalProperties: false`` at the root, while
 #: both shipped binaries tolerate an unknown root key -- OpenCode 1.18.26 and
@@ -89,7 +100,43 @@ def test_every_serialiser_document_validates_against_the_cli_schema(
         document = {
             key: value for key, value in document.items() if key != DEFAULTED_KEY
         }
-    jsonschema.validate(document, _schema(VENDORED_SCHEMAS[format_id]))
+    schema = _schema(VENDORED_SCHEMAS[format_id])
+    if format_id in FORMATS_WITHOUT_A_SCHEMA_CHECK:
+        jsonschema.Draft7Validator(schema).validate(document)
+        return
+    jsonschema.validate(document, schema)
+
+
+def test_the_openclaw_document_carries_no_root_key_its_schema_refuses() -> None:
+    """OpenClaw sets ``additionalProperties: false`` at two levels.
+
+    Nothing of MCC's bookkeeping can live in the file -- not ``_mcc_defaulted``
+    at the root, not a provider-level note -- so the record reaches the
+    launcher and the card through ``GET /admin/api/catalogue-models`` instead.
+    The negative half below is what proves the schema would have caught it,
+    rather than that the key happens to be absent.
+    """
+
+    document, defaulted = serialise("openclaw", live_catalogue_models())
+
+    assert defaulted.by_model, "the fixture must exercise the defaulted record"
+    assert DEFAULTED_KEY not in document
+    assert DEFAULTED_KEY not in repr(document)
+
+    extra_root = {**document, DEFAULTED_KEY: {"a": ["b"]}}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft7Validator(_schema("openclaw.schema.json")).validate(extra_root)
+
+    block = document["models"]["providers"]["mcc"]
+    block["invented"] = True
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft7Validator(_schema("openclaw.schema.json")).validate(document)
+    del block["invented"]
+
+    entry = block["models"][0]
+    entry["invented"] = True
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.Draft7Validator(_schema("openclaw.schema.json")).validate(document)
 
 
 def test_the_kilo_document_carries_no_root_key_its_validator_refuses() -> None:

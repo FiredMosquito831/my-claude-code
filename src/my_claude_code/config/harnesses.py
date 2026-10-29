@@ -46,8 +46,10 @@ binary probes -- stays in ``cli/launchers`` and is bound to a spec by
 ``cli/harnesses/registry.py``.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from my_claude_code.config.install_methods import (
     AIDER_METHODS,
@@ -62,6 +64,7 @@ from my_claude_code.config.install_methods import (
     GOOSE_METHODS,
     KILO_METHODS,
     KIMI_NO_BUTTON_REASON,
+    OPENCLAW_METHODS,
     OPENCODE2_METHODS,
     OPENCODE_METHODS,
     PI_METHODS,
@@ -222,6 +225,47 @@ AIDER_API_KEY_ENV = "OPENAI_API_KEY"
 #: the proxy token never lands on disk.
 DROID_API_KEY_ENV = "MCC_DROID_API_KEY"
 DROID_API_KEY_REFERENCE = "${MCC_DROID_API_KEY}"
+
+#: OpenClaw's credential, the two constants that describe the block MCC writes,
+#: and the three variables the CLI itself reads to find its file.
+#:
+#: ``openclaw`` resolves its configuration the way its own ``dist/*.mjs`` does:
+#: ``OPENCLAW_CONFIG_PATH`` names the file outright, else ``OPENCLAW_STATE_DIR``
+#: holds it, else it is ``<home>/.openclaw/openclaw.json`` with ``OPENCLAW_HOME``
+#: outranking ``HOME`` and ``USERPROFILE``. MCC follows that order rather than
+#: ``Path.home()`` for the reason ``config/harness_config_merge.py`` states:
+#: writing one file while the CLI reads another fails silently, as a picker
+#: that never shows MCC's models.
+#:
+#: The proxy token never lands on disk. OpenClaw expands a ``$VAR`` reference in
+#: ``apiKey`` from the process environment, and ``mcc-openclaw`` sets this
+#: variable in the child process only. The base URL beside it *is* written
+#: literally -- a loopback address on the user's own machine, not a secret --
+#: because OpenClaw validates it as a URL and substitutes nothing into it.
+OPENCLAW_API_KEY_ENV = "MCC_OPENCLAW_API_KEY"
+OPENCLAW_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
+
+#: The three variables OpenClaw itself reads to find its document, named here
+#: so the merge spec and the documentation cannot disagree about their
+#: spelling -- and so the docs guard, which only knows names the harness layer
+#: declares, can see that they are real.
+OPENCLAW_CONFIG_PATH_ENV = "OPENCLAW_CONFIG_PATH"
+OPENCLAW_STATE_DIR_ENV = "OPENCLAW_STATE_DIR"
+OPENCLAW_HOME_ENV = "OPENCLAW_HOME"
+
+#: The provider id MCC owns inside ``models.providers``.
+OPENCLAW_PROVIDER_ID = "mcc"
+
+#: The one key MCC *replaces* rather than creates in the user's document:
+#: OpenClaw's default model. Configure records what it held (a string, an
+#: absent key, or an object with its own ``primary``), and Undo puts it back.
+OPENCLAW_PRIMARY_MODEL_PATH: tuple[str, ...] = (
+    "agents",
+    "defaults",
+    "model",
+    "primary",
+)
+
 
 #: Droid's base-URL placeholder. Resolved to the proxy **root** with no
 #: ``/v1``: MCC's Droid entry declares ``provider: "anthropic"``, which
@@ -441,6 +485,34 @@ class HarnessConfigMerge:
     #: Command Code prefers ``HOME``; following the CLI is the only way the
     #: file MCC writes is the file the CLI reads.
     home_env_vars: tuple[str, ...] = ("HOME", "USERPROFILE")
+    #: A variable that names *this file* outright, when the CLI publishes one.
+    #: OpenClaw's ``OPENCLAW_CONFIG_PATH`` is the first: it wins over
+    #: everything below, exactly as it does inside the CLI.
+    path_env_var: str | None = None
+    #: A variable that names the *directory* the document sits in, when the
+    #: CLI publishes one. OpenClaw's ``OPENCLAW_STATE_DIR``. Consulted after
+    #: ``path_env_var`` and before the home-relative default.
+    state_env_var: str | None = None
+    #: A variable that outranks the OS home for this CLI's own resolution.
+    #: OpenClaw's ``OPENCLAW_HOME``. Empty by default, because a CLI that
+    #: invents a home variable MCC ignores is a CLI MCC configures invisibly.
+    home_override_env_var: str | None = None
+    #: The key inside MCC's block that carries the proxy base URL. Command
+    #: Code spells it ``baseURL``; OpenClaw spells it ``baseUrl``.
+    base_url_key: str = "baseURL"
+    #: The placeholder the serialiser writes there, replaced with this
+    #: install's own proxy root on the way to disk.
+    base_url_sentinel: str = COMMANDCODE_BASE_URL_SENTINEL
+    #: Whether the *document* is edited as text through
+    #: ``config/document_codecs`` -- so every byte MCC does not own survives,
+    #: comments and layout included -- rather than rebuilt canonically from
+    #: its parsed form the way Command Code's always has been. OpenClaw is the
+    #: first harness whose file is a JSON5 document users actually hand-edit.
+    preserve_bytes: bool = False
+    #: Keys MCC *replaces* rather than creates inside the same document, with
+    #: the path the serialiser states each new value at. Recorded for Undo
+    #: exactly as the desktop Configure engine records ``overwritten_keys``.
+    overwritten_key_paths: tuple[tuple[str, ...], ...] = ()
 
     @property
     def owned_key_label(self) -> str:
@@ -612,6 +684,15 @@ class HarnessSpec:
     #: :attr:`install_unavailable_reason` says why.
     install_methods: tuple[InstallMethod, ...] = ()
     install_unavailable_reason: str = ""
+    #: Where an install's own configuration lives, home-relative, tried in
+    #: order. Consulted by the Coding agents card **only when the binary is not
+    #: on PATH**, and reported as "config found, CLI not on PATH" -- a
+    #: different fact from "not installed", and one the user can act on.
+    #:
+    #: OpenClaw is the first: its document survives an uninstall of the CLI, a
+    #: PATH that does not carry npm's global folder, and a shell started before
+    #: the install. dsh and Hermes declare their own between them.
+    detection_paths: tuple[tuple[str, ...], ...] = ()
 
     @property
     def command(self) -> str:
@@ -628,6 +709,44 @@ class HarnessSpec:
         if platform == "win32" and self.install_hint_windows is not None:
             return self.install_hint_windows
         return self.install_hint
+
+    def config_probe_path(self, env: Mapping[str, str]) -> str | None:
+        """Return the first declared configuration path that exists, or None.
+
+        The card's second rung, asked only when the binary is not on PATH: an
+        install whose npm global folder is not in *this* shell, or whose CLI
+        was removed while its file stayed, is a different fact from "not
+        installed" and the one a user can act on. Resolved through the
+        harness's own home rules -- its merge spec's, when it has one -- so the
+        path reported is the path the CLI would read.
+        """
+
+        if not self.detection_paths:
+            return None
+        base = self._detection_home(env)
+        for parts in self.detection_paths:
+            try:
+                if base.joinpath(*parts).exists():
+                    return str(base.joinpath(*parts))
+            except OSError:
+                continue
+        return None
+
+    def _detection_home(self, env: Mapping[str, str]) -> Path:
+        """Return the home this CLI resolves, in the CLI's own order."""
+
+        merge = self.catalogue.merge if self.catalogue is not None else None
+        override = merge.home_override_env_var if merge is not None else None
+        if override is not None:
+            value = env.get(override, "").strip()
+            if value:
+                return Path(value).expanduser()
+        names = merge.home_env_vars if merge is not None else ("HOME", "USERPROFILE")
+        for name in names:
+            value = env.get(name, "").strip()
+            if value:
+                return Path(value)
+        return Path.home()
 
 
 HARNESS_SPECS: tuple[HarnessSpec, ...] = (
@@ -978,6 +1097,112 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "the document up first."
         ),
         tagline="The Command Code agent, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="openclaw",
+        display_name="OpenClaw",
+        binary="openclaw",
+        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        install_hint=(
+            "Install OpenClaw with: npm install -g openclaw "
+            "(it needs Node.js 24.22.1 or newer)"
+        ),
+        install_methods=OPENCLAW_METHODS,
+        commands=(
+            HarnessCommand(
+                suffix="openclaw",
+                target="my_claude_code.cli.launchers.openclaw:launch",
+                legacy_alias=False,
+                help_text="Launch OpenClaw through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments="--models",
+                        help_text=(
+                            "MCC's own flag: list the models MCC published to "
+                            "~/.openclaw/openclaw.json and exit"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--disconnect",
+                        help_text=(
+                            "MCC's own flag: remove MCC's models.providers.mcc "
+                            "block from ~/.openclaw/openclaw.json, put back any "
+                            "default model it replaced, and exit"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--restore",
+                        help_text=(
+                            "MCC's own flag: the same removal, but refusing if "
+                            "the file changed since MCC configured it, and "
+                            "consuming the record of what MCC replaced"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="openclaw",
+            # No file of MCC's own: OpenClaw reads one document and MCC merges
+            # one key into it. Every other lever was measured and rejected --
+            # ``OPENCLAW_CONFIG_PATH`` would *replace* the user's channels and
+            # gateway settings for that process, and ``$include`` resolves only
+            # inside ``~/.openclaw``, which is the tool's own directory.
+            filename=None,
+            carries_defaulted_record=False,
+            merge=HarnessConfigMerge(
+                relative_parts=(".openclaw", "openclaw.json"),
+                owned_key_path=("models", "providers", OPENCLAW_PROVIDER_ID),
+                display_path="~/.openclaw/openclaw.json",
+                path_env_var=OPENCLAW_CONFIG_PATH_ENV,
+                state_env_var=OPENCLAW_STATE_DIR_ENV,
+                home_override_env_var=OPENCLAW_HOME_ENV,
+                # OpenClaw spells the field ``baseUrl`` and its OpenAI chat
+                # client appends ``chat/completions`` to ``<baseUrl>/v1``.
+                base_url_key="baseUrl",
+                base_url_sentinel=OPENCLAW_BASE_URL_SENTINEL,
+                # The user's own JSON5 document: comments, indentation and key
+                # order survive because the edit is made to the text.
+                preserve_bytes=True,
+                overwritten_key_paths=(OPENCLAW_PRIMARY_MODEL_PATH,),
+            ),
+        ),
+        passthrough_commands=frozenset(
+            {
+                "help",
+                "status",
+                "doctor",
+                "config",
+                "models",
+                "gateway",
+                "logs",
+                "update",
+                "onboard",
+                "plugins",
+                "agents",
+                "channels",
+                "cron",
+                "devices",
+                "node",
+                "security",
+                "sessions",
+            }
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-v"}),
+        # Binary-first, then the document: an install whose npm global folder
+        # is not on this shell's PATH has a config file and no binary, and the
+        # card says so instead of "not installed".
+        detection_paths=(
+            (".openclaw", "openclaw.json"),
+            (".openclaw",),
+        ),
+        summary=(
+            "OpenClaw, which reads one JSON5 document and no extra-config "
+            "variable, so MCC merges a single models.providers.mcc block into "
+            "~/.openclaw/openclaw.json and backs the document up first. Every "
+            "other byte, comment and key is left exactly as it was."
+        ),
+        tagline="The OpenClaw gateway, served through this proxy.",
     ),
     HarnessSpec(
         # ``kimi_code``, not ``kimi``: the latter is an upstream Moonshot

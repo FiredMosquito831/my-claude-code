@@ -44,7 +44,9 @@ merge into one file while the CLI read another, and the only symptom would be
 a model picker that never shows MCC's models.
 """
 
+import contextlib
 import json
+import os
 import shutil
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -53,9 +55,31 @@ from pathlib import Path
 from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
 )
+from my_claude_code.config.document_codecs import (
+    DeleteKey,
+    DocumentFormat,
+    DocumentFormatError,
+    SetScalar,
+    SetTable,
+    apply_edits,
+    parse_document,
+    scalar_text,
+)
 from my_claude_code.config.harnesses import (
     COMMANDCODE_BASE_URL_SENTINEL,
     HarnessConfigMerge,
+)
+from my_claude_code.config.restore_record import (
+    RestoreEntry,
+    UndoMode,
+    capture_overwritten,
+    document_sha256,
+    forget_entry,
+    mark_undone,
+    read_entry,
+    refresh_document_sha256,
+    value_at,
+    write_entry,
 )
 
 #: Keys the serialiser puts at the top of its own document that belong inside
@@ -64,6 +88,11 @@ from my_claude_code.config.harnesses import (
 #: the CLI guessed; leaving it at the document root would litter a file MCC
 #: does not own.
 CARRIED_DOCUMENT_KEYS: tuple[str, ...] = ("_mcc_defaulted",)
+
+#: The key Command Code (and every merge target before OpenClaw) spells its
+#: base URL with. Passed as the default to :func:`with_base_url` and
+#: :func:`owned_block_names`, which take the merge's own key when it has one.
+DEFAULT_BASE_URL_KEY = "baseURL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,11 +103,48 @@ class MergeResult:
     changed: bool
     created: bool
     backup_path: Path | None
+    #: Whether Undo removed a document MCC itself had created (7.116.0). False
+    #: on every Configure, and for every document that existed beforehand.
+    removed_file: bool = False
+
+
+class MergeDocumentError(ValueError):
+    """The document could not be parsed, so nothing was written.
+
+    Raised only on the byte-preserving path. Command Code's canonical path
+    deliberately replaces a document that is not JSON (its own test says so);
+    a document a user hand-edits -- comments and all -- must never be
+    rewritten from a failed parse.
+    """
 
 
 def merge_config_path(merge: HarnessConfigMerge, env: Mapping[str, str]) -> Path:
-    """Return the file this CLI reads, resolved the way the CLI resolves it."""
+    """Return the file this CLI reads, resolved the way the CLI resolves it.
 
+    Four rungs, in the CLI's own order, each declared by the merge spec and
+    each rung the one OpenClaw's own ``resolveConfigPath`` walks:
+
+    1. a variable naming the *file* (``OPENCLAW_CONFIG_PATH``);
+    2. a variable naming the *directory* it sits in (``OPENCLAW_STATE_DIR``);
+    3. a variable that outranks the OS home (``OPENCLAW_HOME``);
+    4. the home folder itself, in the CLI's own preference order.
+
+    A spec that declares none of 1-3 gets exactly the resolution it always
+    had: ``HOME``, then ``USERPROFILE``, then ``Path.home()``.
+    """
+
+    if merge.path_env_var is not None:
+        value = env.get(merge.path_env_var, "").strip()
+        if value:
+            return Path(value).expanduser()
+    if merge.state_env_var is not None:
+        value = env.get(merge.state_env_var, "").strip()
+        if value:
+            return Path(value).expanduser().joinpath(merge.relative_parts[-1])
+    if merge.home_override_env_var is not None:
+        value = env.get(merge.home_override_env_var, "").strip()
+        if value:
+            return Path(value).expanduser().joinpath(*merge.relative_parts)
     for name in merge.home_env_vars:
         value = env.get(name, "").strip()
         if value:
@@ -115,21 +181,30 @@ def owned_block(
 
 
 def with_base_url(
-    block: Mapping[str, object], proxy_root_url: str
+    block: Mapping[str, object],
+    proxy_root_url: str,
+    *,
+    key: str = DEFAULT_BASE_URL_KEY,
+    sentinel: str = COMMANDCODE_BASE_URL_SENTINEL,
 ) -> dict[str, object]:
     """Return the owned block with the base-URL sentinel replaced.
 
-    Command Code refuses a ``baseURL`` that is not a parseable absolute URL
-    and applies no environment substitution to it, so the real proxy root has
-    to be written literally. It is not a secret -- it is a loopback address on
+    The CLI refuses a base URL that is not a parseable absolute URL and
+    applies no environment substitution to it, so the real proxy root has to
+    be written literally. It is not a secret -- it is a loopback address on
     the user's own machine -- and it is the only MCC value that reaches the
     file. The API key beside it stays a ``$VAR`` reference.
+
+    ``key`` is the CLI's own spelling: Command Code's is ``baseURL`` and
+    OpenClaw's is ``baseUrl``. ``sentinel`` is the placeholder that serialiser
+    wrote there. Both default to Command Code's, which is the path every merge
+    target before OpenClaw used.
     """
 
     resolved = dict(block)
-    if resolved.get("baseURL") == COMMANDCODE_BASE_URL_SENTINEL:
+    if resolved.get(key) == sentinel:
         stripped = proxy_root_url.rstrip("/")
-        resolved["baseURL"] = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
+        resolved[key] = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
     return resolved
 
 
@@ -143,7 +218,9 @@ def read_document(path: Path) -> dict[str, object] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def owned_block_present(path: Path, owned_key_path: Sequence[str]) -> bool:
+def owned_block_present(
+    path: Path, owned_key_path: Sequence[str], *, preserve_bytes: bool = False
+) -> bool:
     """Return whether MCC's key already exists in the user's document.
 
     The background refresh keys off this rather than off the file existing: a
@@ -151,7 +228,7 @@ def owned_block_present(path: Path, owned_key_path: Sequence[str]) -> bool:
     have a provider block appear in it because a provider key rotated.
     """
 
-    document = read_document(path)
+    document = read_document(path) if not preserve_bytes else read_text_document(path)
     if document is None:
         return False
     node: object = document
@@ -163,7 +240,13 @@ def owned_block_present(path: Path, owned_key_path: Sequence[str]) -> bool:
 
 
 def owned_block_names(
-    path: Path, owned_key_path: Sequence[str], proxy_root_url: str
+    path: Path,
+    owned_key_path: Sequence[str],
+    proxy_root_url: str,
+    *,
+    key: str = DEFAULT_BASE_URL_KEY,
+    sentinel: str = COMMANDCODE_BASE_URL_SENTINEL,
+    preserve_bytes: bool = False,
 ) -> bool:
     """Whether MCC's block in the user's document already names *this* server.
 
@@ -186,21 +269,42 @@ def owned_block_names(
     block MCC wrote matches itself exactly.
     """
 
-    document = read_document(path)
+    document = read_document(path) if not preserve_bytes else read_text_document(path)
     if document is None:
         return False
     node: object = document
-    for key in owned_key_path:
+    for owned_key in owned_key_path:
         if not isinstance(node, Mapping):
             return False
-        node = node.get(key)
+        node = node.get(owned_key)
     if not isinstance(node, Mapping):
         return False
-    current = node.get("baseURL")
+    current = node.get(key)
     if not isinstance(current, str):
         return False
-    ours = with_base_url({"baseURL": COMMANDCODE_BASE_URL_SENTINEL}, proxy_root_url)
-    return current.rstrip("/") == str(ours["baseURL"]).rstrip("/")
+    ours = with_base_url({key: sentinel}, proxy_root_url, key=key, sentinel=sentinel)
+    return current.rstrip("/") == str(ours[key]).rstrip("/")
+
+
+def read_text_document(path: Path) -> dict[str, object] | None:
+    """Return a JSON5 document read as text, or None when it is unusable.
+
+    The byte-preserving path's reader. ``json.loads`` is not the parser
+    OpenClaw uses for ``openclaw.json`` -- that document allows comments and
+    trailing commas -- so a block MCC had just written into a commented file
+    would read as "not there" and the background refresh would never touch it
+    again.
+    """
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        payload = parse_document(text, DocumentFormat.JSON)
+    except DocumentFormatError:
+        return None
+    return _as_object_map(payload)
 
 
 def merge_owned_block(
@@ -324,3 +428,398 @@ def _backup_if_needed(path: Path, backup_suffix: str) -> Path | None:
     except OSError:
         return None
     return backup_path
+
+
+# --------------------------------------------------------------------------
+# The byte-preserving merge (7.116.0, OpenClaw)
+# --------------------------------------------------------------------------
+#
+# Command Code's path above rebuilds the document from its parsed form and
+# writes it canonically. That is defensible for a file of provider maps and
+# wrong for a file a user hand-edits: OpenClaw's ``openclaw.json`` is JSON5
+# with comments, and anyone who has written one has arranged it their own way.
+#
+# So this path makes the same promise ``config/document_codecs`` already makes
+# for every desktop document: the edit is applied to the *text*, and the lines
+# MCC does not own come back byte for byte. Everything else is the engine the
+# desktop cards already use --
+#
+# * the one-time ``.mcc-backup``, taken before the first edit and never
+#   overwritten, so it is the user's pre-MCC file rather than yesterday's MCC
+#   output;
+# * a ``restore_record`` entry for every value MCC *replaced* rather than
+#   created, written only when something was replaced (the Command Code rule);
+# * the same two Undo modes: ``KEYS_ONLY`` never refuses, ``RESTORE`` requires
+#   the record and refuses when the document changed since.
+#
+# The caller supplies the serialiser's document, exactly as ``desktop_apply``
+# does: what MCC writes comes from ``application``, which ``config`` may not
+# import.
+
+
+def configure_owned_block(
+    *,
+    merge: HarnessConfigMerge,
+    path: Path,
+    document: Mapping[str, object],
+    proxy_root_url: str,
+    subject: str,
+    claim: bool = True,
+    record_path: Path | None = None,
+) -> MergeResult:
+    """Write MCC's block -- and any value it replaces -- into the user's file.
+
+    ``claim`` separates the two callers. ``True`` is the explicit
+    ``mcc-<harness>`` run: it writes the block, writes the replaced values and
+    records what they were. ``False`` is the background refresh: it brings
+    MCC's own block up to date and touches nothing else, because
+    ``agents.defaults.model.primary`` is the user's choice of model and a
+    provider refresh must not move it back under them. A refresh also keeps the
+    stored document hash current (``refresh_document_sha256``), so a later
+    ``RESTORE`` does not refuse over bytes MCC itself wrote.
+
+    Raises :class:`MergeDocumentError` rather than touching a document that
+    does not parse: the user's file is not MCC's to replace.
+    """
+
+    before_text, existed, crlf = _read_text_or_empty(path)
+    parsed = _parsed_or_raise(before_text, path)
+    block = with_base_url(
+        owned_block(document, merge.owned_key_path),
+        proxy_root_url,
+        key=merge.base_url_key,
+        sentinel=merge.base_url_sentinel,
+    )
+
+    edits: list[SetTable | SetScalar] = [SetTable(merge.owned_key_path, block)]
+    recorded: list[tuple[str, ...]] = []
+    if claim:
+        for key_path in merge.overwritten_key_paths:
+            value, present = value_at(document, key_path)
+            if not present:
+                continue
+            edits.append(SetScalar(tuple(key_path), value))
+            # Where OpenClaw's ``agents.defaults.model`` is a plain string (or
+            # anything else that is not an object), writing ``primary`` means
+            # replacing that whole value. Record the value that goes, not the
+            # key MCC could not have written into.
+            recorded.append(_interrupted_ancestor(parsed, key_path) or tuple(key_path))
+
+    created_parents = _created_parents(parsed, [edit.key_path for edit in edits])
+    overwritten = (
+        capture_overwritten(
+            parsed,
+            recorded,
+            prior_lines={
+                key_path: scalar_text(before_text, DocumentFormat.JSON, key_path)
+                for key_path in recorded
+            },
+        )
+        if claim
+        else ()
+    )
+
+    after_text = apply_edits(_editable_text(before_text), DocumentFormat.JSON, edits)
+    if after_text == before_text:
+        return MergeResult(path=path, changed=False, created=False, backup_path=None)
+
+    before_hash = document_sha256(path) if existed else ""
+    backup_path = _backup_if_needed(path, merge.backup_suffix) if existed else None
+    _write_document_text(path, after_text, crlf)
+    if claim:
+        write_entry(
+            RestoreEntry(
+                subject=subject,
+                document_path=str(path),
+                document_sha256=document_sha256(path),
+                overwritten=overwritten,
+                created_file=not existed,
+                created_parents=created_parents,
+            ),
+            path=record_path,
+        )
+    elif existed:
+        refresh_document_sha256(
+            subject,
+            before=before_hash,
+            after=document_sha256(path),
+            path=record_path,
+        )
+    return MergeResult(
+        path=path, changed=True, created=not existed, backup_path=backup_path
+    )
+
+
+def unconfigure_owned_block(
+    *,
+    merge: HarnessConfigMerge,
+    path: Path,
+    subject: str,
+    mode: UndoMode = UndoMode.KEYS_ONLY,
+    record_path: Path | None = None,
+    proxy_root_url: str | None = None,
+) -> MergeResult:
+    """Take MCC's block back out, putting back whatever it replaced.
+
+    The two modes are the desktop engine's, unchanged: ``KEYS_ONLY`` removes
+    exactly what MCC created, restores what the record says it replaced, and
+    never refuses; ``RESTORE`` does the same but requires the record and
+    refuses when the document has moved since MCC wrote it. A file MCC created
+    is removed once nothing is left in it.
+    """
+
+    before_text, existed, crlf = _read_text_or_empty(path)
+    if not existed:
+        return MergeResult(path=path, changed=False, created=False, backup_path=None)
+    parsed = _parsed_or_raise(before_text, path)
+
+    entry = read_entry(subject, path=record_path)
+    live_record = entry is not None and not entry.undone_at
+    _, owned_present = value_at(parsed, merge.owned_key_path)
+    if not owned_present and not live_record:
+        # Nothing of MCC's in this file, and no record of a Configure still in
+        # place: a replaced key here is the user's own. The desktop engine's
+        # ``_holds_nothing_of_mccs`` rule, for the same data-loss reason.
+        return MergeResult(path=path, changed=False, created=False, backup_path=None)
+    if not live_record and not _names_this_server(merge, path, proxy_root_url):
+        # A block under MCC's key that MCC has no record of writing, and that
+        # does not name this server's proxy root: somebody else's, and the one
+        # rule this engine has never broken is that it does not delete what it
+        # cannot prove it wrote. ``mcc-<harness>`` can claim it; no undo can.
+        return MergeResult(path=path, changed=False, created=False, backup_path=None)
+
+    if mode is UndoMode.RESTORE and entry is None:
+        raise MergeDocumentError(
+            f"no record of what MCC replaced in {path}. Removing MCC's block "
+            "is still possible with KEYS_ONLY."
+        )
+    if mode is UndoMode.RESTORE and entry is not None:
+        current = document_sha256(path)
+        if entry.document_sha256 and current and entry.document_sha256 != current:
+            raise MergeDocumentError(
+                f"{path} has changed since MCC configured it, so restoring the "
+                "pre-MCC values would overwrite an edit made since. Remove "
+                f"MCC's block only, or restore from {path.name}"
+                f"{merge.backup_suffix} by hand."
+            )
+
+    restore: dict[tuple[str, ...], tuple[object, str]] = {}
+    for value in entry.overwritten if entry is not None else ():
+        if value.prior_present:
+            restore[tuple(value.key_path)] = (value.prior_value, value.prior_line)
+
+    # What Undo puts back comes from the record, not from the merge spec: the
+    # record is what MCC actually wrote, and it is the only thing that knows a
+    # plain-string ``agents.defaults.model`` was replaced whole.
+    replaced_paths = (
+        tuple(tuple(value.key_path) for value in entry.overwritten)
+        if entry is not None and entry.overwritten
+        else merge.overwritten_key_paths
+    )
+    edits: list[DeleteKey | SetScalar] = [
+        # With a record, the containers MCC created are named and removed
+        # below, one at a time -- so the leaf is removed on its own and a
+        # container the user already had is kept. Without one there is nothing
+        # to tell them apart, and an empty container carries no information,
+        # so the ordinary prune applies.
+        DeleteKey(
+            merge.owned_key_path,
+            prune_empty_ancestors=entry is None or not entry.created_parents,
+        )
+    ]
+    for key_path in replaced_paths:
+        found = restore.get(tuple(key_path))
+        if found is None:
+            edits.append(DeleteKey(tuple(key_path), prune_empty_ancestors=False))
+        else:
+            edits.append(SetScalar(tuple(key_path), found[0], prior_line=found[1]))
+
+    after_text = apply_edits(before_text, DocumentFormat.JSON, edits)
+    after_text = _remove_created_parents(
+        after_text, merge, entry.created_parents if entry is not None else ()
+    )
+    emptied = not _nonempty_document(after_text)
+
+    backup_path = _backup_if_needed(path, merge.backup_suffix)
+    if emptied and entry is not None and entry.created_file:
+        with contextlib.suppress(OSError):
+            path.unlink()
+        removed_file = True
+        changed = True
+    else:
+        removed_file = False
+        changed = after_text != before_text
+        if changed:
+            _write_document_text(path, after_text, crlf)
+
+    if mode is UndoMode.RESTORE:
+        forget_entry(subject, path=record_path)
+    else:
+        mark_undone(subject, path=record_path)
+    return MergeResult(
+        path=path,
+        changed=changed,
+        created=False,
+        backup_path=backup_path,
+        removed_file=removed_file,
+    )
+
+
+def _read_text_or_empty(path: Path) -> tuple[str, bool, bool]:
+    """Return ``(text with LF line ends, existed, written_with_crlf)``.
+
+    Read as bytes and decoded, then normalised, exactly as
+    ``config/desktop_apply._read_mcp_text`` does for the media server entry: a
+    document a Notepad user saved with CRLF has to come back with CRLF, and
+    ``read_text``'s universal-newline mode would quietly hand back LF.
+    """
+
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return "", False, False
+    except OSError:
+        return "", False, False
+    text = raw.decode("utf-8", errors="surrogateescape")
+    crlf = "\r\n" in text and "\n" not in text.replace("\r\n", "")
+    return text.replace("\r\n", "\n").replace("\r", "\n"), True, crlf
+
+
+def _names_this_server(
+    merge: HarnessConfigMerge, path: Path, proxy_root_url: str | None
+) -> bool:
+    """Return whether MCC's block in ``path`` names this server's proxy root."""
+
+    if proxy_root_url is None:
+        return False
+    return owned_block_names(
+        path,
+        merge.owned_key_path,
+        proxy_root_url,
+        key=merge.base_url_key,
+        sentinel=merge.base_url_sentinel,
+        preserve_bytes=merge.preserve_bytes,
+    )
+
+
+def _parsed_or_raise(text: str, path: Path) -> dict[str, object]:
+    """Return the document, or refuse to touch one that does not parse."""
+
+    if not text.strip():
+        return {}
+    try:
+        payload = parse_document(text, DocumentFormat.JSON)
+    except DocumentFormatError as exc:
+        raise MergeDocumentError(f"{path} does not parse: {exc}") from exc
+    document = _as_object_map(payload)
+    if document is None:
+        raise MergeDocumentError(f"{path} is not a JSON object")
+    return document
+
+
+def _editable_text(text: str) -> str:
+    """Return a root object to edit: the file's own text, or ``{}``."""
+
+    return text if text.strip() else "{}"
+
+
+def _created_parents(
+    parsed: Mapping[str, object], key_paths: Sequence[Sequence[str]]
+) -> tuple[tuple[str, ...], ...]:
+    """Return the containers above these keys that did not exist beforehand."""
+
+    created: list[tuple[str, ...]] = []
+    for key_path in key_paths:
+        for depth in range(1, len(key_path)):
+            prefix = tuple(key_path[:depth])
+            if prefix in created:
+                continue
+            _, present = value_at(parsed, prefix)
+            if not present:
+                created.append(prefix)
+    return tuple(created)
+
+
+def _interrupted_ancestor(
+    parsed: Mapping[str, object], key_path: Sequence[str]
+) -> tuple[str, ...] | None:
+    """Return the first ancestor of ``key_path`` that is not an object, if any.
+
+    ``_json_set`` walks the path until the chain of objects stops, then writes
+    the rest as one nested value there. This names the level it will stop at,
+    so Configure records the value that actually goes -- the plain string
+    ``agents.defaults.model`` -- rather than a key underneath it that never
+    existed.
+    """
+
+    for depth in range(1, len(key_path)):
+        prefix = tuple(key_path[:depth])
+        value, present = value_at(parsed, prefix)
+        if present and not isinstance(value, Mapping):
+            return prefix
+    return None
+
+
+def _remove_created_parents(
+    text: str, merge: HarnessConfigMerge, parents: Sequence[Sequence[str]]
+) -> str:
+    """Drop containers MCC created, once its departure has left them empty.
+
+    ``DeleteKey`` prunes every empty ancestor, which is right for MCC's block
+    and wrong for a container that was already in the file. The record says
+    which ones MCC created, so exactly those go -- outermost first, and only
+    while they are empty, so a key the user added afterwards is never lost.
+
+    Applied in passes, because emptying ``models.providers`` is what makes
+    ``models`` empty a pass later. Bounded by the number of recorded parents:
+    nothing new can become empty that was not already listed.
+    """
+
+    if not parents:
+        return text
+    wanted = {tuple(parent) for parent in parents}
+    for _pass in range(len(wanted) + 1):
+        try:
+            parsed = parse_document(text, DocumentFormat.JSON)
+        except DocumentFormatError:
+            return text
+        empties: list[DeleteKey] = []
+        for parent in sorted(wanted, key=len):
+            value, present = value_at(parsed, parent)
+            if present and isinstance(value, Mapping) and not value:
+                # A one-part path has no ancestors to prune, and
+                # ``_json_delete`` only reaches a key at depth one when
+                # pruning is on.
+                empties.append(
+                    DeleteKey(tuple(parent), prune_empty_ancestors=len(parent) == 1)
+                )
+        if not empties:
+            return text
+        text = apply_edits(text, DocumentFormat.JSON, empties)
+    return text
+
+
+def _nonempty_document(text: str) -> bool:
+    """Return whether a document still holds anything at all."""
+
+    try:
+        parsed = parse_document(text, DocumentFormat.JSON)
+    except DocumentFormatError:
+        return True
+    return bool(parsed) if isinstance(parsed, Mapping) else True
+
+
+def _write_document_text(path: Path, text: str, crlf: bool) -> None:
+    """Write an edited document in place, staging a sibling and replacing it.
+
+    ``newline=""`` so the text is written exactly as edited, and CRLF restored
+    when the file was written that way: the same rule
+    ``config/desktop_apply._write_mcp_text`` follows, and the reason a
+    Notepad-edited document keeps its line endings through a cycle.
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".mcc-tmp")
+    payload = text.replace("\n", "\r\n") if crlf else text
+    temporary.write_text(payload, encoding="utf-8", newline="")
+    os.replace(temporary, path)

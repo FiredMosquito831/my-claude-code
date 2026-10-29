@@ -94,8 +94,10 @@ class SetScalar:
     #: TOML only (7.111.4): the user's own line for this key, as Configure
     #: found it, for Undo to put back verbatim -- comment, indentation, key
     #: spelling and quoting included. Used only when it still says exactly
-    #: ``key = value``; otherwise the value alone is edited. JSON and YAML
-    #: ignore it.
+    #: ``key = value``; otherwise the value alone is edited. Since 7.116.0 the
+    #: same field carries the user's raw *value text* for a JSON key (see
+    #: :func:`scalar_text`), and is written back verbatim when it still parses
+    #: to the value being restored. YAML ignores it.
     prior_line: str = ""
 
 
@@ -871,8 +873,8 @@ def _apply_json_edits(text: str, edits: Sequence[Edit]) -> str:
         match edit:
             case SetTable(key_path=key_path, value=value):
                 text = _json_set(text, key_path, dict(value))
-            case SetScalar(key_path=key_path, value=value):
-                text = _json_set(text, key_path, value)
+            case SetScalar(key_path=key_path, value=value, prior_line=prior_line):
+                text = _json_set(text, key_path, value, prior_text=prior_line)
             case DeleteKey(key_path=key_path, prune_empty_ancestors=prune):
                 text = _json_delete(text, key_path, prune=prune)
     return text
@@ -885,7 +887,9 @@ def _json_root_object(text: str) -> _JsonValue:
     return root
 
 
-def _json_set(text: str, key_path: Sequence[str], value: object) -> str:
+def _json_set(
+    text: str, key_path: Sequence[str], value: object, *, prior_text: str = ""
+) -> str:
     """Set one key, rewriting only the bytes of the value it replaces."""
 
     if not key_path:
@@ -903,10 +907,12 @@ def _json_set(text: str, key_path: Sequence[str], value: object) -> str:
                 nested = {part: nested}
             return _json_set_member(text, node, key, nested)
         node = member.value
-    return _json_set_member(text, node, key_path[-1], value)
+    return _json_set_member(text, node, key_path[-1], value, prior_text)
 
 
-def _json_set_member(text: str, node: _JsonValue, key: str, value: object) -> str:
+def _json_set_member(
+    text: str, node: _JsonValue, key: str, value: object, prior_text: str = ""
+) -> str:
     indent_unit = _json_indent_unit(text)
     member = node.members.get(key)
     if member is None:
@@ -917,9 +923,61 @@ def _json_set_member(text: str, node: _JsonValue, key: str, value: object) -> st
         # with different spacing -- and a diff nobody asked for is exactly
         # what this path exists to stop.
         return text
+    if prior_text and _json_text_says(prior_text, value):
+        # The user's own bytes for exactly this value: Undo of a replaced key
+        # gives back their spelling, not a re-render of it. ``json.dumps``
+        # would escape non-ASCII and re-quote a string the user wrote some
+        # other way; this is the JSON half of the TOML ``prior_line`` rule.
+        return text[: member.value.start] + prior_text + text[member.value.end :]
     indent = _json_line_indent(text, member.start)
     rendered = _json_render(value, indent_unit, indent)
     return text[: member.value.start] + rendered + text[member.value.end :]
+
+
+def _json_text_says(prior_text: str, value: object) -> bool:
+    """Return whether one span of JSON text is exactly ``value``.
+
+    Type-aware, because JSON is: ``true`` is not ``1`` and ``1`` is not
+    ``1.0``, though Python compares them equal in one direction.
+    """
+
+    try:
+        parsed = parse_jsonc(prior_text)
+    except DocumentFormatError:
+        return False
+    return type(parsed) is type(value) and parsed == value
+
+
+def scalar_text(
+    text: str, document_format: DocumentFormat, key_path: Sequence[str]
+) -> str:
+    """Return the exact text one key's value occupies, or "" when it has none.
+
+    JSON only, and the counterpart of :func:`root_scalar_line` for a document
+    edited as text: what Configure records beside a value it replaces, so Undo
+    writes the user's bytes back rather than a canonical re-render of the same
+    value. "" for every other format, for a missing key, and for text that
+    does not parse -- which is exactly the record every caller wrote before
+    this existed, and those still undo by value.
+    """
+
+    if document_format is not DocumentFormat.JSON or not key_path:
+        return ""
+    try:
+        node = _json_root_object(text)
+    except DocumentFormatError:
+        return ""
+    member: _JsonMember | None = None
+    for key in key_path:
+        if node.kind != "object":
+            return ""
+        member = node.members.get(key)
+        if member is None:
+            return ""
+        node = member.value
+    if member is None or member.value.kind != "scalar":
+        return ""
+    return text[member.value.start : member.value.end]
 
 
 def _json_insert_member(

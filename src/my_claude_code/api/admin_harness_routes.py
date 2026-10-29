@@ -71,7 +71,10 @@ from my_claude_code.application.tier_chains import (
     resolve_tier_chain,
 )
 from my_claude_code.config.atomic_json import json_document_bytes
-from my_claude_code.config.harness_config_merge import merge_config_path
+from my_claude_code.config.harness_config_merge import (
+    merge_config_path,
+    read_text_document,
+)
 from my_claude_code.config.harness_tiers import (
     HarnessTierOverride,
     HarnessTiers,
@@ -343,12 +346,29 @@ def _installed_binary_path(spec: HarnessSpec) -> str | None:
 
 def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
     binary_path = _installed_binary_path(spec)
+    # Binary first, and only then the config file: a CLI on PATH is installed
+    # whatever its file says, and a file without the CLI is the state the card
+    # has to name differently from "not installed" (7.116.0).
+    config_path = (
+        None if binary_path is not None else spec.config_probe_path(os.environ)
+    )
     return {
         "id": spec.id,
         "display_name": spec.display_name,
         "binary": spec.binary,
         "installed": binary_path is not None,
         "binary_path": binary_path,
+        # The second rung: an install's own configuration, found where the CLI
+        # would read it, with its binary not on this server's PATH.
+        "config_found": config_path is not None,
+        "config_path": config_path,
+        "install_state": (
+            "installed"
+            if binary_path is not None
+            else "config_only"
+            if config_path is not None
+            else "absent"
+        ),
         # The line for THIS operating system: Windows users were shown the
         # POSIX ``curl … | sh`` line for Pi, Goose and Droid (spec §1 item 3).
         "install_hint": spec.install_hint_for(sys.platform),
@@ -414,6 +434,14 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         # Set instead when the CLI reads only its own document: the one key
         # MCC writes into a file it does not own.
         "merged_key": merge.owned_key_label if merge is not None else None,
+        # Values outside that key which MCC replaces, with the user's prior
+        # value recorded so Undo can put it back (7.116.0, OpenClaw's default
+        # model). Empty for every merge target that only creates keys.
+        "replaced_keys": (
+            [".".join(key_path) for key_path in merge.overwritten_key_paths]
+            if merge is not None
+            else []
+        ),
         "delivery": catalogue.delivery,
         "path": str(path),
         "exists": False,
@@ -427,7 +455,11 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         "model_count_label": catalogue.model_count_label,
         "model_count_note": catalogue.model_count_note,
     }
-    document = _read_catalogue(path, catalogue.document_format)
+    document = _read_catalogue(
+        path,
+        catalogue.document_format,
+        preserve_bytes=merge is not None and merge.preserve_bytes,
+    )
     if document is None:
         return entry
     if merge is not None:
@@ -465,15 +497,22 @@ def _merged_block(
 
 
 def _read_catalogue(
-    path: Path, document_format: str = "json"
+    path: Path, document_format: str = "json", *, preserve_bytes: bool = False
 ) -> Mapping[str, Any] | None:
     """Return a generated catalogue, parsed the way its own format demands.
 
     ``tomllib`` reads and does not write, which is exactly the half needed
     here: the dashboard only reports what is on disk. Writing goes through
     ``config/harness_toml.py``.
+
+    ``preserve_bytes`` asks for the JSON5 reader instead of ``json.loads``: a
+    merge target MCC edits as text is a document a user may have commented,
+    and ``json.loads`` would report the very file MCC had just written as
+    absent. Only OpenClaw declares it.
     """
 
+    if preserve_bytes:
+        return read_text_document(path)
     try:
         raw = path.read_bytes()
     except OSError:

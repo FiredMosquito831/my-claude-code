@@ -2265,6 +2265,66 @@ model and even with `--local-only`. Sign in once, or set
 `COMMAND_CODE_API_KEY`. MCC will not fake that credential for you: it belongs
 to Command Code's account, not to this proxy.
 
+### OpenClaw
+
+```bash
+mcc-openclaw
+```
+
+OpenClaw is a multi-channel AI gateway and agent; its own npm package is
+`openclaw` (install it with `npm install -g openclaw`, on Node.js 24.22.1 or
+newer — the package's own `engines.node` is `>=24.22.1 <25 || >=26.12.1`). It
+reads exactly one document, `~/.openclaw/openclaw.json`, resolved from
+`OPENCLAW_CONFIG_PATH`, else `OPENCLAW_STATE_DIR`, else `OPENCLAW_HOME`, else
+`HOME`/`USERPROFILE`. The two levers it also publishes were measured and
+rejected: `OPENCLAW_CONFIG_PATH` *replaces* the ambient config for that
+process, so your channels, skills and gateway settings would vanish, and
+`$include` resolves only inside `~/.openclaw`.
+
+So MCC merges **one block**, `models.providers.mcc`, into your document and
+treats everything else as yours:
+
+| Guarantee | How |
+| --- | --- |
+| One owner | Only `models.providers.mcc` is written, and one recorded value beside it — `agents.defaults.model.primary`, below. Comments, indentation, key order and every other key come back byte for byte, because the edit is made to the text rather than to a re-serialised copy. |
+| Backed up once | The document is copied to `openclaw.json.mcc-backup` before MCC's first edit, and that copy is never overwritten — so it is always your pre-MCC file. |
+| Idempotent | A refresh that resolves the same models writes nothing. |
+| Never uninvited | The background refresh only touches the file when `models.providers.mcc` is already there and names *this* server's address. Having an `openclaw.json` is not consent; running `mcc-openclaw` is. |
+| Reversible | `mcc-openclaw --disconnect` removes the block, puts your default model back, and leaves the rest of the document exactly as it was. `mcc-openclaw --restore` does the same but refuses if the file changed since MCC wrote it, and consumes the record. A file `mcc-openclaw` created is removed again. |
+
+**What MCC writes, precisely.** `models.providers.mcc` carries the proxy base
+URL, a `$MCC_OPENCLAW_API_KEY` reference (the launcher sets that variable in
+the child process only, so **your proxy token is never in the file**), the
+`openai-completions` API and every model MCC can route, each with the limits
+and prices the resolution ladder actually resolved: `contextWindow`,
+`maxTokens`, `input`, `reasoning`, `cost` in USD per million tokens. A value
+nobody published is **omitted**, never written as `0` — a zero window or a
+zero price is a claim MCC cannot make, and a free-looking model is worse than
+one with no price.
+
+**The one value outside the block.** OpenClaw's default model lives at
+`agents.defaults.model.primary`, so `mcc-openclaw` sets it to MCC's starting
+model and records what it replaced — a string, an existing `primary`, or
+nothing at all. `--disconnect` puts back exactly the bytes that were there.
+The background refresh deliberately never touches it: your choice of model is
+yours.
+
+MCC appears inside OpenClaw as the provider `mcc`:
+
+```bash
+mcc-openclaw --models                  # what MCC published to the file
+mcc-openclaw                           # OpenClaw, routed through MCC
+mcc-openclaw --disconnect              # remove MCC's block and restore your default
+mcc-openclaw --restore                 # the same, hash-checked, consuming the record
+```
+
+Maintenance subcommands — `config`, `doctor`, `gateway`, `models`, `plugins`,
+`channels`, `--version` and the rest — reach the CLI untouched and do not need
+a running proxy.
+
+`models.json` under `~/.openclaw/agents/<id>/agent/` is **never touched**: the
+app regenerates that file itself.
+
 ### Kimi Code
 
 ```bash

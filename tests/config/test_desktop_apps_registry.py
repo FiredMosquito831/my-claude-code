@@ -54,6 +54,38 @@ def test_every_id_is_unique():
     assert len(DESKTOP_APPS_BY_ID) == len(DESKTOP_APPS)
 
 
+def test_the_desktop_set_is_the_reviewed_one():
+    """A card is a decision about somebody's file, not an addition.
+
+    Every other registry in this codebase states its contents in a contract
+    test (the harness registry, the install methods), and this one did not --
+    so a card could be added, shipped, and started writing into a user's
+    document with no test noticing. It was found by a mutation check on
+    7.116.0: adding an OpenClaw card (the user's decision that release was a
+    CLI launcher only) failed nothing.
+
+    Changing this set is the intended way to add a card: the diff then says
+    "a new document MCC writes into" in a file somebody reviews, which is
+    exactly what an edit to ``desktop_apps.py`` alone does not say.
+    """
+
+    assert sorted(DESKTOP_APPS_BY_ID) == [
+        "antigravity",
+        "claude_desktop",
+        "codex_desktop",
+        "commandcode",
+        "crush_desktop",
+        "goose_desktop",
+        "kimi_desktop",
+        "lm_studio",
+        "opencode_desktop",
+        "qwen_desktop",
+        "roo_code",
+        "vscode_copilot",
+        "warp",
+    ]
+
+
 @pytest.mark.parametrize("spec", DESKTOP_APPS, ids=ids(DESKTOP_APPS))
 def test_every_spec_declares_a_doc_url(spec: DesktopAppSpec):
     """A row is a claim about somebody else's software; it cites its source."""

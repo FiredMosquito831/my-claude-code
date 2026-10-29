@@ -179,6 +179,7 @@ fail; the mutation was run and both did.
 
 import hashlib
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -244,6 +245,19 @@ BASELINE_PATH = HERE / "metadata_ladder_equality_baseline.json"
 ROWS_PATH = HERE / "metadata_ladder_listing_rows.json"
 MODELS_DEV_PATH = HERE / "metadata_ladder_models_dev.json"
 LIVE_PATH = HERE / "metadata_ladder_openrouter_live.json"
+
+#: Recapture the snapshot into the baseline, from inside the suite so the
+#: fixtures that shape it are the ones the tests use. Same idiom as
+#: ``test_mcp_media_off_is_byte_identical``: set it, run the test, and it
+#: writes the file and skips. 7.116.0 used it to add OpenClaw's serialiser and
+#: recaptured nothing else.
+BASELINE_WRITE = os.environ.get("MCC_LADDER_BASELINE_WRITE", "")
+
+#: The same for the OpenRouter-live half, which is recorded under ``kor-live/``
+#: by its own test. A whole-file recapture of either half would delete the
+#: other's keys, which is why both write to a path the caller names rather than
+#: over the baseline.
+LIVE_WRITE = os.environ.get("MCC_LADDER_LIVE_WRITE", "")
 
 #: 7.84.0 (K-OR): where an entry the live list changes records its new answer.
 KOR_PREFIX = "kor-live/"
@@ -981,7 +995,13 @@ def _assert_unchanged(
 
 def test_every_output_is_byte_identical_to_v7_78_10(monkeypatch, tmp_path) -> None:
     baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    _assert_unchanged(recorded(snapshot(monkeypatch, tmp_path)), baseline)
+    current = recorded(snapshot(monkeypatch, tmp_path))
+    if BASELINE_WRITE:
+        Path(BASELINE_WRITE).write_text(
+            json.dumps(current, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        pytest.skip("wrote the baseline")
+    _assert_unchanged(current, baseline)
 
 
 def test_with_the_live_list_switched_off_nothing_changes(monkeypatch, tmp_path) -> None:
@@ -998,6 +1018,11 @@ def test_with_the_live_list_on_only_the_recorded_entries_move(
 ) -> None:
     baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     current = recorded(snapshot(monkeypatch, tmp_path, "on"))
+    if LIVE_WRITE:
+        Path(LIVE_WRITE).write_text(
+            json.dumps(current, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        pytest.skip("wrote the live snapshot")
     moved = {
         key.removeprefix(KOR_PREFIX)
         for key in baseline
