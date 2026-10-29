@@ -140,11 +140,20 @@ _OPENCODE_GO_EFFORTS = tuple(
     for effort, value in _OPENAI_STANDARD_EFFORTS
 )
 
-#: The models.dev bucket carrying OpenCode's own model registry, including the
+#: The models.dev bucket carrying OpenCode Zen's model registry, including the
 #: per-model ``provider.npm`` override that names each model's wire surface.
-#: One name for both OpenCode profiles: Zen and Go are the same vendor, the
-#: same credential and the same registry behind two path prefixes.
+#: Zen and Go are the same vendor and the same credential. They are **not** the
+#: same registry: models.dev files Go under ``opencode-go``, and the two rosters
+#: disagree (CONFIRMED 2026-10-29 -- 21 ids shared, 16 Go-only, 109 Zen-only,
+#: and seven ids whose published ``npm`` differs). Reading Zen's bucket for a Go
+#: model is what 7.113.5 fixes; see :data:`OPENCODE_GO_REGISTRY_PROVIDER`.
 OPENCODE_REGISTRY_PROVIDER = "opencode"
+
+#: Go's own registry bucket. The value is MCC's *provider* id, not models.dev's
+#: bucket name: the reader resolves it through ``PROVIDER_ID_ALIASES`` exactly
+#: as the six other models.dev readers already do, so a models.dev spelling
+#: never has to be written into a profile field whose type says "provider".
+OPENCODE_GO_REGISTRY_PROVIDER = "opencode_go"
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,25 +490,28 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NamedEffortReasoning(_OPENCODE_GO_EFFORTS),
         client_identity=OPENCODE_CLIENT_IDENTITY,
-        # The Go endpoint is the same vendor, the same credential and the same
-        # model registry behind a different path prefix, so it is declared the
-        # same way. Nothing about it was measured -- the subscription behind
-        # this machine's key is out of credit and answers 401 to everything --
-        # which is exactly why the registry is only the *first* source: a Go
-        # model whose surface the registry gets wrong is corrected by one probe
-        # and remembered, without a release.
+        # The Go endpoint is the same vendor and the same credential as Zen, and
+        # a different registry. models.dev files it under ``opencode-go``, whose
+        # 37 models overlap Zen's 130 in 21 ids -- so before 7.113.5, while this
+        # profile pointed at Zen's bucket, every Go-only id was looked up in a
+        # roster that does not carry it, missed, and fell to the floor below.
+        # Nothing about this host was measured -- the subscription behind this
+        # machine's key is out of credit and answers 401 to everything -- which
+        # is exactly why the registry is only the *first* source: a Go model
+        # whose surface the registry gets wrong is corrected by one probe and
+        # remembered, without a release.
         response_surfaces=(
             ResponseSurface.CHAT_COMPLETIONS,
             ResponseSurface.RESPONSES,
             ResponseSurface.MESSAGES,
         ),
-        surface_registry_provider=OPENCODE_REGISTRY_PROVIDER,
-        # The same door as Zen, for the same reason and with one more: the Go
-        # endpoint's roster is the Zen registry behind another path prefix, so
-        # the majority argument above is the same argument, and nothing about
-        # this host has been measured -- which is precisely when a default
-        # should be the surface the rung can correct in one probe rather than
-        # a guess that reroutes every model at once.
+        surface_registry_provider=OPENCODE_GO_REGISTRY_PROVIDER,
+        # The same door as Zen, and for the same reason: the floor is what a
+        # model gets when nobody -- not the registry, not a probe -- has said
+        # anything, and Chat Completions is where most of either roster sits.
+        # Nothing about this host has been measured, which is precisely when a
+        # default should be the surface the rung can correct in one probe rather
+        # than a guess that reroutes every model at once.
         no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
         responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
         free_tier_tool_catalogue=OPENCODE_FREE_TIER_CATALOGUE,

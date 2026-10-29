@@ -243,6 +243,33 @@ def models_dev_provider_model_ids(
     )
 
 
+def models_dev_bucket_id(index: Mapping[str, Any], provider_id: str) -> str | None:
+    """The bucket this provider's id names, directly or through the alias map.
+
+    A direct hit wins, so an alias entry is only needed where the two ids
+    genuinely differ -- the same order :func:`_provider_bucket_metadata` uses,
+    now shared instead of restated. ``None`` means neither the id nor its alias
+    names a bucket in this index, which is "nothing published" rather than "this
+    provider is unknown".
+
+    Exists because the surface reader used to skip this step: it read
+    ``index[provider]`` raw, so ``opencode_go`` (models.dev's ``opencode-go``,
+    in :data:`PROVIDER_ID_ALIASES`) was looked up under a name no bucket
+    carries and every one of its models fell to the profile's floor. Every
+    other reader in this module already resolved through the map; this makes
+    the seventh agree with the six.
+    """
+
+    if not provider_id:
+        return None
+    if isinstance(index.get(provider_id), Mapping):
+        return provider_id
+    alias = PROVIDER_ID_ALIASES.get(provider_id)
+    if alias and isinstance(index.get(alias), Mapping):
+        return alias
+    return None
+
+
 def models_dev_provider_npm_overrides(
     provider: str, path: Path | None = None
 ) -> dict[str, str]:
@@ -252,9 +279,11 @@ def models_dev_provider_npm_overrides(
     use a per-model ``provider: {npm: "..."}`` block to say this particular
     model is served by a different SDK -- which, for a gateway that fronts
     several APIs behind one base URL, is the same statement as "it is served
-    on a different endpoint". OpenCode Zen is the case this exists for: 56 of
-    its 102 models carry the field, and it is the only *published* account of
-    which of Zen's four surfaces a model lives behind.
+    on a different endpoint". OpenCode is the case this exists for: 56 of Zen's
+    102 models carry the field, and it is the only *published* account of which
+    of the four surfaces a model lives behind. Go publishes its own, different
+    bucket (``opencode-go``, 37 models), and the two do not agree -- which is
+    why :func:`models_dev_bucket_id` is the lookup and not a raw subscript.
 
     Read out of the document already on disk, and nothing is fetched -- the
     caller is on a request path. A missing or unknown bucket answers with an
@@ -265,9 +294,10 @@ def models_dev_provider_npm_overrides(
     cache = read_models_dev_cache(path)
     if cache is None:
         return {}
-    bucket = cache.index.get(provider)
-    if not isinstance(bucket, Mapping):
+    bucket_id = models_dev_bucket_id(cache.index, provider)
+    if bucket_id is None:
         return {}
+    bucket = cache.index[bucket_id]
     models = bucket.get("models")
     if not isinstance(models, Mapping):
         return {}
@@ -565,14 +595,13 @@ def _provider_bucket_metadata(
     if not provider_id:
         return {}
     # MCC's provider ids and models.dev's do not always agree (open_router vs
-    # openrouter, fireworks vs fireworks-ai); the alias map is the same one the
-    # reasoning-capability lookup uses.
-    bucket = index.get(provider_id)
-    if not isinstance(bucket, Mapping):
-        alias = PROVIDER_ID_ALIASES.get(provider_id)
-        bucket = index.get(alias) if alias else None
-    if not isinstance(bucket, Mapping):
+    # openrouter, fireworks vs fireworks-ai, opencode_go vs opencode-go); the
+    # alias map is the same one the reasoning-capability lookup uses, and
+    # :func:`models_dev_bucket_id` is the one place that walks it.
+    bucket_id = models_dev_bucket_id(index, provider_id)
+    if bucket_id is None:
         return {}
+    bucket = index[bucket_id]
     models = bucket.get("models")
     if not isinstance(models, Mapping):
         return {}

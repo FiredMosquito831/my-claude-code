@@ -1,0 +1,520 @@
+{
+ "beam-free": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "cat-jam-free": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "claude-haiku-5-5": {
+  "after": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  },
+  "before": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  }
+ },
+ "deepseek-v4-pro": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "deepseek-v4.1-flash": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "gemini-4-argon": {
+  "after": {
+   "detail": "the host serves this model through Google's own API, which is not an endpoint of this gateway (@ai-sdk/google)",
+   "label": "unservable (registry)",
+   "source": "registry",
+   "surface": "unservable"
+  },
+  "before": {
+   "detail": "the host serves this model through Google's own API, which is not an endpoint of this gateway (@ai-sdk/google)",
+   "label": "unservable (registry)",
+   "source": "registry",
+   "surface": "unservable"
+  }
+ },
+ "gemini-4-argon-contributor": {
+  "after": {
+   "detail": "the host serves this model through Google's own API, which is not an endpoint of this gateway (@ai-sdk/google)",
+   "label": "unservable (registry)",
+   "source": "registry",
+   "surface": "unservable"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "glm-5.2": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "glm-5.3": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "glm-5.3-flash": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "gpt-5.6-luna": {
+  "after": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  },
+  "before": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  }
+ },
+ "gpt-6-luna": {
+  "after": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  },
+  "before": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  }
+ },
+ "grok-4.7": {
+  "after": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  },
+  "before": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  }
+ },
+ "hy3": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "hy4-preview": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "iceman-contributor-free": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "kimi-k2.7-code": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "kimi-k3": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "kimi-k3.1-pro": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "longcat-2.0": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "longcat-2.5-preview-free": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "mimo-v2.5": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "mimo-v2.5-pro": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "mimo-v2.6-flash": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "mimo-v2.6-pro": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "minimax-m2.7": {
+  "after": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "minimax-m3": {
+  "after": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "minimax-m3.1-flash": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "minimax-m3.1-flash-free": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "muse-spark-1.2-contributor": {
+  "after": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "muse-spark-1.3-contributor": {
+  "after": {
+   "detail": "@ai-sdk/openai",
+   "label": "responses (registry)",
+   "source": "registry",
+   "surface": "responses"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "qwen3.7-plus": {
+  "after": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "qwen3.8-flash": {
+  "after": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  },
+  "before": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  }
+ },
+ "qwen3.8-max": {
+  "after": {
+   "detail": "@ai-sdk/anthropic",
+   "label": "messages (registry)",
+   "source": "registry",
+   "surface": "messages"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "space-bunny": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "step-5-preview": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ },
+ "step-5-preview-free": {
+  "after": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  },
+  "before": {
+   "detail": "no registry entry for this model",
+   "label": "chat_completions (profile)",
+   "source": "profile",
+   "surface": "chat_completions"
+  }
+ }
+}

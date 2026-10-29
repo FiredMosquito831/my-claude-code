@@ -113,6 +113,24 @@ value, and the value they showed before is the one now beside it.
 page fields (max option explanation, effort values and provenance) move.
 Their before/after expectations are recorded separately on the base tree;
 all ladder data and this historical baseline remain intact.
+
+**7.113.5 (OCGO-1) makes ``opencode_go`` read its own registry bucket, on
+purpose.** The Go profile was handed Zen's bucket name, so every id only Go
+publishes was looked up in a roster that does not carry it, missed, and fell to
+the profile floor -- Chat Completions, source ``profile``, for all of them. It
+now names its own id and the reader resolves ``opencode_go`` -> ``opencode-go``
+through ``PROVIDER_ID_ALIASES``, as the six other models.dev readers already
+did. The one Go model this fixture carries, ``minimax-m3``, moves from the floor
+to the door Go publishes (``messages``, ``@ai-sdk/anthropic``); every output
+that embeds its panel -- the page, the blanked twin, the provenance route --
+moves with it, and nothing else does. Each moved entry holds both answers,
+``v7.113.4`` (what this branch's parent answers, already past 7.113.2's
+correction where one exists) and ``v7.113.5``;
+``test_7_113_5_moves_only_the_opencode_go_registry_answers`` holds the rule:
+the moved set is exactly those ten entries, the surface row is the only field
+inside a capability panel that moves, and no price, kind, canonical encoding,
+record, routing lookup, harness catalogue, ``/v1/models`` or ``/v1beta/models``
+entry moves at all.
 """
 
 import hashlib
@@ -231,6 +249,13 @@ AFTER_K2 = "v7.80.0"
 #: Where 7.83.0 records an entry it moves on purpose: both answers, under these.
 BEFORE_K4 = "v7.82.0"
 AFTER_K4 = "v7.83.0"
+
+#: 7.113.5 (OCGO-1): where an entry the identity fix moves holds both answers.
+#: The two ``opencode_go/minimax-m3`` capability rows -- the Go provider's own
+#: registry bucket, ``opencode-go``, instead of Zen's -- move from the profile
+#: floor to the door Go's registry publishes. See the module docstring.
+BEFORE_OCGO1 = "v7.113.4"
+AFTER_OCGO1 = "v7.113.5"
 #: The record fields 7.83.0 fills from the row's own statement.
 K4_RECORD_FIELDS = (
     "context_length",
@@ -797,12 +822,32 @@ def _is_k4_entry(value: Any) -> bool:
     return isinstance(value, dict) and set(value) == {BEFORE_K4, AFTER_K4}
 
 
+def _is_ocgo1_entry(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {BEFORE_OCGO1, AFTER_OCGO1}
+
+
 def _expected(key: str, value: Any) -> Any:
+    if _is_ocgo1_entry(value):
+        return value[AFTER_OCGO1]
     if _is_k4_entry(value):
         return value[AFTER_K4]
-    if _is_kind_entry(key):
+    if _is_kind_entry(key) and isinstance(value, dict) and AFTER_K2 in value:
         return value[AFTER_K2]
     return value
+
+
+def _current_answer(group: str, key: str, value: Any) -> Any:
+    """What this release answers for one recorded entry, from the baseline.
+
+    An entry 7.113.5 moves carries both answers itself, and its ``AFTER_OCGO1``
+    is already past whatever 7.113.2 recorded for it -- so it is not handed to
+    :func:`corrected_expectation` a second time, which would demand that the
+    correction's ``before`` be the 7.113.5 answer.
+    """
+
+    if _is_ocgo1_entry(value):
+        return value[AFTER_OCGO1]
+    return corrected_expectation(group, key, _expected(key, value))
 
 
 def _is_kor_key(key: str) -> bool:
@@ -845,7 +890,7 @@ def _assert_unchanged(
         key
         for key in sorted(current)
         if _encoded(current[key])
-        != _encoded(corrected_expectation(go_group, key, _expected(key, baseline[key])))
+        != _encoded(_current_answer(go_group, key, baseline[key]))
     ]
     assert not differing, differing
 
@@ -890,10 +935,10 @@ def test_with_the_live_list_on_only_the_recorded_entries_move(
         if key in moved:
             expected = baseline[KOR_PREFIX + key]
         elif key in plain:
-            expected = _expected(key, baseline[key])
+            expected = baseline[key]
         else:
             expected = baseline[key]
-        expected = corrected_expectation("metadata_on", key, expected)
+        expected = _current_answer("metadata_on", key, expected)
         if _encoded(current[key]) != _encoded(expected):
             differing.append(key)
     assert not differing, differing
@@ -985,8 +1030,9 @@ def test_7_84_0_fills_gaps_and_moves_no_stated_value() -> None:
     }
     assert moved, "the fixture would prove nothing if nothing moved"
     violations: list[str] = []
-    for key, after in moved.items():
+    for key, recorded_value in moved.items():
         before = _expected(key, baseline[key])
+        after = _expected(key, recorded_value)
         if key.startswith(DIGESTED_PREFIXES):
             if key.startswith(("serialiser/", "k4-blanked/serialiser/")):
                 continue  # held by the substituted digests below
@@ -1432,3 +1478,75 @@ def test_7_86_0_puts_the_providers_words_first_and_moves_nothing_else() -> None:
                     assert now.get("source") == "provider", (where, field)
     assert not violations, violations
     assert flipped, "no capability record was turned round"
+
+
+#: The entries 7.113.5 moves: the one Go model the fixtures carry, and every
+#: output that embeds its capability panel.
+OCGO1_MOVED = (
+    "capabilities/opencode_go/minimax-m3",
+    "page",
+    "k4-blanked/page",
+    "admin/catalogue-models?provenance=1",
+    "k4-blanked/admin/catalogue-models?provenance=1",
+)
+
+
+def test_7_113_5_moves_only_the_opencode_go_registry_answers() -> None:
+    """The one move 7.113.5 makes: Go reads its own registry bucket.
+
+    ``opencode_go`` was handed Zen's bucket name, so every Go-only id missed in
+    a roster that does not publish it and fell to the profile floor. Reading
+    ``opencode-go`` instead (through ``PROVIDER_ID_ALIASES``) moves the one Go
+    model the fixtures carry -- ``minimax-m3``, from the floor to the door the
+    vendor publishes -- and every output that embeds that panel. Nothing else
+    moves: no price, no kind, no canonical encoding, no record, no routing
+    lookup, no harness catalogue, no ``/v1/models``, no ``/v1beta/models``.
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {key: value for key, value in baseline.items() if _is_ocgo1_entry(value)}
+    assert set(moved) == set(OCGO1_MOVED) | {KOR_PREFIX + key for key in OCGO1_MOVED}, (
+        sorted(moved)
+    )
+
+    panels = 0
+    digests = 0
+    for key, entry in moved.items():
+        before, after = entry[BEFORE_OCGO1], entry[AFTER_OCGO1]
+        if key.endswith("capabilities/opencode_go/minimax-m3"):
+            assert isinstance(before, dict) and isinstance(after, dict), key
+            changed = sorted(
+                field
+                for field in set(before) | set(after)
+                if _encoded(before.get(field)) != _encoded(after.get(field))
+            )
+            assert changed == ["response_surface"], (key, changed)
+            was, now = before["response_surface"], after["response_surface"]
+            assert was["label"] == "chat_completions (profile)", key
+            assert was["source"] == "profile", key
+            assert was["note"] == "no registry entry for this model", key
+            assert now["label"] == "messages (registry)", key
+            assert now["source"] == "registry", key
+            assert now["note"] == "@ai-sdk/anthropic", key
+            # The same three doors are still offered; only the answer moved.
+            assert now["offered"] == was["offered"], key
+            assert now["override"] == was["override"] == "", key
+            panels += 1
+            continue
+        assert "sha256" in before and "sha256" in after, key
+        assert after["sha256"] != before["sha256"], key
+        digests += 1
+
+    assert panels == 2, panels
+    assert digests == 8, digests
+    # A digest is only a claim; each one that moved must be an output a panel
+    # reaches. The catalogue route without provenance does not carry the
+    # surface, so it must NOT have moved -- that absence is half the proof.
+    assert "admin/catalogue-models" not in moved
+    assert not [
+        key
+        for key in moved
+        if key.startswith(("prices/", "kinds/", "kinv/", "routing/", "records/"))
+        or key in {"v1/models", "v1beta/models", PICKER_KINDS_KEY}
+        or "serialiser/" in key
+    ], sorted(moved)

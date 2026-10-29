@@ -153,14 +153,24 @@ def registry_silence(registry_provider: str) -> str:
 
     Reads only what is already on disk, like every other caller on a request
     path; a fetch here would turn a page render into a network wait.
+
+    The bucket is resolved through :func:`models_dev_bucket_id`, the same
+    lookup :func:`registry_surface` goes through, so the two silences describe
+    the bucket that actually answered. Reading the raw id instead told every
+    ``opencode_go`` row "no cached copy of the vendor's registry yet" -- a
+    sentence about *this install* -- when the truth was "Go's registry has
+    nothing for this model", a sentence about the *vendor*.
     """
 
     if not registry_provider:
         return ""
-    from my_claude_code.providers.runtime.models_dev import read_models_dev_cache
+    from my_claude_code.providers.runtime.models_dev import (
+        models_dev_bucket_id,
+        read_models_dev_cache,
+    )
 
     cache = read_models_dev_cache()
-    if cache is None or not isinstance(cache.index.get(registry_provider), Mapping):
+    if cache is None or models_dev_bucket_id(cache.index, registry_provider) is None:
         return "no cached copy of the vendor's registry yet"
     return "no registry entry for this model"
 
