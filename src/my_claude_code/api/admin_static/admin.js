@@ -20197,6 +20197,9 @@ function renderHarnesses(errorMessage) {
   renderMcpMediaControls();
   renderAgentInstallControls();
   syncRoutePauseUi();
+  // 7.113.3: a re-render (an Install finishing, a tier save) rebuilds the
+  // cards under a query that is still in the box.
+  applyCodingAgentsFilter();
 }
 
 function harnessCard(harness) {
@@ -20266,6 +20269,62 @@ function harnessCard(harness) {
     card.append(hint);
   }
   return card;
+}
+
+/* --------------------------------------------------------------------- */
+/* Finding a card (7.113.3)                                                */
+/* --------------------------------------------------------------------- */
+/* The user's words (2026-10-29): "allow users to search for the coding agent
+   that is of interest to them instead of having to scroll each time". One box
+   above both card groups -- the CLI agents and the desktop apps -- because
+   they are one page of cards to the reader, even though two routes fill them.
+
+   It filters; it does not fetch, rebuild or reorder anything. What it matches
+   is the text a card renders, so every name, command, legacy alias and label
+   on a card is findable and nothing the page does not show is ever matched. A
+   card is hidden with the `hidden` attribute -- never removed -- for the two
+   reasons the Providers page's filter already records: changedValues() walks
+   [data-key] across the document, so a detached control would silently stop
+   being saveable, and a hidden card is also out of the tab order. An empty
+   query shows every card again, which is also exactly what the server sent. */
+
+const CODING_AGENT_LIST_IDS = ["codingAgentsList", "desktopAppsList"];
+
+function codingAgentHaystack(card) {
+  // Collapse whitespace so a two-word query ("codex desktop") matches across
+  // the element boundaries a card's own markup puts between the words.
+  return (card.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function applyCodingAgentsFilter() {
+  const input = byId("codingAgentsFilter");
+  if (!input) return;
+  const query = input.value.replace(/\s+/g, " ").trim().toLowerCase();
+  let shown = 0;
+  CODING_AGENT_LIST_IDS.forEach((listId) => {
+    const list = byId(listId);
+    if (!list) return;
+    list.querySelectorAll(".coding-agent-card").forEach((card) => {
+      const matches = !query || codingAgentHaystack(card).includes(query);
+      card.hidden = !matches;
+      if (matches) shown += 1;
+    });
+  });
+  const bar = byId("codingAgentsFilterBar");
+  if (bar) bar.classList.toggle("coding-agents-filtering", Boolean(query));
+  const note = byId("codingAgentsFilterNote");
+  if (note) note.hidden = !(query && shown === 0);
+}
+
+function initCodingAgentsFilter() {
+  const input = byId("codingAgentsFilter");
+  if (!input) return;
+  // No debounce and no request: both lists are already in this document, so a
+  // keystroke is one synchronous pass over their text.
+  input.addEventListener("input", applyCodingAgentsFilter);
+  // The browser restores a search box's value on back/forward without firing
+  // an input event, so the filter is applied once on start-up as well.
+  applyCodingAgentsFilter();
 }
 
 /* --------------------------------------------------------------------- */
@@ -20343,6 +20402,8 @@ function renderDesktopApps(errorMessage) {
   });
   renderMcpMediaControls();
   renderAgentInstallControls();
+  // 7.113.3: see renderHarnesses -- the same query survives the re-render.
+  applyCodingAgentsFilter();
 }
 
 /* --------------------------------------------------------------------- */
@@ -20405,6 +20466,9 @@ function renderAgentInstallControls() {
   document.querySelectorAll(".agent-install-control").forEach((host) => {
     fillAgentInstallControl(host, agentInstallEntry(host.dataset.installTarget));
   });
+  // 7.113.3: these lines are text on the cards the filter matches, and this
+  // runs again when a job's state changes -- so the match is re-taken.
+  applyCodingAgentsFilter();
 }
 
 function agentInstallParagraph(className, text) {
@@ -20940,6 +21004,10 @@ function renderMcpMediaControls() {
   document.querySelectorAll(".mcp-media-control").forEach((host) => {
     fillMcpMediaControl(host, mcpMediaApp(host.dataset.mcpApp));
   });
+  // 7.113.3: same reason as renderAgentInstallControls -- the button's text is
+  // part of the card the filter matches, and it arrives after the card is
+  // appended.
+  applyCodingAgentsFilter();
 }
 
 function mcpMediaParagraph(className, text) {
@@ -37277,6 +37345,11 @@ function initModelsView() {
 }
 
 initModelsView();
+
+/* 7.113.3: the Coding agents page's filter box. Bound once, at start-up: the
+   input is static markup and sits outside both card lists, so it survives
+   every re-render of either of them with its query (and its value) intact. */
+initCodingAgentsFilter();
 
 /* ------------------------------------------------------ route rail wiring
    The drop target is tracked by pointerover on the container rather than

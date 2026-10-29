@@ -12082,3 +12082,230 @@ def test_jsdom_third_party_text_on_the_chain_surfaces_stays_text(
     assert WS_PROBE in websearch_chain["detailFailed"]["summary"]
     assert WS_PROBE in websearch_chain["detailFailed"]["meta"]["Error"]
     assert WS_PROBE in websearch_chain["triesCells"][1]["lines"][0]["text"]
+
+
+# --------------------------------------------------------------------------
+# 7.113.3: the Coding agents page's filter box. One run of
+# admin_jsdom_coding_agents_filter.mjs (MCC_JSDOM_SCENARIO=coding_agents_filter)
+# on the harness's own payloads -- 15 CLI agents and 10 desktop apps -- and the
+# empty-query DOM compared with the one the BASE tree (7.113.2, aa4afc78) drew
+# from the same scenario pointed at its own admin_static.
+
+CA_BASELINE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "coding_agents_page_dom_7_113_2.json"
+)
+CA_CLI = [
+    "claude",
+    "codex",
+    "pi",
+    "opencode",
+    "kilo",
+    "commandcode_cli",
+    "kimi_code",
+    "qwen_code",
+    "crush",
+    "cline_cli",
+    "goose",
+    "aider",
+    "droid",
+    "gemini_cli",
+    "antigravity",
+]
+CA_DESKTOP = [
+    "codex_desktop",
+    "opencode_desktop",
+    "goose_desktop",
+    "crush_desktop",
+    "claude_desktop",
+    "roo_code",
+    "goose_unresolved",
+    "codex_removed",
+    "antigravity",
+    "warp",
+]
+
+
+@pytest.fixture(scope="module")
+def coding_agents_filter() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="coding_agents_filter")
+
+
+def test_jsdom_coding_agents_filter_scenario_runs_clean(
+    coding_agents_filter,
+) -> None:
+    assert coding_agents_filter["fatal"] is None
+    assert coding_agents_filter["scenarioFatal"] is None
+    assert coding_agents_filter["scriptErrors"] == []
+    assert coding_agents_filter["consoleErrors"] == []
+    assert coding_agents_filter["baseTree"] is False
+    assert coding_agents_filter["harnessRoutes"] == [
+        "/admin/api/harnesses",
+        "/admin/api/desktop-apps",
+    ]
+
+
+def test_jsdom_coding_agents_filter_box_is_first_and_at_rest_shows_every_card(
+    coding_agents_filter,
+) -> None:
+    empty = coding_agents_filter["empty"]
+    assert empty["cli"] == CA_CLI
+    assert empty["desktop"] == CA_DESKTOP
+    assert empty["total"] == 25
+    assert empty["shown"] == 25
+    assert empty["hidden"] == []
+    assert empty["noteHidden"] is True
+    assert empty["filtering"] is False
+    assert empty["barClass"] == "coding-agents-filter"
+    assert empty["value"] == ""
+    # The box reads first: it is the first control on the page, above both
+    # card groups and every card's buttons.
+    assert coding_agents_filter["firstFocusableId"] == "codingAgentsFilter"
+
+
+def test_jsdom_coding_agents_filter_empty_query_is_the_base_trees_page_exactly(
+    coding_agents_filter,
+) -> None:
+    """The view's children, bar apart, are what 7.113.2 drew.
+
+    The baseline was captured by this same scenario file pointed at the BASE
+    tree's admin_static, where the box does not exist: so the equality is the
+    empty box's whole footprint on the page -- one wrapper, one input, one
+    hidden note -- and nothing else.
+    """
+
+    baseline = json.loads(CA_BASELINE.read_text(encoding="utf-8"))
+    assert "BASE tree aa4afc78" in baseline["written_by"]
+    assert baseline["dom"]["viewChildCount"] == 4
+    assert baseline["dom"]["filterBar"] is None
+    dom = coding_agents_filter["dom"]
+    assert dom["viewChildCount"] == 5
+    assert dom["filterBar"].count("<input") == 1
+    assert 'id="codingAgentsFilter"' in dom["filterBar"]
+    assert dom["children"] == baseline["dom"]["children"]
+
+
+def test_jsdom_coding_agents_filter_keeps_exactly_the_cards_that_render_it(
+    coding_agents_filter,
+) -> None:
+    codex = coding_agents_filter["codex"]
+    assert codex["cli"] == ["codex"]
+    # Both Codex desktop cards: the live one and the second machine's.
+    assert codex["desktop"] == ["codex_desktop", "codex_removed"]
+    assert codex["shown"] == 3
+    assert codex["noteHidden"] is True
+    assert codex["filtering"] is True
+    assert codex["barClass"] == "coding-agents-filter coding-agents-filtering"
+    # What is visible is exactly what renders the query -- read independently
+    # from each card's own text -- and everything else is hidden, not gone.
+    assert (
+        codex["cli"] + codex["desktop"]
+        == coding_agents_filter["codexHits"]
+        == [
+            "codex",
+            "codex_desktop",
+            "codex_removed",
+        ]
+    )
+    assert len(codex["hidden"]) == 22
+    assert set(codex["hidden"]) == (set(CA_CLI) | set(CA_DESKTOP)) - {
+        "codex",
+        "codex_desktop",
+        "codex_removed",
+    }
+
+
+def test_jsdom_coding_agents_filter_matches_a_name_a_command_and_a_legacy_alias(
+    coding_agents_filter,
+) -> None:
+    # Kilo's own summary calls it "a fork of OpenCode", so Kilo is an honest
+    # match for that word; the desktop app is in the other group.
+    assert coding_agents_filter["opencode"]["cli"] == ["opencode", "kilo"]
+    assert coding_agents_filter["opencode"]["desktop"] == ["opencode_desktop"]
+    assert coding_agents_filter["opencode"]["shown"] == 3
+    # Roo Code's card names the policy that manages it ("...Policies\Claude").
+    assert coding_agents_filter["claude"]["cli"] == ["claude"]
+    assert coding_agents_filter["claude"]["desktop"] == ["claude_desktop", "roo_code"]
+    # Typed in capitals and still a match: the comparison is case-insensitive.
+    assert coding_agents_filter["claude"]["value"] == "CLAUDE"
+    # fcc-claude is the legacy alias the Claude Code card renders as a
+    # command line, which is the point of matching rendered text.
+    assert coding_agents_filter["legacyAlias"]["cli"] == ["claude"]
+    assert coding_agents_filter["legacyAlias"]["desktop"] == []
+    assert coding_agents_filter["legacyAlias"]["shown"] == 1
+
+
+def test_jsdom_coding_agents_filter_nothing_matches_and_no_control_leaves(
+    coding_agents_filter,
+) -> None:
+    nothing = coding_agents_filter["nothing"]
+    assert nothing["shown"] == 0
+    assert nothing["cli"] == []
+    assert nothing["desktop"] == []
+    assert len(nothing["hidden"]) == 25
+    assert nothing["noteHidden"] is False
+    assert nothing["noteText"] == "No agents match."
+    assert nothing["filtering"] is True
+    # Hiding a card never detaches a control: the page's [data-key] count is
+    # the same at rest, filtered and cleared, which is what keeps
+    # changedValues() and every Save working.
+    assert coding_agents_filter["dataKeyCountEmpty"] == 164
+    assert coding_agents_filter["dataKeyCountFiltered"] == 164
+    assert coding_agents_filter["dataKeyCountCleared"] == 164
+
+
+def test_jsdom_coding_agents_filter_typing_sends_nothing_and_clearing_restores(
+    coding_agents_filter,
+) -> None:
+    """No request per keystroke, and clearing leaves the page it started as."""
+
+    assert coding_agents_filter["typingFetchCalls"] == []
+    assert coding_agents_filter["typingState"]["shown"] == 3
+    cleared = coding_agents_filter["cleared"]
+    assert cleared["cli"] == CA_CLI
+    assert cleared["desktop"] == CA_DESKTOP
+    assert cleared["hidden"] == []
+    assert cleared["noteHidden"] is True
+    assert cleared["filtering"] is False
+    assert cleared["value"] == ""
+    # Not "visible again": the same markup, byte for byte.
+    assert coding_agents_filter["clearedDom"] == coding_agents_filter["dom"]
+
+
+def test_jsdom_coding_agents_filter_markup_in_the_query_never_reaches_the_page(
+    coding_agents_filter,
+) -> None:
+    """The query is compared, never rendered: no element, no attribute, no
+    script, and the note says the same sentence it always says."""
+
+    xss = coding_agents_filter["xss"]
+    assert xss["typed"] == (
+        '<img src=x onerror="window.__agentXss=1"><script>window.__agentXss=2</script>'
+    )
+    assert xss["imagesAfter"] == xss["imagesBefore"]
+    assert xss["scriptsAfter"] == xss["scriptsBefore"]
+    assert xss["elementsAfter"] == xss["elementsBefore"]
+    assert xss["flag"] == ""
+    assert xss["viewMarkup"] is False
+    assert xss["shown"] == 0
+    assert xss["noteText"] == "No agents match."
+
+
+def test_admin_coding_agents_filter_functions_cannot_fetch_or_write_markup() -> None:
+    """A future edit that adds a request or an HTML sink fails here, not in a
+    review: the filter is a comparison over text that is already rendered."""
+
+    source = (STATIC_DIR / "admin.js").read_text(encoding="utf-8")
+    start = source.index("function codingAgentHaystack(")
+    end = source.index("\nfunction initCodingAgentsFilter(", start)
+    body = source[start:end]
+    for forbidden in (
+        "fetch(",
+        "api(",
+        "XMLHttpRequest",
+        ".innerHTML",
+        "insertAdjacentHTML",
+        "outerHTML",
+    ):
+        assert forbidden not in body, forbidden
