@@ -41,6 +41,16 @@ prefers nothing and keeps the discovery order. The set is ordered by
 :data:`CLIENT_FAMILY_ORDER` and the first member is what every pre-7.114.0
 caller reads, so a model with one known door resolves byte for byte what it
 always did -- which, on this fleet, is every model but one.
+
+**Since 7.115.0 a host may guess.** On the two OpenCode profiles
+(``optimistic_first_try``) a model whose surface is *unknown* -- the vendor's
+registry names no package this build can map, so rung 6 is the floor -- is
+tried once on the door its client family prefers and then on the floor, with
+the wrong door learned and skipped from the next request on. The guess is a
+``guessed=True`` candidate: the walk asks it one ~16-token probe, never the
+client's request, and the floor is never abandoned. A caller with no request
+in flight builds no guess at all, which is what keeps every Models-page and
+admin answer identical to the release before.
 """
 
 from collections.abc import Iterable, Mapping
@@ -111,6 +121,17 @@ UNSERVABLE_REASONS: Mapping[ResponseSurface, str] = {
 }
 
 DEFAULT_SURFACE = ResponseSurface.CHAT_COMPLETIONS
+
+#: What a guessed door is, in the operator's words, when the vendor's registry
+#: named no package for this model at all (7.115.0). The unservable case has
+#: its own sentence below; both are a statement about *this* door, never a
+#: claim about the model.
+UNKNOWN_SURFACE_GUESS = (
+    "guessed -- the vendor's registry names no surface for this model"
+)
+UNSERVABLE_SURFACE_GUESS = (
+    "guessed -- the vendor names a surface this build cannot speak"
+)
 
 #: Which known door each inbound client family asks first (7.114.0).
 #:
@@ -322,12 +343,22 @@ def resolve_surface_ladder(
     probe -- and ``UNKNOWN`` prefers nothing, so those callers keep the order
     they had.
 
-    ``optimistic`` is the profile's ``optimistic_first_try`` (7.114.0), and in
-    this release only the **unservable** branch reads it: a model the vendor
-    places on an API this build cannot speak is not refused on such a host but
-    tried on the door its client prefers and then on the floor, one probe
-    before the client's request ever reaches the guess. Every other profile
-    keeps the hard refusal.
+    ``optimistic`` is the profile's ``optimistic_first_try``, and only the two
+    OpenCode profiles set it. Two branches read it, both confined to them:
+
+    * **unservable** (7.114.0) -- a model the vendor places on an API this
+      build cannot speak is not refused on such a host but tried on the door
+      its client prefers and then on the floor, one probe before the client's
+      request ever reaches the guess. Every other profile keeps the refusal.
+    * **unknown** (7.115.0) -- a model the vendor's registry says nothing
+      about resolves to the profile's floor and nothing else; on such a host
+      the door the client family prefers is *tried once* ahead of it, learned
+      from, and fallen back from inside the same attempt. This is the one
+      place in the resolver that answers with a door nobody vouched for, so
+      it is also the one place a caller can see ``guessed`` ahead of the
+      floor. With no request in flight the family is ``UNKNOWN``, there is no
+      preferred door, and the answer is the floor -- byte for byte what every
+      caller outside a request answered before this release.
 
     ``declared`` is what the *profile* says this provider can speak. A
     resolved surface that is not in it becomes :data:`ResponseSurface.
@@ -398,14 +429,29 @@ def resolve_surface_ladder(
         return _one(
             ResolvedResponseSurface(DEFAULT_SURFACE, ResponseSurfaceSource.DEFAULT)
         )
-    return _one(
-        _constrain(
-            no_information,
-            ResponseSurfaceSource.PROFILE,
-            registry_silence(registry_provider),
-            speakable,
-        )
+    detail = registry_silence(registry_provider)
+    floor = _constrain(
+        no_information,
+        ResponseSurfaceSource.PROFILE,
+        detail,
+        speakable,
     )
+    if optimistic and floor.surface is not ResponseSurface.UNSERVABLE:
+        # 7.115.0, optimistic discovery. Nobody published a door for this
+        # model, so the resolver's own answer is the profile's floor. On a host
+        # that opted in the request asks the door its client family prefers
+        # FIRST, one tiny probe before the client's request -- and falls back
+        # to the floor inside the same attempt. One guess, then home: the
+        # second member is always the floor, and a caller with no family
+        # preference (the Models page, an admin call) never guesses at all.
+        return _guessed_ladder(
+            family,
+            speakable,
+            no_information,
+            reason=UNKNOWN_SURFACE_GUESS,
+            floor_detail=detail,
+        )
+    return _one(floor)
 
 
 def resolve_response_surface(
@@ -515,16 +561,23 @@ def _guessed_ladder(
     family: ClientFamily,
     speakable: tuple[ResponseSurface, ...],
     no_information: ResponseSurface | None,
+    *,
+    reason: str = UNSERVABLE_SURFACE_GUESS,
+    floor_detail: str = "",
 ) -> ResolvedSurfaceLadder:
     """``[the family's preferred door] + [the floor]`` -- one guess, then home.
 
-    7.114.0's unservable branch (and 7.115.0's unknown-surface branch will
-    build the same shape). The vendor said this model needs an API this build
-    cannot speak; that statement is honoured -- the named door is never
-    dialled -- but "therefore the model is unusable" is no longer concluded
-    from it, because nobody has asked the host whether it also answers on a
-    door MCC does speak. The guess carries ``guessed=True`` so the walk probes
-    it first; it is one ~16-token question, not the client's request.
+    7.114.0's unservable branch, and 7.115.0's unknown-surface branch, build
+    the same shape: the first member is the door this client family prefers
+    among the doors the host speaks, marked ``guessed`` so the walk asks it one
+    ~16-token probe before the client's request ever reaches it; the second is
+    the profile's floor, which is what the request would have used with nobody
+    guessing, carrying the same source and note it always did.
+
+    One guess and only one. ``UNKNOWN`` -- no request in flight, or a dialect
+    that says nothing about a surface -- has no preferred door, so the ladder
+    is the floor alone and every caller outside a request answers exactly what
+    it answered before this existed.
     """
 
     floor = DEFAULT_SURFACE if no_information is None else no_information
@@ -535,11 +588,13 @@ def _guessed_ladder(
             ResolvedResponseSurface(
                 preferred,
                 ResponseSurfaceSource.PROFILE,
-                "guessed -- the vendor names a surface this build cannot speak",
+                reason,
                 guessed=True,
             )
         )
-    candidates.append(_constrain(floor, ResponseSurfaceSource.PROFILE, "", speakable))
+    candidates.append(
+        _constrain(floor, ResponseSurfaceSource.PROFILE, floor_detail, speakable)
+    )
     return ResolvedSurfaceLadder(tuple(candidates))
 
 

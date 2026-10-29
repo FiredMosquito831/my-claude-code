@@ -1194,10 +1194,15 @@ class OpenAIChatProvider(BaseProvider):
         prefers, **inside this one attempt**, so a wrong door costs a failed
         call and not the request: the door that answered wrong is pruned from
         the learned set for seven days and the next candidate carries the
-        client's request. A door MCC is only *guessing* at (a model the vendor
-        places on an API this build cannot speak) is asked one ~16-token probe
-        first, never the client's request. Nothing here changes which model is
-        tried, the retry ladder, the credential pool or ``route_health``.
+        client's request. A door MCC is only *guessing* at is asked one
+        ~16-token probe first, never the client's request: since 7.114.0 that
+        is a model the vendor places on an API this build cannot speak, and
+        since 7.115.0 also a model the vendor says nothing about at all on a
+        host that opted into optimistic discovery -- the guessed door is the
+        one its client family prefers, the floor is its fallback, and a probe
+        that answers is remembered so the next request goes straight there.
+        Nothing here changes which model is tried, the retry ladder, the
+        credential pool or ``route_health``.
         """
 
         request = self.with_stand_ins(request)
@@ -1227,11 +1232,12 @@ class OpenAIChatProvider(BaseProvider):
         door_known = candidate.source in _KNOWN_SURFACE_SOURCES
         while True:
             if candidate.guessed:
-                # The unservable-probe: the vendor named an API this build
-                # cannot speak, so the door MCC can speak is a guess until it
-                # answers. It is asked one tiny question first -- the client's
-                # tools and context never reach a wrong path -- and the answer
-                # is remembered either way.
+                # The guessed door: either the vendor named an API this build
+                # cannot speak (7.114.0) or the vendor named nothing at all
+                # and this host opted into optimistic discovery (7.115.0). It
+                # is asked one tiny question first -- the client's tools and
+                # context never reach a wrong path -- and the answer is
+                # remembered either way.
                 failure = await self._probe_guessed_surface(request.model, surface)
                 if failure is None:
                     remember_response_surfaces(
