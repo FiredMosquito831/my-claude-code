@@ -1200,7 +1200,8 @@ def incoming_message_factory():
 
 
 #: ``logging_config``'s module state, which ``configure_logging`` keeps between
-#: calls to decide whether it is configuring the process or adjusting it.
+#: calls to decide whether it is configuring the process or adjusting it, and
+#: which ``configure_raw_diagnostics`` (7.113.4) keeps for the raw file.
 _LOGGING_CONFIG_GLOBALS = (
     "_configured",
     "_current_path",
@@ -1208,6 +1209,10 @@ _LOGGING_CONFIG_GLOBALS = (
     "_current_verbose",
     "_sink_id",
     "_active_sink",
+    "_raw_path",
+    "_raw_flags",
+    "_raw_sink_id",
+    "_raw_sink",
 )
 
 
@@ -1254,6 +1259,11 @@ class _ProcessLogging:
             # are never reused, so a different id is a sink this test added.
             with contextlib.suppress(ValueError):  # the test removed it itself
                 loguru_logger.remove(sink_id)
+        raw_sink_id = logging_config._raw_sink_id
+        if raw_sink_id is not None and raw_sink_id != self.module_state["_raw_sink_id"]:
+            # The same, for the raw-diagnostics sink a test turned on.
+            with contextlib.suppress(ValueError):
+                loguru_logger.remove(raw_sink_id)
         root = logging.getLogger()
         # pytest's capture handlers for the phase now running (teardown) stay:
         # pytest takes them off again on its way out of the phase.

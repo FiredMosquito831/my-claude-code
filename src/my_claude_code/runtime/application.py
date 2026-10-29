@@ -51,7 +51,10 @@ from my_claude_code.config.env_files import (
     ANTHROPIC_AUTH_TOKEN_ENV,
     process_env_key_is_effective,
 )
-from my_claude_code.config.logging_config import set_third_party_verbosity
+from my_claude_code.config.logging_config import (
+    configure_raw_diagnostics,
+    set_third_party_verbosity,
+)
 from my_claude_code.config.model_refs import parse_model_ref_list, parse_provider_type
 from my_claude_code.config.paths import messaging_state_dir_path
 from my_claude_code.config.provider_registry import get_provider_registry
@@ -707,6 +710,23 @@ class ApplicationRuntime:
         retune_request_log_store(current)
         retune_shared_store(current)
         set_third_party_verbosity(bool(current.log_raw_api_payloads))
+        if changed(
+            "log_raw_sse_events",
+            "log_raw_api_payloads",
+            "log_raw_cli_diagnostics",
+            "server_log_retain_files",
+        ):
+            # 7.113.4: the three raw settings decide whether raw-diagnostics.log
+            # exists at all, and each one applies on Save. No path is passed:
+            # the composition root adopted it, and a save may arrive without
+            # one. A build that never adopted a path (an embedded harness, a
+            # unit test) answers False and does nothing.
+            configure_raw_diagnostics(
+                sse=current.log_raw_sse_events,
+                payloads=current.log_raw_api_payloads,
+                cli=current.log_raw_cli_diagnostics,
+                retain_files=current.server_log_retain_files,
+            )
         if changed(
             "proxy_cooldown_seconds",
             "proxy_cooldown_max_seconds",
