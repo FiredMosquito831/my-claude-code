@@ -161,6 +161,20 @@ does not move, and it says so: no entry carries a ``v7.115.0`` pair,
 for byte, and ``test_7_115_0_moves_nothing`` holds the rule on both sides --
 the page keeps answering the floor for an unpublished model, and the
 request-time ladder is the only thing that gains a guess.
+
+**7.115.1 (MCOUNT) adds two observability counters, and this file does not
+move.** The deprecated ``delta.function_call`` count lives on the request
+attempt's own ``response_shape``, which no page here renders. The per-model
+"in-loop turn ended with text only" count is served by its own route
+(``/admin/api/requests/in-loop``) beside the Models page rather than inside its
+payload -- the same decision 7.5.0 made for the latency rollup, and for the
+same reason: a readout that moves with every logged request has no business
+moving a payload digested against this baseline. So no entry carries a
+``v7.115.1`` answer, ``test_7_115_1_adds_a_route_beside_the_page`` names every
+entry a page change would have moved and finds each of them unchanged, and the
+page's model rows carry no in-loop field at all. Had the field been folded in,
+that test's row-key check and the byte-identical snapshot above would both
+fail; the mutation was run and both did.
 """
 
 import hashlib
@@ -302,6 +316,9 @@ AFTER_OCGO2 = "v7.114.0"
 #: test asserts it finds nothing.
 BEFORE_OCGO3 = "v7.114.0"
 AFTER_OCGO3 = "v7.115.0"
+#: 7.115.1 (MCOUNT) moves nothing either, and its count is not on the page at
+#: all: no entry may carry this answer.
+MCOUNT_ANSWER = "v7.115.1"
 #: The record fields 7.83.0 fills from the row's own statement.
 K4_RECORD_FIELDS = (
     "context_length",
@@ -1839,3 +1856,60 @@ def test_7_115_0_moves_nothing(monkeypatch, tmp_path) -> None:
         assert known.primary.label == "messages (registry)", family
         assert known.primary.guessed is False
     assert go.optimistic_first_try is True
+
+
+#: Every digested output a change to the Models page's own payload would move.
+#: Named rather than implied, so the release that finally moves one has to edit
+#: this line and say so (7.115.1).
+MCOUNT_PAGE_ENTRIES = (
+    "page",
+    "k4-blanked/page",
+    "admin/models",
+    "admin/catalogue-models",
+    "admin/catalogue-models?provenance=1",
+    "v1/models",
+    "v1beta/models",
+)
+
+
+def test_7_115_1_adds_a_route_beside_the_page(monkeypatch, tmp_path) -> None:
+    """The in-loop count is served beside the page, so nothing here moves.
+
+    The Models page is the natural place to *show* a per-model measurement and
+    the wrong place to *carry* a moving one: its payload is digested against
+    this baseline, and this count changes with every logged request. It is
+    therefore its own route, exactly like ``/admin/api/requests/latency``, and
+    the page's own model rows are untouched.
+
+    The rule, in the order it would be broken:
+
+    * no entry in the committed baseline carries a ``v7.115.1`` answer -- the
+      file was not edited for this release;
+    * every entry a Models-page change would move is byte-identical to the
+      committed answer;
+    * and no model row on the page carries an in-loop field, so the count
+      cannot creep in behind an unchanged digest. (It would not survive that
+      anyway: the digest covers the whole payload. Both checks were mutation-
+      run against a row that carried the field, and both failed.)
+    """
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {
+        key: value
+        for key, value in baseline.items()
+        if isinstance(value, dict) and MCOUNT_ANSWER in value
+    }
+    assert moved == {}, sorted(moved)
+
+    outputs = snapshot(monkeypatch, tmp_path)
+    current = recorded(outputs)
+    for key in MCOUNT_PAGE_ENTRIES:
+        assert current[key] == _current_answer("metadata", key, baseline[key]), key
+    _assert_unchanged(current, baseline)
+
+    page = outputs["page"]
+    rows = [model for provider in page["providers"] for model in provider["models"]]
+    assert rows, "the fixture page must have rows to check"
+    assert not [
+        model for model in rows if any("in_loop" in str(key) for key in model)
+    ], "the in-loop count belongs to /admin/api/requests/in-loop, not the page"

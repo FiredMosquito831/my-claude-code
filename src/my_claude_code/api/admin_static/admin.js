@@ -32234,6 +32234,10 @@ const modelsState = {
   // endpoint was unreachable. Kept beside `data` rather than in it: it comes
   // from a different endpoint on purpose (see loadModelsView).
   latency: null,
+  // { days, byRef: Map } from /admin/api/requests/in-loop, or null when the
+  // endpoint was unreachable. Beside `data` for the same reason as `latency`:
+  // it moves with every logged request and the page's payload is pinned.
+  inLoop: null,
   loading: false,
   filter: "",
   // Which provider/model rows are unfolded, so a re-render after a save does
@@ -32277,12 +32281,14 @@ async function loadModelsView(force = false) {
     // off exactly that kind of critical path. Started at the same moment, so
     // it costs nothing in wall clock, and a failure leaves the page intact
     // with no chips rather than no page.
-    const [data, latency] = await Promise.all([
+    const [data, latency, inLoop] = await Promise.all([
       api("/admin/api/model-admin"),
       api("/admin/api/requests/latency").catch(() => null),
+      api("/admin/api/requests/in-loop").catch(() => null),
     ]);
     modelsState.data = data;
     modelsState.latency = indexLatencyByModel(latency);
+    modelsState.inLoop = indexInLoopByModel(inLoop);
     renderModelsPage();
     setModelsStatus("");
   } catch (error) {
@@ -33861,6 +33867,9 @@ function buildModelSummary(model) {
     second.appendChild(chip);
   }
   appendLatencyChip(second, model.model_ref);
+  // How often this model stopped mid-loop (7.115.1): the request log's own
+  // answer to "it said it would keep reading and stopped".
+  appendInLoopChip(second, model.model_ref);
   // What this deployment taught MCC about itself, with its age and whether it
   // is still being applied. Blank for the common case: most models have never
   // said anything about themselves.
@@ -33968,6 +33977,53 @@ function appendLatencyChip(row, modelRef) {
       )
       .join(" · "),
   ].join(" ");
+  row.appendChild(chip);
+}
+
+/* The "it said it would keep reading and stopped" count (7.115.1), per model:
+   in-loop turns that ended with assistant text and no tool call. Fetched from
+   the request log beside the page, like the latency rollup above, and absent
+   rather than zeroed when the model had no sequenced turn in the window --
+   never measured is not the same fact as measured zero. Observation only:
+   no request, response or route changes because of it. */
+function indexInLoopByModel(payload) {
+  if (!payload || payload.enabled === false || !Array.isArray(payload.rows)) {
+    return null;
+  }
+  const byRef = new Map();
+  payload.rows.forEach((row) => {
+    const ref = String(row.model_ref || "");
+    if (!ref) return;
+    byRef.set(ref, row);
+  });
+  return { days: Number(payload.days || 0), byRef };
+}
+
+function appendInLoopChip(row, modelRef) {
+  const index = modelsState.inLoop;
+  if (!index) return;
+  const entry = index.byRef.get(String(modelRef || ""));
+  if (!entry) return;
+  const total = Number(entry.in_loop_turns || 0);
+  if (!total) return;
+  const textOnly = Number(entry.text_only_turns || 0);
+  const unmeasured = Number(entry.unmeasured_turns || 0);
+  const days = index.days || 7;
+  const chip = buildModelsChip(
+    "measured",
+    `last ${days}d: ${textOnly}/${total} in-loop turns ended with text only` +
+      (unmeasured ? ` (${unmeasured} not measured)` : ""),
+  );
+  chip.title =
+    "An in-loop turn is a request that followed a tool result: the turn " +
+    "before it in the same session and subagent called a tool. One ended " +
+    "with text only when it called no tool and delivered visible text -- the " +
+    "model stopped mid-loop instead of continuing, which is what a turn that " +
+    "announces the next step and closes looks like from here. Counted from " +
+    "this installation's request log over the last " +
+    `${days} days; only requests that carried a session id can be sequenced, ` +
+    "and succeeded turns are counted. Observation only: nothing about the " +
+    "requests themselves changes.";
   row.appendChild(chip);
 }
 

@@ -800,7 +800,17 @@ def record_reasoning_adaptation(kind: ReasoningAdaptationKind, message: str) -> 
 RESPONSE_SHAPE_MAX_CHARS = 2048
 """Hard cap on one attempt's shape record. It is a tally, not a transcript."""
 
-_SHAPE_FIELDS = ("reasoning_content", "reasoning", "content", "tool_calls")
+_SHAPE_FIELDS = (
+    "reasoning_content",
+    "reasoning",
+    "content",
+    # The deprecated single-call delta (7.115.1), named beside the modern
+    # ``tool_calls`` it was replaced by. Only the Chat door can carry it, and
+    # only when a host still uses it -- so a reply without one records exactly
+    # the fields it always did.
+    "function_call",
+    "tool_calls",
+)
 
 
 @dataclass(slots=True)

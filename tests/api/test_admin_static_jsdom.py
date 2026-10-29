@@ -12309,3 +12309,84 @@ def test_admin_coding_agents_filter_functions_cannot_fetch_or_write_markup() -> 
         "outerHTML",
     ):
         assert forbidden not in body, forbidden
+
+
+# --------------------------------------------------------------------------- #
+# admin_jsdom_in_loop_chip.mjs (MCC_JSDOM_SCENARIO=in_loop_chip)
+# on the harness's own Models payload -- 45 models per provider -- plus one
+# /admin/api/requests/in-loop answer of four rows covering a stop, a measured
+# zero and an unmeasured tail. The scenario then makes that route fail and
+# re-loads the page once.
+# --------------------------------------------------------------------------- #
+
+IN_LOOP_CHIP = "last 7d: 8/86 in-loop turns ended with text only"
+IN_LOOP_ZERO = "last 7d: 0/4 in-loop turns ended with text only"
+IN_LOOP_UNMEASURED = "last 7d: 3/12 in-loop turns ended with text only (2 not measured)"
+
+
+@pytest.fixture(scope="module")
+def in_loop_chip() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="in_loop_chip")
+
+
+def _in_loop_chips(payload: dict, phase: str) -> dict:
+    rows = payload[phase]
+    return {row["ref"]: row["chips"] for row in rows}
+
+
+def test_jsdom_in_loop_chip_scenario_runs_clean(in_loop_chip) -> None:
+    assert in_loop_chip["fatal"] is None
+    assert in_loop_chip.get("scenarioError") is None
+    assert in_loop_chip["scriptErrors"] == []
+    assert in_loop_chip["consoleErrors"] == []
+    assert in_loop_chip["harnessRoutes"] == ["/admin/api/requests/in-loop"]
+
+
+def test_jsdom_in_loop_chip_draws_one_chip_per_measured_model(in_loop_chip) -> None:
+    chips = _in_loop_chips(in_loop_chip, "loaded")
+
+    assert [chip["text"] for chip in chips["alpha/model-01"]] == [IN_LOOP_CHIP]
+    assert [chip["className"] for chip in chips["alpha/model-01"]] == [
+        "models-chip models-chip-measured"
+    ]
+    # The measured zero is drawn as a zero; the unmeasured tail is named
+    # beside the count instead of being folded into it or dropped.
+    assert [chip["text"] for chip in chips["alpha/model-03"]] == [IN_LOOP_ZERO]
+    assert [chip["text"] for chip in chips["alpha/model-02"]] == [IN_LOOP_UNMEASURED]
+    # A model the endpoint did not name draws no chip at all: never measured
+    # is not the same fact as measured zero.
+    assert chips["alpha/model-00:free"] == []
+    assert chips["alpha/model-04"] == []
+
+
+def test_jsdom_in_loop_chip_says_what_the_turn_is(in_loop_chip) -> None:
+    title = _in_loop_chips(in_loop_chip, "loaded")["alpha/model-01"][0]["title"]
+
+    assert "followed a tool result" in title
+    assert "called no tool" in title
+    assert "visible text" in title
+    assert "Observation only" in title
+    # The window the count covers is named, not implied by the page's own
+    # reasoning chip beside it.
+    assert "last 7 days" in title
+
+
+def test_jsdom_in_loop_chip_is_fetched_beside_the_page(in_loop_chip) -> None:
+    """One call on the first load, one more on the reload; the page's own
+    payload carries no in-loop field on any row."""
+
+    assert in_loop_chip["callsBeforeFailure"] == 1
+    assert in_loop_chip["callsAfterFailure"] == 2
+    assert not [key for key in in_loop_chip["pageRowKeys"] if "in_loop" in str(key)], (
+        in_loop_chip["pageRowKeys"]
+    )
+
+
+def test_jsdom_in_loop_chip_failure_leaves_the_page_intact(in_loop_chip) -> None:
+    """The chip is a readout: losing it costs the chip, never the tree."""
+
+    assert in_loop_chip["treeStillRendered"] is True
+    assert in_loop_chip["statusText"] == ""
+    after = _in_loop_chips(in_loop_chip, "afterFailure")
+    assert after, "the model rows must still be there"
+    assert all(chips == [] for chips in after.values()), after

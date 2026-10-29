@@ -11150,6 +11150,123 @@ class RequestLogStore:
                 self._stats_cache.popitem(last=False)
         return [dict(row) for row in payload]
 
+    def in_loop_text_only_by_model(
+        self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
+    ) -> list[dict[str, Any]]:
+        """Per model: how many in-loop turns ended with text and no tool call.
+
+        The question is the user's own (2026-10-29): a model that narrates the
+        next step and then closes the turn looks, from the outside, exactly
+        like a model that finished -- the client receives a valid message with
+        text and an ``end_turn``, and nothing says the turn was in the middle
+        of reading a file. It is only visible against the turn before it.
+
+        **In-loop** means the request immediately preceding this one in the
+        same conversation thread ended with at least one tool call. That is
+        what "the model has a tool result in hand" looks like from this side
+        of the wire: the client returns a tool result as the next message of
+        the same conversation. The thread is ``session_id`` plus ``agent_id``
+        -- a subagent speaks in its own transcript, and its turns interleave
+        with the main thread's while it runs, so both are required. Both
+        columns arrived in 7.42.0, so no row older than that is in any thread
+        here; a client that states no session id is outside the population
+        entirely, which is why this is a count of what was measured and never
+        of "all turns".
+
+        **Ended with text only** means the turn itself called no tool and
+        delivered visible text (``output_chars > 0``). ``tool_call_count`` is
+        written as NULL, never 0, when a turn called no tool
+        (``request_capture.py``), and every row in this population was
+        written by a release that writes it -- so NULL here is the measured
+        "no tool call", not an unmeasured row. The predicate reads both
+        spellings of "none" (NULL and a 0) so a future writer that starts
+        storing the zero cannot silently zero this count. A turn that ended
+        with reasoning and no visible text is not counted: the client saw
+        nothing.
+
+        Only successes are counted. A cancelled or failed request is not an
+        assistant turn the client received, though it stays in the sequence
+        its neighbours are read against -- which is why the window below is
+        over every session-carrying row and only the counted rows are
+        narrowed. Treating a failed request as if it were absent would make
+        the turn after it follow a tool call two turns back.
+
+        Two approximations, stated rather than hidden. The first turn of a
+        thread inside the window has no predecessor inside it and is not
+        counted as in-loop, so a session that was mid-loop when the window
+        opened undercounts by at most that turn. And a client that
+        interleaves requests of its own (a title, a summary) in one thread
+        puts one between a tool call and the turn that consumed its result;
+        that turn is not counted either. Both push the number down, never up.
+
+        ``unmeasured_turns`` is the in-loop turns whose visible-text length
+        was never recorded (``output_chars`` NULL). They are inside
+        ``in_loop_turns`` and in neither of the other two: unknown is not
+        "no text" and is not "text" either.
+        """
+
+        cache_key = ("in_loop_text_only_by_model", since, limit)
+        now = time.monotonic()
+        with self._stats_lock:
+            cached = self._stats_cache.get(cache_key)
+            if cached is not None:
+                if now - cached[0] < _STATS_CACHE_TTL_SECONDS:
+                    self._stats_cache.move_to_end(cache_key)
+                    return [dict(row) for row in cached[1]["rows"]]
+                del self._stats_cache[cache_key]
+        args: list[Any] = [] if since is None else [since]
+        args.append(limit)
+        since_clause = "" if since is None else " AND ts_epoch >= ?"
+        try:
+            with self._connection() as conn:
+                rows = conn.execute(
+                    "WITH thread_rows AS ("
+                    " SELECT provider || '/' || resolved_model AS model_ref,"
+                    " status, tool_call_count, output_chars,"
+                    " LAG(tool_call_count) OVER ("
+                    " PARTITION BY session_id, agent_id"
+                    " ORDER BY ts_epoch, rowid"
+                    " ) AS previous_tool_calls"
+                    " FROM requests"
+                    " WHERE session_id IS NOT NULL"
+                    f"{since_clause}"
+                    ")"
+                    " SELECT model_ref,"
+                    " COUNT(*) AS in_loop_turns,"
+                    " SUM(CASE WHEN COALESCE(tool_call_count, 0) = 0"
+                    " AND output_chars > 0 THEN 1 ELSE 0 END) AS text_only_turns,"
+                    " SUM(CASE WHEN output_chars IS NULL THEN 1 ELSE 0 END)"
+                    " AS unmeasured_turns"
+                    " FROM thread_rows"
+                    " WHERE previous_tool_calls > 0"
+                    " AND status = 'success'"
+                    " AND model_ref IS NOT NULL"
+                    " GROUP BY model_ref"
+                    " ORDER BY text_only_turns DESC, in_loop_turns DESC"
+                    " LIMIT ?",
+                    args,
+                ).fetchall()
+        except sqlite3.Error as exc:
+            # A readout, not a control: a page that cannot measure renders
+            # without the chip rather than with an error over it.
+            logger.warning("In-loop breakdown unavailable: {}", exc)
+            return []
+        payload = [
+            {
+                "model_ref": str(row["model_ref"]),
+                "in_loop_turns": int(row["in_loop_turns"] or 0),
+                "text_only_turns": int(row["text_only_turns"] or 0),
+                "unmeasured_turns": int(row["unmeasured_turns"] or 0),
+            }
+            for row in rows
+        ]
+        with self._stats_lock:
+            self._stats_cache[cache_key] = (now, {"rows": payload})
+            self._stats_cache.move_to_end(cache_key)
+            while len(self._stats_cache) > _STATS_CACHE_MAX_ENTRIES:
+                self._stats_cache.popitem(last=False)
+        return [dict(row) for row in payload]
+
     def ttft_percentiles(
         self,
         *,

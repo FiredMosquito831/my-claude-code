@@ -4748,6 +4748,16 @@ if (process.env.MCC_JSDOM_SCENARIO === "coding_agents_filter") {
   );
   scenario = prepareCodingAgentsFilterScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=in_loop_chip (7.115.1): the Models page's in-loop chip --
+   the count fetched beside the page, the measured zero, the unmeasured tail,
+   the tooltip's own words, and the page intact when the endpoint fails
+   (admin_jsdom_in_loop_chip.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "in_loop_chip") {
+  const { prepareInLoopChipScenario } = await import(
+    "./admin_jsdom_in_loop_chip.mjs"
+  );
+  scenario = prepareInLoopChipScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
