@@ -47,7 +47,9 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
             "subscription gateway (opencode.ai/inference/go/v1); single key from "
             "opencode.ai/auth. Go resolves each model's endpoint from its own "
             "registry, and since 7.114.0 a model that answers on more than one "
-            "endpoint is tried on the one your client's format prefers."
+            "endpoint is tried on the one your client's format prefers; since "
+            "7.115.0 a model whose endpoint the vendor does not publish is "
+            "probed once and remembered."
         ),
     },
     "AI_GATEWAY_API_KEY": {

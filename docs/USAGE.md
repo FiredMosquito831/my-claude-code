@@ -3447,6 +3447,17 @@ or a country refusal teaches nothing. A model the vendor places on an API this
 proxy cannot speak (`@ai-sdk/google`) is probed once on first use instead of
 being refused, and the answer is remembered.
 
+Since 7.115.0 the same one-time probe covers the opposite silence: a model
+whose endpoint **nobody publishes** — no `provider.npm` at all, or a package
+this build cannot map, which is 88 of the 167 OpenCode rows — is tried once on
+the endpoint your client's format prefers, then falls back to Chat Completions
+inside the same request. That trial costs one ~16-token probe, once per model
+per seven days; the answer is remembered as a learned fact, so the second
+request goes straight to the endpoint that worked and never probes again.
+Nothing else changes: the Models page still shows the floor for such a model
+until a probe has answered, and a declared endpoint, an operator override or a
+learned fact is never guessed at.
+
 The `chat_completions (profile)` row is the one a **fresh or keyless install** sees, because its
 models.dev cache has not been fetched yet — as does any install whose fetch
 failed. The note beside it says which silence produced it: *no registry entry

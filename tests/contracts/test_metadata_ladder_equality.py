@@ -148,6 +148,19 @@ recorded beside the snapshot under ``ocgo2/`` -- both answers, ``v7.113.5`` and
 that key is the only one of its kind, its two answers are what this tree's
 resolver gives, and the sibling ``muse-spark-1.2-contributor`` (never measured)
 keeps its registry door.
+
+**7.115.0 (OCGO-3) adds *optimistic discovery*, and it moves nothing at all.**
+On the two OpenCode profiles a model whose surface nobody published is tried
+once on the door its client family prefers before falling back to the profile's
+floor. That is a change to *cost*, not to a surface: the resolver's answer
+outside a request -- every page, every admin route, every digest in this file
+-- is still the floor, because ``UNKNOWN`` has no preferred door and expresses
+no optimism. So this is the first release in the arc whose equality baseline
+does not move, and it says so: no entry carries a ``v7.115.0`` pair,
+``test_every_output_is_byte_identical_to_v7_78_10`` re-proves the snapshot byte
+for byte, and ``test_7_115_0_moves_nothing`` holds the rule on both sides --
+the page keeps answering the floor for an unpublished model, and the
+request-time ladder is the only thing that gains a guess.
 """
 
 import hashlib
@@ -284,6 +297,11 @@ AFTER_OCGO1 = "v7.113.5"
 OCGO2_PREFIX = "ocgo2/"
 BEFORE_OCGO2 = "v7.113.5"
 AFTER_OCGO2 = "v7.114.0"
+#: 7.115.0 (OCGO-3) moves nothing, so this pair must never appear in the file:
+#: the predicate below is the rule stated as a search, and the release's own
+#: test asserts it finds nothing.
+BEFORE_OCGO3 = "v7.114.0"
+AFTER_OCGO3 = "v7.115.0"
 #: The record fields 7.83.0 fills from the row's own statement.
 K4_RECORD_FIELDS = (
     "context_length",
@@ -856,6 +874,12 @@ def _is_ocgo1_entry(value: Any) -> bool:
 
 def _is_ocgo2_entry(value: Any) -> bool:
     return isinstance(value, dict) and set(value) == {BEFORE_OCGO2, AFTER_OCGO2}
+
+
+def _is_ocgo3_entry(value: Any) -> bool:
+    """An entry 7.115.0 would have to write -- and never does (OCGO-3)."""
+
+    return isinstance(value, dict) and set(value) == {BEFORE_OCGO3, AFTER_OCGO3}
 
 
 def _expected(key: str, value: Any) -> Any:
@@ -1720,3 +1744,98 @@ def test_7_114_0_moves_only_the_muse_row_for_anthropic_clients(
     )
     assert len(sibling.candidates) == 1
     assert sibling.primary.label == "responses (registry)"
+
+
+#: The OpenCode rows the committed fixtures publish without a surface this
+#: build can use: the Go bucket carries an entry for ``deepseek-v4.1-flash``
+#: but no ``provider.npm``, and three Zen rows are the same. They are 7.115.0's
+#: population -- and the page must not move for them.
+OCGO3_UNPUBLISHED = (
+    ("opencode_go", "deepseek-v4.1-flash"),
+    ("opencode", "glm-5.3-flash"),
+    ("opencode", "hy3-free"),
+    ("opencode", "kimi-k3"),
+)
+
+
+def test_7_115_0_moves_nothing(monkeypatch, tmp_path) -> None:
+    """The first release in this arc whose equality baseline does not move.
+
+    Optimistic discovery changes *cost*, not surface: on the two OpenCode
+    profiles a model nobody published a door for is tried once on the door its
+    client family prefers, before the profile's floor. Everything this file
+    records is rendered outside a request, where the family is ``UNKNOWN``,
+    nothing is preferred, and the floor is the answer -- so no entry can move,
+    and none does.
+
+    Three halves, and the third is the one that says what the release actually
+    does:
+
+    * no entry in the committed baseline carries a ``v7.115.0`` answer;
+    * the snapshot this tree renders is the committed one, byte for byte --
+      the same claim ``test_every_output_is_byte_identical_to_v7_78_10``
+      makes, re-stated for this release's own rule test;
+    * for a model with no published surface, the page still shows the floor
+      and never the guess, while the *request-time* ladder is the only thing
+      that gains one -- and a model whose door the vendor published gains
+      nothing at all, under every client family.
+    """
+
+    from my_claude_code.providers.openai_chat.response_surface import (
+        catalogue_surface,
+    )
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {key: value for key, value in baseline.items() if _is_ocgo3_entry(value)}
+    assert moved == {}, sorted(moved)
+    _assert_unchanged(recorded(snapshot(monkeypatch, tmp_path)), baseline)
+
+    def ladder(provider_id: str, model_id: str, family: ClientFamily, on: bool) -> Any:
+        profile = OPENAI_CHAT_PROFILES[provider_id]
+        return resolve_surface_ladder(
+            provider_id,
+            model_id,
+            client_family=family,
+            registry_provider=profile.surface_registry_provider,
+            declared=profile.response_surfaces,
+            no_information=profile.no_information_surface,
+            measured=profile.measured_surfaces,
+            optimistic=on,
+        )
+
+    # The page: no request in flight, so no preference and no guess.
+    for provider_id, model_id in OCGO3_UNPUBLISHED:
+        page = catalogue_surface(provider_id, model_id)
+        assert page is not None, model_id
+        assert page.label == "chat_completions (profile)", model_id
+        assert page.detail == "no registry entry for this model", model_id
+        assert page.guessed is False, model_id
+        for family in ClientFamily:
+            off = ladder(provider_id, model_id, family, False)
+            assert len(off.candidates) == 1, model_id
+            assert off.primary == page, model_id
+    # A request: the preferred door is tried once, and the floor is kept.
+    for provider_id, model_id in OCGO3_UNPUBLISHED:
+        on = ladder(provider_id, model_id, ClientFamily.ANTHROPIC, True)
+        assert [c.surface.value for c in on.candidates] == [
+            "messages",
+            "chat_completions",
+        ], model_id
+        assert on.candidates[0].guessed is True
+        assert on.candidates[1] == catalogue_surface(provider_id, model_id), model_id
+        openai = ladder(provider_id, model_id, ClientFamily.OPENAI, True)
+        assert [c.surface.value for c in openai.candidates] == [
+            "responses",
+            "chat_completions",
+        ], model_id
+        unknown = ladder(provider_id, model_id, ClientFamily.UNKNOWN, True)
+        assert unknown == ladder(provider_id, model_id, ClientFamily.UNKNOWN, False)
+
+    # A published door is not a guess, on any family, with the flag on.
+    go = OPENAI_CHAT_PROFILES["opencode_go"]
+    for family in ClientFamily:
+        known = ladder("opencode_go", "minimax-m3", family, True)
+        assert len(known.candidates) == 1, family
+        assert known.primary.label == "messages (registry)", family
+        assert known.primary.guessed is False
+    assert go.optimistic_first_try is True
