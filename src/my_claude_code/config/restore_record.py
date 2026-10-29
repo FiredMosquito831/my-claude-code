@@ -112,8 +112,8 @@ class OverwrittenValue:
             "prior_value": self.prior_value,
             "prior_present": self.prior_present,
         }
-        # Only when there is one, so every record without a line -- every
-        # JSON and YAML document's -- is written exactly as before.
+        # Only when there is one, so every record written before this field
+        # existed is written exactly as before.
         if self.prior_line:
             payload["prior_line"] = self.prior_line
         return payload
@@ -147,15 +147,34 @@ class RestoreEntry:
     #: rewrites its own configuration is the failure mode that already cost a
     #: release once.
     undone_at: str = ""
+    #: Whether the document itself did not exist before MCC wrote it (7.116.0;
+    #: the first harness whose CLI may not have created its file yet). Undo
+    #: removes a document MCC created once nothing of MCC's is left in it.
+    #: False for every card that required the app's file to exist first, which
+    #: is every desktop card, and absent from every record written before it.
+    created_file: bool = False
+    #: Containers above a key MCC wrote that did not exist beforehand, so Undo
+    #: removes exactly those -- ``models``/``providers`` in a document that had
+    #: neither -- and leaves an empty container the user already had alone.
+    created_parents: tuple[tuple[str, ...], ...] = ()
 
     def as_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "subject": self.subject,
             "document_path": self.document_path,
             "document_sha256": self.document_sha256,
             "overwritten": [value.as_payload() for value in self.overwritten],
             "undone_at": self.undone_at,
         }
+        # Only when set, so every record written before 7.116.0 -- every
+        # desktop card's -- is written byte for byte as it always was.
+        if self.created_file:
+            payload["created_file"] = True
+        if self.created_parents:
+            payload["created_parents"] = [
+                list(key_path) for key_path in self.created_parents
+            ]
+        return payload
 
 
 def restore_record_path() -> Path:
@@ -266,6 +285,8 @@ def write_entry(entry: RestoreEntry, *, path: Path | None = None) -> Path:
                 document_path=entry.document_path,
                 document_sha256=entry.document_sha256,
                 overwritten=existing.overwritten,
+                created_file=existing.created_file,
+                created_parents=existing.created_parents,
             )
         subjects[entry.subject] = entry.as_payload()
     else:
@@ -309,12 +330,26 @@ def read_entry(subject: str, *, path: Path | None = None) -> RestoreEntry | None
                 )
             )
 
+    # ``payload`` is a plain dict here (it came out of the JSON document), so
+    # the list is pulled the same way the ``overwritten`` values above are.
+    raw_parents = payload.get("created_parents")
+    created_parents = tuple(
+        key_path
+        for key_path in (
+            _key_path(item)
+            for item in (raw_parents if isinstance(raw_parents, list) else [])
+        )
+        if key_path is not None
+    )
+
     return RestoreEntry(
         subject=str(payload.get("subject", subject)),
         document_path=str(payload.get("document_path", "")),
         document_sha256=str(payload.get("document_sha256", "")),
         overwritten=tuple(values),
         undone_at=str(payload.get("undone_at", "")),
+        created_file=bool(payload.get("created_file")),
+        created_parents=created_parents,
     )
 
 
@@ -345,6 +380,8 @@ def mark_undone(subject: str, *, path: Path | None = None) -> None:
         document_sha256=entry.document_sha256,
         overwritten=entry.overwritten,
         undone_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        created_file=entry.created_file,
+        created_parents=entry.created_parents,
     )
     subjects[subject] = stamped.as_payload()
     write_json_document_atomically(record_path, _with_subjects(record, subjects))
@@ -484,6 +521,8 @@ def refresh_document_sha256(
         document_path=entry.document_path,
         document_sha256=after,
         overwritten=entry.overwritten,
+        created_file=entry.created_file,
+        created_parents=entry.created_parents,
     ).as_payload()
     write_json_document_atomically(record_path, _with_subjects(record, subjects))
     _harden(record_path)

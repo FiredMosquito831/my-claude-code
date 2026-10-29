@@ -201,6 +201,7 @@ PASS_THROUGH: dict[str, str] = dict.fromkeys(
         "mcc-opencode2",
         "mcc-kilo",
         "mcc-commandcode",
+        "mcc-openclaw",
         "mcc-kimi",
         "mcc-qwen",
         "mcc-crush",

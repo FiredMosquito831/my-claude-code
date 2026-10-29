@@ -474,6 +474,14 @@ _NODE_CLINE = NodeRequirement(
     "20",
     "docs.cline.bot: 'Install Node.js 20+ (22 recommended)' (the package declares none)",
 )
+#: OpenClaw's own ``engines.node`` is a range -- ``>=24.22.1 <25 || >=26.12.1``
+#: -- and ``NodeRequirement`` holds one floor, so the floor is what it holds.
+#: The range is stated here and in the card's copy line so a reader on Node 25
+#: (which the package excludes) can see why the check refuses.
+_NODE_OPENCLAW = NodeRequirement(
+    "24.22.1",
+    "engines.node '>=24.22.1 <25 || >=26.12.1' (openclaw package.json, 2026-10-29)",
+)
 
 # ---------------------------------------------------------------- per agent
 
@@ -699,6 +707,23 @@ COMMANDCODE_METHODS: tuple[InstallMethod, ...] = _npm_everywhere(
     # Every bin the package adds, so the plan can say so: ``cmd`` is one of
     # them, and on Windows System32's cmd.exe normally precedes npm's folder.
     bins=("command-code", "cmd", "cmdc", "commandcode"),
+)
+
+#: OpenClaw ships only as an npm package, and its name is the one thing the
+#: method must get exactly right: a package called ``@openclaw-ai/openclawai``
+#: exists and is not the project. The version is npm's ``latest``, as every
+#: other row here installs the vendor's own channel, and the Node floor is the
+#: package's own ``engines.node``.
+OPENCLAW_METHODS: tuple[InstallMethod, ...] = _npm_everywhere(
+    "openclaw",
+    bound=_NODE_OPENCLAW,
+    doc_url="https://www.npmjs.com/package/openclaw",
+    checked_by=(
+        "npm registry: openclaw 2026.10.8 package.json -- bin openclaw, "
+        "engines.node '>=24.22.1 <25 || >=26.12.1' (2026-10-29)"
+    ),
+    bins=("openclaw",),
+    checked_on="2026-10-29",
 )
 
 _QWEN_DOC = "https://github.com/QwenLM/qwen-code#installation"

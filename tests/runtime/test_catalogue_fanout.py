@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
@@ -17,7 +18,11 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
-from my_claude_code.config.harnesses import MCC_HARNESS_ID_SENTINEL, harness_specs
+from my_claude_code.config.harnesses import (
+    MCC_HARNESS_ID_SENTINEL,
+    harness_spec,
+    harness_specs,
+)
 from my_claude_code.config.proxy_auth import PROXY_NO_AUTH_SENTINEL
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings
@@ -564,6 +569,154 @@ def test_a_merge_target_is_never_created_at_startup(tmp_path: Path) -> None:
     _merge_publisher(path).ensure_exists(_runtime())
 
     assert not path.exists()
+
+
+# ------------------------------------------------------- OpenClaw (7.116.0)
+
+
+def _openclaw_publisher(path: Path) -> HarnessCatalogueFanoutPublisher:
+    return HarnessCatalogueFanoutPublisher({"openclaw": path})
+
+
+def _openclaw_seed(runtime: FakeRuntime) -> str:
+    """A hand-written openclaw.json already carrying this server's block."""
+
+    base_url = f"{local_proxy_root_url(runtime.current_settings())}/v1"
+    return (
+        "// hand-written, and MCC must keep every byte of it\n"
+        "{\n"
+        '  "channels": { "telegram": { "token": "x" } },\n'
+        '  "agents": { "defaults": { "model": "openai/gpt-5" } },\n'
+        '  "models": {\n'
+        '    "providers": {\n'
+        '      "mcc": {\n'
+        f'        "baseUrl": "{base_url}",\n'
+        '        "apiKey": "$MCC_OPENCLAW_API_KEY",\n'
+        '        "api": "openai-completions",\n'
+        '        "models": [{"id": "stale/model", "name": "stale/model"}]\n'
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def test_an_openclaw_file_mcc_has_not_been_invited_into_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "openclaw.json"
+    path.write_text(
+        '{\n  "channels": {"telegram": {"token": "x"}}\n}\n', encoding="utf-8"
+    )
+    before = path.read_bytes()
+
+    _openclaw_publisher(path).publish(_runtime())
+
+    assert path.read_bytes() == before
+
+
+def test_an_invited_openclaw_file_is_refreshed_and_keeps_every_byte(
+    tmp_path: Path,
+) -> None:
+    """The refresh edits the text: comments, layout and the user's model stay."""
+
+    runtime = _runtime({"nvidia_nim/configured": 300_000})
+    path = tmp_path / "openclaw.json"
+    path.write_text(_openclaw_seed(runtime), encoding="utf-8", newline="")
+
+    _openclaw_publisher(path).publish(runtime)
+
+    text = path.read_bytes().decode("utf-8")
+    assert "// hand-written, and MCC must keep every byte of it" in text
+    assert '"model": "openai/gpt-5"' in text, (
+        "a provider refresh must not move the user's chosen model"
+    )
+    document = json.loads(
+        text.replace("// hand-written, and MCC must keep every byte of it", "")
+    )
+    models = document["models"]["providers"]["mcc"]["models"]
+    assert "stale/model" not in json.dumps(models)
+    assert "nvidia_nim/configured" in [entry["id"] for entry in models]
+    assert document["models"]["providers"]["mcc"]["baseUrl"].endswith("/v1")
+
+
+def test_an_openclaw_refresh_from_another_server_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    owner = _runtime()
+    path = tmp_path / "openclaw.json"
+    path.write_text(_openclaw_seed(owner), encoding="utf-8", newline="")
+    before = path.read_bytes()
+
+    intruder = _runtime()
+    intruder._settings = intruder._settings.model_copy(
+        update={"port": owner.current_settings().port + 1}
+    )
+    _openclaw_publisher(path).publish(intruder)
+
+    assert path.read_bytes() == before
+
+
+def test_an_openclaw_refresh_keeps_a_later_restore_possible(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The recorded hash follows MCC's own refresh, so RESTORE still works."""
+
+    from my_claude_code.application.catalogues import serialise
+    from my_claude_code.config.harness_config_merge import (
+        configure_owned_block,
+        unconfigure_owned_block,
+    )
+    from my_claude_code.config.restore_record import UndoMode
+
+    runtime = _runtime({"nvidia_nim/configured": 300_000})
+    path = tmp_path / "openclaw.json"
+    record = tmp_path / "restore-record.json"
+    monkeypatch.setattr(
+        "my_claude_code.config.restore_record.restore_record_path", lambda: record
+    )
+    catalogue = harness_spec("openclaw").catalogue
+    assert catalogue is not None and catalogue.merge is not None
+    merge = catalogue.merge
+
+    document = serialise(
+        "openclaw",
+        [
+            CatalogueModel(
+                gateway_id="anthropic/openrouter/configured",
+                provider_model_ref="openrouter/configured",
+                display_name="Configured",
+                is_primary_route=True,
+            )
+        ],
+    )[0]
+    original = (
+        "// mine\n{\n"
+        '  "agents": {"defaults": {"model": "openai/gpt-5"}},\n'
+        '  "theme": "dark"\n'
+        "}\n"
+    )
+    path.write_text(original, encoding="utf-8", newline="")
+    configure_owned_block(
+        merge=merge,
+        path=path,
+        document=document,
+        proxy_root_url=local_proxy_root_url(runtime.current_settings()),
+        subject="openclaw",
+        record_path=record,
+    )
+
+    _openclaw_publisher(path).publish(runtime)
+
+    unconfigure_owned_block(
+        merge=merge,
+        path=path,
+        subject="openclaw",
+        mode=UndoMode.RESTORE,
+        record_path=record,
+        proxy_root_url=local_proxy_root_url(runtime.current_settings()),
+    )
+    assert path.read_bytes().decode("utf-8") == original
 
 
 # ------------------------------------------------------------------ TOML target

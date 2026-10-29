@@ -20213,6 +20213,12 @@ function harnessCard(harness) {
   title.textContent = harness.display_name;
   const badge = document.createElement("span");
   const servable = harness.available !== false;
+  // 7.116.0: three states, not two. An agent whose CLI is not on this
+  // server's PATH but whose own configuration is on disk is neither
+  // "installed" nor "not installed" -- it is the state a PATH problem, an
+  // uninstall that kept its file, or a shell started before the install
+  // produces, and it is the one the user can act on.
+  const configOnly = !harness.installed && harness.config_found;
   // "Not servable" is a different fact from "Not installed" and must not be
   // told with the same word: one is something the user can fix by installing
   // the CLI, the other is something MCC measured and cannot fix at all.
@@ -20224,7 +20230,9 @@ function harnessCard(harness) {
   badge.textContent = servable
     ? harness.installed
       ? "Installed"
-      : "Not installed"
+      : configOnly
+        ? "Config found, CLI not on PATH"
+        : "Not installed"
     : "Not servable";
   heading.append(title, badge);
   card.append(heading);
@@ -22368,10 +22376,16 @@ function harnessMeta(harness) {
     // This agent reads only its own config file, so MCC writes one key into
     // it. Saying which key, and that nothing else is touched, is the whole
     // difference between an edit a user can audit and one they cannot.
+    const replaced = catalogue.replaced_keys || [];
     rows.push([
       "Merged key",
-      `${catalogue.merged_key} - the only key MCC writes; every other key is ` +
-        `left byte-for-byte, and your file is backed up before the first edit`,
+      replaced.length
+        ? `${catalogue.merged_key} - the only block MCC writes; it also sets ` +
+          `${replaced.join(", ")}, recorded so Undo puts your value back. ` +
+          `Every other key is left byte-for-byte, comments and all, and your ` +
+          `file is backed up before the first edit`
+        : `${catalogue.merged_key} - the only key MCC writes; every other key is ` +
+          `left byte-for-byte, and your file is backed up before the first edit`,
     ]);
   }
 

@@ -63,6 +63,7 @@ from my_claude_code.config.harness_cline import (
     with_selected_model,
 )
 from my_claude_code.config.harness_config_merge import (
+    configure_owned_block,
     merge_config_path,
     merge_owned_block,
     owned_block,
@@ -177,7 +178,15 @@ class HarnessCatalogueFanoutPublisher:
         if catalogue is None:
             return False
         if catalogue.merge is not None:
-            if owned_block_names(path, catalogue.merge.owned_key_path, proxy_root_url):
+            merge = catalogue.merge
+            if owned_block_names(
+                path,
+                merge.owned_key_path,
+                proxy_root_url,
+                key=merge.base_url_key,
+                sentinel=merge.base_url_sentinel,
+                preserve_bytes=merge.preserve_bytes,
+            ):
                 return True
             logger.debug(
                 "{} catalogue at {} names another server, not {}; leaving it "
@@ -224,15 +233,30 @@ class HarnessCatalogueFanoutPublisher:
                 )
             )
             if catalogue.merge is not None:
-                merge_owned_block(
-                    path=path,
-                    owned_key_path=catalogue.merge.owned_key_path,
-                    block=with_base_url(
-                        owned_block(document, catalogue.merge.owned_key_path),
-                        proxy_root_url,
-                    ),
-                    backup_suffix=catalogue.merge.backup_suffix,
-                )
+                merge = catalogue.merge
+                if merge.preserve_bytes:
+                    # OpenClaw: the document is edited as text, so every byte
+                    # MCC does not own -- comments, indentation, key order --
+                    # survives the refresh, and the replaced default model is
+                    # left alone (``claim=False``): it is the user's choice of
+                    # model, and a provider refresh must not move it back.
+                    configure_owned_block(
+                        merge=merge,
+                        path=path,
+                        document=document,
+                        proxy_root_url=proxy_root_url,
+                        subject=spec.id,
+                        claim=False,
+                    )
+                else:
+                    merge_owned_block(
+                        path=path,
+                        owned_key_path=merge.owned_key_path,
+                        block=with_base_url(
+                            owned_block(document, merge.owned_key_path), proxy_root_url
+                        ),
+                        backup_suffix=merge.backup_suffix,
+                    )
             elif catalogue.document_format == "toml":
                 # Kimi Code's ``config.toml`` is the one generated document
                 # that is not JSON, and the one whose provider block carries

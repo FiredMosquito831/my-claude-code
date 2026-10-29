@@ -5,8 +5,8 @@
    "sha256": "9e1cb51d2ae8b9077fb33329ef72dbb4cc9957de7a1f8812f79d1f0864fbcf06"
   },
   "v7.83.0": {
-   "bytes": 223404,
-   "sha256": "42da45484eb630130a2774483218affff0466e8421200323cbfaa05ee85b7f7c"
+   "bytes": 234357,
+   "sha256": "0eaea401242d3ad1abd899157186575d27d96f02f2a5a9e96cf20c1a82a8e174"
   }
  },
  "admin/catalogue-models?provenance=1": {
@@ -15,8 +15,8 @@
    "sha256": "5141b817274245632045c73e3be048626f3c058442f9b7de7e48c88bc754f366"
   },
   "v7.113.5": {
-   "bytes": 365584,
-   "sha256": "bca973f797dc7179e5a4500649f9ef90bc5e912faddf4e682e92e4e7f665d117"
+   "bytes": 376537,
+   "sha256": "780adbff2f874f75101d5a2b522dd83a2f4ed2093f65c521728d9dde00665656"
   }
  },
  "admin/models": {
@@ -16870,8 +16870,8 @@
   }
  },
  "k4-blanked/admin/catalogue-models": {
-  "bytes": 225102,
-  "sha256": "f224ccfe152a6eecd78617a4f952d91fdaa0455c2beee6b44b7cc65a1cb21580"
+  "bytes": 234110,
+  "sha256": "cbf90aa248ca71901b382023d99e18ae7e16a7b21d36daed7385cffe0e7eadc7"
  },
  "k4-blanked/admin/catalogue-models?provenance=1": {
   "v7.113.4": {
@@ -16879,8 +16879,8 @@
    "sha256": "97ba30f196895fda9f333e5ddc6c0f867a4d8f61c5dc751a5514178d1d690702"
   },
   "v7.113.5": {
-   "bytes": 261408,
-   "sha256": "1e0bc44c13cdb25e6aa8f2e68f6b6d3a228678cb27ce22bc0f6f5ea2e8321dee"
+   "bytes": 270416,
+   "sha256": "f76f2d2520d846b4baaf974fd63edf1cd798d7be949bbde7785a3d7a02a1f2ea"
   }
  },
  "k4-blanked/page": {
@@ -16932,6 +16932,10 @@
  "k4-blanked/serialiser/kimi": {
   "bytes": 10287,
   "sha256": "ef21bbfd8559331b9b59145dc3151eadfece3d358a268dfe28fc3348598c9cba"
+ },
+ "k4-blanked/serialiser/openclaw": {
+  "bytes": 8090,
+  "sha256": "47be5278638bb6f6f54762199e19d8dbde191efce4d1ef1fae7a3d5da712e20c"
  },
  "k4-blanked/serialiser/opencode": {
   "bytes": 10912,
@@ -18219,8 +18223,8 @@
   }
  },
  "kor-live/admin/catalogue-models": {
-  "bytes": 222161,
-  "sha256": "17d81382f64be8f64550d2ef68468a944b942bd39fbc653f004dbb5ac21704d6"
+  "bytes": 233369,
+  "sha256": "06f5df38e6ab0103509f77f0fe049440d8d0e7015db33d3a8171b1dd42531c45"
  },
  "kor-live/admin/catalogue-models?provenance=1": {
   "v7.113.4": {
@@ -18228,8 +18232,8 @@
    "sha256": "3b8f8e13558c6fde48d85259258ff5aa01a00cfc80058dc406576f5996f10418"
   },
   "v7.113.5": {
-   "bytes": 387037,
-   "sha256": "a5e8fb371671b04bb073c6342236c5437d433a3fdbc04d6b9765f62ad8e8057c"
+   "bytes": 398245,
+   "sha256": "29e581ca72310e0d3fd1a1e8aa4be3f0f8854e502e0d3ad43f444a9309a624f7"
   }
  },
  "kor-live/capabilities/cline/cline-pass/deepseek-v4.1-flash": {
@@ -22661,8 +22665,8 @@
   "supports_tool_calls": "false"
  },
  "kor-live/k4-blanked/admin/catalogue-models": {
-  "bytes": 225319,
-  "sha256": "f879653ac54b967c0fb36427914835868783c765e3a19c0f386b5c1ecf9a2554"
+  "bytes": 234488,
+  "sha256": "fcbb7108556958724ea301389c1cbff5398764f3240b8a6d6591220991f216cb"
  },
  "kor-live/k4-blanked/admin/catalogue-models?provenance=1": {
   "v7.113.4": {
@@ -22670,8 +22674,8 @@
    "sha256": "f575a46df11bf9d9a4c674c95f09992df78e8c07e88f22c7cb19cc6fb983f47e"
   },
   "v7.113.5": {
-   "bytes": 283977,
-   "sha256": "a11bf2de615462f974871c7b04040f14da9a37faad3558205866685cf8a356ff"
+   "bytes": 293146,
+   "sha256": "a3b53862270b4a8a0ecc75d4a0456813038d63008e55fd8c2ecdc1a0bf8ff243"
   }
  },
  "kor-live/k4-blanked/page": {
@@ -22711,6 +22715,10 @@
  "kor-live/k4-blanked/serialiser/kimi": {
   "bytes": 10218,
   "sha256": "118a7697efff1186a7bdaf47ad6bf51a17f520f8dc20f908b6f4bacbe6526c53"
+ },
+ "kor-live/k4-blanked/serialiser/openclaw": {
+  "bytes": 8233,
+  "sha256": "27513787cb83b2904d468fd457f67a515f98db9567954b588d829c174a6a7af4"
  },
  "kor-live/k4-blanked/serialiser/opencode": {
   "bytes": 11146,
@@ -24155,6 +24163,10 @@
   "bytes": 7876,
   "sha256": "ea1f4258914480d8b007f60730a0af5decc332d25cd93cac23c965593127ae3c"
  },
+ "kor-live/serialiser/openclaw": {
+  "bytes": 10130,
+  "sha256": "901825528b30ca7d12deec70c64673b608830340e12f32c0fcc52cd7250c72e9"
+ },
  "kor-live/serialiser/opencode": {
   "bytes": 13936,
   "sha256": "b3c0581485412c1c9dd51e6dffe9913350cb39dcd22b7b371edc7eb68ca774d7"
@@ -24210,6 +24222,10 @@
  "kor-substituted/serialiser/kimi": {
   "bytes": 8059,
   "sha256": "329acd50d76c3dedfaaa3028bf817265bffb8df8f37ad07c40cf49ebc0fcf52b"
+ },
+ "kor-substituted/serialiser/openclaw": {
+  "bytes": 9897,
+  "sha256": "fc943a097980c2836aeb5638735e7e6d0512f917b9649ed0105b1b15214b8aca"
  },
  "kor-substituted/serialiser/opencode": {
   "bytes": 13766,
@@ -25779,6 +25795,10 @@
    "bytes": 8059,
    "sha256": "329acd50d76c3dedfaaa3028bf817265bffb8df8f37ad07c40cf49ebc0fcf52b"
   }
+ },
+ "serialiser/openclaw": {
+  "bytes": 9897,
+  "sha256": "fc943a097980c2836aeb5638735e7e6d0512f917b9649ed0105b1b15214b8aca"
  },
  "serialiser/opencode": {
   "v7.82.0": {

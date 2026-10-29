@@ -812,6 +812,21 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>OpenClaw</h4>
+                    <p>
+                      OpenClaw, which reads one
+                      <code>~/.openclaw/openclaw.json</code> and no extra-config
+                      variable, so this proxy merges a single
+                      <code>models.providers.mcc</code> block into it &mdash;
+                      comments, layout and every other key left byte for byte,
+                      your default model recorded so Undo can put it back, and
+                      your file backed up first.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-openclaw</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Kimi Code</h4>
                     <p>
                       Moonshot's Kimi Code CLI, pointed at a
@@ -3807,6 +3822,7 @@ mcc-opencode
 mcc-opencode2
 mcc-kilo
 mcc-commandcode
+mcc-openclaw
 mcc-kimi
 mcc-qwen
 mcc-crush
@@ -3868,6 +3884,25 @@ mcc-gemini</code></pre>
                   literal key there and expands
                   <code>$MCC_COMMANDCODE_API_KEY</code> from the launched
                   process's environment instead.
+                </p>
+                <p>
+                  <strong>OpenClaw is the second, and its file is the one you are
+                  most likely to have written yourself.</strong> It reads exactly one
+                  <code>~/.openclaw/openclaw.json</code> &mdash; JSON5, comments and
+                  all &mdash; and publishes no <em>extra</em>-config lever, so this
+                  proxy merges a single <code>models.providers.mcc</code> block into
+                  it. The edit is made to the text, so comments, indentation and key
+                  order come back byte for byte; the document is copied to
+                  <code>openclaw.json.mcc-backup</code> before the first edit; a
+                  refresh that resolves the same models writes nothing and only ever
+                  touches a block that already names this server. One value outside
+                  the block is written &mdash; OpenClaw's default model,
+                  <code>agents.defaults.model.primary</code> &mdash; and what it held
+                  is recorded, so <code>mcc-openclaw --disconnect</code> puts it back.
+                  <code>mcc-openclaw --restore</code> does the same but refuses if the
+                  file changed since. Models carry the limits and prices the ladder
+                  actually resolved; a value nobody published is left out rather than
+                  written as a zero.
                 </p>
                 <p>
                   <strong>Kimi Code reads a config file too, and takes a flag for

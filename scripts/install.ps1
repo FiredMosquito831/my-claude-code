@@ -5500,6 +5500,7 @@ function Write-MccCommandReference {
     Write-Host "  mcc-aider               Launch Aider through the proxy"
     Write-Host "  mcc-droid               Launch Droid through the proxy"
     Write-Host "  mcc-gemini              Launch Gemini CLI through the proxy"
+    Write-Host "  mcc-openclaw            Launch OpenClaw through the proxy"
     Write-Host "  mcc-desktop             Open the system tray app (desktop)"
     Write-Host ""
     Write-Host "Manage and inspect:"
@@ -5654,6 +5655,7 @@ function Get-LauncherCommands {
         "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
         "mcc-qwen", "mcc-crush",
         "mcc-cline", "mcc-goose", "mcc-aider", "mcc-droid", "mcc-gemini",
+        "mcc-openclaw",
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
         "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
         "mcc-apps", "mcc-desktop", "my-claude-code",
@@ -5673,6 +5675,7 @@ function Get-LauncherIntroducedIn {
     # of every version.
     return @{
         "mcc-mcp" = "7.99.0"
+        "mcc-openclaw" = "7.116.0"
     }
 }
 

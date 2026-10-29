@@ -131,13 +131,13 @@ def test_every_registered_catalogue_format_has_a_serialiser() -> None:
 FORMATS_WITHOUT_A_CONTEXT_FIELD = frozenset({"gemini_cli"})
 
 
-#: Formats whose CLI refuses unknown root keys, so the generated document
-#: cannot carry MCC's own record of what it had to guess. Kilo CLI is the only
-#: one: its validator runs an excess-key check against the root document and
-#: throws ``Unrecognized key: _mcc_defaulted``. The record still reaches the
-#: launcher's summary and the dashboard card, which read it from
-#: ``GET /admin/api/catalogue-models`` rather than from the file.
-FORMATS_WITHOUT_A_DEFAULTED_RECORD = frozenset({"kilo"})
+#: Formats whose generated document cannot carry MCC's record of what it had
+#: to guess. Kilo CLI refuses unknown root keys outright. OpenClaw declares
+#: ``additionalProperties: false`` at *both* levels it generates -- the root
+#: and the provider entry -- so there is nowhere in the document the record
+#: could live; the launcher and the card read it from
+#: ``GET /admin/api/catalogue-models``.
+FORMATS_WITHOUT_A_DEFAULTED_RECORD = frozenset({"kilo", "openclaw"})
 
 
 @pytest.mark.parametrize("format_id", sorted(SERIALISERS))
@@ -338,6 +338,9 @@ FORMATS_WITH_AN_ATTRIBUTION_HEADER: dict[str, tuple[str, ...]] = {
     # above, and the reason VS Code is the one desktop app in the set that can
     # be attributed by header rather than by user-agent.
     "vscode": ("chatLanguageModel", "requestHeaders"),
+    # ``providers.<id>.headers`` on the provider entry: "Custom headers to
+    # send with every request" in the schema OpenClaw generates for itself.
+    "openclaw": ("models", "providers", "mcc", "headers"),
 }
 
 #: Qwen Code's is a sixth, and it is not in the table above because its header

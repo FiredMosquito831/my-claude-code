@@ -118,6 +118,56 @@ def test_a_missing_binary_reports_the_vendor_install_hint_and_nothing_else(
         assert entry["install_hint"]
 
 
+def test_a_harness_whose_config_is_on_disk_but_binary_is_not_says_so(
+    monkeypatch, tmp_path
+):
+    """7.116.0: "config found, CLI not on PATH" is a third state, not a no.
+
+    An agent whose npm global folder is not on this server's PATH, or whose CLI
+    was removed while its document stayed, is neither installed nor absent --
+    and the difference is the one the user can act on. The detection is
+    binary-first: a binary on PATH answers "installed" whatever the file says.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    config_dir = tmp_path / ".openclaw"
+    config_dir.mkdir()
+    (config_dir / "openclaw.json").write_text("{}", encoding="utf-8")
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    by_id = {entry["id"]: entry for entry in body["harnesses"]}
+    openclaw = by_id["openclaw"]
+    assert openclaw["installed"] is False
+    assert openclaw["config_found"] is True
+    assert openclaw["install_state"] == "config_only"
+    assert openclaw["config_path"].endswith("openclaw.json")
+
+    # Every other harness declares no detection path, so nothing else moves.
+    assert [entry["id"] for entry in body["harnesses"] if entry["config_found"]] == [
+        "openclaw"
+    ]
+    assert by_id["codex"]["install_state"] == "absent"
+
+    # And a binary on PATH wins: the file is not consulted.
+    found = str(tmp_path / "bin" / "openclaw")
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which",
+        lambda name: found if name == "openclaw" else None,
+    )
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+    openclaw = next(entry for entry in body["harnesses"] if entry["id"] == "openclaw")
+    assert openclaw["installed"] is True
+    assert openclaw["install_state"] == "installed"
+    assert openclaw["config_found"] is False
+
+
 def test_catalogue_card_reports_path_model_count_and_defaulted_count(
     monkeypatch, tmp_path
 ):

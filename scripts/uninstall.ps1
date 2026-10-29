@@ -30,6 +30,7 @@ $AllCommands = @(
     "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
     "mcc-qwen", "mcc-crush",
     "mcc-cline", "mcc-goose", "mcc-aider", "mcc-droid", "mcc-gemini",
+    "mcc-openclaw",
     "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
     "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
     "mcc-apps", "mcc-mcp",

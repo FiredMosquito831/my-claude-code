@@ -1627,6 +1627,7 @@ launcher_introduced_in() {
     # command: those are expected of every version.
     case $1 in
         mcc-mcp) printf '7.99.0\n' ;;
+        mcc-openclaw) printf '7.116.0\n' ;;
     esac
 }
 
@@ -1684,7 +1685,7 @@ configure_and_verify_my_claude_code() {
     for command_name in mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi \
         mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi \
         mcc-qwen mcc-crush \
-        mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini \
+        mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-openclaw \
         mcc-init mcc-chatgpt-oauth-login mcc-anthropic-oauth-login \
         mcc-compact-log mcc-help mcc-rtk mcc-migrate mcc-apps mcc-mcp \
         mcc-desktop my-claude-code; do
@@ -3740,6 +3741,7 @@ else
     printf '  mcc-aider               Launch Aider through the proxy\n'
     printf '  mcc-droid               Launch Droid through the proxy\n'
     printf '  mcc-gemini              Launch Gemini CLI through the proxy\n'
+    printf '  mcc-openclaw            Launch OpenClaw through the proxy\n'
     printf '  mcc-desktop             Open the system tray app (desktop)\n'
     printf '\nManage and inspect:\n'
     printf '  mcc-init                Create or repair ~/.mcc/.env\n'

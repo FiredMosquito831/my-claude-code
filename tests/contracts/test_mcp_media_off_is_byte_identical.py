@@ -25,6 +25,13 @@ of the 33 surfaces above byte for byte, so they still stand as ``51a00ea1``
 wrote them. It also added the Windows cycle baseline and the R13 test at the
 foot of this file.
 
+7.116.0 recaptured it for one added harness, OpenClaw, and the recapture was
+checked the only way this file's promise can be checked: every surface above
+is byte-identical, and the two that enumerate harnesses -- the payload and the
+route's own answer -- are byte-identical once ``catalogues.openclaw`` is
+removed. Adding a harness cannot leave those two unchanged; it must leave
+everything else alone, and this release's recapture proved it did.
+
 To refresh the baseline from a base checkout: copy this file there and run it
 with ``MCC_MCP_OFF_BASELINE_WRITE=<path>``.
 """

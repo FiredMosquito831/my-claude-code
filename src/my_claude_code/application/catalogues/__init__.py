@@ -45,6 +45,10 @@ from my_claude_code.application.catalogues.gemini_cli import (
 from my_claude_code.application.catalogues.goose import build_goose_catalogue
 from my_claude_code.application.catalogues.kilo import build_kilo_catalogue
 from my_claude_code.application.catalogues.kimi import build_kimi_catalogue
+from my_claude_code.application.catalogues.openclaw import (
+    PROVIDER_ID as OPENCLAW_PROVIDER_ID,
+)
+from my_claude_code.application.catalogues.openclaw import build_openclaw_catalogue
 from my_claude_code.application.catalogues.opencode import (
     PROVIDER_ID as OPENCODE_PROVIDER_ID,
 )
@@ -69,6 +73,7 @@ SERIALISERS: dict[str, CatalogueSerialiser] = {
     "goose": build_goose_catalogue,
     "kilo": build_kilo_catalogue,
     "kimi": build_kimi_catalogue,
+    "openclaw": build_openclaw_catalogue,
     "opencode": build_opencode_catalogue,
     "pi": build_pi_catalogue,
     "qwen": build_qwen_catalogue,
@@ -97,6 +102,7 @@ MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "goose": ("models",),
     "kilo": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "kimi": ("models",),
+    "openclaw": ("models", "providers", OPENCLAW_PROVIDER_ID, "models"),
     "opencode": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "pi": ("models",),
     "qwen": ("modelProviders", QWEN_AUTH_TYPE),
