@@ -1652,6 +1652,32 @@ def _surface_failure_evidence(
     return None
 
 
+def _legacy_function_call_chars(call: object) -> int:
+    """Characters the deprecated ``delta.function_call`` delta carried (7.115.1).
+
+    The pre-``tool_calls`` single-call shape -- ``{"name": ..., "arguments":
+    ...}``, one frame at a time -- is decoded by ``chunks.py`` and read by no
+    provider code: a host that used it would send a call MCC never saw, and
+    the reply would look exactly like a model that stopped on its own. The
+    2026-10-29 investigation could not rule that out from the log, because
+    nothing counted the field. This counts it and nothing else reads it.
+
+    A length rather than a structure, like every other shape field: the tally
+    keeps no text. A frame carrying the field at all is one delta even if its
+    parts are empty, so a bare ``function_call`` still counts as a sighting.
+    """
+
+    if isinstance(call, Mapping):
+        name = call.get("name")
+        arguments = call.get("arguments")
+    else:
+        name = getattr(call, "name", None)
+        arguments = getattr(call, "arguments", None)
+    return len(name if isinstance(name, str) else "") + len(
+        arguments if isinstance(arguments, str) else ""
+    )
+
+
 class _OpenAIChatStreamRunner:
     """Own one OpenAI-chat request's stream, parsing, and recovery state."""
 
@@ -1828,6 +1854,24 @@ class _OpenAIChatStreamRunner:
                             shape.note_field("content", len(delta.content))
                         if shape is not None and delta.tool_calls:
                             shape.note_field("tool_calls", len(delta.tool_calls))
+                        if shape is not None:
+                            # Read through ``getattr`` like ``chunk.usage``
+                            # above: MCC's own chunk declares this field, but a
+                            # chunk object that does not carry it is not an
+                            # error, and an AttributeError on the reply path
+                            # would turn a real answer into an internal 500.
+                            legacy_call = getattr(delta, "function_call", None)
+                            if legacy_call is not None:
+                                # Recording only (7.115.1): the deprecated
+                                # single-call shape this door parses and has
+                                # never read. Counting it says whether a host
+                                # used it -- the one blind spot the 2026-10-29
+                                # investigation left open -- without changing
+                                # one byte of what the client receives.
+                                shape.note_field(
+                                    "function_call",
+                                    _legacy_function_call_chars(legacy_call),
+                                )
                         if output_reasoning and reasoning is not None:
                             for event in hold_events(ledger.ensure_thinking_block()):
                                 yield event

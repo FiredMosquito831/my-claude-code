@@ -5350,6 +5350,62 @@ async def request_log_latency(
     return result
 
 
+@router.get("/admin/api/requests/in-loop")
+async def request_log_in_loop(
+    request: Request,
+    days: int = REASONING_MEASUREMENT_DAYS,
+    since: float | None = None,
+    settings: Settings = Depends(get_settings),
+):
+    """Per model: how many in-loop turns ended with text and no tool call.
+
+    The Models page's "it said it would keep reading and stopped" counter, and
+    it is fetched beside the page rather than folded into it -- the same
+    decision ``/admin/api/requests/latency`` records, for the same reason: the
+    page's payload is digested against a pinned equality baseline, and a
+    readout that changes with every logged request has no business moving it.
+    ``loadModelsView`` asks for both at once, so the extra call costs no wall
+    clock, and a failure leaves the page intact with one chip missing.
+
+    Declared above ``/admin/api/requests/{request_id}``, like its siblings: a
+    request id of "in-loop" would otherwise be answered by the detail route.
+
+    The derivation is :meth:`RequestLogStore.in_loop_text_only_by_model`'s, and
+    the answer carries its own denominators -- a count of stops with no count
+    of the turns they came out of cannot say whether a model stops often or
+    was simply never in a loop.
+    """
+
+    require_loopback_admin(request)
+    window_days = max(1, min(int(days), 90))
+    window = (
+        since
+        if since is not None
+        else int(time.time() - window_days * 86_400) // 60 * 60
+    )
+    result: dict[str, Any] = {
+        "enabled": False,
+        "days": window_days,
+        "window_since": float(window),
+        "rows": [],
+        "models": 0,
+        "in_loop_turns": 0,
+        "text_only_turns": 0,
+        "unmeasured_turns": 0,
+    }
+    store = _request_log_store_or_none(settings)
+    if store is None:
+        return result
+    rows = await asyncio.to_thread(store.in_loop_text_only_by_model, since=window)
+    result["rows"] = rows
+    result["enabled"] = True
+    result["models"] = len(rows)
+    result["in_loop_turns"] = sum(int(row["in_loop_turns"]) for row in rows)
+    result["text_only_turns"] = sum(int(row["text_only_turns"]) for row in rows)
+    result["unmeasured_turns"] = sum(int(row["unmeasured_turns"]) for row in rows)
+    return result
+
+
 @router.get("/admin/api/requests/harness-usage")
 async def request_log_harness_usage(
     request: Request,
