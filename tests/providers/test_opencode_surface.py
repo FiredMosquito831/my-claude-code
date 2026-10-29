@@ -43,6 +43,7 @@ from my_claude_code.providers.openai_chat import (
 )
 from my_claude_code.providers.openai_chat.response_surface import (
     alternative_surfaces,
+    registry_silence,
     remember_response_surface,
 )
 from my_claude_code.providers.recovery import learned_fact_store
@@ -711,3 +712,34 @@ def test_the_fixture_directory_holds_the_reference_capture() -> None:
         / "opencode_reference_request.json"
     )
     assert reference.is_file()
+
+
+def test_a_cache_holding_only_zens_roster_does_not_answer_for_go() -> None:
+    """7.113.5: the two profiles no longer share one bucket name.
+
+    ``_write_registry`` caches ``opencode`` alone. Before 7.113.5 both profiles
+    read that bucket, so a Go model was resolved out of Zen's roster -- which is
+    exactly how every Go-only id missed and fell to the floor. The alias map now
+    sends ``opencode_go`` to ``opencode-go``, which this cache does not hold, so
+    the answer is the floor plus the *other* silence: this install has not
+    fetched Go's registry, which is a fact about the install and not the vendor.
+    """
+
+    _write_registry(**{"muse-spark-1.3-contributor-free": _npm("@ai-sdk/openai")})
+    profile = OPENAI_CHAT_PROFILES["opencode_go"]
+    resolved = resolve_response_surface(
+        "opencode_go",
+        "muse-spark-1.3-contributor-free",
+        registry_provider=profile.surface_registry_provider,
+        declared=profile.response_surfaces,
+        no_information=profile.no_information_surface,
+    )
+    assert resolved.surface is ResponseSurface.CHAT_COMPLETIONS
+    assert resolved.source is ResponseSurfaceSource.PROFILE
+    assert registry_silence(profile.surface_registry_provider) == (
+        "no cached copy of the vendor's registry yet"
+    )
+    # Zen, on the same cache, still resolves that model from its own roster.
+    assert _resolve("muse-spark-1.3-contributor-free").surface is (
+        ResponseSurface.RESPONSES
+    )

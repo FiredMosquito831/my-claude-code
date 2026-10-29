@@ -10,13 +10,13 @@
   }
  },
  "admin/catalogue-models?provenance=1": {
-  "v7.82.0": {
-   "bytes": 364248,
-   "sha256": "9af8e614e7720b4779b26ffda4ce8c19217d7cd7e677963f879d7b40faf7f8e9"
-  },
-  "v7.83.0": {
+  "v7.113.4": {
    "bytes": 365590,
    "sha256": "5141b817274245632045c73e3be048626f3c058442f9b7de7e48c88bc754f366"
+  },
+  "v7.113.5": {
+   "bytes": 365584,
+   "sha256": "bca973f797dc7179e5a4500649f9ef90bc5e912faddf4e682e92e4e7f665d117"
   }
  },
  "admin/models": {
@@ -4596,72 +4596,186 @@
   }
  },
  "capabilities/opencode_go/minimax-m3": {
-  "cache_read_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "models_dev",
-   "source_label": "models.dev",
-   "tier": 3,
-   "tier_label": "models.dev bucket, exact id",
-   "value": 0.06
-  },
-  "cache_write_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "context_length": {
-   "approximate": false,
-   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": 1000000
-  },
-  "default_parameters": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "input_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": 0.3
-  },
-  "max_output_tokens": {
-   "approximate": false,
-   "reference": false,
-   "source": "models_dev",
-   "source_label": "models.dev",
-   "tier": 3,
-   "tier_label": "models.dev bucket, exact id",
-   "value": 131072
-  },
-  "output_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": 1.2
-  },
-  "reasoning": {
-   "can_reason": {
+  "v7.113.4": {
+   "cache_read_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 0.06
+   },
+   "cache_write_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "context_length": {
+    "approximate": false,
+    "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1000000
+   },
+   "default_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "input_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 0.3
+   },
+   "max_output_tokens": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 131072
+   },
+   "output_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1.2
+   },
+   "reasoning": {
+    "can_reason": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
+    },
+    "default_enabled": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "mandatory": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supported_efforts": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supports_budget_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_effort_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_toggle_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
+    }
+   },
+   "reasoning_dialect": {
+    "known": false,
+    "source": "unknown",
+    "source_label": "unknown"
+   },
+   "reasoning_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "response_surface": {
+    "approximate": false,
+    "label": "chat_completions (profile)",
+    "note": "no registry entry for this model",
+    "offered": [
+     {
+      "label": "Chat Completions (/chat/completions)",
+      "value": "chat_completions"
+     },
+     {
+      "label": "Responses (/responses)",
+      "value": "responses"
+     },
+     {
+      "label": "Messages (/messages)",
+      "value": "messages"
+     }
+    ],
+    "override": "",
+    "reference": false,
+    "source": "profile",
+    "source_label": "this provider's declared first door",
+    "tier": null,
+    "tier_label": null,
+    "value": "chat_completions"
+   },
+   "supported_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_tool_calls": {
     "approximate": false,
     "reference": false,
     "source": "models_dev",
@@ -4670,127 +4784,213 @@
     "tier_label": "models.dev bucket, exact id",
     "value": true
    },
-   "default_enabled": {
+   "supports_vision": {
     "approximate": false,
     "reference": false,
-    "source": "unknown",
-    "source_label": "unknown",
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
     "tier": null,
     "tier_label": null,
-    "value": null
-   },
-   "mandatory": {
-    "approximate": false,
-    "reference": false,
-    "source": "unknown",
-    "source_label": "unknown",
-    "tier": null,
-    "tier_label": null,
-    "value": null
-   },
-   "supported_efforts": {
-    "approximate": false,
-    "reference": false,
-    "source": "unknown",
-    "source_label": "unknown",
-    "tier": null,
-    "tier_label": null,
-    "value": null
-   },
-   "supports_budget_control": {
-    "approximate": false,
-    "reference": false,
-    "source": "models_dev",
-    "source_label": "models.dev",
-    "tier": 3,
-    "tier_label": "models.dev bucket, exact id",
-    "value": false
-   },
-   "supports_effort_control": {
-    "approximate": false,
-    "reference": false,
-    "source": "models_dev",
-    "source_label": "models.dev",
-    "tier": 3,
-    "tier_label": "models.dev bucket, exact id",
-    "value": false
-   },
-   "supports_toggle_control": {
-    "approximate": false,
-    "reference": false,
-    "source": "models_dev",
-    "source_label": "models.dev",
-    "tier": 3,
-    "tier_label": "models.dev bucket, exact id",
     "value": true
    }
   },
-  "reasoning_dialect": {
-   "known": false,
-   "source": "unknown",
-   "source_label": "unknown"
-  },
-  "reasoning_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "response_surface": {
-   "approximate": false,
-   "label": "chat_completions (profile)",
-   "note": "no registry entry for this model",
-   "offered": [
-    {
-     "label": "Chat Completions (/chat/completions)",
-     "value": "chat_completions"
+  "v7.113.5": {
+   "cache_read_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 0.06
+   },
+   "cache_write_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "context_length": {
+    "approximate": false,
+    "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1000000
+   },
+   "default_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "input_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 0.3
+   },
+   "max_output_tokens": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 131072
+   },
+   "output_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1.2
+   },
+   "reasoning": {
+    "can_reason": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
     },
-    {
-     "label": "Responses (/responses)",
-     "value": "responses"
+    "default_enabled": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
     },
-    {
-     "label": "Messages (/messages)",
-     "value": "messages"
+    "mandatory": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supported_efforts": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supports_budget_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_effort_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_toggle_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
     }
-   ],
-   "override": "",
-   "reference": false,
-   "source": "profile",
-   "source_label": "this provider's declared first door",
-   "tier": null,
-   "tier_label": null,
-   "value": "chat_completions"
-  },
-  "supported_parameters": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "supports_tool_calls": {
-   "approximate": false,
-   "reference": false,
-   "source": "models_dev",
-   "source_label": "models.dev",
-   "tier": 3,
-   "tier_label": "models.dev bucket, exact id",
-   "value": true
-  },
-  "supports_vision": {
-   "approximate": false,
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": true
+   },
+   "reasoning_dialect": {
+    "known": false,
+    "source": "unknown",
+    "source_label": "unknown"
+   },
+   "reasoning_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "response_surface": {
+    "approximate": false,
+    "label": "messages (registry)",
+    "note": "@ai-sdk/anthropic",
+    "offered": [
+     {
+      "label": "Chat Completions (/chat/completions)",
+      "value": "chat_completions"
+     },
+     {
+      "label": "Responses (/responses)",
+      "value": "responses"
+     },
+     {
+      "label": "Messages (/messages)",
+      "value": "messages"
+     }
+    ],
+    "override": "",
+    "reference": false,
+    "source": "registry",
+    "source_label": "the vendor's published registry",
+    "tier": null,
+    "tier_label": null,
+    "value": "messages"
+   },
+   "supported_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_tool_calls": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_vision": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": true
+   }
   }
  },
  "capabilities/vercel/alibaba/qwen-3-14b": {
@@ -16674,12 +16874,24 @@
   "sha256": "f224ccfe152a6eecd78617a4f952d91fdaa0455c2beee6b44b7cc65a1cb21580"
  },
  "k4-blanked/admin/catalogue-models?provenance=1": {
-  "bytes": 261414,
-  "sha256": "97ba30f196895fda9f333e5ddc6c0f867a4d8f61c5dc751a5514178d1d690702"
+  "v7.113.4": {
+   "bytes": 261414,
+   "sha256": "97ba30f196895fda9f333e5ddc6c0f867a4d8f61c5dc751a5514178d1d690702"
+  },
+  "v7.113.5": {
+   "bytes": 261408,
+   "sha256": "1e0bc44c13cdb25e6aa8f2e68f6b6d3a228678cb27ce22bc0f6f5ea2e8321dee"
+  }
  },
  "k4-blanked/page": {
-  "bytes": 78868,
-  "sha256": "b58e342ce89aec751ade282723dff6f4871eeadd7ccc4f7c2fa06229b073c314"
+  "v7.113.4": {
+   "bytes": 78868,
+   "sha256": "b58e342ce89aec751ade282723dff6f4871eeadd7ccc4f7c2fa06229b073c314"
+  },
+  "v7.113.5": {
+   "bytes": 78835,
+   "sha256": "47e0775b408483b558f5c397525c71dc8e0fc2ccb78a8d774e5a2607ce5a359a"
+  }
  },
  "k4-blanked/serialiser/aider": {
   "bytes": 14336,
@@ -18011,8 +18223,14 @@
   "sha256": "17d81382f64be8f64550d2ef68468a944b942bd39fbc653f004dbb5ac21704d6"
  },
  "kor-live/admin/catalogue-models?provenance=1": {
-  "bytes": 387043,
-  "sha256": "3b8f8e13558c6fde48d85259258ff5aa01a00cfc80058dc406576f5996f10418"
+  "v7.113.4": {
+   "bytes": 387043,
+   "sha256": "3b8f8e13558c6fde48d85259258ff5aa01a00cfc80058dc406576f5996f10418"
+  },
+  "v7.113.5": {
+   "bytes": 387037,
+   "sha256": "a5e8fb371671b04bb073c6342236c5437d433a3fdbc04d6b9765f62ad8e8057c"
+  }
  },
  "kor-live/capabilities/cline/cline-pass/deepseek-v4.1-flash": {
   "cache_read_price": {
@@ -21042,107 +21260,221 @@
   }
  },
  "kor-live/capabilities/opencode_go/minimax-m3": {
-  "cache_read_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "models_dev",
-   "source_label": "models.dev",
-   "tier": 3,
-   "tier_label": "models.dev bucket, exact id",
-   "value": 0.06
-  },
-  "cache_write_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "context_length": {
-   "approximate": false,
-   "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": 1000000
-  },
-  "default_parameters": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "description": {
-   "approximate": false,
-   "note": "OpenRouter live, exact id (minimax/minimax-m3). Shown only; nothing reads it.",
-   "openrouter_ids": [
-    "minimax/minimax-m3"
-   ],
-   "reference": false,
-   "source": "openrouter_live",
-   "source_label": "OpenRouter live",
-   "tier": null,
-   "tier_label": "OpenRouter live, exact id",
-   "value": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,..."
-  },
-  "input_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": 0.3
-  },
-  "knowledge_cutoff": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "listed_on_openrouter": {
-   "approximate": false,
-   "note": "OpenRouter live, exact id (minimax/minimax-m3). The day OpenRouter added it to its list -- not the model's release date.",
-   "openrouter_ids": [
-    "minimax/minimax-m3"
-   ],
-   "reference": false,
-   "source": "openrouter_live",
-   "source_label": "OpenRouter live",
-   "tier": null,
-   "tier_label": "OpenRouter live, exact id",
-   "value": "2026-05-31"
-  },
-  "max_output_tokens": {
-   "approximate": false,
-   "reference": false,
-   "source": "models_dev",
-   "source_label": "models.dev",
-   "tier": 3,
-   "tier_label": "models.dev bucket, exact id",
-   "value": 131072
-  },
-  "output_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": 1.2
-  },
-  "reasoning": {
-   "can_reason": {
+  "v7.113.4": {
+   "cache_read_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 0.06
+   },
+   "cache_write_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "context_length": {
+    "approximate": false,
+    "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1000000
+   },
+   "default_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (minimax/minimax-m3). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "minimax/minimax-m3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,..."
+   },
+   "input_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 0.3
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "listed_on_openrouter": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (minimax/minimax-m3). The day OpenRouter added it to its list -- not the model's release date.",
+    "openrouter_ids": [
+     "minimax/minimax-m3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "2026-05-31"
+   },
+   "max_output_tokens": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 131072
+   },
+   "output_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1.2
+   },
+   "reasoning": {
+    "can_reason": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
+    },
+    "default_enabled": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "mandatory": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supported_efforts": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supports_budget_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_effort_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_toggle_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
+    }
+   },
+   "reasoning_dialect": {
+    "known": false,
+    "source": "unknown",
+    "source_label": "unknown"
+   },
+   "reasoning_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "response_surface": {
+    "approximate": false,
+    "label": "chat_completions (profile)",
+    "note": "no registry entry for this model",
+    "offered": [
+     {
+      "label": "Chat Completions (/chat/completions)",
+      "value": "chat_completions"
+     },
+     {
+      "label": "Responses (/responses)",
+      "value": "responses"
+     },
+     {
+      "label": "Messages (/messages)",
+      "value": "messages"
+     }
+    ],
+    "override": "",
+    "reference": false,
+    "source": "profile",
+    "source_label": "this provider's declared first door",
+    "tier": null,
+    "tier_label": null,
+    "value": "chat_completions"
+   },
+   "supported_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_tool_calls": {
     "approximate": false,
     "reference": false,
     "source": "models_dev",
@@ -21151,127 +21483,248 @@
     "tier_label": "models.dev bucket, exact id",
     "value": true
    },
-   "default_enabled": {
+   "supports_vision": {
     "approximate": false,
     "reference": false,
-    "source": "unknown",
-    "source_label": "unknown",
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
     "tier": null,
     "tier_label": null,
-    "value": null
-   },
-   "mandatory": {
-    "approximate": false,
-    "reference": false,
-    "source": "unknown",
-    "source_label": "unknown",
-    "tier": null,
-    "tier_label": null,
-    "value": null
-   },
-   "supported_efforts": {
-    "approximate": false,
-    "reference": false,
-    "source": "unknown",
-    "source_label": "unknown",
-    "tier": null,
-    "tier_label": null,
-    "value": null
-   },
-   "supports_budget_control": {
-    "approximate": false,
-    "reference": false,
-    "source": "models_dev",
-    "source_label": "models.dev",
-    "tier": 3,
-    "tier_label": "models.dev bucket, exact id",
-    "value": false
-   },
-   "supports_effort_control": {
-    "approximate": false,
-    "reference": false,
-    "source": "models_dev",
-    "source_label": "models.dev",
-    "tier": 3,
-    "tier_label": "models.dev bucket, exact id",
-    "value": false
-   },
-   "supports_toggle_control": {
-    "approximate": false,
-    "reference": false,
-    "source": "models_dev",
-    "source_label": "models.dev",
-    "tier": 3,
-    "tier_label": "models.dev bucket, exact id",
     "value": true
    }
   },
-  "reasoning_dialect": {
-   "known": false,
-   "source": "unknown",
-   "source_label": "unknown"
-  },
-  "reasoning_price": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "response_surface": {
-   "approximate": false,
-   "label": "chat_completions (profile)",
-   "note": "no registry entry for this model",
-   "offered": [
-    {
-     "label": "Chat Completions (/chat/completions)",
-     "value": "chat_completions"
+  "v7.113.5": {
+   "cache_read_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 0.06
+   },
+   "cache_write_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "context_length": {
+    "approximate": false,
+    "note": "The routed deployment's own /models payload wins outright. Where it published nothing, the value comes off the same ten-rung ladder the output limit walks, and the tier beside it names the rung.",
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1000000
+   },
+   "default_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "description": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (minimax/minimax-m3). Shown only; nothing reads it.",
+    "openrouter_ids": [
+     "minimax/minimax-m3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "MiniMax-M3 is a multimodal foundation model from MiniMax. It supports text, image, and video inputs with text output, a 1M-token context window, and is suited for long-horizon agentic work, coding,..."
+   },
+   "input_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 0.3
+   },
+   "knowledge_cutoff": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "listed_on_openrouter": {
+    "approximate": false,
+    "note": "OpenRouter live, exact id (minimax/minimax-m3). The day OpenRouter added it to its list -- not the model's release date.",
+    "openrouter_ids": [
+     "minimax/minimax-m3"
+    ],
+    "reference": false,
+    "source": "openrouter_live",
+    "source_label": "OpenRouter live",
+    "tier": null,
+    "tier_label": "OpenRouter live, exact id",
+    "value": "2026-05-31"
+   },
+   "max_output_tokens": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": 131072
+   },
+   "output_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": 1.2
+   },
+   "reasoning": {
+    "can_reason": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
     },
-    {
-     "label": "Responses (/responses)",
-     "value": "responses"
+    "default_enabled": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
     },
-    {
-     "label": "Messages (/messages)",
-     "value": "messages"
+    "mandatory": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supported_efforts": {
+     "approximate": false,
+     "reference": false,
+     "source": "unknown",
+     "source_label": "unknown",
+     "tier": null,
+     "tier_label": null,
+     "value": null
+    },
+    "supports_budget_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_effort_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": false
+    },
+    "supports_toggle_control": {
+     "approximate": false,
+     "reference": false,
+     "source": "models_dev",
+     "source_label": "models.dev",
+     "tier": 3,
+     "tier_label": "models.dev bucket, exact id",
+     "value": true
     }
-   ],
-   "override": "",
-   "reference": false,
-   "source": "profile",
-   "source_label": "this provider's declared first door",
-   "tier": null,
-   "tier_label": null,
-   "value": "chat_completions"
-  },
-  "supported_parameters": {
-   "approximate": false,
-   "reference": false,
-   "source": "unknown",
-   "source_label": "unknown",
-   "tier": null,
-   "tier_label": null,
-   "value": null
-  },
-  "supports_tool_calls": {
-   "approximate": false,
-   "reference": false,
-   "source": "models_dev",
-   "source_label": "models.dev",
-   "tier": 3,
-   "tier_label": "models.dev bucket, exact id",
-   "value": true
-  },
-  "supports_vision": {
-   "approximate": false,
-   "reference": false,
-   "source": "provider_or_models_dev",
-   "source_label": "provider /models or models.dev",
-   "tier": null,
-   "tier_label": null,
-   "value": true
+   },
+   "reasoning_dialect": {
+    "known": false,
+    "source": "unknown",
+    "source_label": "unknown"
+   },
+   "reasoning_price": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "response_surface": {
+    "approximate": false,
+    "label": "messages (registry)",
+    "note": "@ai-sdk/anthropic",
+    "offered": [
+     {
+      "label": "Chat Completions (/chat/completions)",
+      "value": "chat_completions"
+     },
+     {
+      "label": "Responses (/responses)",
+      "value": "responses"
+     },
+     {
+      "label": "Messages (/messages)",
+      "value": "messages"
+     }
+    ],
+    "override": "",
+    "reference": false,
+    "source": "registry",
+    "source_label": "the vendor's published registry",
+    "tier": null,
+    "tier_label": null,
+    "value": "messages"
+   },
+   "supported_parameters": {
+    "approximate": false,
+    "reference": false,
+    "source": "unknown",
+    "source_label": "unknown",
+    "tier": null,
+    "tier_label": null,
+    "value": null
+   },
+   "supports_tool_calls": {
+    "approximate": false,
+    "reference": false,
+    "source": "models_dev",
+    "source_label": "models.dev",
+    "tier": 3,
+    "tier_label": "models.dev bucket, exact id",
+    "value": true
+   },
+   "supports_vision": {
+    "approximate": false,
+    "reference": false,
+    "source": "provider_or_models_dev",
+    "source_label": "provider /models or models.dev",
+    "tier": null,
+    "tier_label": null,
+    "value": true
+   }
   }
  },
  "kor-live/capabilities/vercel/alibaba/qwen-3-14b": {
@@ -22212,12 +22665,24 @@
   "sha256": "f879653ac54b967c0fb36427914835868783c765e3a19c0f386b5c1ecf9a2554"
  },
  "kor-live/k4-blanked/admin/catalogue-models?provenance=1": {
-  "bytes": 283983,
-  "sha256": "f575a46df11bf9d9a4c674c95f09992df78e8c07e88f22c7cb19cc6fb983f47e"
+  "v7.113.4": {
+   "bytes": 283983,
+   "sha256": "f575a46df11bf9d9a4c674c95f09992df78e8c07e88f22c7cb19cc6fb983f47e"
+  },
+  "v7.113.5": {
+   "bytes": 283977,
+   "sha256": "a11bf2de615462f974871c7b04040f14da9a37faad3558205866685cf8a356ff"
+  }
  },
  "kor-live/k4-blanked/page": {
-  "bytes": 101952,
-  "sha256": "41e94f8581981d9c465b5e2477885cbad3b9092fe2bec194b47009020f478c12"
+  "v7.113.4": {
+   "bytes": 101952,
+   "sha256": "41e94f8581981d9c465b5e2477885cbad3b9092fe2bec194b47009020f478c12"
+  },
+  "v7.113.5": {
+   "bytes": 101919,
+   "sha256": "acb8bb568881af75d7e29200b5244ab56e111107c0b541be36b32a84ffa8232e"
+  }
  },
  "kor-live/k4-blanked/serialiser/aider": {
   "bytes": 14249,
@@ -22352,8 +22817,14 @@
   "tier": "provider /models, exact id"
  },
  "kor-live/page": {
-  "bytes": 227184,
-  "sha256": "99763a85fedbb2ad681c8d3a3dc767169c57fe5d33f6b82a5135b693c6311238"
+  "v7.113.4": {
+   "bytes": 227125,
+   "sha256": "24d36a24d5ee40a1b63ce5b10fffc8f135b0225cdcc4da64ecc3772a4c83255f"
+  },
+  "v7.113.5": {
+   "bytes": 227092,
+   "sha256": "977ad2c3ad5c9361716434a9b3541a4b35c33ae1c869ab622aa26056e9758147"
+  }
  },
  "kor-live/page-diff": {
   "cline/cline-pass/deepseek-v4.1-flash": {
@@ -23757,13 +24228,13 @@
   "sha256": "9ca00cd61aed92417a561ded334d7147f7814525bb3c392b9e153a47c6dbf43f"
  },
  "page": {
-  "v7.82.0": {
-   "bytes": 201214,
-   "sha256": "28d0ec26f2386faf71cf1bb23a03b16bd20886e922b853837e12febae872505a"
+  "v7.113.4": {
+   "bytes": 201619,
+   "sha256": "3c799a6c53bbecd612f05c84768bbfdbcd12fd84028732b6b9b5fef70b85e97b"
   },
-  "v7.83.0": {
-   "bytes": 201678,
-   "sha256": "d0242705eabf9b4491254fb9b298b16171b8be13c0e87b6769455f0ca7773048"
+  "v7.113.5": {
+   "bytes": 201586,
+   "sha256": "6dd05ff92c90870a8db0c352015c2dbafe0e8987c2d4140c400136e628de1013"
   }
  },
  "picker-kinds": {
