@@ -4737,6 +4737,17 @@ if (process.env.MCC_JSDOM_SCENARIO === "websearch_chain") {
   const { prepareWebSearchChainScenario } = await import("./admin_jsdom_websearch_chain.mjs");
   scenario = prepareWebSearchChainScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=coding_agents_filter (7.113.3): the Coding agents page's
+   filter box -- one query narrowing the CLI agents and the desktop apps,
+   cleared back to the same markup, no request per keystroke, third-party text
+   never reaching markup -- and the empty-query DOM the BASE tree drew for the
+   equality baseline (admin_jsdom_coding_agents_filter.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "coding_agents_filter") {
+  const { prepareCodingAgentsFilterScenario } = await import(
+    "./admin_jsdom_coding_agents_filter.mjs"
+  );
+  scenario = prepareCodingAgentsFilterScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

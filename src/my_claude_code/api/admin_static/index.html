@@ -1025,6 +1025,34 @@
             data-view="coding_agents"
             hidden
           >
+            <!-- 7.113.3: finding one agent among the cards below. It sits
+                 outside both groups so one box filters the CLI agents and the
+                 desktop apps alike, and it changes nothing but which cards are
+                 shown: every card is already in this document, the match is a
+                 case-insensitive substring of the text each card renders (its
+                 name, its commands and legacy aliases, its labels), and an
+                 empty box shows them all again. No request, no server change. -->
+            <div class="coding-agents-filter" id="codingAgentsFilterBar" role="search">
+              <label class="coding-agents-filter-label" for="codingAgentsFilter">
+                Find an agent
+              </label>
+              <input
+                id="codingAgentsFilter"
+                class="coding-agents-filter-input"
+                type="search"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="Filter by name, command or app &mdash; Codex, OpenCode, Claude Code"
+              />
+              <p
+                id="codingAgentsFilterNote"
+                class="coding-agents-filter-note"
+                role="status"
+                aria-live="polite"
+                hidden
+              >No agents match.</p>
+            </div>
+
             <section class="settings-section" aria-label="Coding agents">
               <div class="section-heading">
                 <div>
@@ -3794,7 +3822,9 @@ mcc-gemini</code></pre>
                   button each, the protocol it will speak, and the catalogue this proxy
                   generates for it. A missing one is reported with that agent's own
                   install command, and its card has an <strong>Install</strong> button
-                  (<a href="#guide-install-agents">Install a coding agent</a>).
+                  (<a href="#guide-install-agents">Install a coding agent</a>). A search
+                  box at the top of that page narrows the cards as you type &mdash; by
+                  name, command or app &mdash; and sends nothing to the server.
                 </p>
                 <p>
                   <strong>OpenCode, OpenCode 2 and Kilo read a config file</strong>
