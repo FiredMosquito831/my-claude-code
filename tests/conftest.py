@@ -288,6 +288,23 @@ def _isolate_learned_facts():
 
 
 @pytest.fixture(autouse=True)
+def _reset_client_family():
+    """No test may inherit the inbound client family another test installed.
+
+    7.114.0's surface ladder reads a per-request slot
+    (``core.client_family``); the executor sets and resets it around a stream,
+    but a test that leaves a stream half-consumed can leave the slot set for
+    the rest of its worker's context, which would make a later resolution
+    order itself for the wrong client.
+    """
+    from my_claude_code.core.client_family import reset_client_family
+
+    reset_client_family()
+    yield
+    reset_client_family()
+
+
+@pytest.fixture(autouse=True)
 def _no_first_start_side_effects(monkeypatch):
     """``serve()`` initialises the config home; no unit test may really do it.
 

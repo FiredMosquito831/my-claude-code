@@ -787,7 +787,7 @@ async def test_a_bare_500_on_a_custom_host_probes_the_declared_other_door(
     facts = learned_fact_store().facts_for_model("custom_house", "m")
     surface_facts = [f for f in facts if f.fact_kind == "response_surface"]
     assert len(surface_facts) == 1
-    assert surface_facts[0].value == "responses"
+    assert surface_facts[0].value == ["responses"]
     assert surface_facts[0].source == "probe"
 
 

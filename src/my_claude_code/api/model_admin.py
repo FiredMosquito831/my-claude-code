@@ -536,6 +536,11 @@ def prompt_cache_lifetimes_payload(
 SURFACE_SOURCE_LABELS: dict[str, str] = {
     ResponseSurfaceSource.OVERRIDE: "an operator override",
     ResponseSurfaceSource.LEARNED: "a probe of this deployment",
+    # 7.114.0: a dated measurement shipped with the build. Weaker than
+    # anything this install proved for itself -- which is why the resolver
+    # reads the learned rung first -- and stronger than what the vendor
+    # publishes, because somebody watched the door answer.
+    ResponseSurfaceSource.MEASURED: "a measurement of this deployment",
     ResponseSurfaceSource.REGISTRY: "the vendor's published registry",
     # Two silences, two sentences. ``DEFAULT`` is reached only by a provider
     # that has one surface, where "only surface" is the whole truth. A gateway

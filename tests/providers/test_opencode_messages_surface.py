@@ -391,7 +391,8 @@ async def test_a_probe_that_the_messages_door_answers_is_remembered() -> None:
         if fact.fact_kind == "response_surface"
     ]
     assert len(facts) == 1
-    assert facts[0].value == "messages"
+    # 7.114.0: the learned row is the set of doors still worth trying.
+    assert facts[0].value == ["messages"]
     assert facts[0].source == "probe"
 
 

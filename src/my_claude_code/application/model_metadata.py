@@ -1,6 +1,7 @@
 """Application-owned model metadata."""
 
 from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import date
 from enum import Enum, StrEnum
 
 from my_claude_code.core.reasoning import ReasoningEffort
@@ -398,13 +399,21 @@ class ResponseSurfaceSource(StrEnum):
 
     Ordered as the resolver reads them, strongest first: an operator said so,
     then MCC measured it, then the published registry, then the default nobody
-    stands behind.
+    stands behind. Since 7.114.0 there are two measurements and the order
+    between them is the point: what *this* deployment proved for itself
+    (:data:`LEARNED`) outranks what an earlier dated measurement shipped
+    (:data:`MEASURED`), which in turn outranks what the vendor publishes.
     """
 
     #: ``model_overrides.json`` named it.
     OVERRIDE = "override"
     #: A probe of this deployment succeeded on it and the fact was stored.
     LEARNED = "learned"
+    #: A dated measurement of this deployment, shipped as a constant beside the
+    #: resolver's own data (7.114.0). Weaker than anything this install proved
+    #: for itself -- which is why it sits below :data:`LEARNED` -- and stronger
+    #: than what the vendor publishes, because somebody watched the door answer.
+    MEASURED = "measured"
     #: The vendor's own published registry (models.dev ``provider.npm``).
     REGISTRY = "registry"
     #: Nothing said anything, and the *profile* named the door to knock on
@@ -426,12 +435,70 @@ class ResolvedResponseSurface:
     #: package that selected it, or the probe that proved it. Never a
     #: credential, never response text.
     detail: str = ""
+    #: True for a door MCC is *guessing* at: nobody vouched for it and no probe
+    #: has proved it, so the walk asks it one tiny question before it carries
+    #: the client's request (7.114.0, the unservable-probe). False everywhere
+    #: else, including the profile's floor -- the floor is what a multi-surface
+    #: host sends the client's request to when nobody has an opinion, and that
+    #: has been true since the surface rung shipped.
+    guessed: bool = False
 
     @property
     def label(self) -> str:
         """``"responses (registry)"`` -- what the Models page shows."""
 
         return f"{self.surface.value} ({self.source.value})"
+
+
+@dataclass(frozen=True, slots=True)
+class MeasuredSurfaceSet:
+    """The doors a dated measurement of this deployment watched answer.
+
+    7.114.0. A *set* rather than one surface, because a gateway that fronts
+    several APIs can serve one model on more than one of them, and which one
+    to use is then a preference about the inbound client rather than a fact
+    about the model. ``surfaces`` is ordered strongest-first as measured, and
+    that order is also the order a caller with no client preference keeps.
+
+    ``measured_on`` is rendered on the Models page and is never used to make
+    the entry expire: a shipped constant that aged out would move a working
+    model back to a worse door with no event to notice. It is superseded by
+    any learned fact this deployment writes, and by the next release.
+    ``evidence`` is the bounded account of what was watched -- never a
+    credential, never response text.
+
+    Data on the profile, keyed by model id, exactly as ``surface_by_upstream``
+    and ``free_tier_tool_catalogue`` are: the resolver stays a lookup and
+    still reads no model name.
+    """
+
+    surfaces: tuple[ResponseSurface, ...]
+    measured_on: date
+    evidence: str
+
+
+#: ``opencode_go/muse-spark-1.3-contributor``, measured 2026-10-29 against the
+#: Go host: two calls on ``/responses`` and two on ``/messages``, each answered
+#: HTTP 200 with a ``probe_ping`` tool_use and a clean ``end_turn``, one
+#: upstream attempt per request. The Chat Completions door is included because
+#: every request MCC made to this model before that measurement was served on
+#: it -- 372 of them -- and a terminal rung is better stated than implied.
+#:
+#: ``muse-spark-1.2-contributor`` is deliberately absent: it was never
+#: measured, so it keeps the door its registry publishes.
+MUSE_SPARK_GO_MEASURED = MeasuredSurfaceSet(
+    surfaces=(
+        ResponseSurface.MESSAGES,
+        ResponseSurface.RESPONSES,
+        ResponseSurface.CHAT_COMPLETIONS,
+    ),
+    measured_on=date(2026, 10, 29),
+    evidence=(
+        "4 Go calls: 2 on /responses and 2 on /messages, each answered HTTP 200 "
+        "with a probe_ping tool_use then end_turn DONE, exactly 1 upstream "
+        "attempt per request"
+    ),
+)
 
 
 def canonical_model_info(info: ProviderModelInfo) -> str:

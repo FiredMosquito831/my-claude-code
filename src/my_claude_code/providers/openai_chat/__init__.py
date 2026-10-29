@@ -48,10 +48,15 @@ from .reasoning import (
 )
 from .request_policy import OpenAIChatRequestPolicy, build_openai_chat_request_body
 from .response_surface import (
+    CLIENT_FAMILY_ORDER,
     NPM_SURFACES,
+    ResolvedSurfaceLadder,
     catalogue_surface,
     declared_surfaces_for,
+    learned_surfaces,
+    remember_response_surfaces,
     resolve_response_surface,
+    resolve_surface_ladder,
 )
 from .usage import usage_int
 
@@ -83,6 +88,7 @@ def create_openai_chat_provider(
 
 
 __all__ = [
+    "CLIENT_FAMILY_ORDER",
     "GENERIC_OPENAI_PROFILE",
     "NO_REASONING",
     "NPM_SURFACES",
@@ -99,6 +105,7 @@ __all__ = [
     "OpenAIChatProvider",
     "OpenAIChatRequestPolicy",
     "ReasoningObject",
+    "ResolvedSurfaceLadder",
     "build_openai_chat_request_body",
     "catalogue_surface",
     "complaint_evidence_snippet",
@@ -111,13 +118,16 @@ __all__ = [
     "is_bad_request",
     "learned_effort_values",
     "learned_named_effort_reasoning",
+    "learned_surfaces",
     "matched_token",
     "model_is_zero_cost",
     "observe_identity_enforcement",
     "openai_v1_base_url",
     "profile_with_declared_surfaces",
     "profile_with_learned_dialect",
+    "remember_response_surfaces",
     "resolve_response_surface",
+    "resolve_surface_ladder",
     "sampling_parameter_evidence",
     "upstream_complaint",
     "usage_int",

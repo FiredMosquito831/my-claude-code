@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from my_claude_code.application.errors import InvalidRequestError
-from my_claude_code.application.model_metadata import ResponseSurface
+from my_claude_code.application.model_metadata import (
+    MUSE_SPARK_GO_MEASURED,
+    MeasuredSurfaceSet,
+    ResponseSurface,
+)
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.config.marketplaces import INFERHUB_MARKETPLACE, MarketplaceDialect
 from my_claude_code.core.anthropic import ReasoningReplayMode
@@ -237,6 +241,30 @@ class OpenAIChatProfile:
     # that fronts several APIs states its own answer here instead of inheriting
     # a constant written for providers that have no choice to make.
     no_information_surface: ResponseSurface | None = None
+    # Which doors a *dated measurement of this deployment* watched answer, per
+    # model id (7.114.0). Empty -- every profile but ``opencode_go`` -- means
+    # nothing was ever measured and the rungs below answer alone.
+    #
+    # A measurement outranks the vendor's published registry and is outranked
+    # by anything this install proved for itself, so a shipped entry can never
+    # pin a door a live probe has since disproved. Data keyed by model id, the
+    # same shape ``surface_by_upstream`` and ``free_tier_tool_catalogue``
+    # already use: the resolver stays a lookup and still reads no model name.
+    measured_surfaces: tuple[tuple[str, MeasuredSurfaceSet], ...] = ()
+    # Whether a model the vendor places on a surface this build cannot speak
+    # is **probed** on first use instead of refused (7.114.0). False -- every
+    # profile but the two OpenCode ones -- keeps the hard refusal, byte for
+    # byte, exactly as it has been.
+    #
+    # A flag on the profile rather than a check on the provider id, and that
+    # is the point, as it is for ``response_surfaces`` above: "this gateway
+    # fronts more than one API and wants the doors it can speak tried" is a
+    # property of a deployment. InferHub is the third multi-door host and does
+    # NOT set it: its doors are declared per upstream, and a declared door is
+    # never overruled by an unmeasured guess. 7.115.0 adds the second branch
+    # that reads this (the unknown-surface first try); in this release only
+    # the unservable branch does.
+    optimistic_first_try: bool = False
     # The longest tool name this host's *Responses* endpoint accepts. ``None``
     # -- every profile but the two OpenCode ones -- sends names as the client
     # wrote them on that surface. OpenCode Zen refuses a name past 64
@@ -480,6 +508,14 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
         responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
         free_tier_tool_catalogue=OPENCODE_FREE_TIER_CATALOGUE,
+        # 7.114.0: the nine ``@ai-sdk/google`` models in Zen's registry are
+        # declared on an API this build cannot speak, and until now that was
+        # read as "unusable" and refused before any call. The vendor's
+        # statement is still honoured -- that door is never dialled -- but the
+        # host is now asked, with one probe, whether it also serves the model
+        # on a door MCC does speak. Nothing is hidden: the row keeps the
+        # vendor's reason until a probe has actually answered.
+        optimistic_first_try=True,
     ),
     "opencode_go": OpenAIChatProfile(
         _policy(
@@ -515,6 +551,17 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
         responses_tool_name_max_length=OPENAI_TOOL_NAME_MAX_LENGTH,
         free_tier_tool_catalogue=OPENCODE_FREE_TIER_CATALOGUE,
+        # 7.114.0: the one model on this fleet with a measured multi-door set.
+        # Two calls on ``/responses`` and two on ``/messages`` each answered
+        # 200 with a real tool call on 2026-10-29; Chat Completions is in the
+        # set because every request before that measurement was served on it.
+        # ``muse-spark-1.2-contributor`` is deliberately absent -- it was never
+        # measured, so it keeps the Responses door its registry publishes.
+        measured_surfaces=(("muse-spark-1.3-contributor", MUSE_SPARK_GO_MEASURED),),
+        # The same opt-in as Zen, for the same reason: this host's two
+        # ``@ai-sdk/google`` models are probed on first use instead of
+        # refused.
+        optimistic_first_try=True,
     ),
     "vercel": OpenAIChatProfile(
         _policy(

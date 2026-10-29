@@ -50,6 +50,7 @@ from my_claude_code.core.anthropic.streaming.truncation import (
     CommittedStreamTracker,
     StreamTruncation,
 )
+from my_claude_code.core.client_family import client_family_scope
 from my_claude_code.core.credential_attribution import (
     current_credential,
     record_credential,
@@ -124,6 +125,39 @@ def _trace_event_name(wire_api: WireApi, suffix: str) -> str:
 def _stream_trace_event(wire_api: WireApi, suffix: str) -> str:
     """Return the stream-lifecycle trace event name for this surface."""
     return f"{_STREAM_TRACE_NAMESPACES[wire_api]}.{suffix}"
+
+
+async def _client_family_scoped(
+    body: AsyncIterator[str], wire_api: WireApi
+) -> AsyncIterator[str]:
+    """Run one provider stream with the inbound client family in its slot.
+
+    7.114.0. Which door a model is asked on first can depend on what the
+    caller speaks (``core/client_family.py``), and the value is known here and
+    nowhere below: ``BaseProvider.stream_response`` is a signature every
+    provider shares and none of them would read, so it is left in the same
+    kind of per-request slot the proxy label and the recovery rung already use
+    (``core/upstream_ladder.py:456-471``). The scope opens before the inner
+    generator's first ``__anext__`` -- so it is set when the provider resolves
+    its surface -- and closes, resetting the slot, when the stream ends or is
+    closed early.
+    """
+
+    with client_family_scope(wire_api):
+        try:
+            async for chunk in body:
+                yield chunk
+        finally:
+            # A client hanging up closes this generator at the ``yield``
+            # below, and ``async for`` does not close what it iterates: the
+            # inner body -- and the provider stream under it -- has to be
+            # closed here or a cancelled request leaves its upstream open.
+            await close_stream_input(
+                body,
+                owner="client_family_scoped",
+                source="api",
+                preserved_error=sys.exception(),
+            )
 
 
 AttemptObserver = Callable[[RoutedMessagesRequest, int], None]
@@ -1443,7 +1477,7 @@ class ProviderExecutor:
             stream_trace["generation_id"] = self._generation_id
 
         return traced_async_stream(
-            guarded_provider_body(),
+            _client_family_scoped(guarded_provider_body(), wire_api),
             stage="egress",
             source="api",
             complete_event=_stream_trace_event(wire_api, "stream_completed"),
