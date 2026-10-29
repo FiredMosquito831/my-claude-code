@@ -330,6 +330,18 @@ def read_entry(subject: str, *, path: Path | None = None) -> RestoreEntry | None
                 )
             )
 
+    # ``payload`` is a plain dict here (it came out of the JSON document), so
+    # the list is pulled the same way the ``overwritten`` values above are.
+    raw_parents = payload.get("created_parents")
+    created_parents = tuple(
+        key_path
+        for key_path in (
+            _key_path(item)
+            for item in (raw_parents if isinstance(raw_parents, list) else [])
+        )
+        if key_path is not None
+    )
+
     return RestoreEntry(
         subject=str(payload.get("subject", subject)),
         document_path=str(payload.get("document_path", "")),
@@ -337,13 +349,7 @@ def read_entry(subject: str, *, path: Path | None = None) -> RestoreEntry | None
         overwritten=tuple(values),
         undone_at=str(payload.get("undone_at", "")),
         created_file=bool(payload.get("created_file")),
-        created_parents=tuple(
-            key_path
-            for key_path in (
-                _key_path(item) for item in _items(payload, "created_parents")
-            )
-            if key_path is not None
-        ),
+        created_parents=created_parents,
     )
 
 
