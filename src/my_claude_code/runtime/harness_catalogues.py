@@ -186,6 +186,7 @@ class HarnessCatalogueFanoutPublisher:
                 key=merge.base_url_key,
                 sentinel=merge.base_url_sentinel,
                 preserve_bytes=merge.preserve_bytes,
+                document_format=merge.document_format,
             ):
                 return True
             logger.debug(

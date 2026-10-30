@@ -1,0 +1,124 @@
+{
+  "app_id": "hermes",
+  "display_name": "Hermes Agent",
+  "app_version": "0.19.0",
+  "extracted": "2026-10-30",
+  "source_file": "hermes_agent-0.19.0-py3-none-any.whl (10,144,439 bytes, sha256 bd0bac012aee38a60894781f4597dc29ee7bedb3448540249921f10d3bef327f, fetched from PyPI files.pythonhosted.org). Opened with Python's zipfile and read in place; requires_python is <3.14,>=3.11, so it was never installed into MCC's 3.14 venv.",
+  "note": "A rule, not a schema. Hermes Agent publishes no machine-readable schema for config.yaml, so every entry below is a fact read out of the shipped source. It governs a Coding agents CLI launcher (mcc-hermes), not a Desktop apps Configure card.",
+
+  "home_resolution": {
+    "env": "HERMES_HOME",
+    "windows": "%LOCALAPPDATA%\\hermes",
+    "windows_without_localappdata": "~/AppData/Local/hermes",
+    "other": "~/.hermes",
+    "evidence": "hermes_constants.py:46-67: _get_platform_default_hermes_home() returns Path(LOCALAPPDATA)/'hermes' on win32 (falling back to Path.home()/'AppData'/'Local'/'hermes' when LOCALAPPDATA is empty) and Path.home()/'.hermes' elsewhere; _hermes_home_from_env() returns Path(HERMES_HOME) when that is set, else the platform default.",
+    "mcc_must_follow_this_order": true,
+    "why": "MCC writes one file into somebody else's directory. Writing one path while the CLI reads another fails silently, as a picker that never shows MCC's models -- and on Windows the CLI's home is not the user's home at all."
+  },
+
+  "config_document": "<home>/config.yaml",
+  "config_document_evidence": "hermes_cli/config.py:749-751: get_config_path() -> get_hermes_home() / 'config.yaml'. The same directory holds .env, auth.json and SOUL.md (config.py:753-755).",
+
+  "provider_root": "providers: { <name>: Provider }",
+  "provider_root_evidence": "hermes_cli/config.py:5224-5271: get_compatible_custom_providers() reads config['custom_providers'] (the legacy list, auto-migrated at config version 12) and then providers_dict_to_custom_providers(config['providers']). MCC writes the keyed schema.",
+
+  "provider_keys": [
+    "provider",
+    "name",
+    "api",
+    "url",
+    "base_url",
+    "api_key",
+    "key_env",
+    "api_key_env",
+    "api_mode",
+    "transport",
+    "model",
+    "default_model",
+    "models",
+    "context_length",
+    "rate_limit_delay",
+    "request_timeout_seconds",
+    "stale_timeout_seconds",
+    "discover_models",
+    "extra_body",
+    "extra_headers",
+    "ssl_ca_cert",
+    "ssl_verify"
+  ],
+  "provider_keys_evidence": "hermes_cli/config.py:5015-5037: _KNOWN_KEYS in _normalize_custom_provider_entry. `unknown = set(entry.keys()) - _KNOWN_KEYS - set(_CAMEL_ALIASES.keys())`; entries in `unknown` are logged as `providers.<name>: unknown config keys ignored: ...` (deduplicated per provider and signature) and then dropped. So an unknown key is not fatal and is not silent -- it is a warning MCC must not cause in somebody else's tool.",
+  "camel_aliases_auto_mapped": {
+    "apiKey": "api_key",
+    "baseUrl": "base_url",
+    "apiMode": "api_mode",
+    "keyEnv": "key_env",
+    "apiKeyEnv": "key_env",
+    "defaultModel": "default_model",
+    "contextLength": "context_length",
+    "rateLimitDelay": "rate_limit_delay"
+  },
+
+  "required_provider_keys": ["api"],
+  "required_provider_keys_evidence": "hermes_cli/config.py:5055-5075: the base URL is taken from api, url or base_url, validated with urllib.parse.urlparse, and `if not base_url: return None` -- the provider entry is dropped whole, with a warning. `name` defaults to the mapping key (5077-5086), so it is not required.",
+
+  "credential": {
+    "field": "key_env",
+    "form": "an environment-variable NAME, never a value",
+    "alias": "api_key_env",
+    "evidence": "hermes_cli/config.py:5088-5091 keeps key_env as a stripped string; providers.py:625-641 turns it into ProviderDef.api_key_env_vars; agent/auxiliary_client.py:4253-4255 and 5009-5011 read it with os.getenv(key_env). Nothing on disk resolves it.",
+    "mcc_writes": "key_env: MCC_HERMES_API_KEY"
+  },
+
+  "transport": {
+    "values": ["openai_chat", "anthropic_messages", "codex_responses"],
+    "aliases": ["transport", "api_mode"],
+    "mcc_writes": "openai_chat",
+    "evidence": "hermes_cli/providers.py:38 `transport: str = \"openai_chat\"  # openai_chat | anthropic_messages | codex_responses`; :401 TRANSPORT_TO_API_MODE maps openai_chat -> chat_completions; :633 `entry.get(\"transport\", \"openai_chat\")`; hermes_cli/config.py:5099-5101 reads api_mode or transport."
+  },
+
+  "base_url": {
+    "request_url": "{api}/chat/completions",
+    "therefore": "api must end in /v1 for transport openai_chat -- the OpenAI SDK appends chat/completions and inserts no /v1 of its own",
+    "evidence": "agent/agent_runtime_helpers.py:1626 builds the URL as f\"{agent.base_url.rstrip('/')}{'/responses' if agent.api_mode == 'codex_responses' else '/chat/completions'}\".",
+    "mcc_writes": "<proxy root>/v1, substituted for a sentinel on the way to disk (config/harness_config_merge.with_base_url)"
+  },
+
+  "models": {
+    "shape_mcc_writes": "dict: { <model id>: { <metadata> } }",
+    "normaliser_accepts": ["list of ids", "list of {id: ...} rows", "dict {<id>: meta}"],
+    "evidence": "hermes_cli/config.py:5107-5132: a dict is kept as-is; a list is converted to the dict shape (str items become {id: {}}, dict items take id or name and keep the rest as meta). The dict is what the shipped code expects, so MCC writes it."
+  },
+
+  "per_model_keys_consumed": {
+    "context_length": "The only per-model key the shipped code reads. hermes_cli/config.py:5467 (`raw_ctx = model_cfg.get(\"context_length\")`) inside get_custom_provider_context_length, called from agent/agent_init.py:1765-1775. Separately, agent/agent_init.py:1729 reads the GLOBAL model.context_length (`_config_context_length = _model_cfg.get(\"context_length\")`), which is not the provider block. The provider-level context_length is config.py:5135-5137 and is kept only when int > 0."
+  },
+  "per_model_keys_mcc_must_not_write": [
+    "max_tokens",
+    "maxTokens",
+    "pricing",
+    "cost",
+    "supports_tools",
+    "supports_vision",
+    "reasoning",
+    "reasoning_effort",
+    "answer_in_reasoning",
+    "prompt_caching"
+  ],
+  "per_model_keys_mcc_must_not_write_evidence": "None of these is read from a providers.<name>.models.<model> entry by the 0.19.0 code. answer_in_reasoning and prompt_caching appear only in Hermes' documentation of the model page, not in the shipped source.",
+
+  "default_model": {
+    "key": "default_model",
+    "alias": "model",
+    "evidence": "hermes_cli/config.py:5103-5106: `model_name = entry.get(\"model\") or entry.get(\"default_model\")` becomes the provider's model. MCC writes default_model only; it never sends -m/--model on every launch, because hermes_cli/_parser.py:131-145 documents that flag as a per-invocation override ('Applies to -z/--oneshot and --tui')."
+  },
+
+  "extra_headers": {
+    "key": "extra_headers",
+    "evidence": "hermes_cli/config.py:5150-5155 normalises entry['extra_headers'] with normalize_extra_headers (:5339-5353), which stringifies keys and values and drops None; get_custom_provider_extra_headers (:5356+) returns it for the matching base URL, and the client sends it on every request. MCC writes its x-mcc-harness label here.",
+    "values_may_carry_credentials": true
+  },
+
+  "rewrites_its_own_document": true,
+  "rewrites_its_own_document_evidence": "hermes_cli/config.py:7515+ save_config writes through utils.atomic_yaml_write (:227-280), a PyYAML dump with default_flow_style=False -- comments and layout are lost. _config_version is DEFAULT_CONFIG's own (config.py:3487 sets 33) and check_config_version (:5490-5523) migrates an older on-disk value, rewriting the file.",
+  "undo_implication": "Undo cannot promise to restore the bytes Hermes itself rewrote. MCC's own edits are byte-preserving (config/document_codecs), but Hermes' dumper is not, so RESTORE is hash-guarded and refuses when the document moved, and KEYS_ONLY must work with no record at all."
+}

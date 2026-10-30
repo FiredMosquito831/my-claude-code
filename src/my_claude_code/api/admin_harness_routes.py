@@ -85,6 +85,7 @@ from my_claude_code.config.harness_tiers import (
 )
 from my_claude_code.config.harnesses import (
     PROTOCOL_LABELS,
+    HarnessConfigMerge,
     HarnessSpec,
     harness_command_lines,
     harness_specs,
@@ -459,6 +460,7 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         path,
         catalogue.document_format,
         preserve_bytes=merge is not None and merge.preserve_bytes,
+        merge=merge,
     )
     if document is None:
         return entry
@@ -497,7 +499,11 @@ def _merged_block(
 
 
 def _read_catalogue(
-    path: Path, document_format: str = "json", *, preserve_bytes: bool = False
+    path: Path,
+    document_format: str = "json",
+    *,
+    preserve_bytes: bool = False,
+    merge: HarnessConfigMerge | None = None,
 ) -> Mapping[str, Any] | None:
     """Return a generated catalogue, parsed the way its own format demands.
 
@@ -508,9 +514,14 @@ def _read_catalogue(
     ``preserve_bytes`` asks for the JSON5 reader instead of ``json.loads``: a
     merge target MCC edits as text is a document a user may have commented,
     and ``json.loads`` would report the very file MCC had just written as
-    absent. Only OpenClaw declares it.
+    absent. Only OpenClaw declares it. A **YAML** merge target (Hermes) is read
+    through its merge spec instead, because the format is a property of the
+    merge and the answer has to be the nested mapping MCC wrote -- the card's
+    model count comes from ``providers.mcc.models``.
     """
 
+    if merge is not None and merge.document_format != "json":
+        return read_text_document(path, merge.document_format)
     if preserve_bytes:
         return read_text_document(path)
     try:

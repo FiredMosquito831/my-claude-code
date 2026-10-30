@@ -41,6 +41,8 @@ from my_claude_code.config.document_codecs import (
     SetScalar,
     SetTable,
     apply_edits,
+    yaml_mapping_at,
+    yaml_root_is_sequence,
 )
 
 #: The table the Hermes engine gap was measured on (INVESTIGATION-HARNESS-
@@ -482,3 +484,112 @@ def test_every_existing_yaml_document_round_trips_byte_identically(text: str):
     assert _delete(text) == text
     assert _only_insertions(text, _set(text))
     assert _delete(_set(text)) == text
+
+
+# ---------------------------------------------------------------------------
+# Reading one table back (7.118.0)
+#
+# ``yaml_mapping_at`` is the read half the nested-table edit needed once a
+# *merge target* was YAML: the merge engine asks whether ``providers.mcc.api``
+# names this server, and the Coding agents card asks how many models the block
+# holds. It walks the same entry grammar the writer writes with, so what MCC
+# reads back is exactly what it would have written -- and it is not
+# ``parse_document``, which reports a nested block as present with no value.
+# ---------------------------------------------------------------------------
+
+
+def test_a_nested_table_reads_back_as_the_mapping_that_was_written():
+    text = (
+        "# mine\n"
+        "_config_version: 33\n"
+        "providers:\n"
+        "  mcc:\n"
+        '    api: "http://127.0.0.1:8082/v1"\n'
+        "    key_env: MCC_HERMES_API_KEY\n"
+        "    transport: openai_chat\n"
+        "    models:\n"
+        '      "openrouter/configured":\n'
+        "        context_length: 400000\n"
+        '      "openrouter/other": {}\n'
+    )
+
+    block = yaml_mapping_at(text, ("providers", "mcc"))
+
+    assert block == {
+        "api": "http://127.0.0.1:8082/v1",
+        "key_env": "MCC_HERMES_API_KEY",
+        "transport": "openai_chat",
+        "models": {
+            "openrouter/configured": {"context_length": 400000},
+            "openrouter/other": {},
+        },
+    }
+
+
+def test_reading_the_root_gives_every_section_and_their_order():
+    text = "_config_version: 33\nmodel:\n  provider: openrouter\n"
+
+    root = yaml_mapping_at(text, ())
+    assert root is not None
+    assert list(root) == ["_config_version", "model"]
+    assert root["model"] == {"provider": "openrouter"}
+
+
+def test_a_path_that_is_not_a_mapping_reads_as_none():
+    text = "providers: http://not-a-mapping\n"
+
+    assert yaml_mapping_at(text, ("providers", "mcc")) is None
+    assert yaml_mapping_at(text, ("absent",)) is None
+    assert yaml_mapping_at("providers: [1, 2]\n", ("providers", "models")) is None
+
+
+def test_an_empty_table_reads_as_empty_rather_than_absent():
+    assert yaml_mapping_at("providers:\n  mcc: {}\n", ("providers", "mcc")) == {}
+    assert yaml_mapping_at("providers:\n  mcc:\n", ("providers", "mcc")) == {}
+
+
+def test_a_same_named_key_under_another_parent_is_not_read_as_mccs():
+    text = (
+        "providers:\n"
+        "  myown:\n"
+        "    api: https://example.test/v1\n"
+        "    models:\n"
+        "      theirs: {}\n"
+    )
+
+    assert yaml_mapping_at(text, ("providers", "mcc")) is None
+    assert yaml_mapping_at(text, ("providers", "myown")) == {
+        "api": "https://example.test/v1",
+        "models": {"theirs": {}},
+    }
+
+
+def test_a_root_sequence_is_reported_and_never_read_as_a_mapping():
+    text = "- id: one\n- id: two\n"
+
+    assert yaml_root_is_sequence(text) is True
+    assert yaml_root_is_sequence("---\nkey: value\n") is False
+    assert yaml_root_is_sequence("# only a comment\n\n") is False
+    assert yaml_mapping_at(text, ()) == {}
+
+
+def test_what_the_reader_returns_is_what_the_writer_wrote():
+    document = {
+        "api": "http://127.0.0.1:8082/v1",
+        "key_env": "MCC_HERMES_API_KEY",
+        "transport": "openai_chat",
+        "default_model": "openrouter/configured",
+        "models": {
+            "openrouter/configured": {"context_length": 400000},
+            "openrouter/silent": {},
+        },
+        "extra_headers": {"x-mcc-harness": "hermes"},
+    }
+
+    text = apply_edits(
+        "model:\n  provider: openrouter\n",
+        DocumentFormat.YAML,
+        [SetTable(("providers", "mcc"), document)],
+    )
+
+    assert yaml_mapping_at(text, ("providers", "mcc")) == document

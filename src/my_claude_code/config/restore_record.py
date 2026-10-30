@@ -251,7 +251,9 @@ def _harden(path: Path) -> None:
         return
 
 
-def write_entry(entry: RestoreEntry, *, path: Path | None = None) -> Path:
+def write_entry(
+    entry: RestoreEntry, *, path: Path | None = None, keep_when_empty: bool = False
+) -> Path:
     """Record what Configure overwrote, keeping the *first* answer it got.
 
     The record answers exactly one question -- "what did the user have before
@@ -266,10 +268,27 @@ def write_entry(entry: RestoreEntry, *, path: Path | None = None) -> Path:
     different question -- "is this still the document MCC left?" -- and has to
     track the latest write or a re-apply would make every later Restore refuse.
 
-    An entry with nothing overwritten is not written at all, and an existing
-    one for that subject is dropped: that is the Command Code case, where MCC
-    only ever creates a fresh key, and it keeps the record empty for every
-    caller that does not need it.
+    An entry that records nothing at all is not written, and an existing one
+    for that subject is dropped: that is the Command Code case, where MCC only
+    ever creates a fresh key, and it keeps the record empty for every caller
+    that does not need it.
+
+    "Nothing at all" means no replaced value *and* nothing about the document's
+    own history. 7.118.0 extends the entry's usefulness to two facts that are
+    not replaced values: whether MCC created the file, and which containers it
+    created. A merge target that only ever *creates* its block -- Hermes, whose
+    ``providers.mcc`` replaces nothing -- still has to be able to say "I made
+    this file, so Undo may remove it" and "I made this ``providers:`` key, so
+    Undo may prune it". An entry carrying only those is written, and the
+    first-Configure answer for them is kept for the same reason the overwritten
+    values are.
+
+    ``keep_when_empty`` is the last resort and the reason Hermes passes it: a
+    merge target whose block replaces nothing still needs ``document_sha256``
+    recorded, because that hash is the whole of what ``RESTORE`` can check. The
+    caller that sets it is the one whose CLI rewrites its own document
+    (Hermes' ``save_config`` re-dumps the YAML), so "has this file moved since
+    MCC wrote it" is the only question Undo can answer honestly.
     """
 
     record_path = path if path is not None else restore_record_path()
@@ -277,16 +296,25 @@ def write_entry(entry: RestoreEntry, *, path: Path | None = None) -> Path:
     subjects = record.get("subjects")
     subjects = dict(subjects) if isinstance(subjects, dict) else {}
 
-    if entry.overwritten:
+    records_something = bool(
+        entry.overwritten
+        or entry.created_file
+        or entry.created_parents
+        or keep_when_empty
+    )
+    if records_something:
         existing = read_entry(entry.subject, path=record_path)
-        if existing is not None and existing.overwritten:
+        if existing is not None:
             entry = RestoreEntry(
                 subject=existing.subject,
                 document_path=entry.document_path,
                 document_sha256=entry.document_sha256,
-                overwritten=existing.overwritten,
-                created_file=existing.created_file,
-                created_parents=existing.created_parents,
+                # The user's own pre-MCC values win wherever the first
+                # Configure had them; a fact the first Configure recorded about
+                # the document's history stays true however many runs follow.
+                overwritten=existing.overwritten or entry.overwritten,
+                created_file=existing.created_file or entry.created_file,
+                created_parents=existing.created_parents or entry.created_parents,
             )
         subjects[entry.subject] = entry.as_payload()
     else:

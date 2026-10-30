@@ -18,6 +18,7 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
+from my_claude_code.config.document_codecs import yaml_mapping_at
 from my_claude_code.config.harnesses import (
     MCC_HARNESS_ID_SENTINEL,
     harness_spec,
@@ -867,3 +868,160 @@ def _harness_header_values(node: object) -> set[str]:
         for item in node:
             found |= _harness_header_values(item)
     return found
+
+
+# --------------------------------------------------------- Hermes (7.118.0)
+
+
+def _hermes_publisher(path: Path) -> HarnessCatalogueFanoutPublisher:
+    return HarnessCatalogueFanoutPublisher({"hermes": path})
+
+
+def _hermes_seed(runtime: FakeRuntime) -> str:
+    """A hand-written config.yaml already carrying this server's block."""
+
+    base_url = f"{local_proxy_root_url(runtime.current_settings())}/v1"
+    return (
+        "# hand-written, and MCC must keep every byte of it\n"
+        "_config_version: 33\n"
+        "model:\n"
+        "  provider: openrouter\n"
+        "  default: anthropic/claude-sonnet-4\n"
+        "\n"
+        "providers:\n"
+        "  mcc:\n"
+        f'    api: "{base_url}"\n'
+        "    key_env: MCC_HERMES_API_KEY\n"
+        "    transport: openai_chat\n"
+        "    models:\n"
+        '      "stale/model": {}\n'
+    )
+
+
+def test_a_hermes_file_mcc_has_not_been_invited_into_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "# mine\n_config_version: 33\nmodel:\n  provider: openrouter\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    _hermes_publisher(path).publish(_runtime())
+
+    assert path.read_bytes() == before
+
+
+def test_an_invited_hermes_file_is_refreshed_and_keeps_every_byte(
+    tmp_path: Path,
+) -> None:
+    """The refresh edits the YAML text: comments, layout and the user's model."""
+
+    runtime = _runtime({"nvidia_nim/configured": 300_000})
+    path = tmp_path / "config.yaml"
+    path.write_text(_hermes_seed(runtime), encoding="utf-8", newline="")
+
+    _hermes_publisher(path).publish(runtime)
+
+    text = path.read_bytes().decode("utf-8")
+    assert "# hand-written, and MCC must keep every byte of it" in text
+    assert "  provider: openrouter" in text, (
+        "a provider refresh must not move the user's chosen model"
+    )
+    document = yaml_mapping_at(text, ("providers", "mcc"))
+    assert document is not None
+    models = _nested_map(document["models"])
+    assert "stale/model" not in models
+    assert "nvidia_nim/configured" in models
+    assert _nested_map(models["nvidia_nim/configured"])["context_length"] == 300_000
+    assert str(document["api"]).endswith("/v1")
+    # The refresh is the server's, so the harness id is already resolved.
+    assert document["extra_headers"] == {HARNESS_HEADER: "hermes"}
+
+
+def _nested_map(value: object) -> dict[str, object]:
+    """Narrow one nested value of a parsed YAML document for an assertion."""
+
+    assert isinstance(value, dict)
+    return {str(key): item for key, item in value.items()}
+
+
+def test_a_hermes_refresh_from_another_server_writes_nothing(tmp_path: Path) -> None:
+    owner = _runtime()
+    path = tmp_path / "config.yaml"
+    path.write_text(_hermes_seed(owner), encoding="utf-8", newline="")
+    before = path.read_bytes()
+
+    intruder = _runtime()
+    intruder._settings = intruder._settings.model_copy(
+        update={"port": owner.current_settings().port + 1}
+    )
+    _hermes_publisher(path).publish(intruder)
+
+    assert path.read_bytes() == before
+
+
+def test_a_hermes_refresh_keeps_a_later_restore_possible(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The recorded hash follows MCC's own refresh, so RESTORE still works."""
+
+    from my_claude_code.application.catalogues import serialise
+    from my_claude_code.config.harness_config_merge import (
+        configure_owned_block,
+        unconfigure_owned_block,
+    )
+    from my_claude_code.config.restore_record import UndoMode
+
+    runtime = _runtime({"nvidia_nim/configured": 300_000})
+    path = tmp_path / "config.yaml"
+    record = tmp_path / "restore-record.json"
+    monkeypatch.setattr(
+        "my_claude_code.config.restore_record.restore_record_path", lambda: record
+    )
+    catalogue = harness_spec("hermes").catalogue
+    assert catalogue is not None and catalogue.merge is not None
+    merge = catalogue.merge
+
+    document = serialise(
+        "hermes",
+        [
+            CatalogueModel(
+                gateway_id="anthropic/openrouter/configured",
+                provider_model_ref="openrouter/configured",
+                display_name="Configured",
+                is_primary_route=True,
+            )
+        ],
+    )[0]
+    original = "# mine\n_config_version: 33\nmodel:\n  provider: openrouter\n"
+    path.write_text(original, encoding="utf-8", newline="")
+    configure_owned_block(
+        merge=merge,
+        path=path,
+        document=document,
+        proxy_root_url=local_proxy_root_url(runtime.current_settings()),
+        subject="hermes",
+        record_path=record,
+    )
+
+    _hermes_publisher(path).publish(runtime)
+
+    unconfigure_owned_block(
+        merge=merge,
+        path=path,
+        subject="hermes",
+        mode=UndoMode.RESTORE,
+        record_path=record,
+        proxy_root_url=local_proxy_root_url(runtime.current_settings()),
+    )
+    assert path.read_bytes().decode("utf-8") == original
+
+
+def test_a_hermes_merge_target_is_never_created_at_startup(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+
+    _hermes_publisher(path).ensure_exists(_runtime())
+
+    assert not path.exists()

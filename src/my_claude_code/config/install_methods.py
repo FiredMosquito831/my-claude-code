@@ -953,6 +953,47 @@ GEMINI_METHODS: tuple[InstallMethod, ...] = (
     ),
 )
 
+#: Hermes Agent installs from Nous Research's own installer, and MCC's button
+#: is a **LINK** to it rather than a method it runs: Hermes' own config code
+#: lists ``pip`` and ``homebrew`` as unsupported install methods
+#: (``hermes_cli/config.py:578`` of 0.19.0), so a package-manager button would
+#: produce an install Hermes itself will not update. The vendor publishes
+#: ``install.sh`` and ``install.ps1``; both are on the page below, so one row
+#: per OS pointing at that page is the whole button (user decision 5,
+#: 2026-10-29).
+_HERMES_DOC = "https://hermes-agent.nousresearch.com/docs/getting-started/installation"
+
+HERMES_METHODS: tuple[InstallMethod, ...] = tuple(
+    InstallMethod(
+        id="link",
+        label="Nous Research's installer",
+        os=os_,
+        kind=InstallKind.LINK,
+        doc_url=_HERMES_DOC,
+        checked_on="2026-10-30",
+        checked_by=(
+            "Nous Research's install page "
+            "(hermes-agent.nousresearch.com/docs/getting-started/installation, "
+            "fetched 2026-10-30: install.sh for Linux/macOS/WSL2, install.ps1 "
+            "for Windows); pip/homebrew unsupported per "
+            "hermes_cli/config.py:578 of the published 0.19.0 wheel"
+        ),
+        copy_command=(
+            'powershell -c "irm https://hermes-agent.nousresearch.com/install.ps1 | iex"'
+            if os_ is InstallOs.WINDOWS
+            else "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+        ),
+        url=_HERMES_DOC,
+        hosts=("hermes-agent.nousresearch.com",),
+        changes=(
+            "opens Nous Research's installation page in your browser -- MCC "
+            "runs nothing: Hermes documents pip and Homebrew as unsupported "
+            "install methods, so its own installer is the only path",
+        ),
+    )
+    for os_ in InstallOs
+)
+
 #: Kimi Code (user decision 6): Moonshot's new ``@moonshot-ai/kimi-code``
 #: replaces the legacy ``kimi-cli`` the launcher's hint names, and the button
 #: waits for a check that ``mcc-kimi`` works with it. That check needs Kimi
