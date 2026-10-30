@@ -4352,10 +4352,23 @@ mcc-gemini</code></pre>
                      alt="Web search configuration and analytics" loading="lazy">
                 <p>
                   <code>WEB_SEARCH_PROVIDER=auto</code> needs <strong>no
-                  configuration</strong> &mdash; with no keys it falls back to keyless
-                  DuckDuckGo. Add any provider key and <code>auto</code> prefers it. A
-                  missing key on an explicitly chosen provider fails visibly rather than
-                  degrading silently.
+                  configuration</strong> &mdash; with no keys it falls back to the keyless
+                  <code>ddgs</code> metasearch, then to MCC's own DuckDuckGo hop. Add any
+                  provider key and <code>auto</code> prefers it. A missing key on an
+                  explicitly chosen provider fails visibly rather than degrading silently.
+                </p>
+                <p>
+                  <strong>The <code>ddgs</code> provider is a metasearch.</strong> The
+                  keyless <strong>DuckDuckGo (ddgs)</strong> provider is the
+                  <code>ddgs</code> package: with its Backend engine empty, one search asks
+                  several engines and merges their results, so DuckDuckGo itself may not be
+                  asked; set <code>DDGS_BACKEND=duckduckgo</code> to ask it alone. Bing,
+                  Google and Yandex are switched off inside the version MCC ships, so
+                  choosing one of them runs auto. Its safe search
+                  (<code>DDGS_SAFESEARCH</code>: <code>on</code>, <code>moderate</code> or
+                  <code>off</code>) applies only on the engines that read it &mdash;
+                  DuckDuckGo's own engine ignores it &mdash; and a <code>strict</code>
+                  saved from older docs is read as <code>on</code>.
                 </p>
                 <p>
                   <strong>The keyless DuckDuckGo hop.</strong> The last hop of
@@ -4404,7 +4417,8 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   Locale is worth setting if you are not in the US &mdash;
                   <strong>Firecrawl returns US results unless told otherwise</strong>
                   (<code>FIRECRAWL_COUNTRY=DE</code>). Safe search is available on Brave,
-                  SearXNG, SerpAPI, SearchAPI and DDGS. All 66 advanced options live in the
+                  SearXNG, SerpAPI, SearchAPI and DDGS (on the engines that read it, not
+                  DuckDuckGo's own). All 66 advanced options live in the
                   Advanced options drawers, which are open when the page loads, and each
                   states what leaving it blank does.
                 </p>

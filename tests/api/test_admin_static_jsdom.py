@@ -11759,6 +11759,25 @@ def test_jsdom_with_no_key_every_keyed_control_is_off(marketplaces) -> None:
 WS_BASELINE = (
     Path(__file__).resolve().parents[1] / "fixtures" / "websearch_page_dom_7_112_1.json"
 )
+#: The ddgs drawer's four help texts, which 7.120.2 corrects (RESEARCH-DDG-
+#: WEBSEARCH.md R5: what an empty region and safe search really do, which two
+#: options also reach the keyless DuckDuckGo hop, which backend engines are
+#: switched off). Corrected rather than added, so they are taken out of BOTH
+#: sides -- this tree's page and the base tree's recording -- and every other
+#: node is still compared; tests/websearch/test_ddgs_option_values.py pins
+#: their text.
+WS_CORRECTED_HELP = tuple(
+    re.compile(rf'<div class="field-description" id="desc-{key}">[^<]*</div>')
+    for key in ("DDGS_BACKEND", "DDGS_REGION", "DDGS_TIMELIMIT", "DDGS_SAFESEARCH")
+)
+
+
+def _without_corrected_help(dom: str) -> str:
+    for pattern in WS_CORRECTED_HELP:
+        dom = pattern.sub("", dom)
+    return dom
+
+
 WS_CHOICES = [
     "ddgs",
     "ollama",
@@ -11808,8 +11827,17 @@ def test_jsdom_with_no_chain_the_web_search_page_is_the_base_trees(
     baseline = json.loads(WS_BASELINE.read_text(encoding="utf-8"))
     assert "BASE tree 0f0d7908" in baseline["written_by"]
     unset = websearch_chain["unset"]
+    for pattern in WS_CORRECTED_HELP:
+        # Each corrected help text is one node of the provider grid, on both
+        # sides: the exclusion below can never quietly match nothing.
+        assert len(pattern.findall(unset["dom"]["grid"])) == 1, pattern.pattern
+        assert len(pattern.findall(baseline["unset"]["dom"]["grid"])) == 1, (
+            pattern.pattern
+        )
     for name, base_dom in baseline["unset"]["dom"].items():
-        assert unset["dom"][name] == base_dom, name
+        assert _without_corrected_help(unset["dom"][name]) == (
+            _without_corrected_help(base_dom)
+        ), name
     assert unset["dirty"] == baseline["unset"]["dirty"] == "No changes"
     assert unset["recent"] == baseline["unset"]["recent"]
     assert unset["keys"] == baseline["unset"]["keys"]

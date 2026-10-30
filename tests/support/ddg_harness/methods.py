@@ -101,9 +101,10 @@ PRIMP_TRANSPORT_FAILURES: Failures = {
 #: Every constructor ``primp.Client`` that ``ddgs`` built during a harness run,
 #: newest last -- the keyword arguments as the library passed them. The harness
 #: proves two things with it (``test_the_ddgs_engine_keeps_tls_verification_on``):
-#: TLS verification is on (``verify=True``; MCC never passes ``verify=False`` or
-#: a custom CA) and the browser impersonation is the library's own default
-#: (``impersonate="random"``, set by ``ddgs.http_client.HttpClient``, not by MCC).
+#: TLS certificate verification is on (the library's own default, True; MCC
+#: never switches it off or passes a custom CA) and the browser impersonation is
+#: the library's own default (``impersonate="random"``, set by
+#: ``ddgs.http_client.HttpClient``, not by MCC).
 PRIMP_CLIENTS: list[dict[str, Any]] = []
 
 
@@ -141,9 +142,10 @@ def _ddgs_transport(
 
     Since 9.16.x (DDG-5) the engines drive ``primp`` through
     ``ddgs.http_client.HttpClient``: the client underneath is replaced here, so
-    the library's own construction (proxy, timeout, ``verify=True`` and its own
-    ``impersonate="random"`` default -- recorded in ``PRIMP_CLIENTS``), its
-    status handling (``BaseSearchEngine.request``: 200 -> text, anything else
+    the library's own construction (proxy, timeout, certificate verification on
+    and its own ``impersonate="random"`` default -- recorded in
+    ``PRIMP_CLIENTS``), its status handling (``BaseSearchEngine.request``:
+    200 -> text, anything else
     ``None``), its exception mapping (``HttpClient.request``: ``primp.TimeoutError``
     -> ``TimeoutException``, anything else -> ``DDGSException``) and its parsing
     all stay the library's own. Only the socket underneath is the fake: the
