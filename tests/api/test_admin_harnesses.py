@@ -638,3 +638,146 @@ def test_a_hermes_file_without_mccs_block_reports_no_catalogue(monkeypatch, tmp_
     assert entry["config_found"] is True
     assert entry["catalogue"]["exists"] is False
     assert entry["catalogue"]["model_count"] is None
+
+
+# ---------------------------------------------------------------------------
+# 7.118.1: the assessed-and-not-configured card (the "not yet" state)
+# ---------------------------------------------------------------------------
+
+
+#: Every key one harness entry carried before 7.118.1, taken from the BASE tree
+#: (16bc7b23, v7.118.0)'s own `_harness_payload()`. The new card arrives as a
+#: *second top-level key* and never as another entry or another field on one:
+#: an older page, the install-target lookup and the RTK toggles all read this
+#: payload, and every one of them must see exactly what it saw in 7.118.0.
+HARNESS_ENTRY_KEYS = frozenset(
+    {
+        "available",
+        "binary",
+        "binary_path",
+        "catalogue",
+        "command",
+        "command_lines",
+        "commands",
+        "config_found",
+        "config_path",
+        "display_name",
+        "id",
+        "install_hint",
+        "install_state",
+        "installed",
+        "protocol",
+        "protocol_label",
+        "rtk_agent",
+        "rtk_enabled",
+        "summary",
+        "unavailable_reason",
+    }
+)
+
+#: What a not-yet card carries: prose from the registry and nothing else. No
+#: path, no probe, no setting -- there is nothing about this agent MCC reads.
+NOT_YET_CARD_KEYS = frozenset(
+    {
+        "id",
+        "display_name",
+        "package",
+        "assessed_on",
+        "summary",
+        "reason",
+        "would_change",
+        "doc_url",
+    }
+)
+
+
+def test_the_not_yet_card_is_served_with_its_date_and_its_measured_reason(
+    monkeypatch, tmp_path
+):
+    """The card is the whole feature, so the payload is its contract.
+
+    It has to say what the agent is, when MCC assessed it, why MCC will not
+    write, and what would reverse that -- each of which is a fact a reader can
+    re-check against the version named on it.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    cards = {card["id"]: card for card in body["not_yet"]}
+    assert list(cards) == ["dsh"]
+    card = cards["dsh"]
+    assert set(card) == NOT_YET_CARD_KEYS
+    assert card["display_name"] == "DeepSeek Harness"
+    assert card["package"] == "@deepseek-ai/dsh"
+    assert card["assessed_on"] == "2026-10-30"
+    # Why not, in the words of the measurement: a patch REPLACES the row.
+    assert "replaces the targeted row's whole config" in card["reason"]
+    assert "was gone" in card["reason"]
+    assert "llm-pi-ai" in card["reason"]
+    # What would change the decision, stated as a fact about dsh rather than
+    # as a promise about MCC.
+    assert card["would_change"].startswith("What would change this")
+    assert "per-key patch form" in card["would_change"]
+    assert card["doc_url"].startswith("https://")
+
+
+def test_the_not_yet_card_is_not_a_harness_and_offers_nothing_to_press(
+    monkeypatch, tmp_path
+):
+    """It explains; it does not register, probe, launch or offer to install.
+
+    "dsh" is deliberately not a harness id: every consumer of the registry --
+    the console scripts, the install targets, the catalogue fan-out, the RTK
+    toggles -- is right to be unable to see it.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    assert "dsh" not in harness_ids()
+    assert "dsh" not in {entry["id"] for entry in body["harnesses"]}
+    # Nothing on the card is a control, a path or a probe: the payload has no
+    # `installed`, no `command`, no `install_hint` and no `catalogue` key at
+    # all, so no control on the page can appear for it.
+    for forbidden in (
+        "installed",
+        "command",
+        "install_hint",
+        "catalogue",
+        "config_path",
+    ):
+        assert forbidden not in body["not_yet"][0]
+
+
+def test_the_harnesses_payload_gained_one_key_and_no_entry_changed_shape(
+    monkeypatch, tmp_path
+):
+    """The additive half of 7.118.1, pinned so it cannot become a rename.
+
+    The base tree's payload was dumped with this same home redirection; the
+    branch's differs by exactly one top-level key, and every harness entry --
+    all of them, not a sample -- carries the same key set it carried then.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    assert sorted(body) == ["harnesses", "not_yet"]
+    assert len(body["harnesses"]) == len(harness_ids())
+    assert [entry["id"] for entry in body["harnesses"]] == list(harness_ids())
+    for entry in body["harnesses"]:
+        assert set(entry) == HARNESS_ENTRY_KEYS, entry["id"]
+    assert [card["id"] for card in body["not_yet"]] == ["dsh"]

@@ -2177,6 +2177,86 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class HarnessNotYetCard:
+    """A coding agent MCC has assessed and deliberately does not configure.
+
+    A third state beside "servable" and ``HarnessSpec.available=False``. An
+    unavailable row is a client MCC *tried* and cannot serve; this one is an
+    agent whose model list MCC has already mapped but whose configuration
+    hook cannot be used without taking something away from the user. It gets a
+    card -- the question "can I use this through MCC?" gets asked, and a dated
+    answer somebody can re-check beats silence -- and nothing else: no
+    launcher, no console script, no Install method, no detection, no
+    catalogue, and no write of any kind into the agent's own files.
+
+    It is **not** a ``HarnessSpec`` on purpose. A spec row is registered as a
+    harness everywhere -- ``harness_ids``, the install targets, the catalogue
+    fan-out, the RTK toggles -- and none of that is true of an agent MCC has
+    decided not to touch this cycle.
+    """
+
+    #: Stable id the card is keyed by; never a harness id (``tests`` assert
+    #: the two vocabularies do not overlap).
+    id: str
+    display_name: str
+    #: The vendor's package as published, which is what a reader would install
+    #: or look up. Rendered verbatim.
+    package: str
+    #: The date MCC recorded this decision, ISO 8601, rendered on the card.
+    assessed_on: str
+    #: What it is, in one line.
+    summary: str
+    #: Why MCC does not configure it today, with the measurement, its date and
+    #: the version it was taken on, so the claim can be re-checked.
+    reason: str
+    #: What would change the decision, stated as a fact about the agent's own
+    #: released configuration surface rather than as a promise about MCC.
+    would_change: str
+    #: The vendor's own page for this tool, when there is one to cite. https,
+    #: and only ever rendered as a link, never as a write target.
+    doc_url: str = ""
+
+
+#: Assessed, mapped, and deliberately not configured. See
+#: :class:`HarnessNotYetCard`; the bar for adding a row here is a *measurement*
+#: that the agent's configuration surface would make MCC's write destructive,
+#: not a lack of time.
+NOT_YET_CARDS: tuple[HarnessNotYetCard, ...] = (
+    HarnessNotYetCard(
+        id="dsh",
+        display_name="DeepSeek Harness",
+        package="@deepseek-ai/dsh",
+        assessed_on="2026-10-30",
+        summary=(
+            "DeepSeek's open-source agent runtime, published on npm as "
+            "@deepseek-ai/dsh with the dsh command. MCC has mapped how it takes "
+            "a model list and does not configure it yet."
+        ),
+        reason=(
+            "Assessed 2026-10-30, and MCC does not configure it today. Measured "
+            "2026-10-29 on @deepseek-ai/dsh 0.2.1-rc.2: the only hook MCC can "
+            "use is a plugin row in dsh's YAML patch list (id: llm-pi-ai), and "
+            "a patch replaces the targeted row's whole config rather than "
+            "merging into it. With one provider written into the profile patch "
+            "and MCC's written into the home patch, the composed configuration "
+            "contained only MCC's -- the provider the user had configured "
+            "through dsh's own Models page was gone. A write that silently "
+            "hides a provider you configured is worse than no write, so MCC "
+            "writes nothing into dsh's files."
+        ),
+        would_change=(
+            "What would change this: a released dsh version whose "
+            "configuration hook merges into the existing provider map, or "
+            "offers a per-key patch form, instead of owning the whole plugin "
+            "row. dsh is a 0.2.1 release candidate, so the hook's shape can "
+            "still move; re-measure it first, and the rest is one serialiser."
+        ),
+        doc_url="https://www.npmjs.com/package/@deepseek-ai/dsh",
+    ),
+)
+
+
 def harness_specs() -> tuple[HarnessSpec, ...]:
     """Return every registered harness, in presentation order."""
 
@@ -2300,3 +2380,15 @@ def launchable_specs() -> tuple[HarnessSpec, ...]:
     """
 
     return tuple(spec for spec in HARNESS_SPECS if spec.available)
+
+
+def not_yet_cards() -> tuple[HarnessNotYetCard, ...]:
+    """Return the agents MCC has assessed and deliberately does not configure.
+
+    Served on the Coding agents page beside the launchable harnesses and
+    deliberately separate from them: nothing here is a harness id, so no code
+    path that installs a shim, writes a catalogue or looks a launcher up can
+    ever see one by accident.
+    """
+
+    return NOT_YET_CARDS

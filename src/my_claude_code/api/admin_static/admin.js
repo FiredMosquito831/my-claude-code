@@ -115,6 +115,11 @@ const state = {
   // here rather than by the Coding agents view because the Token Optimizer
   // page's RTK checkboxes are generated from the same list.
   harnesses: null,
+  // 7.118.1: the agents MCC has assessed and does not configure yet, from the
+  // same payload's `not_yet` key. A list of their own rather than more
+  // harnesses: nothing on these cards is installed, launched or written, so
+  // every control that reads `harnesses` is right to skip them.
+  notYetCards: null,
   // {enabled, days, counts, labels} from /admin/api/requests/harness-usage.
   // Fetched beside the harness list so a card can say how much traffic the
   // agent actually sent; null until that call lands or when it failed.
@@ -20151,8 +20156,12 @@ async function loadHarnesses() {
   try {
     const payload = await api("/admin/api/harnesses");
     state.harnesses = Array.isArray(payload.harnesses) ? payload.harnesses : [];
+    // 7.118.1: an older server sends no such key, and the page then simply has
+    // no such card -- the same shape as a payload without it.
+    state.notYetCards = Array.isArray(payload.not_yet) ? payload.not_yet : [];
   } catch (error) {
     state.harnesses = [];
+    state.notYetCards = [];
     renderHarnesses(error.message);
     renderRtkState();
     return;
@@ -20193,6 +20202,14 @@ function renderHarnesses(errorMessage) {
     // 7.102.0: the Install button, filled from /admin/api/agent-installs.
     card.append(agentInstallHost(harness.id));
     list.append(card);
+  });
+  // 7.118.1: the agents MCC has assessed and does not configure yet. Last,
+  // because they are not launchable: no command, no Install, no Configure,
+  // no MCP and no tier rails -- only the dated reason and what would change
+  // it. They are still `.coding-agent-card`s so the find box matches them
+  // like any other card.
+  (state.notYetCards || []).forEach((entry) => {
+    list.append(notYetCard(entry));
   });
   renderMcpMediaControls();
   renderAgentInstallControls();
@@ -20276,6 +20293,94 @@ function harnessCard(harness) {
     hint.textContent = harness.install_hint;
     card.append(hint);
   }
+  return card;
+}
+
+/* --------------------------------------------------------------------- */
+/* Assessed, and not configured yet (7.118.1)                              */
+/* --------------------------------------------------------------------- */
+/* The third state on this page. A launchable harness card answers "is this
+   installed, and what does MCC tell it"; a desktop card answers "what would
+   Configure write". This one answers a question that has no button behind it:
+   "can I use this agent through MCC?" -- which was assessed, found to be
+   answerable only by a write that would take something away from the user,
+   and therefore is not done at all.
+
+   So the card is the whole feature: what it is, the date of the assessment,
+   why MCC will not write, and the one thing that would change the decision.
+   Nothing here is fetched for this agent, nothing is probed, and nothing is
+   written -- there is no path, no setting and no command for it to show. The
+   text is the server's registry row verbatim (config/harnesses.py); the page
+   never edits, prefixes or shortens it, because a reason that gets paraphrased
+   on the way to the screen stops being checkable. */
+
+function notYetCard(entry) {
+  const card = document.createElement("div");
+  card.className = "coding-agent-card";
+  // Not `data-harness`: this is not a harness id, and the controls keyed on
+  // that attribute (install hosts, MCP hosts, tier rails) must never see it.
+  card.dataset.notYet = entry.id || "";
+
+  const heading = document.createElement("div");
+  heading.className = "agent-heading";
+  const title = document.createElement("h4");
+  title.textContent = entry.display_name || entry.id || "";
+  const badge = document.createElement("span");
+  badge.className = "agent-state";
+  badge.textContent = "Not yet";
+  heading.append(title, badge);
+  card.append(heading);
+
+  if (entry.summary) {
+    const summary = document.createElement("p");
+    summary.className = "agent-summary";
+    summary.textContent = entry.summary;
+    card.append(summary);
+  }
+
+  if (entry.reason) {
+    // The same box a "Not servable" card puts its evidence in: this is a
+    // measured statement about the agent, and it is the card's main content.
+    const reason = document.createElement("p");
+    reason.className = "agent-unavailable-reason";
+    reason.textContent = entry.reason;
+    card.append(reason);
+  }
+
+  if (entry.would_change) {
+    const change = document.createElement("p");
+    change.className = "field-description";
+    change.textContent = entry.would_change;
+    card.append(change);
+  }
+
+  const meta = document.createElement("dl");
+  meta.className = "agent-meta";
+  const rows = [
+    ["Assessed", entry.assessed_on || ""],
+    ["Package", entry.package || ""],
+    // The explicit "there is nothing to press" line, in the words the
+    // unavailable harness cards already use.
+    ["Launcher", "None - MCC publishes no command for this agent"],
+  ];
+  rows.forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    meta.append(term, detail);
+  });
+  if (entry.doc_url) {
+    // The package's own page on npm -- where a reader checks the version this
+    // card names. agentInstallLink draws http(s) as a link and anything else
+    // as text.
+    const term = document.createElement("dt");
+    term.textContent = "Package page";
+    const detail = document.createElement("dd");
+    detail.append(agentInstallLink(entry.doc_url, entry.doc_url));
+    meta.append(term, detail);
+  }
+  card.append(meta);
   return card;
 }
 

@@ -7,6 +7,7 @@ existed before the registry to byte-identical behaviour, because the registry
 was allowed to change *where* those strings live and nothing else.
 """
 
+import re
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
@@ -40,6 +41,7 @@ from my_claude_code.config.harnesses import (
     harness_spec,
     harness_specs,
     launchable_specs,
+    not_yet_cards,
     rtk_capable_ids,
 )
 from my_claude_code.config.paths import CODEX_MODEL_CATALOG_FILENAME
@@ -483,3 +485,47 @@ def test_the_command_code_harness_id_never_collides_with_the_gateway_provider() 
     assert "commandcode" not in harness_ids()
     # The overlaps that do exist are the documented ones, and no more.
     assert set(harness_ids()) & set(PROVIDER_CATALOG) == {"opencode", "kilo"}
+
+
+# ------------------------------------------------------------------ not yet
+
+
+def test_a_not_yet_card_is_dated_and_is_not_a_registered_harness() -> None:
+    """The two vocabularies are separate, and both halves are load-bearing.
+
+    A not-yet card is not a ``HarnessSpec``: it publishes no command, declares
+    no binary to probe, owns no catalogue and writes nothing. So its id must
+    not resolve as a harness -- otherwise a launcher lookup, an install target
+    or the RTK list could pick it up by accident -- and it must carry the date
+    and the reason that make the decision checkable rather than asserted.
+    """
+
+    cards = not_yet_cards()
+    assert cards, "the page has a card group with nothing in it"
+    registered = set(harness_ids())
+    binaries = {spec.binary for spec in HARNESS_SPECS}
+
+    for card in cards:
+        assert card.id not in registered, card.id
+        assert card.id not in binaries, card.id
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", card.assessed_on), card.assessed_on
+        assert card.display_name.strip() and card.package.strip()
+        assert card.summary.strip() and card.reason.strip()
+        assert card.would_change.strip()
+        assert card.doc_url.startswith("https://"), card.doc_url
+
+
+def test_the_dsh_card_carries_the_measurement_that_blocks_it() -> None:
+    """The reason has to be the finding, not a preference.
+
+    dsh's only usable hook is a plugin row in a YAML patch list, and a patch
+    replaces the targeted row's whole config -- measured, it hid a provider the
+    user had configured. The card says so, dated, and states the one thing that
+    would change the answer (a released merge-shaped, or per-key, hook).
+    """
+
+    card = next(entry for entry in not_yet_cards() if entry.id == "dsh")
+    assert card.package == "@deepseek-ai/dsh"
+    assert card.assessed_on == "2026-10-30"
+    assert "replaces the targeted row's whole config" in card.reason
+    assert "merges into the existing provider map" in card.would_change
