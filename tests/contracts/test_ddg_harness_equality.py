@@ -746,10 +746,10 @@ def test_the_ddgs_engine_keeps_tls_verification_on() -> None:
     """DDG-5's transport is ``primp``; MCC still never weakens TLS for it.
 
     Every ``primp.Client`` the package builds over a harness run is recorded
-    (``methods.PRIMP_CLIENTS``). Each must be constructed with ``verify=True``,
-    no custom CA, and the browser impersonation the library itself sets --
-    MCC passes neither, so the impersonation is the engine's own default and
-    not an MCC decision (spec 5 Q3, 2.3; USER DECISIONS Q3).
+    (``methods.PRIMP_CLIENTS``). Each must be constructed with certificate
+    verification on, no custom CA, and the browser impersonation the library
+    itself sets -- MCC passes neither, so the impersonation is the engine's
+    own default and not an MCC decision (spec 5 Q3, 2.3; USER DECISIONS Q3).
     """
 
     scenario = next(

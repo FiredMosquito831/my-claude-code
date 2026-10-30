@@ -4781,13 +4781,15 @@ WEB_SEARCH_CHAIN=                   # optional: exa,tavily,ddgs,legacy (7.112.0)
 WEB_SEARCH_CHAIN_PAUSED=            # optional: chain entries to skip
 ```
 
-**`WEB_SEARCH_CHAIN` (7.112.0, optional).** An ordered list of search services, tried in turn; a service listed twice is tried again at its place, and `legacy` is the old DuckDuckGo scraper. Unset, the two settings above route every search exactly as before. Set, it replaces them for routing (`WEB_SEARCH_PROVIDER=disabled` still disables), and each service's keys follow the model providers' key rules (see [Multi-key rotation](#12-multi-key-rotation)): a key is benched only for a rejected key, a 429 or an out-of-credits message, a server error or a timeout moves to the next service, each key gets `PROVIDER_RETRY_ATTEMPTS` tries, and an only key is never benched into an outage. An entry without its key is skipped and named on its attempt row; `WEB_SEARCH_CHAIN_PAUSED` skips entries without removing them.
+**`WEB_SEARCH_CHAIN` (7.112.0, optional).** An ordered list of search services, tried in turn; a service listed twice is tried again at its place, and `legacy` is the keyless DuckDuckGo hop (below). Unset, the two settings above route every search exactly as before. Set, it replaces them for routing (`WEB_SEARCH_PROVIDER=disabled` still disables), and each service's keys follow the model providers' key rules (see [Multi-key rotation](#12-multi-key-rotation)): a key is benched only for a rejected key, a 429 or an out-of-credits message, a server error or a timeout moves to the next service, each key gets `PROVIDER_RETRY_ATTEMPTS` tries, and an only key is never benched into an outage. An entry without its key is skipped and named on its attempt row; `WEB_SEARCH_CHAIN_PAUSED` skips entries without removing them.
 
 **The Search chain card (7.113.0).** Admin → Web Search → **Search chain** edits both settings with the model chain editor: **Add search service**, a picker per row, arrows and drag (with Undo), a `×2` chip for a repeat, **Pause** per service (written to `WEB_SEARCH_CHAIN_PAUSED`), and *no key configured* on a row that will be skipped. **Apply** saves them like any setting. While a chain is set the route summary shows it and names the two settings it replaces; a provider card's **Manage keys** shows its keys' health from the pool that serves today's route, in the model rules' words (*benched 60 s: rate limited*, *out of credits*, *locked out, tier 2 of 3*), with **Reset** on a benched key; Analytics adds **Position**, **Key tries** (expands to every try on every key) and **Failure kind** once a chain has written rows, `—` on rows without them.
 
 **`CONTEXT7_API_KEY` (7.113.0).** Context7 answers a search with **library documentation** — two calls (the best-matching library, then its documentation), one result per snippet titled *library — section*, its URL the source Context7 cites, its excerpt cut at 1,000 characters with a marker. **`auto` never picks it**; use `WEB_SEARCH_PROVIDER=context7` or, better, a place in `WEB_SEARCH_CHAIN`. Several keys rotate with `CONTEXT7_API_KEY_ROTATION` like any provider. Not verified on a real key. See [docs/WEB-SEARCH.md](WEB-SEARCH.md).
 
-**`auto` works with zero configuration.** With no keys set it falls back to keyless DuckDuckGo, so search works out of the box. Set any provider key and `auto` prefers it (except Context7).
+**`auto` works with zero configuration.** With no keys set it falls back to the keyless `ddgs` metasearch and then MCC's own DuckDuckGo hop, so search works out of the box. Set any provider key and `auto` prefers it (except Context7).
+
+**The `ddgs` provider is a metasearch.** **DuckDuckGo (ddgs)** on the Web Search page is the `ddgs` package: with **Backend engine** (`DDGS_BACKEND`) empty, one search asks several engines — Wikipedia and Grokipedia first, then the others in a random order — and merges their results, so DuckDuckGo may not be asked at all; `DDGS_BACKEND=duckduckgo` asks it alone. In `ddgs` 9.16.1, shipped since 7.120.1, the engines are Brave, DuckDuckGo, Grokipedia, Mojeek, Startpage, Wikipedia and Yahoo: **Bing, Google and Yandex are switched off inside the package, and choosing one of them runs `auto`**. Since 7.118.2 a DuckDuckGo result carries the page it leads to rather than DuckDuckGo's `/l/?uddg=` redirect, and its ads are dropped. Through the package a blocked engine and an empty answer look the same (*No results found.*); the keyless hop below is the one that reports DuckDuckGo's bot check. Details: [docs/WEB-SEARCH.md](WEB-SEARCH.md#the-ddgs-provider-is-a-metasearch).
 
 **The keyless DuckDuckGo hop (7.119.0).** The last hop of `auto` (and the `legacy` chain entry) reads DuckDuckGo's no-JavaScript pages with declared parser profiles — since 7.119.1 its html search form first, and its lite page only when that page has no result and no bot check (7.119.0 asked the lite page alone): each result carries its **snippet**, ads are skipped, and `DDGS_REGION` / `DDGS_TIMELIMIT` travel as the page's `kl` / `df` when set. When DuckDuckGo answers with its bot check, the search says so — `web_search rate limited by legacy: DuckDuckGo answered with its bot check instead of results (…)`, code `too_many_requests` — instead of "no results", the lite page is not asked after it, and a chain moves on to its next entry as it would for a 429. The hop sends the form's own `Referer` and `Sec-Fetch-*` headers and one static browser-class User-Agent, all declared in `config/duckduckgo_profiles.py` (headers only; certificate verification untouched). `WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS` (default `0` = back to back) spaces its requests, the html and lite requests of one search counting as two; only this hop waits. Details: [docs/WEB-SEARCH.md](WEB-SEARCH.md#the-keyless-duckduckgo-hop-71190).
 
@@ -4799,7 +4801,7 @@ Claude Code's `web_fetch` tool is fulfilled at the proxy by fetching the page an
 
 `WEB_FETCH_EXTRACTOR` (**Web Fetch Extractor** on Model Config → Web tools) picks the extractor: `trafilatura`, the default above, or `basic`, the escape hatch that returns every text node, one per line — exactly the bytes every release before 7.120.0 returned, with the silent cut and no marker. Nothing else about the tool changes: the same SSRF guard and DNS pinning, the same redirect, size and time limits, and the same `text/plain` result with its title. Details and the measurements: [docs/WEB-SEARCH.md](WEB-SEARCH.md#web-fetch-71200).
 
-15 backends are supported (14 web search services plus Context7's library documentation). Free tiers worth knowing: Exa ($10/month ongoing), Tavily (1,000 credits/month), Brave ($5/month), Serper (2,500 one-time), Linkup ($20 topped up monthly), and DuckDuckGo (keyless, unlimited, lower quality).
+15 backends are supported (14 web search services plus Context7's library documentation). Free tiers worth knowing: Exa ($10/month ongoing), Tavily (1,000 credits/month), Brave ($5/month), Serper (2,500 one-time), Linkup ($20 topped up monthly), and the keyless `ddgs` metasearch and DuckDuckGo hop (no key and no quota, but their engines can rate-limit you or answer with a bot check; lower quality).
 
 ### The setting most worth changing
 
@@ -4847,16 +4849,19 @@ BRAVE_SAFESEARCH=strict       # off | moderate | strict
 SEARXNG_SAFESEARCH=2          # 0 | 1 | 2
 SERPAPI_SAFE=active
 SEARCHAPI_SAFE=active
-DDGS_SAFESEARCH=strict
+DDGS_SAFESEARCH=on            # on | moderate | off (empty = moderate)
 ```
 
-Locale matters if you're not in the US — **Firecrawl returns US results unless told otherwise**:
+`DDGS_SAFESEARCH` takes the `ddgs` package's `on`, `moderate` or `off`. A `strict` saved from an older version of these docs is read as `on` since 7.120.2 — the package never knew it (its Brave engine read it as off and its Startpage engine failed on it) — and the dashboard lists it as *strict (older spelling, read as on)*. Only the engines that read it apply it: in `ddgs` 9.16.1 Brave, Mojeek and Startpage. **DuckDuckGo's own engine ignores it**, and so does the keyless DuckDuckGo hop.
+
+Locale matters if you're not in the US — **Firecrawl returns US results unless told otherwise**, and `ddgs` asks for `us-en` when `DDGS_REGION` is empty:
 
 ```bash
 FIRECRAWL_COUNTRY=DE
 TAVILY_COUNTRY=germany
 BRAVE_COUNTRY=DE
 SERPER_GL=de                  # SERPAPI_GL / SEARCHAPI_GL / JINA_GL are equivalent
+DDGS_REGION=de-de             # region-language; also the keyless DuckDuckGo hop's kl
 ```
 
 Freshness uses each provider's own vocabulary (`BRAVE_FRESHNESS=pw`, `TAVILY_TIME_RANGE=week`, `SERPER_TBS=qdr:w`). For a precise window rather than a relative one:

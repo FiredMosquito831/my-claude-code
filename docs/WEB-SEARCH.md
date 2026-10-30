@@ -33,8 +33,8 @@ MCC supports 15 search backends, resolved by `WEB_SEARCH_PROVIDER`:
 
 `WEB_SEARCH_PROVIDER` accepts `auto` (default), `off`, `disabled`, or one of the provider IDs `ddgs | ollama | exa | tavily | brave | searxng | jina | serper | firecrawl | linkup | perplexity | parallel | searchapi | serpapi | context7`:
 
-- **`auto`** picks the first configured provider in catalog order — never `context7`, which answers with library documentation rather than web pages; with no keys set it falls back to keyless `ddgs`, so search works **zero-config out of the box**.
-- **`off`** preserves the legacy DuckDuckGo HTML scraper without using the provider registry.
+- **`auto`** picks the first configured provider in catalog order — never `context7`, which answers with library documentation rather than web pages; with no keys set it falls back to the keyless `ddgs` metasearch and then the keyless DuckDuckGo hop (both [below](#the-ddgs-provider-is-a-metasearch)), so search works **zero-config out of the box**.
+- **`off`** runs only the keyless DuckDuckGo hop, without the provider registry or `ddgs`.
 - **`disabled`** rejects web searches without making an outbound search request.
 - An explicit ID pins that provider and is strict by default: missing credentials or upstream failure are surfaced instead of silently changing providers.
 
@@ -85,7 +85,7 @@ WEB_SEARCH_CHAIN=exa,tavily,ddgs,legacy   # ordered; a service listed twice is t
 WEB_SEARCH_CHAIN_PAUSED=                  # entries to skip without removing them
 ```
 
-Unset, nothing changes: `WEB_SEARCH_PROVIDER` and `WEB_SEARCH_FALLBACK_POLICY` route every search exactly as before. Set, the chain replaces both for routing (`WEB_SEARCH_PROVIDER=disabled` still disables search). Entries are the provider IDs above plus `legacy` (the old DuckDuckGo scraper). An entry whose key is not set is skipped and its attempt row names the variable; a paused entry is skipped; an entry whose every key is cooling down for at least `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` is stepped over unless it is the last one. A 400 from one service moves on to the next (each builds its own request); a failure kind listed in `FALLBACK_SKIP_KINDS` ends the search; `FALLBACK_TOTAL_TIMEOUT` (0 = none) bounds the whole search. No proxy chains apply to search; `WEBSEARCH_PROXY` and the system proxy behave as before.
+Unset, nothing changes: `WEB_SEARCH_PROVIDER` and `WEB_SEARCH_FALLBACK_POLICY` route every search exactly as before. Set, the chain replaces both for routing (`WEB_SEARCH_PROVIDER=disabled` still disables search). Entries are the provider IDs above plus `legacy` (the keyless DuckDuckGo hop, below). An entry whose key is not set is skipped and its attempt row names the variable; a paused entry is skipped; an entry whose every key is cooling down for at least `FALLBACK_COOLDOWN_STEP_OVER_FLOOR` is stepped over unless it is the last one. A 400 from one service moves on to the next (each builds its own request); a failure kind listed in `FALLBACK_SKIP_KINDS` ends the search; `FALLBACK_TOTAL_TIMEOUT` (0 = none) bounds the whole search. No proxy chains apply to search; `WEBSEARCH_PROXY` and the system proxy behave as before.
 
 **On the dashboard (7.113.0).** **Admin → Web Search → Search chain** draws the chain with the same editor as a model fallback chain: **Add search service** adds a row with a picker of every service above plus the old scraper; the arrows and the grip reorder it (a drag says what it moved and offers **Undo**); a service you list twice shows a `×2` chip and is tried again at its place; **Pause** on a row pauses that service at every place it is listed (`WEB_SEARCH_CHAIN_PAUSED`); a row whose service has no key says *no key configured* — the search skips it. Nothing is written until **Apply**, through the same save as every other setting. With a chain set, the route summary at the top of the page shows the chain instead of the provider route and says plainly that Web Search Provider and Fallback Policy are not used while it is; each provider card says where it sits in the chain (`Search chain #1, #3`) or that it is not in it.
 
@@ -106,12 +106,25 @@ One search is two calls with `Authorization: Bearer <key>`: `GET https://context
 
 The API was read from Context7's own clients (`@upstash/context7-mcp` and `@upstash/context7-sdk`); MCC's adapter has been proven against recorded responses of that shape, **not verified on a real key**.
 
+### The ddgs provider is a metasearch
+
+The keyless provider `auto` falls back to — **DuckDuckGo (ddgs)** on the Web Search page — is the `ddgs` package (MIT), a **metasearch**, not DuckDuckGo itself. With **Backend engine** (`DDGS_BACKEND`) left empty, one search asks Wikipedia and Grokipedia first, then the package's other engines in a random order until it has enough results, and merges what comes back. DuckDuckGo is one of those engines and may not be asked at all; whichever engines answered, the results are labelled `ddgs`. To ask DuckDuckGo and nothing else, pin it:
+
+```bash
+DDGS_BACKEND=duckduckgo   # only DuckDuckGo's html page, through the ddgs package
+```
+
+- **Which engines.** Since 7.120.1 MCC ships `ddgs` 9.16.1, with its HTTP client `primp` 2.0.1. Its engines are Brave, DuckDuckGo, Grokipedia, Mojeek, Startpage, Wikipedia and Yahoo. **Bing, Google and Yandex are switched off inside that version**: **Backend engine** still lists them, but choosing one runs `auto` (the package logs *backends do not exist or are disabled … Using 'auto'*), so pin one of the seven instead. The update changed none of MCC's calls, took six packages out of the lock (`brotli`, `brotlicffi`, `fake-useragent`, `h2`, `hpack`, `hyperframe`) and keeps certificate verification on: MCC never turns it off and passes no custom CA.
+- **DuckDuckGo's result links (fixed in 7.118.2).** DuckDuckGo's engine returns each result as DuckDuckGo's own click-through link, `//duckduckgo.com/l/?uddg=<destination>&rut=…`, and each ad as a `duckduckgo.com/y.js?…` link — before 7.118.2, none of the ten result links on the recorded live DuckDuckGo page led to the page itself. The adapter now reports the destination the link names, percent-decoded exactly once (the package has already decoded the whole link once; decoding again would corrupt a destination that carries an escape of its own), and drops ad rows instead of returning them as results. A `/l/` link without a usable destination keeps the URL the engine gave; rows that do not link to `duckduckgo.com` are untouched.
+- **A block reads like no results.** The package answers a refused or blocked engine — a bot check, a 403, a 429 — exactly as it answers an empty one, *No results found.*, so on this provider MCC cannot tell the two apart and reports an upstream failure either way. The keyless DuckDuckGo hop below is the one that tells DuckDuckGo's bot check from an empty page.
+- **Not the keyless hop.** The `legacy` hop below is MCC's own code: it asks DuckDuckGo's html page, then its lite page, itself — no other engine and no `ddgs` package. Of the `ddgs` options it reads only `DDGS_REGION` and `DDGS_TIMELIMIT` (as `kl` and `df`); `DDGS_BACKEND` and `DDGS_SAFESEARCH` do not apply to it.
+
 ### The keyless DuckDuckGo hop (7.119.0)
 
-The last hop of the `auto` route — and the `legacy` entry of a search chain — asks DuckDuckGo's no-JavaScript pages. Since 7.119.1 it submits the **html** page's own search form first (`POST https://html.duckduckgo.com/html/` with `q` and `b`), with the headers a browser sends for that form — `Referer: https://html.duckduckgo.com/` and `Sec-Fetch-Dest`, `Sec-Fetch-Mode`, `Sec-Fetch-Site`, `Sec-Fetch-User` — and one static browser-class User-Agent (Firefox ESR on Windows). It asks the **lite** page (`GET https://lite.duckduckgo.com/lite/`) only as the second try, when the html page held no result and no bot check. Headers only: no TLS or HTTP/2 fingerprint is imitated, and MCC's own HTTP client keeps certificate verification at the library's default. (7.119.0 asked only the lite page, as `my-claude-code/<version>`; `web_fetch` keeps its own User-Agent.) Everything it knows about DuckDuckGo is declared as data in `config/duckduckgo_profiles.py`: both requests with their fields and headers, the User-Agent, and one row per page kind (html and lite) naming the result row, the title link, the snippet, the ad rows and the next-page form. A markup change is an edit to one row plus a recorded page, not a code change.
+The last hop of the `auto` route — and the `legacy` entry of a search chain — asks DuckDuckGo's no-JavaScript pages itself, without the `ddgs` package. Since 7.119.1 it submits the **html** page's own search form first (`POST https://html.duckduckgo.com/html/` with `q` and `b`), with the headers a browser sends for that form — `Referer: https://html.duckduckgo.com/` and `Sec-Fetch-Dest`, `Sec-Fetch-Mode`, `Sec-Fetch-Site`, `Sec-Fetch-User` — and one static browser-class User-Agent (Firefox ESR on Windows). It asks the **lite** page (`GET https://lite.duckduckgo.com/lite/`) only as the second try, when the html page held no result and no bot check. Headers only: no TLS or HTTP/2 fingerprint is imitated, and MCC's own HTTP client keeps certificate verification at the library's default. (7.119.0 asked only the lite page, as `my-claude-code/<version>`; `web_fetch` keeps its own User-Agent.) Everything it knows about DuckDuckGo is declared as data in `config/duckduckgo_profiles.py`: both requests with their fields and headers, the User-Agent, and one row per page kind (html and lite) naming the result row, the title link, the snippet, the ad rows and the next-page form. A markup change is an edit to one row plus a recorded page, not a code change.
 
 - **Results** carry the title, the destination (DuckDuckGo's `/l/?uddg=` redirect, decoded once) and, since 7.119.0, the **snippet**. Ad rows (`result--ad`) and `y.js` ad links are skipped. When no declared row matches, the link scan of earlier releases still runs, so a layout change never answers worse than before.
-- **Region and time.** `DDGS_REGION` and `DDGS_TIMELIMIT` (the `ddgs` options) travel as the page's own `kl` and `df` fields when they are set — in the html form, and in the lite page's address when it is asked; unset, nothing extra is sent. Whether the live pages honour both has not been verified (no live call was made).
+- **Region and time.** `DDGS_REGION` and `DDGS_TIMELIMIT` (the `ddgs` options) travel as the page's own `kl` and `df` fields when they are set — in the html form, and in the lite page's address when it is asked; unset, nothing extra is sent. Whether the live pages honour both has not been verified (no live call was made). The hop sends no safe-search field: `DDGS_SAFESEARCH`, like `DDGS_BACKEND`, does not apply to it.
 - **A bot check is reported, never worked around.** HTTP 202, or DuckDuckGo's own check markers (`anomaly-modal`, `anomaly.js`, `challenge-form`, *bots use DuckDuckGo*) on a page with no result, is a **rate limit** that says what was seen — `web_search rate limited by legacy: DuckDuckGo answered with its bot check instead of results (HTTP 202; …)`, code `too_many_requests` — never "no results". A bot check on the html page ends the search there: the lite page is not asked. In a search chain it moves on to the next entry exactly as a 429 from DuckDuckGo does; your `PROVIDER_RETRY_ATTEMPTS` and cooldown settings apply unchanged.
 - **A page MCC cannot read** — one that carries DuckDuckGo's next-page form but no row any profile finds — lets the lite page try; if that has nothing either, the search is a failure (*answered with a results page MCC could not read*), not an empty answer.
 - **Other failures**, with no chain set, are worded like every provider's: `web_search unavailable: legacy refused access (HTTP 403)`, `web_search rate limited by legacy: retry after 7s` (DuckDuckGo's `Retry-After`), `web_search unavailable: legacy answered with a server error (HTTP 503)`. An HTTP error or a connection failure on the html form ends the hop there, with no lite try. With a chain set the chain classifies them exactly as it did before 7.119.0. When neither page has a result nor any sign of a check, the answer stays an honest empty one (*No web search results found*).
@@ -141,7 +154,7 @@ Each provider exposes dotenv-only knobs (never in pydantic Settings); empty/unse
 | Firecrawl | `FIRECRAWL_SOURCES` (web/news/images), `FIRECRAWL_SCRAPE_FORMAT` summary/markdown (multiplies credits per result), `FIRECRAWL_TBS`, `FIRECRAWL_LOCATION`, `FIRECRAWL_COUNTRY` (provider defaults to US), `FIRECRAWL_CATEGORIES` (github/research/pdf) |
 | Jina | `JINA_MAX_TOKENS` (token-billed; best cost guardrail), `JINA_SITE`, `JINA_GL` |
 | SearXNG | `SEARXNG_ENGINES`, `SEARXNG_CATEGORIES`, `SEARXNG_TIME_RANGE`, `SEARXNG_LANGUAGE`, `SEARXNG_SAFESEARCH` |
-| ddgs | `DDGS_BACKEND` (pin one free engine to dodge per-engine rate limits), `DDGS_REGION`, `DDGS_TIMELIMIT`, `DDGS_SAFESEARCH` |
+| ddgs | `DDGS_BACKEND` (pin one free engine to dodge per-engine rate limits; Bing, Google and Yandex are off in `ddgs` 9.16.1 and run `auto`), `DDGS_REGION` and `DDGS_TIMELIMIT` (also the DuckDuckGo hop's `kl` and `df`), `DDGS_SAFESEARCH` (`on`, `moderate` or `off`; DuckDuckGo's own engine ignores it) |
 | SerpAPI | `SERPAPI_ENGINE` (`google_light` is cheaper, `num=100` works), `SERPAPI_TBS`, `SERPAPI_GL`, `SERPAPI_HL`, `SERPAPI_SAFE` |
 | SearchAPI.io | `SEARCHAPI_ENGINE` (google/news/scholar/bing), `SEARCHAPI_TIME_PERIOD`, `SEARCHAPI_GL`, `SEARCHAPI_HL`, `SEARCHAPI_SAFE` |
 
@@ -203,10 +216,12 @@ BRAVE_SAFESEARCH=strict      # off | moderate | strict
 SEARXNG_SAFESEARCH=2         # 0 | 1 | 2
 SERPAPI_SAFE=active          # active | off
 SEARCHAPI_SAFE=active        # active | blur | off
-DDGS_SAFESEARCH=strict
+DDGS_SAFESEARCH=on           # on | moderate | off (empty = moderate)
 ```
 
-Locale is per provider and worth setting if you are not in the US — **Firecrawl defaults to US results unless told otherwise**:
+**`DDGS_SAFESEARCH` takes `on`, `moderate` or `off`** — the `ddgs` package's own words, not Brave's. Earlier versions of this page gave `DDGS_SAFESEARCH=strict`, which the package does not know: its Brave engine read it as *off*, and its Startpage engine failed on it. Since 7.120.2 a saved `strict` is read as `on`, the strictest value the package has, and the dashboard lists it as *strict (older spelling, read as on)*, so the line you saved keeps working and a save on the page leaves it as it is. Safe search is applied only by the engines that read it — in `ddgs` 9.16.1 Brave, Mojeek (`on` only) and Startpage. **DuckDuckGo's own engine ignores it**: with `DDGS_BACKEND=duckduckgo` the setting has no effect, and the keyless DuckDuckGo hop sends no safe-search field at all.
+
+Locale is per provider and worth setting if you are not in the US — **Firecrawl defaults to US results unless told otherwise**, and `ddgs` asks for `us-en` when `DDGS_REGION` is empty:
 
 ```bash
 FIRECRAWL_COUNTRY=DE
@@ -214,9 +229,10 @@ TAVILY_COUNTRY=germany
 BRAVE_COUNTRY=DE
 SERPER_GL=de           # SERPAPI_GL / SEARCHAPI_GL / JINA_GL are the same idea
 PARALLEL_LOCATION=DE
+DDGS_REGION=de-de      # region-language; also the keyless DuckDuckGo hop's kl
 ```
 
-Freshness uses each provider's own vocabulary (`BRAVE_FRESHNESS=pw`, `TAVILY_TIME_RANGE=week`, `SERPER_TBS=qdr:w`, …). For a precise window rather than a relative one, several providers now take explicit dates:
+Freshness uses each provider's own vocabulary (`BRAVE_FRESHNESS=pw`, `TAVILY_TIME_RANGE=week`, `SERPER_TBS=qdr:w`, `DDGS_TIMELIMIT=w` — also the DuckDuckGo hop's `df`, …). For a precise window rather than a relative one, several providers now take explicit dates:
 
 ```bash
 TAVILY_START_DATE=2026-01-01

@@ -24,6 +24,17 @@ SERPAPI_DEFAULT_BASE = "https://serpapi.com"
 #: ``@upstash/context7-sdk`` 0.6.0 ``DEFAULT_BASE_URL``).
 CONTEXT7_DEFAULT_BASE = "https://context7.com/api"
 
+#: ``DDGS_SAFESEARCH`` spellings that are not the ``ddgs`` package's own, and
+#: the value each is read as (7.120.2, RESEARCH-DDG-WEBSEARCH.md R5). ``ddgs``
+#: knows ``on``, ``moderate`` and ``off``. MCC's own docs gave ``strict``,
+#: which it does not know: measured on 9.16.1, its Brave engine reads it as
+#: ``off`` and its Startpage engine raises on it, so a search pinned to
+#: Startpage fails outright. A saved ``strict`` is therefore read as ``on``,
+#: the strictest value ``ddgs`` has (matched without regard to case), and stays
+#: one of the select's options so the dashboard shows it rather than emptying
+#: it on the next save. The saved line itself is never rewritten.
+DDGS_SAFESEARCH_ALIASES: dict[str, str] = {"strict": "on"}
+
 
 @dataclass(frozen=True, slots=True)
 class WebSearchOptionSpec:
@@ -106,14 +117,22 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                     ("yahoo", "yahoo"),
                     ("wikipedia", "wikipedia"),
                 ),
-                cost_note="free; pin one engine to dodge per-engine rate limits",
+                cost_note=(
+                    "free; pin one engine to dodge per-engine rate limits. "
+                    "bing, google and yandex are switched off inside ddgs "
+                    "9.16.1, the version MCC ships: choosing one runs auto."
+                ),
             ),
             WebSearchOptionSpec(
                 env="DDGS_REGION",
                 label="Region (e.g. us-en)",
                 field_type="text",
                 default="",
-                cost_note="Empty = DDGS picks by IP. Format is region-language, e.g. uk-en.",
+                cost_note=(
+                    "Empty = us-en, the DDGS default. Format is region-language, "
+                    "e.g. uk-en. When set it is also sent to the keyless "
+                    "DuckDuckGo hop as its kl field."
+                ),
             ),
             WebSearchOptionSpec(
                 env="DDGS_TIMELIMIT",
@@ -127,7 +146,10 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                     ("m", "past month"),
                     ("y", "past year"),
                 ),
-                cost_note="Empty = no recency filter.",
+                cost_note=(
+                    "Empty = no recency filter. When set it is also sent to the "
+                    "keyless DuckDuckGo hop as its df field."
+                ),
             ),
             WebSearchOptionSpec(
                 env="DDGS_SAFESEARCH",
@@ -139,8 +161,16 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                     ("on", "on"),
                     ("moderate", "moderate"),
                     ("off", "off"),
+                    # Offered so a saved line shows instead of an empty select
+                    # (DDGS_SAFESEARCH_ALIASES above).
+                    ("strict", "strict (older spelling, read as on)"),
                 ),
-                cost_note="Empty = moderate, the DDGS default.",
+                cost_note=(
+                    "Empty = moderate, the DDGS default. Only the engines that "
+                    "read it apply it (Brave, Mojeek and Startpage in ddgs "
+                    "9.16.1); DuckDuckGo's own engine ignores it. strict, the "
+                    "spelling older MCC docs gave, is read as on."
+                ),
             ),
         ),
     ),

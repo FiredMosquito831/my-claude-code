@@ -134,6 +134,10 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     'option[value="context7"]',
     // 7.119.0: the keyless DuckDuckGo hop's request spacing, additive.
     '.field[data-key="WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS"]',
+    // 7.120.2: the older `strict` spelling the ddgs SafeSearch select now
+    // offers, additive (Brave's own `strict` option stays compared). The ddgs
+    // drawer's corrected help texts are taken out of both sides by the test.
+    'select[data-key="DDGS_SAFESEARCH"] option[value="strict"]',
   ];
   const stripped = (node) => {
     if (!node) return null;

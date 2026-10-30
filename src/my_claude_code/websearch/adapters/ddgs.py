@@ -14,6 +14,10 @@ So the row is reported as the destination it names -- decoded once, never
 twice -- and an ad row is dropped instead of being returned as an organic
 result. A row whose ``/l/`` link has no usable ``uddg`` keeps the URL the
 engine gave it.
+
+``DDGS_SAFESEARCH`` reaches the package as written, except ``strict`` -- the
+spelling MCC's own docs gave, which ``ddgs`` does not know -- read as ``on``
+(``config.websearch_catalog.DDGS_SAFESEARCH_ALIASES``, 7.120.2).
 """
 
 import asyncio
@@ -23,6 +27,7 @@ from urllib.parse import unquote, urlsplit
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
+from my_claude_code.config.websearch_catalog import DDGS_SAFESEARCH_ALIASES
 from my_claude_code.core.websearch.models import (
     WebSearchResponse,
     WebSearchResultItem,
@@ -87,7 +92,9 @@ class DdgsWebSearchProvider(BaseWebSearchProvider):
         if timelimit := options.get("DDGS_TIMELIMIT", ""):
             kwargs["timelimit"] = timelimit
         if safesearch := options.get("DDGS_SAFESEARCH", ""):
-            kwargs["safesearch"] = safesearch
+            kwargs["safesearch"] = DDGS_SAFESEARCH_ALIASES.get(
+                safesearch.lower(), safesearch
+            )
         return DDGS(
             proxy=self._config.proxy, timeout=int(self._config.http_timeout)
         ).text(query, **kwargs)
