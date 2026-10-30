@@ -6,7 +6,11 @@ import httpx
 import pytest
 
 from my_claude_code.websearch.adapters.brave import BraveWebSearchProvider
-from my_claude_code.websearch.adapters.ddgs import DdgsWebSearchProvider
+from my_claude_code.websearch.adapters.ddgs import (
+    DdgsWebSearchProvider,
+    _destination,
+    _is_ad,
+)
 from my_claude_code.websearch.adapters.exa import ExaWebSearchProvider
 from my_claude_code.websearch.adapters.firecrawl import FirecrawlWebSearchProvider
 from my_claude_code.websearch.adapters.jina import JinaWebSearchProvider
@@ -611,6 +615,204 @@ class TestDdgsAdapter:
         provider = DdgsWebSearchProvider(build_config(api_keys=(), rotation="single"))
         with pytest.raises(WebSearchUpstreamError, match="engine exploded"):
             await provider.search("q")
+
+
+class TestDdgsAdapterHrefs:
+    """The engine's redirect links become destinations; its ad rows are dropped.
+
+    DuckDuckGo's engine answers MCC with ``//duckduckgo.com/l/?uddg=<target>
+    &rut=<token>`` for a result and ``//duckduckgo.com/y.js?...`` for an ad
+    (RESEARCH-DDG-WEBSEARCH.md D1 and G4); ``ddgs`` itself already drops the
+    ``https://duckduckgo.com/y.js?`` ad form and percent-decodes the whole
+    href once (``results._normalize_url``), which is why a row arrives with
+    the destination already decoded and the scheme-relative ad still there.
+    Pure functions plus one provider run: no network, no ``DDGS``.
+    """
+
+    #: DuckDuckGo's ``rut`` token, as both recorded pages carry it.
+    RUT = "0" * 64
+
+    @pytest.mark.parametrize(
+        "href",
+        [
+            f"//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fguide&rut={RUT}",
+            f"https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fguide&rut={RUT}",
+        ],
+        ids=["scheme-relative", "https"],
+    )
+    def test_each_spelling_of_the_redirect_reports_its_destination(
+        self, href: str
+    ) -> None:
+        assert _destination(href) == "https://example.org/guide"
+
+    def test_the_rut_token_is_not_part_of_the_destination(self) -> None:
+        href = (
+            f"//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fguide&rut={self.RUT}"
+        )
+        assert _destination(href) == "https://example.org/guide"
+
+    def test_a_redirect_without_rut_still_unwraps(self) -> None:
+        assert (
+            _destination("//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2F")
+            == "https://example.org/"
+        )
+
+    def test_a_destinations_own_query_string_is_kept_whole(self) -> None:
+        # As ``ddgs`` hands it over: decoded once already, so its own ``&`` is
+        # literal and only the trailing ``&rut=`` token bounds the value.
+        href = (
+            "//duckduckgo.com/l/?uddg=https://example.com/search?q=a+b&page=2"
+            f"&rut={self.RUT}"
+        )
+        assert _destination(href) == "https://example.com/search?q=a+b&page=2"
+
+    def test_an_encoded_destination_with_a_query_string_is_decoded_once(self) -> None:
+        href = (
+            "//duckduckgo.com/l/"
+            "?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Da%2Bb%26page%3D2"
+            f"&rut={self.RUT}"
+        )
+        assert _destination(href) == "https://example.com/search?q=a+b&page=2"
+
+    def test_a_percent_escape_in_the_destination_is_not_decoded_twice(self) -> None:
+        # The engine encodes the destination once and ``ddgs`` decodes the href
+        # once. A ``%C3%A9`` still in the value after that is the destination's
+        # own escape: decoding again would replace it with ``é``.
+        href = (
+            "//duckduckgo.com/l/?uddg=https://example.com/search?q=caf%C3%A9"
+            f"&rut={self.RUT}"
+        )
+        assert _destination(href) == "https://example.com/search?q=caf%C3%A9"
+
+    def test_an_encoded_parameter_inside_the_destination_is_not_decoded_twice(
+        self,
+    ) -> None:
+        # The destination's own query string carries a percent-encoded URL; a
+        # second decode would turn it into a different link.
+        href = (
+            "//duckduckgo.com/l/"
+            "?uddg=https://example.com/click?next=https%3A%2F%2Fexample.org%2Fpage"
+            f"&rut={self.RUT}"
+        )
+        assert (
+            _destination(href)
+            == "https://example.com/click?next=https%3A%2F%2Fexample.org%2Fpage"
+        )
+
+    @pytest.mark.parametrize(
+        "href",
+        [
+            f"//duckduckgo.com/l/?rut={RUT}",
+            f"//duckduckgo.com/l/?uddg=&rut={RUT}",
+            f"//duckduckgo.com/l/?uddg=not-a-url&rut={RUT}",
+            f"//duckduckgo.com/l/?uddg=javascript%3Aalert%281%29&rut={RUT}",
+        ],
+        ids=["missing", "empty", "not-a-url", "not-http"],
+    )
+    def test_a_missing_or_malformed_uddg_keeps_the_engines_url(self, href: str) -> None:
+        # ``None`` means "leave the row's URL exactly as the engine gave it".
+        assert _destination(href) is None
+
+    @pytest.mark.parametrize(
+        "href",
+        [
+            "https://example.net/direct",
+            "https://duckduckgo.com/about",
+            "https://duckduckgo.com.evil.example/l/?uddg=https%3A%2F%2Fx.test%2F",
+        ],
+        ids=["direct", "other-duckduckgo-path", "lookalike-host"],
+    )
+    def test_a_link_that_is_not_the_redirect_is_not_rewritten(self, href: str) -> None:
+        assert _destination(href) is None
+
+    @pytest.mark.parametrize(
+        "href",
+        [
+            "//duckduckgo.com/y.js?ad_domain=ads.example.com&u3=https%3A%2F%2Fads.example.com%2Fx",
+            "https://duckduckgo.com/y.js?ad_domain=ads.example.com",
+        ],
+        ids=["scheme-relative", "https"],
+    )
+    def test_the_engines_ad_click_link_is_an_ad(self, href: str) -> None:
+        assert _is_ad(href) is True
+
+    def test_a_result_or_a_lookalike_host_is_not_an_ad(self) -> None:
+        for href in (
+            "//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2F",
+            "https://duckduckgo.com.evil.example/y.js?ad_domain=ads.example.com",
+            "https://example.com/y.js",
+        ):
+            assert _is_ad(href) is False
+
+    @pytest.mark.asyncio
+    async def test_ads_are_dropped_and_organic_rows_keep_their_order(
+        self, monkeypatch
+    ) -> None:
+        rows = [
+            {
+                "title": "Sponsored",
+                "href": "//duckduckgo.com/y.js?ad_domain=ads.example.com",
+                "body": "An advertisement.",
+            },
+            {
+                "title": "First",
+                "href": f"//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fone&rut={self.RUT}",
+                "body": "One.",
+            },
+            {"title": "Second", "href": "https://example.net/direct", "body": "Two."},
+            {
+                "title": "Third",
+                "href": (
+                    "https://duckduckgo.com/l/"
+                    "?uddg=https%3A%2F%2Fexample.com%2Fsearch%3Fq%3Da%2Bb"
+                    f"%26page%3D2&rut={self.RUT}"
+                ),
+                "body": "Three.",
+            },
+        ]
+
+        class FakeDDGS:
+            def __init__(self, proxy=None, timeout=None) -> None:
+                pass
+
+            def text(self, query, **kwargs):
+                return rows
+
+        monkeypatch.setattr("my_claude_code.websearch.adapters.ddgs.DDGS", FakeDDGS)
+        provider = DdgsWebSearchProvider(build_config(api_keys=(), rotation="single"))
+        response = await provider.search("q")
+        assert [(item.title, item.url) for item in response.results] == [
+            ("First", "https://example.org/one"),
+            ("Second", "https://example.net/direct"),
+            ("Third", "https://example.com/search?q=a+b&page=2"),
+        ]
+        assert [item.snippet for item in response.results] == ["One.", "Two.", "Three."]
+
+    @pytest.mark.asyncio
+    async def test_a_redirect_the_unwrap_cannot_read_is_reported_as_it_came(
+        self, monkeypatch
+    ) -> None:
+        rows = [
+            {
+                "title": "Odd",
+                "href": "//duckduckgo.com/l/?uddg=not-a-url",
+                "body": "Still a row.",
+            }
+        ]
+
+        class FakeDDGS:
+            def __init__(self, proxy=None, timeout=None) -> None:
+                pass
+
+            def text(self, query, **kwargs):
+                return rows
+
+        monkeypatch.setattr("my_claude_code.websearch.adapters.ddgs.DDGS", FakeDDGS)
+        provider = DdgsWebSearchProvider(build_config(api_keys=(), rotation="single"))
+        response = await provider.search("q")
+        assert [item.url for item in response.results] == [
+            "//duckduckgo.com/l/?uddg=not-a-url"
+        ]
 
 
 class TestRotationAcrossKeysEndToEnd:

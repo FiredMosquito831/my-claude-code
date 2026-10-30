@@ -1,9 +1,9 @@
 {
  "about": "Equality baseline of the DDG harness (tests/support/ddg_harness/baseline.py): today's output of every search and fetch method on every fixture under tests/fixtures/ddg and tests/fixtures/extraction, as a readable shape and the sha256 of the canonical outcome JSON. Pinned by tests/contracts/test_ddg_harness_equality.py.",
- "generated_on": "7b9b87b5 (v7.113.1)",
- "cells": {
-  "search:ddgs": {
-   "live_html_200": {
+ "generated_on": "6e749c72 (v7.118.1) + DDG-2 (v7.118.2)",
+ "moved_by_ddg_2": {
+  "search:ddgs live_html_200": {
+   "v7.118.1": {
     "shape": {
      "outcome": "results",
      "requests": [
@@ -101,7 +101,107 @@
     },
     "digest": "ec798162c84d01333945a48af8488f0058965b983c7ab401f4c0c553c3a083db"
    },
-   "edge_html_200": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "POST",
+       "url": "https://html.duckduckgo.com/html/",
+       "form": [
+        [
+         "b",
+         ""
+        ],
+        [
+         "l",
+         "us-en"
+        ],
+        [
+         "q",
+         "omarchy linux"
+        ]
+       ]
+      }
+     ],
+     "results": [
+      {
+       "title": "Omarchy - Wikipedia",
+       "url": "https://en.wikipedia.org/wiki/Omarchy",
+       "snippet": "Omarchy is an open-source Linux distribution created by David Heinemeier Hansson. It is based on Arch Linux and uses the Hyprland tiling Wayland compositor and Quickshell desktop shell. [3][4][5]",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.org/",
+       "snippet": "An opinionated Arch Linux and Hyprland setup guide by DHH for users seeking a customized experience.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.us/",
+       "snippet": "Linux used to be a chore to setup, difficult to debug, and full of confusing upfront choices. Omarchy solves all of it with a lightning fast installation, agents that debug all issues, and fantastic defaults that give you a fully functioning system that looks amazing out of the box.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy — Beautiful, Fun & Opinionated Linux by DHH",
+       "url": "https://omarchy-official.org/",
+       "snippet": "Omarchy is an opinionated Arch + Hyprland distro by DHH — tiling, beautiful themes, curated apps, snapshot-safe via Btrfs. Download the ISO and get practical guides.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "The Manual - Omarchy",
+       "url": "https://omarchy.org/manual/",
+       "snippet": "Omarchy is an omakase Linux distribution based on Arch, the tiling window manager Hyprland, and the desktop construction-kit Quickshell. It ships with everything a modern, savvy computer user needs to be productive immediately.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "GitHub - omacom/omarchy: Beautiful, Modern & Opinionated Linux",
+       "url": "https://github.com/omacom/omarchy",
+       "snippet": "Beautiful, Modern & Opinionated Linux. Contribute to omacom/omarchy development by creating an account on GitHub.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy: Beautiful, Fun & Opinionated Linux",
+       "url": "https://omarchy.archi/",
+       "snippet": "Omarchy: Beautiful, Fun & Opinionated Linux. The malleable OS for the age of agents. Arch + Hyprland, omakase. By DHH.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Thoughts On Omarchy: Slick Distro, Complicated Ethics",
+       "url": "https://tedium.co/2025/10/13/omarchy-linux-distro-commentary/",
+       "snippet": "The rising Linux distro Omarchy smooths out Hyprland's rough edges—but it also carries a controversial sheen that some won't be able to ignore.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy - DistroWatch.com",
+       "url": "https://distrowatch.com/omarchy",
+       "snippet": "Omarchy is an Arch-based Linux distribution featuring the Hyprland tiling window manager. It ships with what a modern software developer would need to be productive immediately, including Neovim, Spotify, Chromium, Typora, Alacritty, LibreOffice and Zoom.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy: the Linux distro built for the agentic AI age",
+       "url": "https://tbreak.com/omarchy-linux-distro-agentic-ai/",
+       "snippet": "Omarchy is the Arch-based Linux distro with an AI agent built in. Here is the field it leads, from Ubuntu 26.04 to CachyOS, and how to try it.",
+       "content": null,
+       "published": null
+      }
+     ]
+    },
+    "digest": "b0b335a0b38e6e6ba3239cbf6dc1fe70acdfb10a4b5029d74dac4c80608a5649"
+   }
+  },
+  "search:ddgs edge_html_200": {
+   "v7.118.1": {
     "shape": {
      "outcome": "results",
      "requests": [
@@ -156,6 +256,206 @@
      ]
     },
     "digest": "1a4e1f4affe99f4727b4f60ed4f38419cf218db5534510eca39a30419335e3fb"
+   },
+   "v7.118.2": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "POST",
+       "url": "https://html.duckduckgo.com/html/",
+       "form": [
+        [
+         "b",
+         ""
+        ],
+        [
+         "l",
+         "us-en"
+        ],
+        [
+         "q",
+         "omarchy linux"
+        ]
+       ]
+      }
+     ],
+     "results": [
+      {
+       "title": "Example guide to harness testing",
+       "url": "https://example.org/guide",
+       "snippet": "A step-by-step guide to harness testing with recorded pages.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "A result whose title link is direct",
+       "url": "https://example.net/direct",
+       "snippet": "This result links straight to its destination, with no redirect.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Tom & Jerry: a destination with its own query",
+       "url": "https://example.com/search?q=a+b&page=2",
+       "snippet": "The destination carries q=a+b&page=2 of its own.",
+       "content": null,
+       "published": null
+      }
+     ]
+    },
+    "digest": "1bd079723c4b5a686dd42f976f47aa736ef6618a7e105ec21b54ac66faf402ed"
+   }
+  }
+ },
+ "cells": {
+  "search:ddgs": {
+   "live_html_200": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "POST",
+       "url": "https://html.duckduckgo.com/html/",
+       "form": [
+        [
+         "b",
+         ""
+        ],
+        [
+         "l",
+         "us-en"
+        ],
+        [
+         "q",
+         "omarchy linux"
+        ]
+       ]
+      }
+     ],
+     "results": [
+      {
+       "title": "Omarchy - Wikipedia",
+       "url": "https://en.wikipedia.org/wiki/Omarchy",
+       "snippet": "Omarchy is an open-source Linux distribution created by David Heinemeier Hansson. It is based on Arch Linux and uses the Hyprland tiling Wayland compositor and Quickshell desktop shell. [3][4][5]",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.org/",
+       "snippet": "An opinionated Arch Linux and Hyprland setup guide by DHH for users seeking a customized experience.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.us/",
+       "snippet": "Linux used to be a chore to setup, difficult to debug, and full of confusing upfront choices. Omarchy solves all of it with a lightning fast installation, agents that debug all issues, and fantastic defaults that give you a fully functioning system that looks amazing out of the box.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy — Beautiful, Fun & Opinionated Linux by DHH",
+       "url": "https://omarchy-official.org/",
+       "snippet": "Omarchy is an opinionated Arch + Hyprland distro by DHH — tiling, beautiful themes, curated apps, snapshot-safe via Btrfs. Download the ISO and get practical guides.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "The Manual - Omarchy",
+       "url": "https://omarchy.org/manual/",
+       "snippet": "Omarchy is an omakase Linux distribution based on Arch, the tiling window manager Hyprland, and the desktop construction-kit Quickshell. It ships with everything a modern, savvy computer user needs to be productive immediately.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "GitHub - omacom/omarchy: Beautiful, Modern & Opinionated Linux",
+       "url": "https://github.com/omacom/omarchy",
+       "snippet": "Beautiful, Modern & Opinionated Linux. Contribute to omacom/omarchy development by creating an account on GitHub.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy: Beautiful, Fun & Opinionated Linux",
+       "url": "https://omarchy.archi/",
+       "snippet": "Omarchy: Beautiful, Fun & Opinionated Linux. The malleable OS for the age of agents. Arch + Hyprland, omakase. By DHH.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Thoughts On Omarchy: Slick Distro, Complicated Ethics",
+       "url": "https://tedium.co/2025/10/13/omarchy-linux-distro-commentary/",
+       "snippet": "The rising Linux distro Omarchy smooths out Hyprland's rough edges—but it also carries a controversial sheen that some won't be able to ignore.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy - DistroWatch.com",
+       "url": "https://distrowatch.com/omarchy",
+       "snippet": "Omarchy is an Arch-based Linux distribution featuring the Hyprland tiling window manager. It ships with what a modern software developer would need to be productive immediately, including Neovim, Spotify, Chromium, Typora, Alacritty, LibreOffice and Zoom.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Omarchy: the Linux distro built for the agentic AI age",
+       "url": "https://tbreak.com/omarchy-linux-distro-agentic-ai/",
+       "snippet": "Omarchy is the Arch-based Linux distro with an AI agent built in. Here is the field it leads, from Ubuntu 26.04 to CachyOS, and how to try it.",
+       "content": null,
+       "published": null
+      }
+     ]
+    },
+    "digest": "b0b335a0b38e6e6ba3239cbf6dc1fe70acdfb10a4b5029d74dac4c80608a5649"
+   },
+   "edge_html_200": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "POST",
+       "url": "https://html.duckduckgo.com/html/",
+       "form": [
+        [
+         "b",
+         ""
+        ],
+        [
+         "l",
+         "us-en"
+        ],
+        [
+         "q",
+         "omarchy linux"
+        ]
+       ]
+      }
+     ],
+     "results": [
+      {
+       "title": "Example guide to harness testing",
+       "url": "https://example.org/guide",
+       "snippet": "A step-by-step guide to harness testing with recorded pages.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "A result whose title link is direct",
+       "url": "https://example.net/direct",
+       "snippet": "This result links straight to its destination, with no redirect.",
+       "content": null,
+       "published": null
+      },
+      {
+       "title": "Tom & Jerry: a destination with its own query",
+       "url": "https://example.com/search?q=a+b&page=2",
+       "snippet": "The destination carries q=a+b&page=2 of its own.",
+       "content": null,
+       "published": null
+      }
+     ]
+    },
+    "digest": "1bd079723c4b5a686dd42f976f47aa736ef6618a7e105ec21b54ac66faf402ed"
    },
    "lite_results_200": {
     "shape": {

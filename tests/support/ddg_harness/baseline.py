@@ -28,6 +28,18 @@ from . import corpus, methods, offline
 
 BASELINE_PATH = corpus.TESTS_DIR / "contracts" / "ddg_harness_baseline.json"
 
+#: Where the cells a DDG PR moves on purpose are recorded, each holding its
+#: answer before and after (the two-answer convention of
+#: ``test_metadata_ladder_equality.py``). 7.118.2 (DDG-2) opened it: the two
+#: ``search:ddgs`` cells that carry results, the live-recorded page's ten D1
+#: redirect URLs and the edge page whose scheme-relative ad row leaked. The
+#: block is preserved verbatim by ``--write`` -- only the PR that moves a cell
+#: again updates it, on purpose -- and ``tests/contracts/
+#: test_ddg_harness_equality.py`` pins the moved set to this name.
+DDG2_KEY = "moved_by_ddg_2"
+DDG2_BEFORE = "v7.118.1"
+DDG2_AFTER = "v7.118.2"
+
 
 def canonical(outcome: dict[str, Any]) -> bytes:
     return json.dumps(
@@ -105,7 +117,11 @@ def moved_cells(
     return {"moved": moved, "missing": missing, "added": added}
 
 
-def document(cells: dict[str, dict[str, dict[str, Any]]], tree: str) -> dict[str, Any]:
+def document(
+    cells: dict[str, dict[str, dict[str, Any]]],
+    tree: str,
+    moved: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "about": (
             "Equality baseline of the DDG harness (tests/support/ddg_harness/"
@@ -115,6 +131,7 @@ def document(cells: dict[str, dict[str, dict[str, Any]]], tree: str) -> dict[str
             "Pinned by tests/contracts/test_ddg_harness_equality.py."
         ),
         "generated_on": tree,
+        DDG2_KEY: moved or {},
         "cells": cells,
     }
 
@@ -132,7 +149,13 @@ def main(argv: list[str] | None = None) -> int:
     with offline.guard():
         cells = methods.run_sync(compute_cells())
     if args.write:
-        text = json.dumps(document(cells, args.tree), indent=1, ensure_ascii=False)
+        # The moved-cells record is this file's history, not its output: a
+        # regeneration keeps every pair exactly as the release that moved it
+        # wrote it (a later PR that moves one again must update it on purpose).
+        moved = load_baseline(args.out).get(DDG2_KEY, {}) if args.out.is_file() else {}
+        text = json.dumps(
+            document(cells, args.tree, moved), indent=1, ensure_ascii=False
+        )
         args.out.write_text(text + "\n", encoding="utf-8", newline="\n")
         print(f"wrote {args.out} ({sum(len(v) for v in cells.values())} cells)")
         return 0
