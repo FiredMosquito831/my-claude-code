@@ -589,6 +589,16 @@ def _isolate_search_chain_books():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_legacy_search_pacing():
+    """The keyless DuckDuckGo hop remembers its last request's start (7.119.0)."""
+    from my_claude_code.api.web_tools import duckduckgo_lite
+
+    duckduckgo_lite.reset_pacing()
+    yield
+    duckduckgo_lite.reset_pacing()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_media_books():
     """Media keeps its own route, key and proxy books (7.60.0); reset them too."""
     from my_claude_code.application.media import executor as media_executor

@@ -43,6 +43,7 @@ from my_claude_code.websearch.registry import (
     build_provider,
 )
 from tests.contracts.search_chat_parity_world import fake_limiter_time
+from tests.support.ddg_harness import corpus
 from tests.support.websearch_credentials import NO_WEB_SEARCH_CREDENTIALS
 
 EXA_KEY_1 = "exa-chain-key-one-1111"
@@ -433,6 +434,122 @@ async def test_the_legacy_entry_answers_after_a_failing_provider(
         ("exa", 0, "error", "failed"),
         ("legacy", 1, "success", "succeeded"),
     ]
+
+
+#: DuckDuckGo's lite bot-check page (MCC-own synthetic fixture, DDG-1 corpus).
+_LITE_CHALLENGE = corpus.body_after_source_line(
+    corpus.DDG_DIR / "mcc_lite_challenge.html"
+)
+
+
+def _real_legacy_hop(
+    monkeypatch, upstream: Upstream, lite: httpx.Response | Exception
+) -> list[httpx.Request]:
+    """The real legacy hop (7.119.0) answered by ``lite``; Exa/Tavily as scripted."""
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host != "lite.duckduckgo.com":
+            return upstream.handler(request)
+        seen.append(request)
+        if isinstance(lite, httpx.RequestError):
+            raise type(lite)(str(lite), request=request)
+        if isinstance(lite, Exception):
+            raise lite
+        return httpx.Response(
+            lite.status_code,
+            headers=lite.headers,
+            content=lite.content,
+            request=request,
+        )
+
+    real = httpx.AsyncClient
+
+    class _Routed(real):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(outbound.httpx, "AsyncClient", _Routed)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_the_legacy_hops_bot_check_falls_through_like_its_429(
+    monkeypatch, upstream: Upstream, recorded: Recorded
+) -> None:
+    """7.119.0 (DDG-3): a bot check is no longer a successful empty answer that
+    ends the chain; it is the hop's ``rate_limit`` and the next entry answers,
+    with exactly the decisions a 429 from the same hop gets (one try per
+    ``PROVIDER_RETRY_ATTEMPTS``, the keyless slot cooling down, the next
+    search stepping over it)."""
+
+    seen = _real_legacy_hop(
+        monkeypatch, upstream, httpx.Response(202, content=_LITE_CHALLENGE)
+    )
+    settings = _settings(WEB_SEARCH_CHAIN="legacy,exa", PROVIDER_RETRY_ATTEMPTS="1")
+
+    results = await _search(settings)
+
+    assert [item["provider"] for item in results] == ["exa"]
+    assert recorded.chain_rows() == [
+        ("legacy", 0, "error", "failed"),
+        ("exa", 1, "success", "succeeded"),
+    ]
+    assert recorded.rows[0].failure_kind == "rate_limit"
+    assert recorded.rows[0].error_kind == "rate_limit"
+    assert "bot check" in (recorded.rows[0].error_message or "")
+    assert [(t["status"], t.get("charged")) for t in recorded.tries(0)] == [
+        (429, "rate_limit")
+    ]
+    assert len(seen) == 1
+
+    await _search(settings, "the next search")
+
+    assert recorded.chain_rows()[2:] == [
+        ("legacy", 0, "skipped", "skipped"),
+        ("exa", 1, "success", "succeeded"),
+    ]
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("lite", "failure_kind", "try_kind"),
+    [
+        (
+            httpx.Response(403, content=b"Forbidden"),
+            "authentication",
+            "HTTPStatusError",
+        ),
+        (httpx.Response(429, content=b"Too Many"), "rate_limit", "HTTPStatusError"),
+        (httpx.Response(503, content=b"Unavailable"), "overloaded", "HTTPStatusError"),
+        (httpx.ReadTimeout("timed out"), "timeout", "ReadTimeout"),
+    ],
+)
+async def test_the_legacy_hops_http_and_transport_failures_still_reach_the_chain_raw(
+    monkeypatch,
+    upstream: Upstream,
+    recorded: Recorded,
+    lite: httpx.Response | Exception,
+    failure_kind: str,
+    try_kind: str,
+) -> None:
+    """7.119.0 classifies these only on the route with no chain set: the chain
+    keeps reading the hop's own httpx error with the model path's classifier,
+    so every decision it made in 7.118.2 is the decision it makes now
+    (measured on all sixteen DDG-1 scenarios, both retry settings)."""
+
+    _real_legacy_hop(monkeypatch, upstream, lite)
+    settings = _settings(WEB_SEARCH_CHAIN="legacy,exa", PROVIDER_RETRY_ATTEMPTS="1")
+
+    results = await _search(settings)
+
+    assert [item["provider"] for item in results] == ["exa"]
+    assert recorded.rows[0].failure_kind == failure_kind
+    assert recorded.rows[0].error_kind == "upstream"
+    assert [t["kind"] for t in recorded.tries(0)] == [try_kind]
 
 
 @pytest.mark.asyncio

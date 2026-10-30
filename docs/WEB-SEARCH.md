@@ -106,6 +106,25 @@ One search is two calls with `Authorization: Bearer <key>`: `GET https://context
 
 The API was read from Context7's own clients (`@upstash/context7-mcp` and `@upstash/context7-sdk`); MCC's adapter has been proven against recorded responses of that shape, **not verified on a real key**.
 
+### The keyless DuckDuckGo hop (7.119.0)
+
+The last hop of the `auto` route — and the `legacy` entry of a search chain — asks DuckDuckGo's no-JavaScript **lite** page once (`GET https://lite.duckduckgo.com/lite/`). It identifies itself as `my-claude-code/<version>`, never as a browser, and uses MCC's own HTTP client with certificate verification left at the library's default. Everything it knows about DuckDuckGo is declared as data in `config/duckduckgo_profiles.py`: the request, and one row per page kind (lite and html) naming the result row, the title link, the snippet, the ad rows and the next-page form. A markup change is an edit to one row plus a recorded page, not a code change.
+
+- **Results** carry the title, the destination (DuckDuckGo's `/l/?uddg=` redirect, decoded once) and, since 7.119.0, the **snippet**. Ad rows and `y.js` ad links are skipped. When no declared row matches, the link scan of earlier releases still runs, so a layout change never answers worse than before.
+- **Region and time.** `DDGS_REGION` and `DDGS_TIMELIMIT` (the `ddgs` options) travel as the page's own `kl` and `df` fields when they are set; unset, nothing extra is sent. Whether the live page honours both has not been verified (no live call was made).
+- **A bot check is reported, never worked around.** HTTP 202, or DuckDuckGo's own check markers (`anomaly-modal`, `anomaly.js`, `challenge-form`, *bots use DuckDuckGo*) on a page with no result, is a **rate limit** that says what was seen — `web_search rate limited by legacy: DuckDuckGo answered with its bot check instead of results (HTTP 202; …)`, code `too_many_requests` — never "no results". In a search chain it moves on to the next entry exactly as a 429 from DuckDuckGo does; your `PROVIDER_RETRY_ATTEMPTS` and cooldown settings apply unchanged.
+- **A page MCC cannot read** — one that carries DuckDuckGo's next-page form but no row any profile finds — is a failure (*answered with a results page MCC could not read*), not an empty answer.
+- **Other failures**, with no chain set, are worded like every provider's: `web_search unavailable: legacy refused access (HTTP 403)`, `web_search rate limited by legacy: retry after 7s` (DuckDuckGo's `Retry-After`), `web_search unavailable: legacy answered with a server error (HTTP 503)`. With a chain set the chain classifies them exactly as it did before 7.119.0. A page with no result and no sign of a check stays an honest empty answer (*No web search results found*).
+- **Spacing.** `WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS` (**Legacy Scrape Minimum Interval (s)** on the Web Search page) is the least time between two of the hop's requests. `0`, the default, sends them back to back, as before. For reference, octos waits about 3 s and Crush a random 0.5–2 s; the value is yours. Only this hop waits, and the next search uses a changed value.
+
+```bash
+WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS=0   # seconds between the hop's requests; 0 = back to back
+DDGS_REGION=uk-en                         # also sent to the hop as kl
+DDGS_TIMELIMIT=w                          # also sent to the hop as df
+```
+
+DuckDuckGo publishes no search API for this use, and every project that reads these pages documents its bot check; nothing can promise that the hop answers. What MCC promises is to say which of the two happened.
+
 ### Advanced options
 
 Each provider exposes dotenv-only knobs (never in pydantic Settings); empty/unset values reproduce default behavior exactly. All of them are editable from the Web Search tab's **Advanced options** drawers. Highlights — cost warnings apply as noted:

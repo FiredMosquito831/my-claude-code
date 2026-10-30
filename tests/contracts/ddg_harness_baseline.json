@@ -1,6 +1,6 @@
 {
  "about": "Equality baseline of the DDG harness (tests/support/ddg_harness/baseline.py): today's output of every search and fetch method on every fixture under tests/fixtures/ddg and tests/fixtures/extraction, as a readable shape and the sha256 of the canonical outcome JSON. Pinned by tests/contracts/test_ddg_harness_equality.py.",
- "generated_on": "6e749c72 (v7.118.1) + DDG-2 (v7.118.2)",
+ "generated_on": "e2e99f0c (v7.118.2) + DDG-3 (v7.119.0)",
  "moved_by_ddg_2": {
   "search:ddgs live_html_200": {
    "v7.118.1": {
@@ -305,6 +305,565 @@
      ]
     },
     "digest": "1bd079723c4b5a686dd42f976f47aa736ef6618a7e105ec21b54ac66faf402ed"
+   }
+  }
+ },
+ "moved_by_ddg_3": {
+  "search:legacy challenge_html_200": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "empty",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": []
+    },
+    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "424900c15ad58bce8ea81e497ee383b8a9b3590f406406d541aa1b7e2197a37d"
+   }
+  },
+  "search:legacy challenge_html_202": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "empty",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": []
+    },
+    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (HTTP 202; the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "8efdc3ce870555c68765a415228e9a10e2ec3a26f30902eb445a12a6658a468f"
+   }
+  },
+  "search:legacy challenge_lite_200": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "empty",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": []
+    },
+    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "424900c15ad58bce8ea81e497ee383b8a9b3590f406406d541aa1b7e2197a37d"
+   }
+  },
+  "search:legacy challenge_lite_202": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "empty",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": []
+    },
+    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (HTTP 202; the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "8efdc3ce870555c68765a415228e9a10e2ec3a26f30902eb445a12a6658a468f"
+   }
+  },
+  "search:legacy edge_html_200": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": [
+      {
+       "title": "Example guide to harness testing",
+       "url": "https://example.org/guide"
+      },
+      {
+       "title": "A result with no snippet",
+       "url": "https://example.edu/no-snippet"
+      },
+      {
+       "title": "Tom & Jerry: a destination with its own query",
+       "url": "https://example.com/search?q=a+b&page=2"
+      }
+     ]
+    },
+    "digest": "0e89a8c14da8d049c646623e7ff9e215b49afbe7aaeb23e45bab7a7e49f5ef6b"
+   },
+   "v7.119.0": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": [
+      {
+       "title": "Example guide to harness testing",
+       "url": "https://example.org/guide",
+       "snippet": "A step-by-step guide to harness testing with recorded pages."
+      },
+      {
+       "title": "A result whose title link is direct",
+       "url": "https://example.net/direct",
+       "snippet": "This result links straight to its destination, with no redirect."
+      },
+      {
+       "title": "A result with no snippet",
+       "url": "https://example.edu/no-snippet",
+       "snippet": ""
+      },
+      {
+       "title": "Tom & Jerry: a destination with its own query",
+       "url": "https://example.com/search?q=a+b&page=2",
+       "snippet": "The destination carries q=a+b&page=2 of its own."
+      }
+     ]
+    },
+    "digest": "57b8f9ec285d6c69eee4b5f80f9f5003edcd165890f4680340a076a29b1bf8c4"
+   }
+  },
+  "search:legacy http_403": {
+   "v7.118.2": {
+    "shape": {
+     "error_class": "HTTPStatusError",
+     "error_text": "Client error '403 Forbidden' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "26fb86a2e88795fc8b7744987c9660b5e0ec8a51e8198777fabdc19f23c72795"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchAuthError",
+     "error_text": "legacy: HTTP 403",
+     "kind": "auth",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "38e58eefd8fe03a008988c691823e77f73e16582d9d984eb81b455cc9444b3c2"
+   }
+  },
+  "search:legacy http_429": {
+   "v7.118.2": {
+    "shape": {
+     "error_class": "HTTPStatusError",
+     "error_text": "Client error '429 Too Many Requests' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "9d3e1a1387832c2f8a352b29b24838e9688bddb66a8b496a64fcc7fa7e644214"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: HTTP 429",
+     "kind": "rate_limit",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "fedc7469288c224c98ead2f91b7169b7873820ae8da4c576e55cb1246d5aa1c7"
+   }
+  },
+  "search:legacy http_500": {
+   "v7.118.2": {
+    "shape": {
+     "error_class": "HTTPStatusError",
+     "error_text": "Server error '500 Internal Server Error' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "2cf4c7e43dcaecdc8855e665fa889c33515b18537fbc1ffd88649b77d0c5422c"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "legacy: HTTP 500",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "94d93ef7ef64c155ae14156cf36696f42367eb1fa46c115d1e7a6745395edb42"
+   }
+  },
+  "search:legacy http_502": {
+   "v7.118.2": {
+    "shape": {
+     "error_class": "HTTPStatusError",
+     "error_text": "Server error '502 Bad Gateway' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "873d5f37fca3033bf14cd0687815e3ad1ff8b6718528f16c2242972efe80d617"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "legacy: HTTP 502",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "0ecd6a3b2a24e1d51c256de9d36b815a2f01b676ecee9fef60545f39fc6a85c9"
+   }
+  },
+  "search:legacy http_503": {
+   "v7.118.2": {
+    "shape": {
+     "error_class": "HTTPStatusError",
+     "error_text": "Server error '503 Service Unavailable' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "15b98f5c16212ee5104f2c4485ebdbf3fefe9d3dd077150c964edc66db397bfd"
+   },
+   "v7.119.0": {
+    "shape": {
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "legacy: HTTP 503",
+     "kind": "upstream",
+     "kind_detail": null,
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ]
+    },
+    "digest": "b8ca7b82d06864cfafe2b94106951297182cf2e15eebe871450c848f918576b6"
+   }
+  },
+  "search:legacy lite_results_200": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": [
+      {
+       "title": "First lite result",
+       "url": "https://example.org/lite/one"
+      },
+      {
+       "title": "Second lite result",
+       "url": "https://example.net/lite/two"
+      },
+      {
+       "title": "Third lite result & more",
+       "url": "https://example.com/lite/three?x=1"
+      }
+     ]
+    },
+    "digest": "f0c8be64a82b255ff7dceb95121cd4c76c27e87c098ab8e08056b396c527abe0"
+   },
+   "v7.119.0": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": [
+      {
+       "title": "First lite result",
+       "url": "https://example.org/lite/one",
+       "snippet": "The first lite result's snippet."
+      },
+      {
+       "title": "Second lite result",
+       "url": "https://example.net/lite/two",
+       "snippet": "The second result, about harness pages."
+      },
+      {
+       "title": "Third lite result & more",
+       "url": "https://example.com/lite/three?x=1",
+       "snippet": "A third snippet."
+      }
+     ]
+    },
+    "digest": "7413232f7e1b0844e67e1839828ecbea1c8a3fbeb01d73fc3980a8f2e69986a1"
+   }
+  },
+  "search:legacy live_html_200": {
+   "v7.118.2": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": [
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.org/"
+      },
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.us/"
+      },
+      {
+       "title": "Omarchy - Wikipedia",
+       "url": "https://en.wikipedia.org/wiki/Omarchy"
+      },
+      {
+       "title": "Omarchy — Beautiful, Fun & Opinionated Linux by DHH",
+       "url": "https://omarchy-official.org/"
+      },
+      {
+       "title": "The Manual - Omarchy",
+       "url": "https://omarchy.org/manual/"
+      },
+      {
+       "title": "GitHub - omacom/omarchy: Beautiful, Modern & Opinionated Linux",
+       "url": "https://github.com/omacom/omarchy"
+      },
+      {
+       "title": "Omarchy: Beautiful, Fun & Opinionated Linux",
+       "url": "https://omarchy.archi/"
+      },
+      {
+       "title": "Thoughts On Omarchy: Slick Distro, Complicated Ethics",
+       "url": "https://tedium.co/2025/10/13/omarchy-linux-distro-commentary/"
+      },
+      {
+       "title": "Omarchy - DistroWatch.com",
+       "url": "https://distrowatch.com/omarchy"
+      },
+      {
+       "title": "Omarchy: the Linux distro built for the agentic AI age",
+       "url": "https://tbreak.com/omarchy-linux-distro-agentic-ai/"
+      }
+     ]
+    },
+    "digest": "1fc9de2735672ac4e29e08450db4e6068225eeeeb1c01c12a34b0f1bce06e1ce"
+   },
+   "v7.119.0": {
+    "shape": {
+     "outcome": "results",
+     "requests": [
+      {
+       "method": "GET",
+       "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+       "form": []
+      }
+     ],
+     "results": [
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.org/",
+       "snippet": "An opinionated Arch Linux and Hyprland setup guide by DHH for users seeking a customized experience."
+      },
+      {
+       "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
+       "url": "https://omarchy.us/",
+       "snippet": "Linux used to be a chore to setup, difficult to debug, and full of confusing upfront choices. Omarchy solves all of it with a lightning fast installation, agents that debug all issues, and fantastic defaults that give you a fully functioning system that looks amazing out of the box."
+      },
+      {
+       "title": "Omarchy - Wikipedia",
+       "url": "https://en.wikipedia.org/wiki/Omarchy",
+       "snippet": "Omarchy is an open-source Linux distribution created by David Heinemeier Hansson. It is based on Arch Linux and uses the Hyprland tiling Wayland compositor and Quickshell desktop shell. [3][4][5]"
+      },
+      {
+       "title": "Omarchy — Beautiful, Fun & Opinionated Linux by DHH",
+       "url": "https://omarchy-official.org/",
+       "snippet": "Omarchy is an opinionated Arch + Hyprland distro by DHH — tiling, beautiful themes, curated apps, snapshot-safe via Btrfs. Download the ISO and get practical guides."
+      },
+      {
+       "title": "The Manual - Omarchy",
+       "url": "https://omarchy.org/manual/",
+       "snippet": "Omarchy is an omakase Linux distribution based on Arch, the tiling window manager Hyprland, and the desktop construction-kit Quickshell. It ships with everything a modern, savvy computer user needs to be productive immediately."
+      },
+      {
+       "title": "GitHub - omacom/omarchy: Beautiful, Modern & Opinionated Linux",
+       "url": "https://github.com/omacom/omarchy",
+       "snippet": "Beautiful, Modern & Opinionated Linux. Contribute to omacom/omarchy development by creating an account on GitHub."
+      },
+      {
+       "title": "Omarchy: Beautiful, Fun & Opinionated Linux",
+       "url": "https://omarchy.archi/",
+       "snippet": "Omarchy: Beautiful, Fun & Opinionated Linux. The malleable OS for the age of agents. Arch + Hyprland, omakase. By DHH."
+      },
+      {
+       "title": "Thoughts On Omarchy: Slick Distro, Complicated Ethics",
+       "url": "https://tedium.co/2025/10/13/omarchy-linux-distro-commentary/",
+       "snippet": "The rising Linux distro Omarchy smooths out Hyprland's rough edges—but it also carries a controversial sheen that some won't be able to ignore."
+      },
+      {
+       "title": "Omarchy - DistroWatch.com",
+       "url": "https://distrowatch.com/omarchy",
+       "snippet": "Omarchy is an Arch-based Linux distribution featuring the Hyprland tiling window manager. It ships with what a modern software developer would need to be productive immediately, including Neovim, Spotify, Chromium, Typora, Alacritty, LibreOffice and Zoom."
+      },
+      {
+       "title": "Omarchy: the Linux distro built for the agentic AI age",
+       "url": "https://tbreak.com/omarchy-linux-distro-agentic-ai/",
+       "snippet": "Omarchy is the Arch-based Linux distro with an AI agent built in. Here is the field it leads, from Ubuntu 26.04 to CachyOS, and how to try it."
+      }
+     ]
+    },
+    "digest": "9318eeafb707dd2eaca5ed425b8c00a8b7b8b8bea5e05cc8509c035a1e5e6d6d"
    }
   }
  },
@@ -892,47 +1451,57 @@
      "results": [
       {
        "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
-       "url": "https://omarchy.org/"
+       "url": "https://omarchy.org/",
+       "snippet": "An opinionated Arch Linux and Hyprland setup guide by DHH for users seeking a customized experience."
       },
       {
        "title": "Omarchy - Beautiful, fun & agentic Linux by DHH",
-       "url": "https://omarchy.us/"
+       "url": "https://omarchy.us/",
+       "snippet": "Linux used to be a chore to setup, difficult to debug, and full of confusing upfront choices. Omarchy solves all of it with a lightning fast installation, agents that debug all issues, and fantastic defaults that give you a fully functioning system that looks amazing out of the box."
       },
       {
        "title": "Omarchy - Wikipedia",
-       "url": "https://en.wikipedia.org/wiki/Omarchy"
+       "url": "https://en.wikipedia.org/wiki/Omarchy",
+       "snippet": "Omarchy is an open-source Linux distribution created by David Heinemeier Hansson. It is based on Arch Linux and uses the Hyprland tiling Wayland compositor and Quickshell desktop shell. [3][4][5]"
       },
       {
        "title": "Omarchy — Beautiful, Fun & Opinionated Linux by DHH",
-       "url": "https://omarchy-official.org/"
+       "url": "https://omarchy-official.org/",
+       "snippet": "Omarchy is an opinionated Arch + Hyprland distro by DHH — tiling, beautiful themes, curated apps, snapshot-safe via Btrfs. Download the ISO and get practical guides."
       },
       {
        "title": "The Manual - Omarchy",
-       "url": "https://omarchy.org/manual/"
+       "url": "https://omarchy.org/manual/",
+       "snippet": "Omarchy is an omakase Linux distribution based on Arch, the tiling window manager Hyprland, and the desktop construction-kit Quickshell. It ships with everything a modern, savvy computer user needs to be productive immediately."
       },
       {
        "title": "GitHub - omacom/omarchy: Beautiful, Modern & Opinionated Linux",
-       "url": "https://github.com/omacom/omarchy"
+       "url": "https://github.com/omacom/omarchy",
+       "snippet": "Beautiful, Modern & Opinionated Linux. Contribute to omacom/omarchy development by creating an account on GitHub."
       },
       {
        "title": "Omarchy: Beautiful, Fun & Opinionated Linux",
-       "url": "https://omarchy.archi/"
+       "url": "https://omarchy.archi/",
+       "snippet": "Omarchy: Beautiful, Fun & Opinionated Linux. The malleable OS for the age of agents. Arch + Hyprland, omakase. By DHH."
       },
       {
        "title": "Thoughts On Omarchy: Slick Distro, Complicated Ethics",
-       "url": "https://tedium.co/2025/10/13/omarchy-linux-distro-commentary/"
+       "url": "https://tedium.co/2025/10/13/omarchy-linux-distro-commentary/",
+       "snippet": "The rising Linux distro Omarchy smooths out Hyprland's rough edges—but it also carries a controversial sheen that some won't be able to ignore."
       },
       {
        "title": "Omarchy - DistroWatch.com",
-       "url": "https://distrowatch.com/omarchy"
+       "url": "https://distrowatch.com/omarchy",
+       "snippet": "Omarchy is an Arch-based Linux distribution featuring the Hyprland tiling window manager. It ships with what a modern software developer would need to be productive immediately, including Neovim, Spotify, Chromium, Typora, Alacritty, LibreOffice and Zoom."
       },
       {
        "title": "Omarchy: the Linux distro built for the agentic AI age",
-       "url": "https://tbreak.com/omarchy-linux-distro-agentic-ai/"
+       "url": "https://tbreak.com/omarchy-linux-distro-agentic-ai/",
+       "snippet": "Omarchy is the Arch-based Linux distro with an AI agent built in. Here is the field it leads, from Ubuntu 26.04 to CachyOS, and how to try it."
       }
      ]
     },
-    "digest": "1fc9de2735672ac4e29e08450db4e6068225eeeeb1c01c12a34b0f1bce06e1ce"
+    "digest": "9318eeafb707dd2eaca5ed425b8c00a8b7b8b8bea5e05cc8509c035a1e5e6d6d"
    },
    "edge_html_200": {
     "shape": {
@@ -947,19 +1516,27 @@
      "results": [
       {
        "title": "Example guide to harness testing",
-       "url": "https://example.org/guide"
+       "url": "https://example.org/guide",
+       "snippet": "A step-by-step guide to harness testing with recorded pages."
+      },
+      {
+       "title": "A result whose title link is direct",
+       "url": "https://example.net/direct",
+       "snippet": "This result links straight to its destination, with no redirect."
       },
       {
        "title": "A result with no snippet",
-       "url": "https://example.edu/no-snippet"
+       "url": "https://example.edu/no-snippet",
+       "snippet": ""
       },
       {
        "title": "Tom & Jerry: a destination with its own query",
-       "url": "https://example.com/search?q=a+b&page=2"
+       "url": "https://example.com/search?q=a+b&page=2",
+       "snippet": "The destination carries q=a+b&page=2 of its own."
       }
      ]
     },
-    "digest": "0e89a8c14da8d049c646623e7ff9e215b49afbe7aaeb23e45bab7a7e49f5ef6b"
+    "digest": "57b8f9ec285d6c69eee4b5f80f9f5003edcd165890f4680340a076a29b1bf8c4"
    },
    "lite_results_200": {
     "shape": {
@@ -974,81 +1551,96 @@
      "results": [
       {
        "title": "First lite result",
-       "url": "https://example.org/lite/one"
+       "url": "https://example.org/lite/one",
+       "snippet": "The first lite result's snippet."
       },
       {
        "title": "Second lite result",
-       "url": "https://example.net/lite/two"
+       "url": "https://example.net/lite/two",
+       "snippet": "The second result, about harness pages."
       },
       {
        "title": "Third lite result & more",
-       "url": "https://example.com/lite/three?x=1"
+       "url": "https://example.com/lite/three?x=1",
+       "snippet": "A third snippet."
       }
      ]
     },
-    "digest": "f0c8be64a82b255ff7dceb95121cd4c76c27e87c098ab8e08056b396c527abe0"
+    "digest": "7413232f7e1b0844e67e1839828ecbea1c8a3fbeb01d73fc3980a8f2e69986a1"
    },
    "challenge_html_202": {
     "shape": {
-     "outcome": "empty",
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (HTTP 202; the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
      "requests": [
       {
        "method": "GET",
        "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
        "form": []
       }
-     ],
-     "results": []
+     ]
     },
-    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+    "digest": "8efdc3ce870555c68765a415228e9a10e2ec3a26f30902eb445a12a6658a468f"
    },
    "challenge_html_200": {
     "shape": {
-     "outcome": "empty",
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
      "requests": [
       {
        "method": "GET",
        "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
        "form": []
       }
-     ],
-     "results": []
+     ]
     },
-    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+    "digest": "424900c15ad58bce8ea81e497ee383b8a9b3590f406406d541aa1b7e2197a37d"
    },
    "challenge_lite_202": {
     "shape": {
-     "outcome": "empty",
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (HTTP 202; the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
      "requests": [
       {
        "method": "GET",
        "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
        "form": []
       }
-     ],
-     "results": []
+     ]
     },
-    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+    "digest": "8efdc3ce870555c68765a415228e9a10e2ec3a26f30902eb445a12a6658a468f"
    },
    "challenge_lite_200": {
     "shape": {
-     "outcome": "empty",
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: DuckDuckGo answered with its bot check instead of results (the page carries 'anomaly-modal', 'anomaly.js', 'challenge-form', 'bots use DuckDuckGo'). MCC reports the check and never solves or works around it.",
+     "kind": "rate_limit",
+     "kind_detail": "challenge",
+     "outcome": "error",
      "requests": [
       {
        "method": "GET",
        "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
        "form": []
       }
-     ],
-     "results": []
+     ]
     },
-    "digest": "1fb81c171381739f2353ba50ff56ee81877db25aeea0924013048513e4565044"
+    "digest": "424900c15ad58bce8ea81e497ee383b8a9b3590f406406d541aa1b7e2197a37d"
    },
    "http_403": {
     "shape": {
-     "error_class": "HTTPStatusError",
-     "error_text": "Client error '403 Forbidden' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403",
-     "kind": "upstream",
+     "error_class": "WebSearchAuthError",
+     "error_text": "legacy: HTTP 403",
+     "kind": "auth",
      "kind_detail": null,
      "outcome": "error",
      "requests": [
@@ -1059,13 +1651,13 @@
       }
      ]
     },
-    "digest": "26fb86a2e88795fc8b7744987c9660b5e0ec8a51e8198777fabdc19f23c72795"
+    "digest": "38e58eefd8fe03a008988c691823e77f73e16582d9d984eb81b455cc9444b3c2"
    },
    "http_429": {
     "shape": {
-     "error_class": "HTTPStatusError",
-     "error_text": "Client error '429 Too Many Requests' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429",
-     "kind": "upstream",
+     "error_class": "WebSearchRateLimitError",
+     "error_text": "legacy: HTTP 429",
+     "kind": "rate_limit",
      "kind_detail": null,
      "outcome": "error",
      "requests": [
@@ -1076,12 +1668,12 @@
       }
      ]
     },
-    "digest": "9d3e1a1387832c2f8a352b29b24838e9688bddb66a8b496a64fcc7fa7e644214"
+    "digest": "fedc7469288c224c98ead2f91b7169b7873820ae8da4c576e55cb1246d5aa1c7"
    },
    "http_500": {
     "shape": {
-     "error_class": "HTTPStatusError",
-     "error_text": "Server error '500 Internal Server Error' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "legacy: HTTP 500",
      "kind": "upstream",
      "kind_detail": null,
      "outcome": "error",
@@ -1093,12 +1685,12 @@
       }
      ]
     },
-    "digest": "2cf4c7e43dcaecdc8855e665fa889c33515b18537fbc1ffd88649b77d0c5422c"
+    "digest": "94d93ef7ef64c155ae14156cf36696f42367eb1fa46c115d1e7a6745395edb42"
    },
    "http_502": {
     "shape": {
-     "error_class": "HTTPStatusError",
-     "error_text": "Server error '502 Bad Gateway' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "legacy: HTTP 502",
      "kind": "upstream",
      "kind_detail": null,
      "outcome": "error",
@@ -1110,12 +1702,12 @@
       }
      ]
     },
-    "digest": "873d5f37fca3033bf14cd0687815e3ad1ff8b6718528f16c2242972efe80d617"
+    "digest": "0ecd6a3b2a24e1d51c256de9d36b815a2f01b676ecee9fef60545f39fc6a85c9"
    },
    "http_503": {
     "shape": {
-     "error_class": "HTTPStatusError",
-     "error_text": "Server error '503 Service Unavailable' for url 'https://lite.duckduckgo.com/lite/?q=omarchy+linux'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503",
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "legacy: HTTP 503",
      "kind": "upstream",
      "kind_detail": null,
      "outcome": "error",
@@ -1127,7 +1719,7 @@
       }
      ]
     },
-    "digest": "15b98f5c16212ee5104f2c4485ebdbf3fefe9d3dd077150c964edc66db397bfd"
+    "digest": "b8ca7b82d06864cfafe2b94106951297182cf2e15eebe871450c848f918576b6"
    },
    "empty_200": {
     "shape": {

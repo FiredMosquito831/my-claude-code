@@ -25,18 +25,51 @@ is DDG-1's answer byte for byte: the live-recorded and synthetic pages are the
 only fixtures the DuckDuckGo engine returns rows for (the lite pages are
 answered with the engine's own "No results found."), the legacy hop and
 ``web_fetch`` are untouched, and no request the fake upstream saw moved.
+
+**7.119.0 (DDG-3) moves exactly twelve cells, on purpose** (spec 5 R2; USER
+DECISIONS Q1, Q4, Q9, Q10). The legacy lite hop is re-implemented as declared
+data (``config/duckduckgo_profiles.py``): the three result pages gain their
+snippets and the edge page its direct-link row; the four bot-check pages are a
+``rate_limit`` naming the check instead of an empty answer (D3); 403 / 429 /
+500 / 502 / 503 are worded through the shared status mapping (``auth``,
+``rate_limit``, ``upstream`` with the status) instead of a raw httpx error.
+Each records both answers under ``moved_by_ddg_3`` (``v7.118.2`` before,
+``v7.119.0`` after). The empty and garbage pages stay the honest empty answer
+their scenarios declare, the two transport failures stay as they were, and
+every ``ddgs`` and ``web_fetch`` cell is byte for byte 7.118.2's (the 319
+unmoved cells' digest map hashed the same on both files, PROGRESS.md); no
+request the fake upstream saw moved.
 """
 
 import copy
 
 import pytest
 
-from tests.support.ddg_harness import baseline, corpus, methods
+from tests.support.ddg_harness import baseline, corpus, methods, scoring
 
 #: The cells 7.118.2 moves, as they are labelled in the baseline. A later
 #: release that moves one of them again has to update this list and the
 #: ``moved_by_ddg_2`` block with it.
 MOVED_BY_DDG_2 = ("search:ddgs edge_html_200", "search:ddgs live_html_200")
+
+#: The cells 7.119.0 moves (DDG-3), every one a ``search:legacy`` cell.
+MOVED_BY_DDG_3 = tuple(
+    f"search:legacy {key}"
+    for key in (
+        "challenge_html_200",
+        "challenge_html_202",
+        "challenge_lite_200",
+        "challenge_lite_202",
+        "edge_html_200",
+        "http_403",
+        "http_429",
+        "http_500",
+        "http_502",
+        "http_503",
+        "lite_results_200",
+        "live_html_200",
+    )
+)
 
 
 @pytest.mark.local_serial
@@ -125,12 +158,28 @@ def test_the_baseline_records_todays_findings_as_they_are() -> None:
             "upstream",
             "ddgs: ddgs search failed: No results found.",
         )
-    # D3: the legacy scraper answers a challenge page with an empty success and
-    # surfaces 403/429 as a raw httpx error.
-    assert legacy["challenge_lite_202"]["shape"]["outcome"] == "empty"
-    assert legacy["http_429"]["shape"]["error_class"] == "HTTPStatusError"
-    # The legacy results carry no snippet at all (title and url only).
-    assert set(legacy["live_html_200"]["shape"]["results"][0]) == {"title", "url"}
+    # D3: the legacy scraper of 7.118.2 and before answered a challenge page
+    # with an empty success and surfaced 403/429 as a raw httpx error, its
+    # results carrying no snippet (title and url only) -- kept as the
+    # before-answers of 7.119.0's moved cells.
+    before = {
+        label: entry[baseline.DDG3_BEFORE]["shape"]
+        for label, entry in document[baseline.DDG3_KEY].items()
+    }
+    assert before["search:legacy challenge_lite_202"]["outcome"] == "empty"
+    assert before["search:legacy http_429"]["error_class"] == "HTTPStatusError"
+    assert set(before["search:legacy live_html_200"]["results"][0]) == {
+        "title",
+        "url",
+    }
+    # 7.119.0: the same pages read as what they are.
+    assert legacy["challenge_lite_202"]["shape"]["kind"] == "rate_limit"
+    assert legacy["http_429"]["shape"]["error_class"] == "WebSearchRateLimitError"
+    assert set(legacy["live_html_200"]["shape"]["results"][0]) == {
+        "title",
+        "url",
+        "snippet",
+    }
     # web_fetch asks aiohttp for the encoding before reading the body, so a
     # response whose Content-Type has no charset fails outright.
     no_charset = fetch["fetch_scenarios/html_without_charset"]["shape"]
@@ -223,3 +272,106 @@ def test_7_118_2_unwraps_the_recorded_redirects_and_drops_the_leaked_ad() -> Non
         row["snippet"] for row in before_edge[1:]
     ]
     assert after_edge[2]["url"] == "https://example.com/search?q=a+b&page=2"
+
+
+# --------------------------------------------------------------- 7.119.0 DDG-3
+
+
+def test_7_119_0_moves_only_the_twelve_legacy_cells_it_names() -> None:
+    """Exactly these cells, every one ``search:legacy``, each with both answers.
+
+    No ``ddgs`` and no ``web_fetch`` cell is among them: those are the
+    byte-for-byte test's, pinned as 7.118.2 left them.
+    """
+
+    document = baseline.load_baseline()
+    moved = document[baseline.DDG3_KEY]
+    assert tuple(sorted(moved)) == MOVED_BY_DDG_3
+    assert all(label.startswith("search:legacy ") for label in moved)
+    assert set(moved).isdisjoint(document[baseline.DDG2_KEY])
+    for label, entry in moved.items():
+        method, key = label.split(" ", 1)
+        assert set(entry) == {baseline.DDG3_BEFORE, baseline.DDG3_AFTER}, label
+        assert entry[baseline.DDG3_AFTER] == document["cells"][method][key], label
+        assert (
+            entry[baseline.DDG3_BEFORE]["digest"]
+            != entry[baseline.DDG3_AFTER]["digest"]
+        ), label
+        # The request the fake upstream saw is the one 7.118.2 sent.
+        assert (
+            entry[baseline.DDG3_BEFORE]["shape"]["requests"]
+            == entry[baseline.DDG3_AFTER]["shape"]["requests"]
+        ), label
+    legacy = document["cells"]["search:legacy"]
+    unmoved = {f"search:legacy {key}" for key in legacy} - set(moved)
+    assert unmoved == {
+        "search:legacy empty_200",
+        "search:legacy garbage_200",
+        "search:legacy transport_refused",
+        "search:legacy transport_timeout",
+    }
+
+
+def test_7_119_0_reads_snippets_wherever_the_page_carries_them() -> None:
+    """The three result pages: same results as before, now with snippets.
+
+    The edge page also gains the row whose title link is direct (no
+    ``uddg=``), which the old anchor scan could not see; both ads stay out.
+    """
+
+    moved = baseline.load_baseline()[baseline.DDG3_KEY]
+
+    def answers(scenario: str) -> tuple[list[dict], list[dict]]:
+        entry = moved[f"search:legacy {scenario}"]
+        return (
+            entry[baseline.DDG3_BEFORE]["shape"]["results"],
+            entry[baseline.DDG3_AFTER]["shape"]["results"],
+        )
+
+    for scenario, with_snippet in (("live_html_200", 10), ("lite_results_200", 3)):
+        before, after = answers(scenario)
+        assert [(row["title"], row["url"]) for row in after] == [
+            (row["title"], row["url"]) for row in before
+        ], scenario
+        assert sum(1 for row in after if row["snippet"]) == with_snippet, scenario
+    before, after = answers("edge_html_200")
+    assert len(before) == 3
+    assert [row["url"] for row in after] == [
+        "https://example.org/guide",
+        "https://example.net/direct",
+        "https://example.edu/no-snippet",
+        "https://example.com/search?q=a+b&page=2",
+    ]
+    assert [bool(row["snippet"]) for row in after] == [True, True, False, True]
+
+
+def test_7_119_0_reports_every_bot_check_and_status_as_what_it_is() -> None:
+    """D3 fixed: a bot check is a rate limit naming the check, never an empty
+    answer; a status is worded through the shared mapping; an honest empty
+    page stays empty; and every scenario ends in the class its corpus declares.
+    """
+
+    cells = baseline.load_baseline()["cells"]["search:legacy"]
+    for scenario in (
+        "challenge_html_200",
+        "challenge_html_202",
+        "challenge_lite_200",
+        "challenge_lite_202",
+    ):
+        shape = cells[scenario]["shape"]
+        assert (shape["kind"], shape["kind_detail"]) == ("rate_limit", "challenge")
+        assert "bot check instead of results" in shape["error_text"]
+        assert ("HTTP 202" in shape["error_text"]) is scenario.endswith("_202")
+    assert cells["http_403"]["shape"]["kind"] == "auth"
+    assert cells["http_429"]["shape"]["kind"] == "rate_limit"
+    for scenario in ("http_500", "http_502", "http_503"):
+        shape = cells[scenario]["shape"]
+        assert shape["kind"] == "upstream"
+        assert shape["error_text"] == f"legacy: HTTP {scenario.removeprefix('http_')}"
+    for scenario in ("empty_200", "garbage_200"):
+        assert cells[scenario]["shape"]["outcome"] == "empty"
+    by_id = {scenario.id: scenario for scenario in corpus.search_corpus().scenarios}
+    assert {
+        scenario: scoring.outcome_class(cell["shape"])
+        for scenario, cell in cells.items()
+    } == {scenario: by_id[scenario].expect for scenario in cells}

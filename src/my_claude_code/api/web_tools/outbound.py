@@ -21,8 +21,10 @@ from my_claude_code.core.websearch.models import WebSearchResponse
 from my_claude_code.websearch.errors import (
     KIND_DETAIL_BAD_JSON,
     KIND_DETAIL_BENCHED,
+    KIND_DETAIL_CHALLENGE,
     KIND_DETAIL_TIMEOUT,
     KIND_DETAIL_TRANSPORT,
+    KIND_DETAIL_UNREADABLE_PAGE,
     WebSearchConfigError,
     WebSearchError,
     WebSearchRateLimitError,
@@ -37,12 +39,13 @@ from my_claude_code.websearch.registry import (
     search_with_logging,
 )
 
-from . import constants
+from . import constants, duckduckgo_lite
 from .constants import (
     _MAX_FETCH_CHARS,
     _MAX_SEARCH_RESULTS,
     _REDIRECT_RESPONSE_BODY_CAP_BYTES,
     _REQUEST_TIMEOUT_S,
+    _SEARCH_HOP_HTTP_HEADERS,
     _WEB_FETCH_REDIRECT_STATUSES,
     _WEB_TOOL_HTTP_HEADERS,
 )
@@ -51,7 +54,7 @@ from .egress import (
     WebFetchEgressViolation,
     get_validated_stream_addrinfos_for_egress,
 )
-from .parsers import HTMLTextParser, SearchResultParser
+from .parsers import HTMLTextParser
 from .search_chain import run_search_chain
 from .search_key_charge import no_chain_key_charge
 from .search_providers import runtime_provider
@@ -378,6 +381,9 @@ _DETAIL_WORDS = {
     KIND_DETAIL_TIMEOUT: "did not answer in time",
     KIND_DETAIL_TRANSPORT: "could not be reached",
     KIND_DETAIL_BAD_JSON: "answered with a body that is not JSON",
+    # 7.119.0: the keyless DuckDuckGo hop's results page has a layout none of
+    # the declared page profiles reads (``duckduckgo_lite.read_answer``).
+    KIND_DETAIL_UNREADABLE_PAGE: "answered with a results page MCC could not read",
 }
 
 
@@ -408,6 +414,15 @@ def _no_chain_failure_summary(error: WebSearchError) -> str:
     provider = error.provider
     if isinstance(error, WebSearchRateLimitError):
         wait = error.retry_after_seconds
+        if error.kind_detail == KIND_DETAIL_CHALLENGE:
+            # 7.119.0: DuckDuckGo's bot check, named in MCC's own words
+            # (``duckduckgo_lite``) -- never "no results".
+            after = (
+                f" Retry after {max(1, math.ceil(wait))}s."
+                if wait is not None and wait > 0
+                else ""
+            )
+            return f"web_search rate limited by {provider}: {error.message}{after}"
         if wait is not None and wait > 0:
             return (
                 f"web_search rate limited by {provider}: retry after "
@@ -551,7 +566,7 @@ async def _legacy_route_search(
     ts_epoch = time.time()
     started = time.perf_counter()
     try:
-        raw_results = await _legacy_web_search_scrape(query)
+        raw_results = await _legacy_route_scrape(query)
     except Exception as error:
         trace.fail(_LEGACY_PROVIDER_ID, error)
         _emit_manual_attempt(
@@ -718,26 +733,64 @@ def _web_search_response_items(response: WebSearchResponse) -> list[dict[str, st
 
 
 async def _legacy_web_search_scrape(query: str) -> list[dict[str, str]]:
+    """The keyless DuckDuckGo hop: one lite-page request, read as declared data.
+
+    7.119.0 (DDG-3): what is asked and how the answer is read live in
+    ``config/duckduckgo_profiles.py`` and ``duckduckgo_lite``: ``kl`` / ``df``
+    from ``DDGS_REGION`` / ``DDGS_TIMELIMIT`` when set, MCC's product
+    User-Agent, ``WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS`` between consecutive
+    requests (0, the default, never waits), snippets, ads skipped, and a bot
+    check raised as a rate limit instead of an empty answer. The client is
+    the one this hop always built -- httpx's own TLS defaults, redirects
+    followed, the same timeout and body cap. An HTTP error status and a
+    transport failure are raised exactly as before (``raise_for_status``
+    before the body is read): the search chain's ``legacy`` entry classifies
+    them with the model path's classifier and decides as it always did, and
+    the route used with no chain words them in :func:`_legacy_route_scrape`.
+    """
+
+    await duckduckgo_lite.pace(get_settings().websearch_legacy_min_interval_seconds)
     async with (
         httpx.AsyncClient(
             timeout=_REQUEST_TIMEOUT_S,
             follow_redirects=True,
-            headers=_WEB_TOOL_HTTP_HEADERS,
+            headers=_SEARCH_HOP_HTTP_HEADERS,
         ) as client,
         client.stream(
-            "GET",
-            "https://lite.duckduckgo.com/lite/",
-            params={"q": query},
+            duckduckgo_lite.LITE.method,
+            duckduckgo_lite.LITE.endpoint,
+            params=duckduckgo_lite.request_params(query),
         ) as response,
     ):
         response.raise_for_status()
         body_bytes = await _read_response_body_capped(
             response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
         )
-    text = body_bytes.decode("utf-8", errors="replace")
-    parser = SearchResultParser()
-    parser.feed(text)
-    return parser.results[:_MAX_SEARCH_RESULTS]
+    return duckduckgo_lite.read_answer(
+        status=response.status_code,
+        text=body_bytes.decode("utf-8", errors="replace"),
+        page_url=str(response.url),
+        headers=response.headers,
+    )
+
+
+async def _legacy_route_scrape(query: str) -> list[dict[str, str]]:
+    """The hop as the route with no chain set runs it (7.119.0).
+
+    An HTTP error status is worded through the adapters' shared status
+    mapping (``duckduckgo_lite.status_failure``): a 403 reads as refused
+    access, a 429 as a rate limit with the wait DuckDuckGo published, a 5xx as
+    a server error with its status -- where every one used to be a raw httpx
+    error the route recorded as ``upstream`` and the client read as "Web tool
+    request failed.". A transport failure passes through unchanged (it was
+    already recorded as ``upstream``), and so does anything the hop classified
+    itself (its bot check, an unreadable page).
+    """
+
+    try:
+        return await _legacy_web_search_scrape(query)
+    except httpx.HTTPStatusError as error:
+        raise duckduckgo_lite.status_failure(error) from error
 
 
 async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, str]:

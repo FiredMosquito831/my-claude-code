@@ -132,6 +132,8 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     '.field[data-key="WEB_SEARCH_CHAIN"]',
     '.field[data-key="WEB_SEARCH_CHAIN_PAUSED"]',
     'option[value="context7"]',
+    // 7.119.0: the keyless DuckDuckGo hop's request spacing, additive.
+    '.field[data-key="WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS"]',
   ];
   const stripped = (node) => {
     if (!node) return null;

@@ -49,8 +49,9 @@ DEFERRED_UNTIL_FIRST_USE: dict[str, str] = {
     ),
     "lxml": (
         "Installed today only as a dependency of ddgs and imported by nothing "
-        "on the startup path; the DuckDuckGo html/lite profile (R2) parses "
-        "with it, imported lazily (42-73 ms measured), and trafilatura needs it."
+        "on the startup path; trafilatura needs it (R3). The DuckDuckGo "
+        "lite/html page profiles (R2, 7.119.0) parse with the standard "
+        "library's html.parser instead, so they never load it."
     ),
 }
 

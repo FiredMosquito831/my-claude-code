@@ -1099,6 +1099,13 @@ IMAGE_JPEG_QUALITY_DEFAULT = 0
 # the setting existed. A user's ceiling, never an invented one (Part IV §1).
 MEDIA_UPLOAD_MAX_MB_DEFAULT = 0
 
+# The least time, in seconds, between two requests of the keyless DuckDuckGo
+# hop of the web search route (the `legacy` entry, 7.119.0). 0 -- the default
+# -- sends them back to back, as every release before it did: no invented
+# throttle (Part IV §1). Other projects space theirs by about 3 s (octos) or a
+# random 0.5-2 s (Crush); those are references, the value is the operator's.
+WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT = 0.0
+
 # Which apps get MCC's media MCP server (7.99.0): a comma list of app ids, set
 # by each card's Add / Remove MCP server button on the Coding agents page.
 # Empty -- the default -- adds it nowhere, and every generated document and

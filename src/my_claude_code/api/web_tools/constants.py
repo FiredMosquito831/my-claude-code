@@ -1,6 +1,6 @@
 """Limits and defaults for outbound web server tool HTTP."""
 
-from my_claude_code.core.version import package_version
+from my_claude_code.core.version import NATIVE_DISTRIBUTION, package_version
 
 _REQUEST_TIMEOUT_S = 20.0
 _MAX_SEARCH_RESULTS = 10
@@ -14,4 +14,12 @@ _WEB_FETCH_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 _WEB_TOOL_HTTP_HEADERS = {
     "User-Agent": f"Mozilla/5.0 compatible; free-claude-code/{package_version()}",
+}
+
+# The keyless DuckDuckGo hop's identity (7.119.0): MCC's product name and
+# version, ``my-claude-code/<version>`` -- the truthful form the 7.0.0 brand
+# uses -- never a browser's and never another client's. ``web_fetch`` keeps
+# the headers above until its own release (DDG-4).
+_SEARCH_HOP_HTTP_HEADERS = {
+    "User-Agent": f"{NATIVE_DISTRIBUTION}/{package_version()}",
 }
