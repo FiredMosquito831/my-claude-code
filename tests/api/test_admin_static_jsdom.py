@@ -67,8 +67,16 @@ from my_claude_code.config.prompt_cache_lifetimes import (
     PROMPT_CACHE_LIFETIME_FAMILIES,
 )
 from my_claude_code.config.settings import Settings
+from my_claude_code.config.websearch_catalog import WEBSEARCH_CATALOG
 from my_claude_code.core.upstream_ladder import _TIMES
-from tests.support.select_blank_payload import FIXTURE_ENV, build_payload
+from tests.support.select_blank_payload import (
+    FIXTURE_ENV,
+    ROTATION_EDIT_VALUE,
+    build_payload,
+    build_payload_after_save,
+    rotation_edit_values,
+    websearch_rotation_keys,
+)
 from tests.support.websearch_page_fixture import PROBE as WS_PROBE
 from tests.support.websearch_page_fixture import websearch_page_fixture
 
@@ -13017,9 +13025,15 @@ UNLISTED_SAVED = {
 SAVED_NUMBER_KEY = "MODEL_DISCOVERY_REFRESH_SECONDS"
 SAVED_NUMBER = "7_200"
 
-#: A websearch rotation select with no control at all until the coverage
-#: release. It is in the file and must never be posted by any save here.
-UNRENDERED_ROTATION = "TAVILY_API_KEY_ROTATION"
+#: A websearch rotation select that had no control at all until 7.121.2 and
+#: now sits on its card showing its unlisted saved value. It is in the file and
+#: must never be posted by a save nobody made.
+TAVILY_ROTATION = "TAVILY_API_KEY_ROTATION"
+
+#: 7.121.2's additions, which the 7.121.0 comparison below names: one rotation
+#: field on each Web Search card, for the thirteen key pools the page had no
+#: control for. Their 7.121.0 control is None (there was none).
+WEBSEARCH_ROTATIONS = websearch_rotation_keys()
 
 #: Fields whose control is not a form control because the page edits them some
 #: other way: the rail pause buttons write their own endpoint, and the three
@@ -13062,9 +13076,14 @@ def select_blank(tmp_path_factory) -> dict:
     payload_path = root / "config.json"
     payload = build_payload(payload_path)
     assert len(payload["fields"]) == len(FIELDS), "the payload is not the manifest"
+    # 7.121.2: what the server answers after the thirteen rotation edits are
+    # saved -- through the real save path, from the body the page must send.
+    after_path = root / "config-after.json"
+    build_payload_after_save(after_path, rotation_edit_values())
     return _run(
         MCC_JSDOM_SCENARIO="select_blank",
         MCC_JSDOM_CONFIG_FILE=str(payload_path),
+        MCC_JSDOM_CONFIG_AFTER_FILE=str(after_path),
     )
 
 
@@ -13194,9 +13213,9 @@ def test_jsdom_no_unlisted_value_is_ever_submitted_untouched(select_blank) -> No
     for body in bodies:
         if body is None:
             continue
-        for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, UNRENDERED_ROTATION):
+        for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, TAVILY_ROTATION):
             assert key not in body["values"], key
-    for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, UNRENDERED_ROTATION):
+    for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, TAVILY_ROTATION):
         assert select_blank["fields"][key].get("submits") is None, key
 
 
@@ -13221,14 +13240,16 @@ def test_jsdom_a_control_nobody_touched_is_never_posted(select_blank) -> None:
 def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
     select_blank,
 ) -> None:
-    """The DOM this release adds is the only DOM that moved.
+    """The DOM this arc adds is the only DOM that moved since 7.121.0.
 
     The baseline is the same scenario, the same harness and the same payload
-    run against the BASE tree f6de93ad: every settings view with the marked
-    options, the saved-number note and the saved-number control normalised out
-    of a clone, and every one of the 547 controls' own markup. One control is
-    allowed to move (the number box that becomes a text box); everything else
-    is byte-identical.
+    run against the BASE tree f6de93ad: every settings view with the arc's
+    additions normalised out of a clone (7.121.1's marked options, saved-number
+    note and saved-number control; 7.121.2's rotation field on each Web Search
+    card), and every one of the 547 controls' own markup. The controls allowed
+    to move are named: the number box that becomes a text box (7.121.1), and
+    the thirteen web-search rotation selects that did not exist (7.121.2).
+    Everything else is byte-identical.
     """
 
     baseline = json.loads(SELECT_BLANK_BASELINE.read_text(encoding="utf-8"))
@@ -13241,7 +13262,11 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
         for key, html in base["controls"].items()
         if select_blank["controls"].get(key) != html
     )
-    assert moved == [SAVED_NUMBER_KEY]
+    assert moved == sorted([SAVED_NUMBER_KEY, *WEBSEARCH_ROTATIONS])
+    for key in WEBSEARCH_ROTATIONS:
+        assert base["controls"][key] is None, key
+        assert select_blank["controls"][key].startswith("<select"), key
+        assert f'id="field-{key}"' in select_blank["controls"][key], key
 
     before = base["controls"][SAVED_NUMBER_KEY]
     after = select_blank["controls"][SAVED_NUMBER_KEY]
@@ -13252,7 +13277,12 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
 
 
 def test_jsdom_only_the_cells_this_release_names_moved(select_blank) -> None:
-    """The base tree's five broken cells, and nothing else, are what changed."""
+    """The base tree's five broken cells, and the one 7.121.2 adds, moved.
+
+    The five are 7.121.1's (blank -> shown); the sixth is the Tavily rotation,
+    which had no control at all before 7.121.2 and now shows its unlisted saved
+    value as its own option. Nothing else moved.
+    """
 
     baseline = json.loads(SELECT_BLANK_BASELINE.read_text(encoding="utf-8"))
     base = baseline["base"]
@@ -13263,11 +13293,15 @@ def test_jsdom_only_the_cells_this_release_names_moved(select_blank) -> None:
         for key, cell in base["fields"].items()
         if select_blank["fields"].get(key) != cell
     )
-    assert moved == sorted([*UNLISTED_SAVED, SAVED_NUMBER_KEY])
-    assert sorted(record["fields"]) == moved
+    assert moved == sorted([*UNLISTED_SAVED, SAVED_NUMBER_KEY, TAVILY_ROTATION])
+    assert sorted(record["fields"]) == sorted([*UNLISTED_SAVED, SAVED_NUMBER_KEY])
     for key, entry in record["fields"].items():
         assert entry["before"] == base["fields"][key], key
         assert entry["after"] == select_blank["fields"][key], key
+    assert base["fields"][TAVILY_ROTATION] == {"present": False}
+    tavily = select_blank["fields"][TAVILY_ROTATION]
+    assert tavily["savedOption"] == _marked_label("on_error")
+    assert tavily["value"] == tavily["original"] == "on_error"
 
     # The base page said "5 unsaved changes" on load, and its Apply posted the
     # five ""; this tree says none, and posts nothing.
@@ -13321,29 +13355,24 @@ def test_jsdom_every_setting_without_a_form_control_is_named_and_hosted(
 ) -> None:
     """A setting the page cannot edit is a setting nobody can change.
 
-    Three groups have no `[data-key]` form control and are (or will be)
-    editable some other way. Naming them here is what makes a NEW setting
-    without a control a failure instead of a silent gap:
+    Two groups have no `[data-key]` form control, each because the page edits
+    it some other way. Naming them here is what makes a NEW setting without a
+    control a failure instead of a silent gap:
 
     * the rail pause buttons write ``ROUTE_PAUSE_KEYS`` through their own
       endpoint -- there is a control per model row, and a second form control
       for the same list would be a second way to write it;
-    * the three ``oauth_login`` fields are buttons that start a login;
-    * the websearch ``_ROTATION`` selects have NO control anywhere: filtered
-      out of the grid (admin.js, the ``_ROTATION`` predicate) and rendered by
-      nothing. That is the coverage gap the next release closes; until then
-      the exact set is pinned so it cannot grow.
+    * the three ``oauth_login`` fields are buttons that start a sign-in.
+
+    The thirteen web-search ``_ROTATION`` selects were the third group until
+    7.121.2, with no control anywhere; each is now on its provider's card.
     """
 
     without = set(select_blank["coverage"]["withoutControl"])
-    rotations = {
-        field.key
-        for field in FIELDS
-        if field.section_id == "websearch" and field.key.endswith("_ROTATION")
-    }
 
-    assert len(rotations) == 13
-    assert without == rotations | PAUSE_LIST_FIELDS | OAUTH_ACTION_FIELDS
+    assert without == PAUSE_LIST_FIELDS | OAUTH_ACTION_FIELDS
+    assert len(WEBSEARCH_ROTATIONS) == 13
+    assert without.isdisjoint(WEBSEARCH_ROTATIONS)
 
     # Each pause list is exactly one the route-pause endpoint writes.
     assert {
@@ -13352,13 +13381,183 @@ def test_jsdom_every_setting_without_a_form_control_is_named_and_hosted(
     # Each "no control" oauth field is the button-rendering type.
     for key in OAUTH_ACTION_FIELDS:
         assert FIELD_BY_KEY[key].field_type == "oauth_login", key
-    # Each rotation that has no control is a select whose widget already
-    # exists -- the coverage release needs no new control type.
-    for key in rotations:
-        assert FIELD_BY_KEY[key].field_type == "select", key
 
     assert select_blank["coverage"]["fieldCount"] == len(FIELDS)
     assert select_blank["coverage"]["controlCount"] == len(FIELDS) - len(without)
+
+
+# ==================================================================== 7.121.2
+# Every setting a control on its own page. Thirteen web-search key-pool
+# rotation settings (TAVILY_API_KEY_ROTATION and twelve more) could be saved in
+# .env and seen nowhere: the generic grid skips every `_ROTATION` field because
+# a provider card hosts its own, and no web-search card ever did. Each card now
+# carries its pool's rotation field. tests/contracts/settings_control_map.json
+# lists every setting with its page and control id; the test below proves the
+# file is what the page renders, and the static contracts fail a new setting
+# that has no entry.
+
+SELECT_BLANK_BASELINE_7_121_1 = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "select_blank_dom_7_121_1.json"
+)
+SETTINGS_CONTROL_MAP = (
+    Path(__file__).resolve().parents[1] / "contracts" / "settings_control_map.json"
+)
+
+
+def _sha256(text: str | None) -> str | None:
+    return None if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _card_for_rotation(key: str) -> str:
+    """The web-search provider whose key pool a rotation setting belongs to."""
+
+    owners = [
+        provider_id
+        for provider_id, descriptor in WEBSEARCH_CATALOG.items()
+        if descriptor.credential_env and f"{descriptor.credential_env}_ROTATION" == key
+    ]
+    assert len(owners) == 1, (key, owners)
+    return owners[0]
+
+
+def test_jsdom_every_websearch_rotation_is_a_control_on_its_providers_card(
+    select_blank,
+) -> None:
+    """Thirteen settings that had no control each have one, where they belong.
+
+    On the Web Search page, inside the card of the provider whose keys they
+    rotate, built by the same renderField every field uses: id `field-<KEY>`,
+    the manifest's label.
+    """
+
+    rotation = select_blank["rotation"]
+
+    assert rotation["keys"] == list(WEBSEARCH_ROTATIONS)
+    assert rotation["present"] == len(WEBSEARCH_ROTATIONS) == 13
+    for key, cell in rotation["before"].items():
+        assert cell is not None, key
+        assert cell["view"] == "web_search", key
+        assert cell["card"] == _card_for_rotation(key), key
+        assert cell["id"] == f"field-{key}", key
+        assert cell["label"] == FIELD_BY_KEY[key].label, key
+
+
+def test_jsdom_the_rotation_controls_round_trip_a_save(select_blank) -> None:
+    """Value shown -> edited -> saved -> shown, for all thirteen.
+
+    Shown: an unset pool reads its Default, and the fixture's hand-written
+    `TAVILY_API_KEY_ROTATION=on_error` reads as its own marked option. Edited:
+    each moved to Round robin. Saved: the body is exactly the thirteen keys,
+    and the page reloads from what the server answers after the REAL save path
+    saved that same body (`build_payload_after_save`). Shown: each now reads
+    Round robin, unmarked, and nothing is left unsaved.
+    """
+
+    rotation = select_blank["rotation"]
+    expected = rotation_edit_values()
+
+    for key, cell in rotation["before"].items():
+        if key == TAVILY_ROTATION:
+            assert cell["value"] == "on_error"
+            assert cell["shown"] == _marked_label("on_error")
+            assert cell["marked"] is True
+        else:
+            assert cell["value"] == "", key
+            assert cell["shown"].startswith("Default ("), key
+            assert cell["marked"] is False, key
+    assert rotation["footerBeforeEdits"] == "No changes"
+
+    assert rotation["footerAfterEdits"] == "13 unsaved changes"
+    assert rotation["submitted"] == expected
+    assert rotation["apply"]["body"] == {"values": expected}
+
+    for key, cell in rotation["after"].items():
+        assert cell["value"] == ROTATION_EDIT_VALUE, key
+        assert cell["shown"] == "Round robin", key
+        assert cell["marked"] is False, key
+    assert rotation["footerAfterSave"] == "No changes"
+
+
+def test_jsdom_the_settings_control_map_is_what_the_page_renders(select_blank) -> None:
+    """The committed map is the page, entry for entry.
+
+    The static contracts read tests/contracts/settings_control_map.json to fail
+    a setting with no control; this is what stops the file from claiming a
+    control the page does not render.
+    """
+
+    committed = json.loads(SETTINGS_CONTROL_MAP.read_text(encoding="utf-8"))
+
+    assert select_blank["controlMap"] == committed["fields"]
+    assert set(committed["fields"]) == {field.key for field in FIELDS}
+
+
+def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
+    select_blank,
+) -> None:
+    """The page is 7.121.1's page plus thirteen rotation fields.
+
+    The baseline is this scenario run on the BASE tree 5591e829 (v7.121.1) on
+    the same payload. Every view is byte-identical with the card rotation
+    fields taken out of a clone; every one of the 534 controls that existed
+    keeps its exact markup (sha256); the moved cells are the thirteen new
+    controls, their control-map entries, and the Tavily cell that now has a
+    control to show its value in.
+    """
+
+    baseline = json.loads(SELECT_BLANK_BASELINE_7_121_1.read_text(encoding="utf-8"))
+    base = baseline["base"]
+    record = baseline["moved_by_7_121_2"]
+
+    assert "5591e829" in baseline["written_by"]
+    assert (
+        baseline["fixture_env_sha256"]
+        == hashlib.sha256(FIXTURE_ENV.encode("utf-8")).hexdigest()
+    )
+
+    assert select_blank["views"] == base["views"]
+    assert record["views"] == []
+
+    mine = {key: _sha256(html) for key, html in select_blank["controls"].items()}
+    moved = sorted(
+        key
+        for key, digest in base["controls_sha256"].items()
+        if mine.get(key) != digest
+    )
+    assert moved == list(WEBSEARCH_ROTATIONS) == record["controls"]
+    for key in WEBSEARCH_ROTATIONS:
+        assert base["controls_sha256"][key] is None, key
+    assert len(base["controls_sha256"]) - len(moved) == 534
+
+    moved_fields = sorted(
+        key
+        for key, cell in base["fields"].items()
+        if select_blank["fields"].get(key) != cell
+    )
+    assert moved_fields == [TAVILY_ROTATION] == sorted(record["fields"])
+    assert record["fields"][TAVILY_ROTATION]["before"] == {"present": False}
+    assert (
+        record["fields"][TAVILY_ROTATION]["after"]
+        == select_blank["fields"][TAVILY_ROTATION]
+    )
+
+    moved_map = sorted(
+        key
+        for key, entry in base["controlMap"].items()
+        if select_blank["controlMap"].get(key) != entry
+    )
+    assert moved_map == list(WEBSEARCH_ROTATIONS) == sorted(record["controlMap"])
+    for key in WEBSEARCH_ROTATIONS:
+        assert base["controlMap"][key] == {"page": "web_search", "control": None}
+        assert select_blank["controlMap"][key] == {
+            "page": "web_search",
+            "control": f"field-{key}",
+        }
+
+    assert base["rotation"]["present"] == 0
+    # 7.121.1's behaviour is untouched: clean on load, nothing posted untouched.
+    assert select_blank["footerOnLoad"] == base["footerOnLoad"] == "No changes"
+    assert select_blank["applyOnLoad"] == base["applyOnLoad"]
 
 
 def _scratch_managed_env(tmp_path, monkeypatch) -> Path:

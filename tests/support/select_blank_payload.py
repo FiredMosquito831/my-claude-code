@@ -28,11 +28,17 @@ The fixture's shape is deliberate, one line per class of value:
 
 import json
 import os
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from my_claude_code.api.admin_routes import _config_response
 from my_claude_code.config import paths
-from my_claude_code.config.admin.manifest import env_keys
+from my_claude_code.config.admin.manifest import FIELDS, env_keys
+from my_claude_code.config.admin.persistence import (
+    commit_prepared_admin_update,
+    prepare_admin_update,
+)
 from my_claude_code.config.provider_registry import reset_provider_registry
 
 #: The scratch managed ``.env``. Fake values, and every one of them chosen to
@@ -60,23 +66,47 @@ MCC_SMOKE_MARKER=keep-me
 #: them would change the payload; all of them are cleared while it is built.
 _DECIDING_ENVIRONMENT = ("MCC_CONFIG_DIR", "MCC_ENV_FILE")
 
+#: What 7.121.2's round trip picks on every Web Search rotation control: a
+#: listed option no fixture line holds, so each of the thirteen is a real edit.
+ROTATION_EDIT_VALUE = "round_robin"
 
-def build_payload(destination: Path) -> dict:
-    """Write ``/admin/api/config`` for ``FIXTURE_ENV`` and return it.
 
-    ``destination`` gets the JSON the scenario reads. The managed ``.env``
-    lives beside it under ``<stem>-root/``; the payload is built from there and
-    from a scratch working directory, and the process environment is restored
-    exactly as it was found -- including the config-directory resolution cache,
-    which would otherwise keep answering with the scratch path for every later
-    test in this process.
+def websearch_rotation_keys() -> tuple[str, ...]:
+    """The key-pool rotation settings that belong to the Web Search page."""
+
+    return tuple(
+        sorted(
+            field.key
+            for field in FIELDS
+            if field.section_id == "websearch" and field.key.endswith("_ROTATION")
+        )
+    )
+
+
+def rotation_edit_values() -> dict[str, str]:
+    """The Apply body the thirteen rotation edits must produce, exactly."""
+
+    return dict.fromkeys(websearch_rotation_keys(), ROTATION_EDIT_VALUE)
+
+
+@contextmanager
+def _scratch_config(root: Path) -> Iterator[Path]:
+    """Run with ``root`` as the whole configuration world, then restore it.
+
+    The managed ``.env`` is ``FIXTURE_ENV`` under ``root/config``; the working
+    directory is ``root/cwd`` (``repo_env_path()`` is cwd-relative, and that
+    directory has no ``.env``); every manifest key and the two names that pick
+    the files are cleared from the process environment. Everything is put back
+    on the way out -- including the config-directory resolution cache, which
+    would otherwise keep answering with the scratch path for every later test
+    in this process.
     """
 
-    root = destination.parent / f"{destination.stem}-root"
     root.mkdir(parents=True, exist_ok=True)
     config_dir = root / "config"
     config_dir.mkdir(exist_ok=True)
-    (config_dir / ".env").write_text(FIXTURE_ENV, encoding="utf-8")
+    managed = config_dir / ".env"
+    managed.write_text(FIXTURE_ENV, encoding="utf-8")
     work = root / "cwd"
     work.mkdir(exist_ok=True)
 
@@ -95,7 +125,7 @@ def build_payload(destination: Path) -> dict:
     reset_provider_registry()
     try:
         os.chdir(work)
-        payload = _config_response()
+        yield managed
     finally:
         os.chdir(saved_cwd)
         os.environ.pop("MCC_CONFIG_DIR", None)
@@ -103,5 +133,35 @@ def build_payload(destination: Path) -> dict:
         paths.reset_config_dir_cache()
         reset_provider_registry()
 
+
+def build_payload(destination: Path) -> dict:
+    """Write ``/admin/api/config`` for ``FIXTURE_ENV`` and return it.
+
+    ``destination`` gets the JSON the scenario reads. The managed ``.env``
+    lives beside it under ``<stem>-root/``.
+    """
+
+    with _scratch_config(destination.parent / f"{destination.stem}-root"):
+        payload = _config_response()
+    destination.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return payload
+
+
+def build_payload_after_save(destination: Path, values: Mapping[str, str]) -> dict:
+    """``/admin/api/config`` after ``values`` is saved over ``FIXTURE_ENV``.
+
+    The save is the server's own: ``prepare_admin_update`` then
+    ``commit_prepared_admin_update``, the two calls behind
+    ``POST /admin/api/config/apply``. The answer is what the page fetches when
+    it reloads after a successful Apply, so a scenario that renders it shows
+    exactly what a reader would see once their edit was saved.
+    """
+
+    with _scratch_config(destination.parent / f"{destination.stem}-root"):
+        prepared = prepare_admin_update(values)
+        if not prepared.valid:
+            raise ValueError(f"the fixture save was refused: {prepared.errors}")
+        commit_prepared_admin_update(prepared)
+        payload = _config_response()
     destination.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return payload

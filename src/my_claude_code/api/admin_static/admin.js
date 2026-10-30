@@ -16676,6 +16676,16 @@ function renderWebSearchProviders() {
 
     card.append(title, meta, actions);
     setWebSearchCardEffective(card, effectiveProvider === provider.id);
+    // 7.121.2: the key pool's rotation policy, on the card whose pool it is.
+    // The generic grid skips every `_ROTATION` field because a provider card
+    // hosts its own (keyManagerForField); a web-search card never hosted one,
+    // so these settings could be saved in .env and seen nowhere. renderField
+    // gives it what every field has -- its source, its default, "Use default",
+    // its help -- and the same dirty/apply wiring.
+    const rotationField = provider.rotationKey
+      ? state.fields.get(provider.rotationKey)
+      : null;
+    if (rotationField) card.appendChild(renderField(rotationField));
     const advanced = renderWebSearchAdvanced(provider);
     if (advanced) {
       card.appendChild(advanced);
