@@ -19,8 +19,8 @@ from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlsplit
 
+import primp
 import pytest
-from ddgs import http_client as ddgs_http_client
 
 
 class OfflineViolation(BaseException):
@@ -58,6 +58,32 @@ def _refuse(what: str, target: object) -> None:
     raise OfflineViolation(f"DDG harness: {what} {target!r} refused (offline only)")
 
 
+#: The request verbs ``primp.Client`` exposes: ``request`` takes a method and a
+#: URL, the shorthands the URL alone. ``ddgs`` drives ``primp`` since 9.16.x
+#: (DDG-5), and the harness replaces ``primp.Client`` itself with its fake, so
+#: gating the real class's verbs leaves the fakes free and any real socket
+#: refused.
+_PRIMP_VERBS = ("request", "get", "head", "options", "delete", "post", "put", "patch")
+
+
+def _gated_verb(verb: str, real):
+    def gated(self: Any, *args: Any, **kwargs: Any) -> Any:
+        url = kwargs.get("url")
+        if url is None:
+            url = (
+                args[1]
+                if verb == "request" and len(args) > 1
+                else args[0]
+                if args
+                else ""
+            )
+        if not _local(urlsplit(str(url)).hostname):
+            _refuse("ddgs (primp) request to", str(url))
+        return real(self, *args, **kwargs)
+
+    return gated
+
+
 #: Whether a ``guard()`` is active (the audit hook below is process-lifetime).
 _active = [False]
 _hook_installed = [False]
@@ -83,7 +109,7 @@ def guard() -> Iterator[None]:
     real_connect_ex = socket.socket.connect_ex
     proactor = asyncio.proactor_events.BaseProactorEventLoop
     real_sock_connect = proactor.sock_connect
-    real_ddgs_request = ddgs_http_client.HttpClient.request
+    real_verbs = {verb: getattr(primp.Client, verb) for verb in _PRIMP_VERBS}
 
     def connect(self: socket.socket, address: Any) -> None:
         if isinstance(address, tuple) and address and not _local(address[0]):
@@ -100,17 +126,12 @@ def guard() -> Iterator[None]:
             _refuse("connection to", address)
         return await real_sock_connect(self, sock, address)
 
-    def ddgs_request(self: Any, *args: Any, **kwargs: Any) -> Any:
-        url = kwargs.get("url", args[1] if len(args) > 1 else "")
-        if not _local(urlsplit(str(url)).hostname):
-            _refuse("ddgs (primp) request to", str(url))
-        return real_ddgs_request(self, *args, **kwargs)
-
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(socket.socket, "connect", connect)
         patch.setattr(socket.socket, "connect_ex", connect_ex)
         patch.setattr(proactor, "sock_connect", sock_connect)
-        patch.setattr(ddgs_http_client.HttpClient, "request", ddgs_request)
+        for verb, real in real_verbs.items():
+            patch.setattr(primp.Client, verb, _gated_verb(verb, real))
         _active[0] = True
         try:
             yield

@@ -64,8 +64,20 @@ DDG3B_AFTER = "v7.119.1"
 DDG4_KEY = "moved_by_ddg_4"
 DDG4_BEFORE = "v7.119.1"
 DDG4_AFTER = "v7.120.0"
+#: 7.120.1 (DDG-5) moves one ``search:ddgs`` cell: the transport-timeout
+#: scenario (spec 5 R4). ``ddgs`` 9.16.x drives ``primp`` instead of its own
+#: httpx-based ``HttpClient2``, and the library's timeout wrapper therefore
+#: reports primp's exception instead of httpx's -- same ``TimeoutException``,
+#: same ``WebSearchUpstreamError`` with ``kind_detail=timeout``, so only the
+#: detail text moves. Every other ``ddgs`` cell is byte for byte 7.120.0's:
+#: the engine's xpath, payload, aggregator and ranker are unchanged, and the
+#: fake transport answers the same POST the pinned answer recorded.
+#: Same convention, its own block.
+DDG5_KEY = "moved_by_ddg_5"
+DDG5_BEFORE = "v7.120.0"
+DDG5_AFTER = "v7.120.1"
 #: Every moved-cells block, in file order. ``--write`` keeps each verbatim.
-MOVED_KEYS = (DDG2_KEY, DDG3_KEY, DDG3B_KEY, DDG4_KEY)
+MOVED_KEYS = (DDG2_KEY, DDG3_KEY, DDG3B_KEY, DDG4_KEY, DDG5_KEY)
 
 #: Cells whose answer depends on the HTML parser build inside lxml's wheel,
 #: with both real answers recorded (7.120.0). The extractor parses the page
