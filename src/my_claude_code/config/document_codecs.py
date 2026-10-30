@@ -45,11 +45,17 @@ nothing here ever re-renders a table the user wrote.
     (``[model_providers.mcc]``), and a top-level scalar (``model``).
 
 ``YAML``
-    Goose's ``config.yaml``. One kind of edit: a top-level scalar
-    (``active_provider``). Goose's real provider definition is a *whole file*
-    MCC owns under ``custom_providers/``, so nothing here ever has to write a
-    nested YAML structure into a document somebody else wrote -- which is the
-    only reason a hand-rolled YAML edit is defensible at all.
+    Goose's ``config.yaml`` and, since 7.117.0, any nested mapping at a dotted
+    path (``providers.mcc``). Goose itself only ever needed a top-level scalar
+    (``active_provider``): its real provider definition is a *whole file* MCC
+    owns under ``custom_providers/``. A nested table is different and needs the
+    same promise the JSON path already makes, because the document is somebody
+    else's and has comments, quoting and an indentation style of its own. The
+    edit is therefore line-based: the lines of the map MCC owns are replaced,
+    every other line -- above the table, below it, inside it, or in a sibling
+    that happens to use the same key -- is the same line, byte for byte. The
+    reader is still shallow; nothing here round-trips a document through a YAML
+    emitter.
 
 A format is not given an edit it cannot perform safely. Asking for a nested
 scalar in YAML raises rather than guessing, because a wrong guess here is a
@@ -487,10 +493,19 @@ def _toml_string(value: str) -> str:
 # YAML
 # --------------------------------------------------------------------------
 #
-# Deliberately shallow. MCC edits exactly one top-level scalar in a YAML
-# document it does not own (Goose's ``active_provider``), and reads the rest
-# only to report status. A full YAML parser would let this module accept edits
-# it has no safe way to write back, so the reader is as narrow as the writer.
+# Still no YAML parser. Two kinds of edit are performed by line, on the text
+# as it is:
+#
+# * a top-level scalar (Goose's ``active_provider``), by matching its line;
+# * a nested mapping at a dotted path (7.117.0), by finding the block that
+#   owns that path through indentation alone and replacing only that block's
+#   own lines.
+#
+# A full parser would let this module accept edits it has no safe way to write
+# back -- and, worse, tempt it to re-render a document somebody else wrote. The
+# reader below is as narrow as the writer: a mapping entry is a line at a known
+# indentation whose key is a plain or quoted scalar, and everything it cannot
+# read is opaque bytes that are preserved exactly where they are.
 
 
 _YAML_ROOT_SCALAR = re.compile(
@@ -539,18 +554,14 @@ def _apply_yaml_edits(text: str, edits: Sequence[Edit]) -> str:
             case SetScalar(key_path=key_path, value=value):
                 if len(key_path) != 1:
                     raise DocumentFormatError(
-                        "YAML edits are top-level scalars only; MCC owns Goose's "
-                        "provider as a whole file rather than a nested block"
+                        "YAML scalar edits are top-level only; a value inside a "
+                        "nested table belongs to the mapping SetTable owns whole"
                     )
                 text = _yaml_set_root_scalar(text, key_path[0], value)
-            case DeleteKey(key_path=key_path):
-                if len(key_path) != 1:
-                    raise DocumentFormatError("YAML deletes are top-level only")
-                text = _yaml_delete_root_scalar(text, key_path[0])
-            case SetTable():
-                raise DocumentFormatError(
-                    "MCC never writes a table into a YAML document it does not own"
-                )
+            case DeleteKey(key_path=key_path, prune_empty_ancestors=prune):
+                text = _yaml_delete(text, key_path, prune=prune)
+            case SetTable(key_path=key_path, value=value):
+                text = _yaml_set_table(text, key_path, value)
     return text
 
 
@@ -570,16 +581,632 @@ def _yaml_set_root_scalar(text: str, key: str, value: object) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _yaml_delete_root_scalar(text: str, key: str) -> str:
-    lines = text.splitlines()
-    pattern = _yaml_root_key_pattern(key)
-    for index, line in enumerate(lines):
-        if pattern.match(line):
-            del lines[index]
-            if not lines:
-                return ""
-            return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
-    return text
+@dataclass(frozen=True, slots=True)
+class _YamlLine:
+    """One physical line: its text without the terminator, and the terminator."""
+
+    body: str
+    ending: str
+
+
+@dataclass(frozen=True, slots=True)
+class _YamlEntry:
+    """One mapping entry: its ``key:`` line and the lines that belong to it."""
+
+    key: str
+    #: The key exactly as written, quoting included, so a rewrite keeps the
+    #: user's spellings where it can.
+    key_text: str
+    #: Leading whitespace of the ``key:`` line.
+    indent: str
+    #: Index of the line carrying ``key:``.
+    header: int
+    #: One past the entry's last non-blank line. Trailing blank lines are not
+    #: part of it, so removing an entry cannot eat the gap after it.
+    last: int
+    #: Leading whitespace of the first child line, or "" for a scalar entry.
+    child_indent: str
+
+
+@dataclass(frozen=True, slots=True)
+class _YamlLevel:
+    """A range of lines searched for one path segment, at one indentation."""
+
+    start: int
+    end: int
+    indent: int
+
+
+@dataclass(frozen=True, slots=True)
+class _YamlItem:
+    """One line-range of a mapping's body: a keyed entry, or an opaque line."""
+
+    key: str | None
+    start: int
+    end: int
+
+
+#: A mapping entry MCC can read: indentation, then a key that is plain (no
+#: spaces, no colon) or quoted, then the colon. A list item, a merge key
+#: (``<<``) and a continuation of a multi-line scalar all fail this on purpose
+#: and are preserved as opaque lines.
+_YAML_ENTRY = re.compile(
+    r"^(?P<indent>[ \t]*)"
+    r"(?P<key>\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'|[A-Za-z0-9_./-]+)"
+    r":(?P<rest>.*)$"
+)
+
+#: A key, or a string value, that needs no quotes: it starts with a letter or
+#: an underscore, so a YAML reader can never give it back as a number.
+_YAML_BARE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+
+#: Words a plain scalar must not be, because a reader would give back
+#: something other than the string.
+_YAML_RESERVED = frozenset({"true", "false", "null", "~", "yes", "no", "on", "off"})
+
+
+def _yaml_delete(text: str, key_path: Sequence[str], *, prune: bool) -> str:
+    """Remove one key -- scalar or whole mapping -- and the parents it empties.
+
+    ``prune`` is the same promise :class:`DeleteKey` makes for JSON: an
+    ancestor left with nothing in it is only there because MCC created it, and
+    leaving ``providers:`` behind is MCC's litter in a document it promised to
+    leave alone. An ancestor that still holds a key or a comment of the user's
+    is kept. ``prune=False`` removes the key alone, for a container the caller
+    knows was there before MCC.
+
+    An absent key returns the text unchanged, byte for byte.
+    """
+
+    if not key_path:
+        raise DocumentFormatError("a YAML delete needs a key")
+    lines = _yaml_lines(text)
+    matched, entry, _level = _yaml_walk(lines, key_path)
+    if entry is None or matched != len(key_path):
+        return text
+    lines = _yaml_cut(lines, entry.header, entry.last)
+    if not prune:
+        return _yaml_text(lines)
+    for depth in range(len(key_path) - 1, 0, -1):
+        matched, parent, _level = _yaml_walk(lines, key_path[:depth])
+        if parent is None or matched != depth:
+            break
+        if _yaml_entry_has_content(lines, parent):
+            break
+        full, _last = _yaml_entry_end(lines, parent.header, len(parent.indent))
+        lines = _yaml_cut(lines, parent.header, full)
+    return _yaml_text(lines)
+
+
+def _yaml_set_table(
+    text: str, key_path: Sequence[str], value: Mapping[str, object]
+) -> str:
+    """Write a mapping at a dotted path, changing only the lines of that map.
+
+    The map is MCC's: every entry it currently holds is replaced or removed,
+    and entries the new value adds go in at the end of it. Comments inside it,
+    and every line outside it -- above, below, or in a sibling that happens to
+    use the same key -- are the same bytes. A table that is not there is
+    created, with the parents the path needs, at the document's own
+    indentation and line ending.
+    """
+
+    if not key_path:
+        raise DocumentFormatError("a YAML table edit needs a key")
+    if not isinstance(value, Mapping):
+        raise DocumentFormatError("a YAML table edit needs a mapping")
+    lines = _yaml_lines(text)
+    unit = _yaml_indent_unit(lines)
+    eol = _yaml_eol(text)
+    matched, container, level = _yaml_walk(lines, key_path)
+    if matched == len(key_path) and container is not None:
+        return _yaml_text(_yaml_replace_entry(lines, container, dict(value), unit, eol))
+    missing = list(key_path[matched:])
+    nested: object = dict(value)
+    for key in reversed(missing[1:]):
+        nested = {key: nested}
+    return _yaml_text(
+        _yaml_insert(lines, container, level, missing[0], nested, unit, eol)
+    )
+
+
+def _yaml_insert(
+    lines: list[_YamlLine],
+    container: _YamlEntry | None,
+    level: _YamlLevel,
+    key: str,
+    value: object,
+    unit: str,
+    eol: str,
+) -> list[_YamlLine]:
+    """Add one entry at the end of ``level``, opening its parent if needed."""
+
+    if container is None:
+        return _yaml_place(
+            lines, len(lines), _yaml_render_entry(key, value, "", unit, eol)
+        )
+    parsed = _yaml_entry_line(lines[container.header].body)
+    if parsed is None:
+        # Unreachable: every entry came from a line this parser accepted.
+        raise DocumentFormatError("cannot read the YAML entry MCC is writing into")
+    if _yaml_body_is_sequence(lines, container):
+        # The path descends through a list. The object path replaces a
+        # non-object with the object MCC needs; so does this one.
+        rendered = _yaml_render_entry(parsed[1], {key: value}, parsed[0], unit, eol)
+        return _yaml_replace_span(lines, container.header, container.last, rendered)
+    indent = container.child_indent
+    updated = list(lines)
+    if not indent:
+        indent = parsed[0] + unit
+        updated[container.header] = _yaml_opened_header(
+            updated[container.header], parsed
+        )
+    return _yaml_place(
+        updated, level.end, _yaml_render_entry(key, value, indent, unit, eol)
+    )
+
+
+def _yaml_replace_entry(
+    lines: list[_YamlLine],
+    entry: _YamlEntry,
+    value: dict[str, object],
+    unit: str,
+    eol: str,
+) -> list[_YamlLine]:
+    """Replace one owned mapping's body, keeping the lines MCC did not write."""
+
+    parsed = _yaml_entry_line(lines[entry.header].body)
+    if parsed is None:
+        raise DocumentFormatError("cannot read the YAML entry MCC is writing into")
+    if not value:
+        header = _YamlLine(
+            f"{entry.indent}{entry.key_text}: {{}}", lines[entry.header].ending
+        )
+        return _yaml_replace_span(lines, entry.header, entry.last, [header])
+    header = _yaml_opened_header(lines[entry.header], parsed)
+    child_indent = entry.child_indent or (entry.indent + unit)
+    if _yaml_body_is_sequence(lines, entry):
+        # A list is replaced whole: its items carry no key MCC could match.
+        body = [header]
+        for key, item in value.items():
+            body.extend(_yaml_render_entry(key, item, child_indent, unit, eol))
+        return _yaml_replace_span(lines, entry.header, entry.last, body)
+    remaining = dict(value)
+    updated: list[_YamlLine] = []
+    for item in _yaml_body_items(
+        lines, entry.header + 1, entry.last, len(child_indent)
+    ):
+        if item.key is None:
+            updated.extend(lines[item.start : item.end])
+        elif item.key in remaining:
+            updated.extend(
+                _yaml_render_entry(
+                    item.key, remaining.pop(item.key), child_indent, unit, eol
+                )
+            )
+    # New keys go after the last line that is not blank, so a trailing gap
+    # stays a trailing gap.
+    insert_at = len(updated)
+    while insert_at and not updated[insert_at - 1].body.strip():
+        insert_at -= 1
+    fresh: list[_YamlLine] = []
+    for key, item in remaining.items():
+        fresh.extend(_yaml_render_entry(key, item, child_indent, unit, eol))
+    updated[insert_at:insert_at] = fresh
+    return _yaml_replace_span(lines, entry.header, entry.last, [header, *updated])
+
+
+def _yaml_body_items(
+    lines: list[_YamlLine], start: int, end: int, indent_width: int
+) -> list[_YamlItem]:
+    """Split a mapping's body into keyed entries and opaque line ranges.
+
+    An opaque line -- a comment, a blank line, a merge key this module does not
+    read -- is preserved exactly where it is.
+    """
+
+    items: list[_YamlItem] = []
+    index = start
+    while index < end:
+        body = lines[index].body
+        stripped = body.lstrip(" \t")
+        parsed = (
+            _yaml_entry_line(body)
+            if stripped and len(body) - len(stripped) == indent_width
+            else None
+        )
+        if parsed is None:
+            items.append(_YamlItem(None, index, index + 1))
+            index += 1
+            continue
+        _full, last = _yaml_entry_end(lines, index, indent_width)
+        last = min(last, end)
+        items.append(_YamlItem(parsed[1], index, last))
+        index = last
+    return items
+
+
+def _yaml_walk(
+    lines: list[_YamlLine], key_path: Sequence[str]
+) -> tuple[int, _YamlEntry | None, _YamlLevel]:
+    """Return ``(matched, container, level)`` for one dotted path.
+
+    ``container`` is the entry whose body is ``level``: the entry for the whole
+    path when every segment matched, the entry a missing next segment belongs
+    under otherwise, and None for the document root.
+    """
+
+    level = _YamlLevel(0, len(lines), 0)
+    container: _YamlEntry | None = None
+    for position, key in enumerate(key_path):
+        found = _yaml_find_entry(lines, key, level.start, level.end, level.indent)
+        if found is None:
+            return position, container, level
+        container = found
+        level = _YamlLevel(found.header + 1, found.last, len(found.child_indent))
+    return len(key_path), container, level
+
+
+def _yaml_find_entry(
+    lines: list[_YamlLine], key: str, start: int, end: int, indent_width: int
+) -> _YamlEntry | None:
+    """Find the mapping entry named ``key`` at exactly ``indent_width``."""
+
+    for index in range(start, end):
+        body = lines[index].body
+        stripped = body.lstrip(" \t")
+        if not stripped:
+            continue
+        width = len(body) - len(stripped)
+        if width < indent_width:
+            break
+        if width > indent_width:
+            continue
+        parsed = _yaml_entry_line(body)
+        if parsed is None:
+            if _yaml_is_sequence_item(stripped):
+                # A list item, not a mapping entry: no key can be here.
+                return None
+            continue
+        if parsed[1] != key:
+            continue
+        _full, last = _yaml_entry_end(lines, index, indent_width)
+        return _YamlEntry(
+            key=key,
+            key_text=parsed[2],
+            indent=parsed[0],
+            header=index,
+            last=last,
+            child_indent=_yaml_child_indent(lines, index, last),
+        )
+    return None
+
+
+def _yaml_entry_end(
+    lines: list[_YamlLine], header: int, indent_width: int
+) -> tuple[int, int]:
+    """Return ``(full_end, last)`` for the entry whose header line is ``header``.
+
+    ``full_end`` includes the blank lines that follow the entry, because
+    indentation cannot terminate a YAML block on a blank line; ``last`` stops at
+    the entry's last non-blank line.
+    """
+
+    index = header + 1
+    last = header + 1
+    while index < len(lines):
+        body = lines[index].body
+        stripped = body.lstrip(" \t")
+        if not stripped:
+            index += 1
+            continue
+        if len(body) - len(stripped) <= indent_width:
+            break
+        index += 1
+        last = index
+    return index, last
+
+
+def _yaml_child_indent(lines: list[_YamlLine], header: int, last: int) -> str:
+    """The indentation of an entry's first child line, or "" when it has none."""
+
+    for index in range(header + 1, last):
+        body = lines[index].body
+        stripped = body.lstrip(" \t")
+        if not stripped or stripped.startswith("#"):
+            continue
+        parsed = _yaml_entry_line(body)
+        return parsed[0] if parsed is not None else _yaml_indent(body)
+    return ""
+
+
+def _yaml_entry_has_content(lines: list[_YamlLine], entry: _YamlEntry) -> bool:
+    """Whether anything of the document's is left inside one entry.
+
+    Comments count. A parent holding only a comment MCC must not have written
+    is the user's, and is kept.
+    """
+
+    return any(
+        lines[index].body.strip() for index in range(entry.header + 1, entry.last)
+    )
+
+
+def _yaml_body_is_sequence(lines: list[_YamlLine], entry: _YamlEntry) -> bool:
+    """Whether an entry's body is a block sequence rather than a mapping."""
+
+    for index in range(entry.header + 1, entry.last):
+        stripped = lines[index].body.lstrip(" \t")
+        if not stripped or stripped.startswith("#"):
+            continue
+        return _yaml_is_sequence_item(stripped)
+    return False
+
+
+def _yaml_is_sequence_item(stripped: str) -> bool:
+    """Whether a stripped line is a block-sequence item, not a document marker.
+
+    A list item is ``-`` or ``- value``. ``---`` opens a document and ``...``
+    closes one, and a naive ``startswith("-")`` takes the opener for a list --
+    which would make the document's root unreadable, and a ``SetTable`` would
+    then append a second copy of a table that is already there.
+    """
+
+    return stripped == "-" or stripped.startswith("- ")
+
+
+def _yaml_entry_line(body: str) -> tuple[str, str, str, str] | None:
+    """``(indent, key, key_text, rest)`` for one mapping-entry line, or None."""
+
+    match = _YAML_ENTRY.match(body)
+    if match is None:
+        return None
+    raw = match.group("key")
+    return match.group("indent"), _yaml_key_name(raw), raw, match.group("rest")
+
+
+def _yaml_key_name(raw: str) -> str:
+    """The string a key's written form stands for."""
+
+    if raw.startswith('"'):
+        try:
+            return str(json.loads(raw))
+        except ValueError:
+            return raw[1:-1]
+    if raw.startswith("'"):
+        return raw[1:-1].replace("''", "'")
+    return raw
+
+
+def _yaml_split_comment(rest: str) -> tuple[str, str]:
+    """Return ``(value, comment)``, splitting at the ``#`` that starts a comment.
+
+    YAML starts a comment at a ``#`` that begins the text or follows
+    whitespace, never inside a quoted scalar -- so ``"a # b"`` keeps its hash.
+    """
+
+    quote = ""
+    index = 0
+    while index < len(rest):
+        char = rest[index]
+        if quote:
+            if quote == '"' and char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                if quote == "'" and rest.startswith("''", index):
+                    index += 2
+                    continue
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and (index == 0 or rest[index - 1] in " \t"):
+            return rest[:index], rest[index:]
+        index += 1
+    return rest, ""
+
+
+def _yaml_opened_header(
+    line: _YamlLine, parsed: tuple[str, str, str, str]
+) -> _YamlLine:
+    """Turn ``key: value`` into ``key:`` so children can go under it.
+
+    A comment after the value stays; the value is what MCC is replacing. A line
+    that is already a block header (or already carries only a comment) is
+    returned as it is.
+    """
+
+    indent, _key, key_text, rest = parsed
+    value, comment = _yaml_split_comment(rest)
+    if not value.strip():
+        return line
+    rebuilt = f"{indent}{key_text}:"
+    if comment.strip():
+        rebuilt = f"{rebuilt} {comment.strip()}"
+    return _YamlLine(rebuilt, line.ending)
+
+
+def _yaml_render_entry(
+    key: str, value: object, indent: str, unit: str, eol: str
+) -> list[_YamlLine]:
+    """Render one entry of an MCC-owned mapping, children indented by ``unit``."""
+
+    key_text = _yaml_key(key)
+    child = indent + unit
+    if isinstance(value, Mapping):
+        if not value:
+            return [_YamlLine(f"{indent}{key_text}: {{}}", eol)]
+        rendered = [_YamlLine(f"{indent}{key_text}:", eol)]
+        for sub_key, sub_value in value.items():
+            rendered.extend(
+                _yaml_render_entry(str(sub_key), sub_value, child, unit, eol)
+            )
+        return rendered
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        items = list(value)
+        if not items:
+            return [_YamlLine(f"{indent}{key_text}: []", eol)]
+        rendered = [_YamlLine(f"{indent}{key_text}:", eol)]
+        for item in items:
+            if isinstance(item, Mapping | Sequence) and not isinstance(
+                item, str | bytes | bytearray
+            ):
+                raise DocumentFormatError(
+                    "cannot render a collection inside a YAML sequence"
+                )
+            rendered.append(_YamlLine(f"{child}- {_yaml_value(item)}", eol))
+        return rendered
+    return [_YamlLine(f"{indent}{key_text}: {_yaml_value(value)}", eol)]
+
+
+def _yaml_key(key: str) -> str:
+    """A key in a form a reader gives back as the same string."""
+
+    if _YAML_BARE.match(key) and key.lower() not in _YAML_RESERVED:
+        return key
+    return json.dumps(key, ensure_ascii=False)
+
+
+def _yaml_value(value: object) -> str:
+    """One scalar of an MCC-owned block, in a form a reader gives back as-is.
+
+    Stricter than :func:`_yaml_render`, which the top-level scalar edit has used
+    since 6.x and which writes a string that looks like a number or a boolean
+    bare -- ``active_provider: 123`` reads back as an int, not the string
+    ``"123"``. That edit's rendering is pinned by Goose's documents and is left
+    alone; a block MCC writes whole gets the version that round-trips.
+    """
+
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value != value:
+            return ".nan"
+        if value == float("inf"):
+            return ".inf"
+        if value == float("-inf"):
+            return "-.inf"
+        return repr(value)
+    if isinstance(value, str):
+        if _YAML_BARE.match(value) and value.lower() not in _YAML_RESERVED:
+            return value
+        return json.dumps(value, ensure_ascii=False)
+    raise DocumentFormatError(f"cannot render {type(value).__name__} as YAML")
+
+
+def _yaml_place(
+    lines: list[_YamlLine], index: int, rendered: Sequence[_YamlLine]
+) -> list[_YamlLine]:
+    """Insert lines at ``index``, keeping a document's missing final newline.
+
+    A document that does not end with a line terminator keeps not ending with
+    one: the terminator the insertion needs goes on the line before it, and the
+    inserted last line inherits the absence.
+    """
+
+    insert = list(rendered)
+    if index == len(lines) and lines and insert and not lines[-1].ending:
+        lines = [*lines[:-1], _YamlLine(lines[-1].body, insert[0].ending)]
+        insert[-1] = _YamlLine(insert[-1].body, "")
+    return [*lines[:index], *insert, *lines[index:]]
+
+
+def _yaml_replace_span(
+    lines: list[_YamlLine], start: int, end: int, rendered: Sequence[_YamlLine]
+) -> list[_YamlLine]:
+    """Replace ``lines[start:end]``, keeping the document's final-newline state."""
+
+    replaced = list(rendered)
+    if end >= len(lines) and end > start and not lines[end - 1].ending and replaced:
+        replaced[-1] = _YamlLine(replaced[-1].body, "")
+    return [*lines[:start], *replaced, *lines[end:]]
+
+
+def _yaml_cut(lines: list[_YamlLine], start: int, end: int) -> list[_YamlLine]:
+    """Remove ``lines[start:end]``, undoing the terminator an append added.
+
+    Deleting a block that ends a document whose last line has no terminator
+    gives the terminator back to the line before it: that is the exact reverse
+    of an append into a document that did not end with a newline.
+    """
+
+    lost = end >= len(lines) and end > start and not lines[end - 1].ending
+    kept = [*lines[:start], *lines[end:]]
+    if lost and kept[-1].ending:
+        kept[-1] = _YamlLine(kept[-1].body, "")
+    return kept
+
+
+def _yaml_lines(text: str) -> list[_YamlLine]:
+    """Split into physical lines, keeping each line's own terminator.
+
+    ``str.splitlines`` is deliberately not used: it splits on Unicode
+    separators YAML does not treat as line breaks, and it drops the
+    terminators -- which is how a CRLF document becomes an LF one.
+    """
+
+    lines: list[_YamlLine] = []
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\r" and index + 1 < len(text) and text[index + 1] == "\n":
+            lines.append(_YamlLine(text[start:index], "\r\n"))
+            index += 2
+            start = index
+            continue
+        if char in "\r\n":
+            lines.append(_YamlLine(text[start:index], char))
+            index += 1
+            start = index
+            continue
+        index += 1
+    if start < len(text):
+        lines.append(_YamlLine(text[start:], ""))
+    return lines
+
+
+def _yaml_text(lines: Sequence[_YamlLine]) -> str:
+    return "".join(f"{line.body}{line.ending}" for line in lines)
+
+
+def _yaml_eol(text: str) -> str:
+    """The terminator new lines are written with, read from the document."""
+
+    for ending in ("\r\n", "\n", "\r"):
+        if ending in text:
+            return ending
+    return "\n"
+
+
+def _yaml_indent(body: str) -> str:
+    """The leading whitespace of one line."""
+
+    return body[: len(body) - len(body.lstrip(" \t"))]
+
+
+def _yaml_indent_unit(lines: Sequence[_YamlLine]) -> str:
+    """The document's own indentation step, or two spaces.
+
+    Read from the first indented content line -- the same reading
+    :func:`_json_indent_unit` makes: a document written with four spaces
+    stays a four-space document, and a tab-indented one is not rewritten with
+    spaces. A file whose first indented line is unusually deep reports that
+    step, which is still what every other block in a hand-written file uses.
+    """
+
+    for line in lines:
+        stripped = line.body.lstrip(" \t")
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = _yaml_indent(line.body)
+        if indent:
+            return indent
+    return "  "
 
 
 def _yaml_render(value: object) -> str:
