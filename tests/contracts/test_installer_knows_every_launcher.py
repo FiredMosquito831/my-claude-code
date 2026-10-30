@@ -242,7 +242,11 @@ def test_a_command_newer_than_the_installed_wheel_is_not_reported_missing() -> N
     )
     assert table is not None, "Get-LauncherIntroducedIn not found in install.ps1"
     gated = dict(re.findall(r'"([a-z0-9-]+)"\s*=\s*"([0-9.]+)"', table.group("body")))
-    assert gated == {"mcc-mcp": "7.99.0", "mcc-openclaw": "7.116.0"}
+    assert gated == {
+        "mcc-mcp": "7.99.0",
+        "mcc-openclaw": "7.116.0",
+        "mcc-hermes": "7.118.0",
+    }
     assert set(gated) <= _published_commands() & _detected_launchers()
 
     confirm = re.search(

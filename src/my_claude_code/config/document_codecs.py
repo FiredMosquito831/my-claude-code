@@ -60,6 +60,16 @@ nothing here ever re-renders a table the user wrote.
 A format is not given an edit it cannot perform safely. Asking for a nested
 scalar in YAML raises rather than guessing, because a wrong guess here is a
 corrupted config file for somebody who was not even using the feature.
+
+Reading a YAML *merge target* back (7.118.0) goes through
+:func:`yaml_mapping_at`, which is the same narrow reader the writer uses --
+:func:`_yaml_walk` and :func:`_yaml_body_items` -- rather than through
+:func:`parse_document`. That distinction is deliberate.
+:func:`_parse_shallow_yaml` answers "which top-level keys are here" and
+deliberately reports a nested block as present with no value; the merge engine
+and the dashboard need "what does *this* table hold" (Hermes' ``providers.mcc``,
+whose ``api`` decides file ownership and whose ``models`` is the card's model
+count). Neither needs, or gets, a general YAML document model.
 """
 
 import json
@@ -579,6 +589,114 @@ def _yaml_set_root_scalar(text: str, key: str, value: object) -> str:
             return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
     lines.append(rendered)
     return "\n".join(lines) + "\n"
+
+
+def yaml_root_is_sequence(text: str) -> bool:
+    """Whether a YAML document's first content line is a block-sequence item.
+
+    A document whose root is a list cannot be given a mapping edit: the walk
+    finds no entry to open and the insert would append ``key:`` after the last
+    ``- item``, producing a file that is neither shape. Asked before MCC
+    touches a merge target, so the refusal names the file instead of the
+    corruption.
+    """
+
+    for line in _yaml_lines(text):
+        stripped = line.body.lstrip(" \t")
+        if not stripped or stripped.startswith("#"):
+            continue
+        return _yaml_is_sequence_item(stripped)
+    return False
+
+
+def yaml_mapping_at(text: str, key_path: Sequence[str]) -> dict[str, object] | None:
+    """Return the mapping a dotted path names in a YAML document, or ``None``.
+
+    The read half of the 7.117.0 nested-table edit, and the only way MCC reads
+    a merge target's block back out of somebody else's ``config.yaml``. It
+    exists because three callers need the same answer and none of them may
+    guess: :func:`~my_claude_code.config.harness_config_merge.owned_block_names`
+    ("does MCC's block name *this* server"), the Coding agents card ("how many
+    models did MCC write"), and Undo ("did MCC create the container this
+    removal emptied").
+
+    An empty ``key_path`` reads the document root. A path that does not resolve,
+    or one that resolves to a scalar or to a flow collection MCC would have to
+    parse properly (``{...}`` / ``[...]``), answers ``None`` -- the same
+    "nothing MCC can vouch for" answer an absent key gets. A path that resolves
+    to an *empty* mapping (``mcc: {}`` or ``mcc:`` with nothing under it)
+    answers ``{}``, because "there and empty" is a different fact from "not
+    there" and Undo turns on it.
+
+    Deliberately not :func:`parse_document`: that reader reports every nested
+    block as present with no value, which is the right answer for the desktop
+    engine's top-level scalar edits and the wrong one here. This walks the same
+    entry grammar :func:`_yaml_set_table` writes with -- :func:`_yaml_walk` for
+    the path, :func:`_yaml_body_items` for each level's own entries, and
+    :func:`_yaml_scalar` for leaves -- so what MCC reads back is exactly what it
+    would have written, and a line it cannot read (a block scalar, an anchor, a
+    list item) is skipped rather than guessed at.
+    """
+
+    lines = _yaml_lines(text)
+    if not key_path:
+        return _yaml_level_mapping(lines, 0, len(lines), 0)
+    matched, entry, _level = _yaml_walk(lines, key_path)
+    if matched != len(key_path) or entry is None:
+        return None
+    parsed = _yaml_entry_line(lines[entry.header].body)
+    if parsed is None:  # pragma: no cover - every entry came from that grammar
+        return None
+    value, _comment = _yaml_split_comment(parsed[3])
+    scalar = value.strip()
+    if scalar == "{}":
+        return {}
+    if scalar:
+        # ``key: value`` is not a mapping, and ``[]`` / ``{a: 1}`` are shapes
+        # this reader does not claim to understand.
+        return None
+    child_indent = _yaml_child_indent(lines, entry.header, entry.last)
+    if not child_indent:
+        return {}
+    return _yaml_level_mapping(lines, entry.header + 1, entry.last, len(child_indent))
+
+
+def _yaml_level_mapping(
+    lines: list[_YamlLine], start: int, end: int, indent_width: int
+) -> dict[str, object]:
+    """Read one indentation level of a YAML mapping into plain data.
+
+    Keys keep the order they are written in; a key's value is a scalar, a
+    nested mapping, ``{}`` for an empty flow mapping, ``[]`` for an empty flow
+    sequence, or an empty mapping for a header with nothing under it. Anything
+    the entry grammar cannot read is skipped -- See :func:`yaml_mapping_at`.
+    """
+
+    document: dict[str, object] = {}
+    for item in _yaml_body_items(lines, start, end, indent_width):
+        if item.key is None:
+            continue
+        parsed = _yaml_entry_line(lines[item.start].body)
+        if parsed is None:  # pragma: no cover - every item carries a key line
+            continue
+        value, _comment = _yaml_split_comment(parsed[3])
+        scalar = value.strip()
+        if scalar == "{}":
+            document[item.key] = {}
+            continue
+        if scalar == "[]":
+            document[item.key] = []
+            continue
+        if scalar:
+            document[item.key] = _yaml_scalar(scalar)
+            continue
+        child_indent = _yaml_child_indent(lines, item.start, item.end)
+        document[item.key] = (
+            _yaml_level_mapping(lines, item.start + 1, item.end, len(child_indent))
+            if child_indent
+            else {}
+        )
+    return document
 
 
 @dataclass(frozen=True, slots=True)

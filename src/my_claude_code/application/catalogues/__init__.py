@@ -43,6 +43,10 @@ from my_claude_code.application.catalogues.gemini_cli import (
     build_gemini_cli_catalogue,
 )
 from my_claude_code.application.catalogues.goose import build_goose_catalogue
+from my_claude_code.application.catalogues.hermes import (
+    PROVIDER_ID as HERMES_PROVIDER_ID,
+)
+from my_claude_code.application.catalogues.hermes import build_hermes_catalogue
 from my_claude_code.application.catalogues.kilo import build_kilo_catalogue
 from my_claude_code.application.catalogues.kimi import build_kimi_catalogue
 from my_claude_code.application.catalogues.openclaw import (
@@ -71,6 +75,7 @@ SERIALISERS: dict[str, CatalogueSerialiser] = {
     "droid": build_droid_catalogue,
     "gemini_cli": build_gemini_cli_catalogue,
     "goose": build_goose_catalogue,
+    "hermes": build_hermes_catalogue,
     "kilo": build_kilo_catalogue,
     "kimi": build_kimi_catalogue,
     "openclaw": build_openclaw_catalogue,
@@ -100,6 +105,7 @@ MODEL_ENTRY_PATHS: dict[str, tuple[str, ...]] = {
     "droid": (DROID_MODELS_KEY,),
     "gemini_cli": GEMINI_CLI_ALIASES_PATH,
     "goose": ("models",),
+    "hermes": ("providers", HERMES_PROVIDER_ID, "models"),
     "kilo": ("provider", OPENCODE_PROVIDER_ID, "models"),
     "kimi": ("models",),
     "openclaw": ("models", "providers", OPENCLAW_PROVIDER_ID, "models"),

@@ -48,6 +48,7 @@ import contextlib
 import json
 import os
 import shutil
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,8 @@ from my_claude_code.config.document_codecs import (
     apply_edits,
     parse_document,
     scalar_text,
+    yaml_mapping_at,
+    yaml_root_is_sequence,
 )
 from my_claude_code.config.harnesses import (
     COMMANDCODE_BASE_URL_SENTINEL,
@@ -131,25 +134,34 @@ def merge_config_path(merge: HarnessConfigMerge, env: Mapping[str, str]) -> Path
 
     A spec that declares none of 1-3 gets exactly the resolution it always
     had: ``HOME``, then ``USERPROFILE``, then ``Path.home()``.
+
+    A spec that declares ``path_rungs`` -- Hermes, whose home is
+    ``%LOCALAPPDATA%\\hermes`` on Windows and ``~/.hermes`` elsewhere -- walks
+    those instead, first match wins. The resolution itself lives on
+    :meth:`HarnessConfigMerge.resolve`, because the dashboard's detection needs
+    the same answer and ``config`` cannot import this module back.
     """
 
-    if merge.path_env_var is not None:
-        value = env.get(merge.path_env_var, "").strip()
-        if value:
-            return Path(value).expanduser()
-    if merge.state_env_var is not None:
-        value = env.get(merge.state_env_var, "").strip()
-        if value:
-            return Path(value).expanduser().joinpath(merge.relative_parts[-1])
-    if merge.home_override_env_var is not None:
-        value = env.get(merge.home_override_env_var, "").strip()
-        if value:
-            return Path(value).expanduser().joinpath(*merge.relative_parts)
-    for name in merge.home_env_vars:
-        value = env.get(name, "").strip()
-        if value:
-            return Path(value).joinpath(*merge.relative_parts)
-    return Path.home().joinpath(*merge.relative_parts)
+    return merge.resolve(env, sys.platform)
+
+
+def merge_document_format(merge: HarnessConfigMerge) -> DocumentFormat:
+    """Return the merge target's format, as the codec layer spells it.
+
+    ``HarnessConfigMerge.document_format`` is a plain string so the registry
+    stays free of this package's enum; this is where it becomes one. An
+    unknown value is a programming error in the registry rather than a runtime
+    condition, and it fails loudly here instead of editing a document with the
+    wrong parser.
+    """
+
+    try:
+        return DocumentFormat(merge.document_format)
+    except ValueError as exc:
+        raise ValueError(
+            f"{merge.owned_key_label}: unknown document format "
+            f"{merge.document_format!r}"
+        ) from exc
 
 
 def owned_block(
@@ -208,9 +220,24 @@ def with_base_url(
     return resolved
 
 
-def read_document(path: Path) -> dict[str, object] | None:
-    """Return the user's document, or None when it is absent or unreadable."""
+def read_document(
+    path: Path, document_format: str = "json"
+) -> dict[str, object] | None:
+    """Return the user's document, or None when it is absent or unreadable.
 
+    ``json`` keeps the strict ``json.loads`` this path has always used -- the
+    canonical Command Code merge rebuilds the document from what it parsed, so
+    a document it silently half-understood would come back rewritten. ``yaml``
+    reads through the codec's own nested reader, which reports exactly the
+    mapping entries the writer would write.
+    """
+
+    if DocumentFormat(document_format) is DocumentFormat.YAML:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        return yaml_mapping_at(text, ())
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except OSError, ValueError:
@@ -219,7 +246,11 @@ def read_document(path: Path) -> dict[str, object] | None:
 
 
 def owned_block_present(
-    path: Path, owned_key_path: Sequence[str], *, preserve_bytes: bool = False
+    path: Path,
+    owned_key_path: Sequence[str],
+    *,
+    preserve_bytes: bool = False,
+    document_format: str = "json",
 ) -> bool:
     """Return whether MCC's key already exists in the user's document.
 
@@ -228,7 +259,11 @@ def owned_block_present(
     have a provider block appear in it because a provider key rotated.
     """
 
-    document = read_document(path) if not preserve_bytes else read_text_document(path)
+    document = (
+        read_text_document(path, document_format)
+        if preserve_bytes
+        else read_document(path, document_format)
+    )
     if document is None:
         return False
     node: object = document
@@ -247,6 +282,7 @@ def owned_block_names(
     key: str = DEFAULT_BASE_URL_KEY,
     sentinel: str = COMMANDCODE_BASE_URL_SENTINEL,
     preserve_bytes: bool = False,
+    document_format: str = "json",
 ) -> bool:
     """Whether MCC's block in the user's document already names *this* server.
 
@@ -269,7 +305,11 @@ def owned_block_names(
     block MCC wrote matches itself exactly.
     """
 
-    document = read_document(path) if not preserve_bytes else read_text_document(path)
+    document = (
+        read_text_document(path, document_format)
+        if preserve_bytes
+        else read_document(path, document_format)
+    )
     if document is None:
         return False
     node: object = document
@@ -286,16 +326,21 @@ def owned_block_names(
     return current.rstrip("/") == str(ours[key]).rstrip("/")
 
 
-def read_text_document(path: Path) -> dict[str, object] | None:
-    """Return a JSON5 document read as text, or None when it is unusable.
+def read_text_document(
+    path: Path, document_format: str = "json"
+) -> dict[str, object] | None:
+    """Return a document read as text, or None when it is unusable.
 
     The byte-preserving path's reader. ``json.loads`` is not the parser
     OpenClaw uses for ``openclaw.json`` -- that document allows comments and
     trailing commas -- so a block MCC had just written into a commented file
     would read as "not there" and the background refresh would never touch it
-    again.
+    again. ``yaml`` reads through the codec's nested reader for the same
+    reason: what MCC must recognise is the text it wrote.
     """
 
+    if DocumentFormat(document_format) is DocumentFormat.YAML:
+        return read_document(path, document_format)
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -483,7 +528,8 @@ def configure_owned_block(
     """
 
     before_text, existed, crlf = _read_text_or_empty(path)
-    parsed = _parsed_or_raise(before_text, path)
+    document_format = merge_document_format(merge)
+    parsed = _parsed_or_raise(before_text, path, document_format)
     block = with_base_url(
         owned_block(document, merge.owned_key_path),
         proxy_root_url,
@@ -511,7 +557,7 @@ def configure_owned_block(
             parsed,
             recorded,
             prior_lines={
-                key_path: scalar_text(before_text, DocumentFormat.JSON, key_path)
+                key_path: scalar_text(before_text, document_format, key_path)
                 for key_path in recorded
             },
         )
@@ -519,7 +565,9 @@ def configure_owned_block(
         else ()
     )
 
-    after_text = apply_edits(_editable_text(before_text), DocumentFormat.JSON, edits)
+    after_text = apply_edits(
+        _editable_text(before_text, document_format), document_format, edits
+    )
     if after_text == before_text:
         return MergeResult(path=path, changed=False, created=False, backup_path=None)
 
@@ -537,6 +585,7 @@ def configure_owned_block(
                 created_parents=created_parents,
             ),
             path=record_path,
+            keep_when_empty=merge.records_document_hash,
         )
     elif existed:
         refresh_document_sha256(
@@ -571,11 +620,12 @@ def unconfigure_owned_block(
     before_text, existed, crlf = _read_text_or_empty(path)
     if not existed:
         return MergeResult(path=path, changed=False, created=False, backup_path=None)
-    parsed = _parsed_or_raise(before_text, path)
+    document_format = merge_document_format(merge)
+    parsed = _parsed_or_raise(before_text, path, document_format)
 
     entry = read_entry(subject, path=record_path)
     live_record = entry is not None and not entry.undone_at
-    _, owned_present = value_at(parsed, merge.owned_key_path)
+    owned_present = _owned_key_present(before_text, parsed, merge, document_format)
     if not owned_present and not live_record:
         # Nothing of MCC's in this file, and no record of a Configure still in
         # place: a replaced key here is the user's own. The desktop engine's
@@ -619,12 +669,12 @@ def unconfigure_owned_block(
     edits: list[DeleteKey | SetScalar] = [
         # With a record, the containers MCC created are named and removed
         # below, one at a time -- so the leaf is removed on its own and a
-        # container the user already had is kept. Without one there is nothing
-        # to tell them apart, and an empty container carries no information,
-        # so the ordinary prune applies.
+        # container the user already had is kept, even an empty one. Without a
+        # record there is nothing to tell them apart, and an empty container
+        # left behind carries no information, so the ordinary prune applies.
         DeleteKey(
             merge.owned_key_path,
-            prune_empty_ancestors=entry is None or not entry.created_parents,
+            prune_empty_ancestors=entry is None,
         )
     ]
     for key_path in replaced_paths:
@@ -634,11 +684,14 @@ def unconfigure_owned_block(
         else:
             edits.append(SetScalar(tuple(key_path), found[0], prior_line=found[1]))
 
-    after_text = apply_edits(before_text, DocumentFormat.JSON, edits)
+    after_text = apply_edits(before_text, document_format, edits)
     after_text = _remove_created_parents(
-        after_text, merge, entry.created_parents if entry is not None else ()
+        after_text,
+        merge,
+        entry.created_parents if entry is not None else (),
+        document_format,
     )
-    emptied = not _nonempty_document(after_text)
+    emptied = not _nonempty_document(after_text, document_format)
 
     backup_path = _backup_if_needed(path, merge.backup_suffix)
     if emptied and entry is not None and entry.created_file:
@@ -685,6 +738,29 @@ def _read_text_or_empty(path: Path) -> tuple[str, bool, bool]:
     return text.replace("\r\n", "\n").replace("\r", "\n"), True, crlf
 
 
+def _owned_key_present(
+    text: str,
+    parsed: Mapping[str, object],
+    merge: HarnessConfigMerge,
+    document_format: DocumentFormat,
+) -> bool:
+    """Whether MCC's own key is in the document.
+
+    JSON asks the parsed document -- the one the byte-preserving path already
+    read as JSON5. YAML must ask the codec's text reader instead: the shallow
+    parse the rest of this module gets from the codec reports a nested block as
+    present with *no value*, which is enough to know ``providers`` exists and
+    not enough to know whether ``providers.mcc`` does. Undo depends on the
+    second answer -- getting it wrong made ``--disconnect`` a no-op on every
+    Hermes file, which the 7.118.0 tests now pin.
+    """
+
+    if document_format is DocumentFormat.YAML:
+        return yaml_mapping_at(text, merge.owned_key_path) is not None
+    _value, present = value_at(parsed, merge.owned_key_path)
+    return present
+
+
 def _names_this_server(
     merge: HarnessConfigMerge, path: Path, proxy_root_url: str | None
 ) -> bool:
@@ -699,28 +775,45 @@ def _names_this_server(
         key=merge.base_url_key,
         sentinel=merge.base_url_sentinel,
         preserve_bytes=merge.preserve_bytes,
+        document_format=merge.document_format,
     )
 
 
-def _parsed_or_raise(text: str, path: Path) -> dict[str, object]:
+def _parsed_or_raise(
+    text: str, path: Path, document_format: DocumentFormat = DocumentFormat.JSON
+) -> dict[str, object]:
     """Return the document, or refuse to touch one that does not parse."""
 
     if not text.strip():
         return {}
+    if document_format is DocumentFormat.YAML and yaml_root_is_sequence(text):
+        # A list is not a document MCC can own a key inside, and the codec's
+        # insert would append a mapping key after the last item rather than
+        # refuse. YAML has no "does not parse" state here -- the reader is
+        # deliberately narrow rather than strict -- so this is its one
+        # structural refusal.
+        raise MergeDocumentError(f"{path} is a YAML sequence, not a mapping")
     try:
-        payload = parse_document(text, DocumentFormat.JSON)
+        payload = parse_document(text, document_format)
     except DocumentFormatError as exc:
         raise MergeDocumentError(f"{path} does not parse: {exc}") from exc
     document = _as_object_map(payload)
     if document is None:
-        raise MergeDocumentError(f"{path} is not a JSON object")
+        raise MergeDocumentError(f"{path} is not a {document_format.value} object")
     return document
 
 
-def _editable_text(text: str) -> str:
-    """Return a root object to edit: the file's own text, or ``{}``."""
+def _editable_text(text: str, document_format: DocumentFormat) -> str:
+    """Return a root object to edit: the file's own text, or an empty one.
 
-    return text if text.strip() else "{}"
+    JSON's empty object is ``{}`` and YAML's is the empty document: its
+    ``SetTable`` writes the whole chain from the first missing segment, so a
+    literal ``{}`` would be a line MCC never means to leave in a config file.
+    """
+
+    if text.strip():
+        return text
+    return "{}" if document_format is DocumentFormat.JSON else ""
 
 
 def _created_parents(
@@ -761,7 +854,10 @@ def _interrupted_ancestor(
 
 
 def _remove_created_parents(
-    text: str, merge: HarnessConfigMerge, parents: Sequence[Sequence[str]]
+    text: str,
+    merge: HarnessConfigMerge,
+    parents: Sequence[Sequence[str]],
+    document_format: DocumentFormat = DocumentFormat.JSON,
 ) -> str:
     """Drop containers MCC created, once its departure has left them empty.
 
@@ -779,31 +875,54 @@ def _remove_created_parents(
         return text
     wanted = {tuple(parent) for parent in parents}
     for _pass in range(len(wanted) + 1):
-        try:
-            parsed = parse_document(text, DocumentFormat.JSON)
-        except DocumentFormatError:
-            return text
         empties: list[DeleteKey] = []
         for parent in sorted(wanted, key=len):
-            value, present = value_at(parsed, parent)
-            if present and isinstance(value, Mapping) and not value:
-                # A one-part path has no ancestors to prune, and
-                # ``_json_delete`` only reaches a key at depth one when
-                # pruning is on.
-                empties.append(
-                    DeleteKey(tuple(parent), prune_empty_ancestors=len(parent) == 1)
-                )
+            if not _container_is_empty(text, document_format, parent):
+                continue
+            # A one-part path has no ancestors to prune, and the JSON delete
+            # only reaches a key at depth one when pruning is on. YAML's has no
+            # such asymmetry, but the flag means the same thing there: this
+            # removal is the one that may take an empty container with it.
+            empties.append(
+                DeleteKey(tuple(parent), prune_empty_ancestors=len(parent) == 1)
+            )
         if not empties:
             return text
-        text = apply_edits(text, DocumentFormat.JSON, empties)
+        try:
+            text = apply_edits(text, document_format, empties)
+        except DocumentFormatError:
+            return text
     return text
 
 
-def _nonempty_document(text: str) -> bool:
+def _container_is_empty(
+    text: str, document_format: DocumentFormat, key_path: Sequence[str]
+) -> bool:
+    """Whether ``key_path`` is present and holds nothing at all.
+
+    JSON asks the parsed document. YAML asks the codec's text reader, which is
+    the only thing that knows an entry from a comment: a ``providers:`` holding
+    only the user's comment is not empty and is never removed.
+    """
+
+    if document_format is DocumentFormat.YAML:
+        value = yaml_mapping_at(text, key_path)
+        return value is not None and not value
+    try:
+        parsed = parse_document(text, document_format)
+    except DocumentFormatError:
+        return False
+    if not isinstance(parsed, Mapping):
+        return False
+    value, present = value_at(parsed, key_path)
+    return present and isinstance(value, Mapping) and not value
+
+
+def _nonempty_document(text: str, document_format: DocumentFormat) -> bool:
     """Return whether a document still holds anything at all."""
 
     try:
-        parsed = parse_document(text, DocumentFormat.JSON)
+        parsed = parse_document(text, document_format)
     except DocumentFormatError:
         return True
     return bool(parsed) if isinstance(parsed, Mapping) else True

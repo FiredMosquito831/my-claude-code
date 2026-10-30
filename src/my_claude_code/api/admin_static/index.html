@@ -827,6 +827,25 @@
                 </li>
                 <li class="claude-launcher">
                   <div class="claude-launcher-info">
+                    <h4>Hermes Agent</h4>
+                    <p>
+                      Nous Research's Hermes Agent, which reads one
+                      <code>config.yaml</code> in its own home &mdash;
+                      <code>HERMES_HOME</code>, else
+                      <code>%LOCALAPPDATA%\hermes</code> on Windows, else
+                      <code>~/.hermes</code> &mdash; and no extra-config variable,
+                      so this proxy merges a single
+                      <code>providers.mcc</code> block into it: comments, layout
+                      and every other section left byte for byte, the proxy token
+                      kept out of the file through
+                      <code>key_env: MCC_HERMES_API_KEY</code>, and your file
+                      backed up first.
+                    </p>
+                  </div>
+                  <div class="claude-command-block"><code>mcc-hermes</code></div>
+                </li>
+                <li class="claude-launcher">
+                  <div class="claude-launcher-info">
                     <h4>Kimi Code</h4>
                     <p>
                       Moonshot's Kimi Code CLI, pointed at a
@@ -3823,6 +3842,7 @@ mcc-opencode2
 mcc-kilo
 mcc-commandcode
 mcc-openclaw
+mcc-hermes
 mcc-kimi
 mcc-qwen
 mcc-crush
@@ -3903,6 +3923,25 @@ mcc-gemini</code></pre>
                   file changed since. Models carry the limits and prices the ladder
                   actually resolved; a value nobody published is left out rather than
                   written as a zero.
+                </p>
+                <p>
+                  <strong>Hermes Agent's file is YAML, and its home is not your
+                  home on Windows.</strong> Nous Research's CLI reads one
+                  <code>config.yaml</code> in <code>HERMES_HOME</code>, else
+                  <code>%LOCALAPPDATA%\hermes</code>, else
+                  <code>~/.hermes</code>, and publishes no <em>extra</em>-config
+                  lever &mdash; so this proxy merges a single
+                  <code>providers.mcc</code> block into it, as a text edit that
+                  keeps comments, quoting, indentation and every other section. The
+                  block names <code>key_env: MCC_HERMES_API_KEY</code>, so the proxy
+                  token never reaches the file: <code>mcc-hermes</code> sets that
+                  variable in the child process only. The only per-model field it
+                  writes is the context window the ladder resolved, and a model
+                  whose window nobody published gets none rather than a zero.
+                  <code>mcc-hermes --disconnect</code> removes the block with no
+                  record needed; <code>mcc-hermes --restore</code> refuses if the
+                  file moved, because Hermes re-dumps its own YAML on migration and
+                  that hash is the only honest guard.
                 </p>
                 <p>
                   <strong>Kimi Code reads a config file too, and takes a flag for

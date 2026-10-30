@@ -153,24 +153,56 @@ def test_antigravity_has_no_method_and_kimi_waits_for_its_check():
     assert "mcc-kimi" in kimi.install_unavailable_reason
 
 
-def test_every_servable_cli_has_a_runnable_method_on_every_os():
+#: Servable CLIs whose only button is a LINK to the vendor's own installer,
+#: with the reason. A LINK row is a real button -- the card opens the vendor's
+#: page -- but the runner executes nothing, so it is the one kind this test
+#: cannot count as "runnable". Hermes is the first: Nous Research's own config
+#: code lists ``pip`` and ``homebrew`` as unsupported install methods
+#: (``hermes_cli/config.py:578`` of the published 0.19.0 wheel), so shipping a
+#: package-manager button would install it the way its vendor says not to.
+#: The reason string is asserted so this cannot become a silent exemption.
+LINK_ONLY_HARNESSES: dict[str, str] = {
+    "hermes": (
+        "Hermes documents pip and Homebrew as unsupported install methods, so "
+        "its only Install button is a link to Nous Research's own installer"
+    ),
+}
+
+
+def test_every_servable_cli_has_a_button_on_every_os():
     """The user's words: buttons "for each and every coding agent"."""
 
     for spec in HARNESS_SPECS:
         if not spec.available or spec.id == "kimi_code":
             continue
         for os_ in InstallOs:
-            runnable = [
-                m
-                for m in methods_for_os(spec.install_methods, os_, "x64")
-                if m.runnable
-            ]
-            assert runnable, (spec.id, os_)
+            methods = methods_for_os(spec.install_methods, os_, "x64")
+            assert methods, (spec.id, os_)
+            runnable = [m for m in methods if m.runnable]
+            if not runnable:
+                # A card with a link and no runnable step is allowed only for a
+                # named harness, and only when every method really is a LINK.
+                assert spec.id in LINK_ONLY_HARNESSES, (spec.id, os_)
+                assert all(m.kind is InstallKind.LINK for m in methods), (
+                    spec.id,
+                    os_,
+                )
+                continue
             first = runnable[0]
             # Decision 1: the vendor's own installer first, npm only where it
             # is the only way.
             if any(m.kind is not InstallKind.NPM for m in runnable):
                 assert first.kind is not InstallKind.NPM, (spec.id, os_)
+
+
+def test_every_link_only_harness_states_why():
+    """An exemption without a reason is a hole; this is the reason, checked."""
+
+    for harness_id, reason in LINK_ONLY_HARNESSES.items():
+        spec = harness_spec(harness_id)
+        assert len(reason) >= 40, harness_id
+        assert spec.install_methods, harness_id
+        assert all(m.kind is InstallKind.LINK for m in spec.install_methods), harness_id
 
 
 def test_every_desktop_app_has_a_button_a_link_or_a_cli_twin():

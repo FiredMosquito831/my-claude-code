@@ -2325,6 +2325,66 @@ a running proxy.
 `models.json` under `~/.openclaw/agents/<id>/agent/` is **never touched**: the
 app regenerates that file itself.
 
+### Hermes Agent
+
+```bash
+mcc-hermes
+```
+
+Hermes Agent is Nous Research's `hermes-agent` — a Python tool on PyPI, so
+install it with **Nous Research's own installer** (`curl -fsSL
+https://hermes-agent.nousresearch.com/install.sh | bash`, or
+`install.ps1` on Windows). Hermes documents `pip` and Homebrew as *unsupported*
+install methods, which is why the Coding agents card's Install button is a link
+to that page and not a package-manager step.
+
+It reads exactly one document, `config.yaml`, inside its home: `HERMES_HOME`,
+else `%LOCALAPPDATA%\hermes` on Windows, else `~/.hermes`. Note that Windows
+answer — the CLI's home is **not** your home folder there. `HERMES_HOME` itself
+is never set by MCC: redirecting it would move sessions, skills, plugins and
+credentials too.
+
+So MCC merges **one block**, `providers.mcc`, into your `config.yaml` and
+treats every other section as yours:
+
+| Guarantee | How |
+| --- | --- |
+| One owner | Only `providers.mcc` is written. Comments, quoting, indentation, key order and every other section come back byte for byte, because the edit is made to the YAML text rather than to a re-serialised copy. |
+| Backed up once | The document is copied to `config.yaml.mcc-backup` before MCC's first edit, and that copy is never overwritten. |
+| Idempotent | A refresh that resolves the same models writes nothing. |
+| Never uninvited | The background refresh only touches the file when `providers.mcc` is already there and names *this* server's address. Having a `config.yaml` is not consent; running `mcc-hermes` is. |
+| Reversible | `mcc-hermes --disconnect` removes the block and leaves the rest exactly as it was — no record required. `mcc-hermes --restore` does the same but **refuses if the file changed since MCC wrote it**, and consumes the record. |
+
+**What MCC writes, precisely.** `providers.mcc` carries the proxy base URL, a
+`key_env: MCC_HERMES_API_KEY` reference — the *name* of an environment
+variable, which `mcc-hermes` sets in the child process only, so **your proxy
+token is never in the file** — the `openai_chat` transport, MCC's starting
+model as `default_model`, and every model MCC can route with the context window
+the ladder actually resolved. A window nobody published is **omitted** and the
+launcher says so; Hermes then runs its own detection. There is deliberately no
+output ceiling, price, tool flag or reasoning flag: Hermes reads none of those
+from a provider's model entry.
+
+**Why `--restore` is the honest undo here.** Hermes rewrites `config.yaml`
+itself — its `_config_version` migrations and `save_config` both re-dump the
+YAML, losing comments and layout. MCC's own edits are byte-preserving, but the
+app's are not, and there is no version MCC can pin (Hermes' `_config_version`
+is Hermes'). So `--restore` checks the file's hash and refuses when it moved,
+while `--disconnect` never refuses.
+
+```bash
+mcc-hermes --models                    # what MCC published to the file
+mcc-hermes                             # Hermes Agent, routed through MCC
+mcc-hermes -m mcc/<provider>/<model> --provider mcc   # start on one model
+mcc-hermes --disconnect                # remove MCC's block
+mcc-hermes --restore                   # the same, hash-checked, consuming the record
+```
+
+`hermes model` lists the provider `mcc` and every model MCC published, and
+maintenance subcommands — `config`, `sessions`, `logs`, `auth`, `gateway`,
+`update`, `--version` and the rest — reach the CLI untouched and do not need a
+running proxy.
+
 ### Kimi Code
 
 ```bash

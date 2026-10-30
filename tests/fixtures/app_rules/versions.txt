@@ -239,3 +239,47 @@ the desktop card's block is embedded in before validation (`embed_at`), and
 the handful of behaviours a JSON Schema cannot express -- each of which was
 measured on the wire against the running binary at the time, and is quoted
 with what was measured.
+
+--------------------------------------------------------------------------
+hermes-agent-0.19.0.json
+--------------------------------------------------------------------------
+App:        Hermes Agent (Nous Research), console scripts hermes,
+            hermes-agent and hermes-acp
+Version:    0.19.0, from the wheel's own METADATA
+Read from:  hermes_agent-0.19.0-py3-none-any.whl (10,144,439 bytes,
+            sha256 bd0bac012aee38a60894781f4597dc29ee7bedb3448540249921f10d3bef327f),
+            fetched from https://pypi.org/pypi/hermes-agent/0.19.0/json
+Date:       2026-10-30
+Platform:   n/a -- the wheel is pure Python (py3-none-any). Its
+            requires_python is <3.14,>=3.11, so it was NOT installed into
+            MCC's 3.14 virtualenv: every read below is a zipfile member
+            read in place, extracted to a scratch folder.
+
+Extraction (the wheel is not importable on 3.14, so nothing is executed):
+
+    curl -fsSL -o hermes_agent-0.19.0-py3-none-any.whl \
+      https://files.pythonhosted.org/packages/e5/30/c85be8290e9565dc3c7a9720e93f3e59e09b1b163487be4946c3aa848f80/hermes_agent-0.19.0-py3-none-any.whl
+
+    # extract_wheel.py: zipfile.ZipFile(...).read(name) -> scratch/, for
+    # hermes_constants.py, hermes_cli/config.py, hermes_cli/providers.py,
+    # hermes_cli/_parser.py, agent/agent_init.py, agent/model_metadata.py,
+    # utils.py
+    uv run --offline python extract_wheel.py
+
+    grep -n '_get_platform_default_hermes_home' -A 12 hermes_constants.py
+    grep -n 'def _hermes_home_from_env' -A 10 hermes_constants.py
+    grep -n 'def get_config_path' -A 4 hermes_cli/config.py
+    grep -n '_KNOWN_KEYS' -A 26 hermes_cli/config.py
+    grep -n '_UNSUPPORTED_INSTALL_METHODS' -A 6 hermes_cli/config.py
+    grep -n 'def get_custom_provider_context_length' -A 62 hermes_cli/config.py
+    grep -n 'context_length' agent/agent_init.py
+    grep -n 'def save_config' -A 20 hermes_cli/config.py
+    grep -n 'def atomic_yaml_write' -A 20 utils.py
+    grep -n 'chat/completions' agent/agent_runtime_helpers.py
+    grep -n 'TRANSPORT_TO_API_MODE' -A 8 hermes_cli/providers.py
+    grep -n '"-m",' -A 12 hermes_cli/_parser.py
+
+Not extracted, and so not asserted: anything about a running Hermes session.
+The wheel was never installed, no profile was created, no key was used and no
+model call was made. The rule says what the document has to look like to be
+accepted, and how the one per-model field MCC writes is consumed.

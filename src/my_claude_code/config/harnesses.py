@@ -46,6 +46,7 @@ binary probes -- stays in ``cli/launchers`` and is bound to a spec by
 ``cli/harnesses/registry.py``.
 """
 
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -62,6 +63,7 @@ from my_claude_code.config.install_methods import (
     DROID_METHODS,
     GEMINI_METHODS,
     GOOSE_METHODS,
+    HERMES_METHODS,
     KILO_METHODS,
     KIMI_NO_BUTTON_REASON,
     OPENCLAW_METHODS,
@@ -267,6 +269,41 @@ OPENCLAW_PRIMARY_MODEL_PATH: tuple[str, ...] = (
 )
 
 
+#: Hermes Agent's credential, the base-URL placeholder, and the variables the
+#: CLI itself reads to find its document.
+#:
+#: Hermes is Nous Research's ``hermes-agent`` (PyPI, console scripts ``hermes``,
+#: ``hermes-agent`` and ``hermes-acp``). Its configuration is
+#: ``<home>/config.yaml``, where the home is ``HERMES_HOME`` when set, else
+#: ``%LOCALAPPDATA%\\hermes`` on Windows, else ``~/.hermes``
+#: (``hermes_constants.py:46-67`` of the published 0.19.0 wheel).
+#:
+#: The proxy token never lands on disk. ``providers.mcc.key_env`` carries the
+#: *name* of an environment variable -- Hermes reads ``os.environ[key_env]`` at
+#: request time and stores no value -- and ``mcc-hermes`` sets it in the child
+#: process only. The coincidentally named ``MCC_HERMES_API_KEY`` is the one
+#: ``mcc-hermes`` writes, and it is a reference in the same sense OpenClaw's
+#: ``$MCC_OPENCLAW_API_KEY`` and Crush's ``$MCC_CRUSH_API_KEY`` are.
+HERMES_API_KEY_ENV = "MCC_HERMES_API_KEY"
+
+#: Written into ``providers.mcc.api`` and replaced on the way to disk with
+#: ``<proxy root>/v1``: Hermes' OpenAI client builds its URL as
+#: ``f"{base_url}{'/chat/completions'}"`` (``agent/agent_runtime_helpers.py:1626``),
+#: so the ``/v1`` belongs in the value -- the same shape Cline's
+#: ``base_url_shape = "v1"`` declares.
+HERMES_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
+
+#: The provider id MCC owns inside ``providers``. Hermes addresses a model as
+#: ``<provider>/<model>`` in its picker, so this id is also the prefix a reader
+#: sees there.
+HERMES_PROVIDER_ID = "mcc"
+
+#: The variable Hermes itself reads to relocate its whole home (config,
+#: sessions, skills, plugins and credentials). MCC follows it so the file it
+#: writes is the file the CLI reads -- it never *sets* it.
+HERMES_HOME_ENV = "HERMES_HOME"
+
+
 #: Droid's base-URL placeholder. Resolved to the proxy **root** with no
 #: ``/v1``: MCC's Droid entry declares ``provider: "anthropic"``, which
 #: instantiates the bundled ``@anthropic-ai/sdk`` client, and that appends
@@ -460,6 +497,72 @@ class HarnessCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class MergePathRung:
+    """One step of a CLI's own search for its configuration document.
+
+    The four fields on :class:`HarnessConfigMerge` before this one
+    (``path_env_var``, ``state_env_var``, ``home_override_env_var`` and
+    ``home_env_vars``) describe every merge target whose document is
+    *home-relative the same way on every platform*: Command Code's
+    ``~/.commandcode/providers.json`` and OpenClaw's
+    ``~/.openclaw/openclaw.json`` both are. Hermes is not -- its home is
+    ``%LOCALAPPDATA%\\hermes`` on Windows and ``~/.hermes`` everywhere else,
+    with ``HERMES_HOME`` outranking both -- and a platform-dependent path with
+    no declared home for it to fall back to is the one thing a resolver must
+    not guess at (see ``_detection_home``'s note on writing one file while the
+    CLI reads another).
+
+    So a spec declares its own ordered rungs instead: the first one that
+    resolves wins, exactly as the CLI resolves them. It is data rather than a
+    method on the spec so the same table feeds the launcher, the background
+    refresh and the dashboard card, and so a test can assert the order.
+    """
+
+    #: The environment variable this rung consults, or ``None`` for the
+    #: operating system's own home folder.
+    env_var: str | None = None
+    #: The document's path below the base this rung names. Always spelled in
+    #: full -- a rung is a whole path from its base, not a fragment.
+    parts: tuple[str, ...] = ()
+    #: ``sys.platform`` values this rung applies to; empty means every one.
+    #: Order carries the precedence, so a platform-specific rung listed before
+    #: a universal one is "on this platform, take this; everywhere else, the
+    #: next rung".
+    platforms: tuple[str, ...] = ()
+
+    def applies_to(self, platform: str) -> bool:
+        """Return whether this rung is one this platform walks at all."""
+
+        return not self.platforms or platform in self.platforms
+
+
+#: Hermes Agent's own search order for ``config.yaml``, transcribed from
+#: ``hermes_constants.py:46-67`` of the published 0.19.0 wheel:
+#:
+#: * ``HERMES_HOME`` when set -- the CLI's own relocation variable, which wins
+#:   over everything below;
+#: * on Windows, ``%LOCALAPPDATA%\\hermes``;
+#: * on Windows with ``LOCALAPPDATA`` unset, ``~/AppData/Local/hermes`` -- the
+#:   wheel's own fallback for that case, kept because a service account can
+#:   genuinely have no ``LOCALAPPDATA``;
+#: * everywhere else, ``~/.hermes``.
+#:
+#: The two Windows rungs precede the universal one on purpose: the rung list is
+#: ordered, so on Windows the universal ``~/.hermes`` rung is never reached, and
+#: on every other platform the Windows rungs are filtered out by ``platforms``.
+HERMES_PATH_RUNGS: tuple[MergePathRung, ...] = (
+    MergePathRung(env_var=HERMES_HOME_ENV, parts=("config.yaml",)),
+    MergePathRung(
+        env_var="LOCALAPPDATA", parts=("hermes", "config.yaml"), platforms=("win32",)
+    ),
+    MergePathRung(
+        parts=("AppData", "Local", "hermes", "config.yaml"), platforms=("win32",)
+    ),
+    MergePathRung(parts=(".hermes", "config.yaml")),
+)
+
+
+@dataclass(frozen=True, slots=True)
 class HarnessConfigMerge:
     """How MCC edits a CLI that reads exactly one file it owns.
 
@@ -513,12 +616,82 @@ class HarnessConfigMerge:
     #: the path the serialiser states each new value at. Recorded for Undo
     #: exactly as the desktop Configure engine records ``overwritten_keys``.
     overwritten_key_paths: tuple[tuple[str, ...], ...] = ()
+    #: How the document itself is encoded: ``json`` -- JSON5, and the default
+    #: because every merge target before Hermes is one -- or ``yaml``. It is a
+    #: property of the *file*, not of the serialiser, exactly as
+    #: ``HarnessCatalogue.document_format`` is for a document MCC owns, and
+    #: ``config/harness_config_merge.py`` parses and edits through it. YAML
+    #: support arrived with the nested-table engine in 7.117.0; this field is
+    #: the declaration that lets a spec use it.
+    document_format: str = "json"
+    #: The CLI's own search order, for a document whose location the four rungs
+    #: above cannot state (Hermes'). Empty means those four rungs are the whole
+    #: story, which is every merge target before Hermes.
+    path_rungs: tuple[MergePathRung, ...] = ()
+    #: Whether Configure records the document's hash even when it replaced no
+    #: value, so ``RESTORE`` has something to compare against. False for every
+    #: merge target whose block also replaces a value -- Command Code and
+    #: OpenClaw both write one, and their record is written for that reason.
+    #: Hermes' ``providers.mcc`` only ever *creates* keys, so without this its
+    #: ``--restore`` would always answer "no record of what MCC replaced" --
+    #: and the hash guard is exactly what a CLI that rewrites its own YAML
+    #: (``save_config`` -> ``utils.atomic_yaml_write``) needs.
+    records_document_hash: bool = False
 
     @property
     def owned_key_label(self) -> str:
         """Return the owned key as a reader would write it, e.g. ``provider.mcc``."""
 
         return ".".join(self.owned_key_path)
+
+    def resolve(self, env: Mapping[str, str], platform: str) -> Path:
+        """Return the document this CLI reads, resolved the way the CLI does.
+
+        The rung list when the spec declares one, else the four home/state
+        fields, else the OS home. Kept here rather than in
+        ``config/harness_config_merge.py`` because the dashboard card's
+        detection needs the same answer and ``config`` may not import the
+        engine's callers back; the engine's own :func:`merge_config_path` is a
+        one-line delegation to this.
+
+        ``platform`` is passed rather than read from ``sys.platform`` so the
+        Windows and POSIX answers can both be asserted from one machine -- the
+        ``%LOCALAPPDATA%`` rung is otherwise unreachable in a test on Linux and
+        untested on the machine that most needs it.
+        """
+
+        if self.path_rungs:
+            for rung in self.path_rungs:
+                if not rung.applies_to(platform):
+                    continue
+                if rung.env_var is None:
+                    return Path.home().joinpath(*rung.parts)
+                value = env.get(rung.env_var, "").strip()
+                if not value:
+                    continue
+                return Path(value).expanduser().joinpath(*rung.parts)
+            # A rung list that resolves nothing still has to answer with the
+            # path the CLI would try last, and the last rung is the only
+            # candidate that can be that.
+            return Path.home().joinpath(*self.path_rungs[-1].parts)
+
+        if self.path_env_var is not None:
+            value = env.get(self.path_env_var, "").strip()
+            if value:
+                return Path(value).expanduser()
+        if self.state_env_var is not None:
+            value = env.get(self.state_env_var, "").strip()
+            if value:
+                return Path(value).expanduser().joinpath(self.relative_parts[-1])
+        if self.home_override_env_var is not None:
+            value = env.get(self.home_override_env_var, "").strip()
+            if value:
+                return Path(value).expanduser().joinpath(*self.relative_parts)
+        for name in self.home_env_vars:
+            value = env.get(name, "").strip()
+            if value:
+                return Path(value).joinpath(*self.relative_parts)
+        return Path.home().joinpath(*self.relative_parts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -733,9 +906,19 @@ class HarnessSpec:
         return None
 
     def _detection_home(self, env: Mapping[str, str]) -> Path:
-        """Return the home this CLI resolves, in the CLI's own order."""
+        """Return the home this CLI resolves, in the CLI's own order.
+
+        A spec that declares its own ``path_rungs`` has told us exactly where
+        its document lives, so the base the declared paths hang off is the
+        directory that document is in -- Hermes' home *is*
+        ``%LOCALAPPDATA%\\hermes``, and its ``config.yaml`` sits at the root of
+        it. Every other merge target is home-relative the way the four fields
+        say, and keeps the answer it always had.
+        """
 
         merge = self.catalogue.merge if self.catalogue is not None else None
+        if merge is not None and merge.path_rungs:
+            return merge.resolve(env, sys.platform).parent
         override = merge.home_override_env_var if merge is not None else None
         if override is not None:
             value = env.get(override, "").strip()
@@ -1203,6 +1386,151 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             "other byte, comment and key is left exactly as it was."
         ),
         tagline="The OpenClaw gateway, served through this proxy.",
+    ),
+    HarnessSpec(
+        id="hermes",
+        display_name="Hermes Agent",
+        # ``hermes`` is the session CLI. The wheel also installs
+        # ``hermes-agent`` (one-shot runner) and ``hermes-acp`` (ACP adapter);
+        # neither is what a user means by "start Hermes".
+        binary="hermes",
+        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        # A Python tool on PyPI (``hermes-agent``), and its own config code
+        # lists ``pip`` and ``homebrew`` as *unsupported* install methods
+        # (``hermes_cli/config.py:578`` of 0.19.0), so neither is the line to
+        # print. Nous Research's installer is.
+        install_hint=(
+            "Install Hermes Agent with Nous Research's installer: "
+            "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+        ),
+        install_hint_windows=(
+            "Install Hermes Agent with Nous Research's installer: "
+            'powershell -c "irm https://hermes-agent.nousresearch.com/install.ps1 | iex"'
+        ),
+        install_methods=HERMES_METHODS,
+        commands=(
+            HarnessCommand(
+                suffix="hermes",
+                target="my_claude_code.cli.launchers.hermes:launch",
+                legacy_alias=False,
+                help_text="Launch Hermes Agent through the proxy",
+                invocations=(
+                    HarnessInvocation(
+                        arguments="--models",
+                        help_text=(
+                            "MCC's own flag: list the models MCC published to "
+                            "the providers.mcc block in your config.yaml and exit"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--disconnect",
+                        help_text=(
+                            "MCC's own flag: remove MCC's providers.mcc block "
+                            "from your config.yaml and exit, leaving every other "
+                            "section untouched"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="--restore",
+                        help_text=(
+                            "MCC's own flag: the same removal, but refusing if "
+                            "the file changed since MCC configured it, and "
+                            "consuming the record"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments='-z "<prompt>"',
+                        help_text=(
+                            "Run one prompt non-interactively and print only the "
+                            "answer (Hermes' own --oneshot)"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="-m mcc/<provider>/<model> --provider mcc",
+                        help_text=(
+                            "Start on one specific MCC-routed model. Hermes' own "
+                            "-m/--model applies to -z and --tui"
+                        ),
+                    ),
+                    HarnessInvocation(
+                        arguments="model",
+                        help_text=(
+                            "Hermes' own model picker, which lists the provider "
+                            "mcc and every model MCC published"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        catalogue=HarnessCatalogue(
+            format_id="hermes",
+            # No file of MCC's own: Hermes reads exactly one config.yaml and
+            # MCC merges one key into it. ``HERMES_HOME`` was measured and
+            # rejected as an override -- it moves sessions, skills, plugins and
+            # credentials too, which is the argument that rejected Kimi's
+            # ``KIMI_SHARE_DIR``.
+            filename=None,
+            # Hermes warns about any key inside a provider entry that its own
+            # normaliser does not know (``hermes_cli/config.py:5037-5041``), so
+            # MCC's bookkeeping never goes into the block: the card and the
+            # launcher read the count from GET /admin/api/catalogue-models.
+            carries_defaulted_record=False,
+            merge=HarnessConfigMerge(
+                # ``HERMES_HOME`` is the base, so the document is its direct
+                # child; the remaining rungs are in ``path_rungs``.
+                relative_parts=("config.yaml",),
+                owned_key_path=("providers", HERMES_PROVIDER_ID),
+                display_path="~/.hermes/config.yaml",
+                # Hermes' document is YAML, and its provider block is a nested
+                # mapping: the case ``document_codecs`` gained in 7.117.0.
+                document_format="yaml",
+                path_rungs=HERMES_PATH_RUNGS,
+                # Hermes spells the field ``api`` (``base_url`` and ``url`` are
+                # accepted aliases) and its OpenAI client appends
+                # ``/chat/completions`` to it, so the value carries ``/v1``.
+                base_url_key="api",
+                base_url_sentinel=HERMES_BASE_URL_SENTINEL,
+                # The user's own config.yaml: comments, quoting and key order
+                # survive because the edit is made to the text.
+                preserve_bytes=True,
+                # Hermes re-dumps config.yaml itself, so the only honest Undo
+                # for the values question is the hash-guarded one -- and the
+                # block replaces nothing, so the record exists for its hash.
+                records_document_hash=True,
+            ),
+        ),
+        # ``chat`` is deliberately absent: it runs an agent and needs the
+        # provider. ``model`` and ``fallback`` are absent for a different
+        # reason -- they list the providers and models MCC has published, so
+        # passing them through would show a picker with no ``mcc`` in it.
+        passthrough_commands=frozenset(
+            {
+                "help",
+                "setup",
+                "logout",
+                "auth",
+                "config",
+                "sessions",
+                "logs",
+                "console",
+                "update",
+                "dashboard",
+                "debug",
+            }
+        ),
+        passthrough_flags=frozenset({"--help", "-h", "--version", "-V"}),
+        # Binary-first, then the document MCC would write: an install whose
+        # script folder is not on this shell's PATH has a config.yaml and no
+        # binary, and the card says "Config found, CLI not on PATH".
+        detection_paths=(("config.yaml",),),
+        summary=(
+            "Nous Research's Hermes Agent, which reads one config.yaml and no "
+            "extra-config variable, so MCC merges a single providers.mcc block "
+            "into it -- comments, layout and every other section left byte for "
+            "byte, and your proxy token never written at all: the block names "
+            "an environment variable the launcher sets in the child process."
+        ),
+        tagline="Nous Research's Hermes Agent, served through this proxy.",
     ),
     HarnessSpec(
         # ``kimi_code``, not ``kimi``: the latter is an upstream Moonshot

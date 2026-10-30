@@ -22,6 +22,11 @@ from tests.api.support import create_test_app, runtime_for_app
 def _set_home(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    # The two variables a CLI's own home lookup consults before the OS home.
+    # Redirected here so a machine that really has Hermes or a `~/.hermes`
+    # installed cannot change what these tests see (7.118.0).
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
     monkeypatch.chdir(tmp_path)
 
 
@@ -541,3 +546,83 @@ def test_clines_catalogue_says_what_its_number_counts(monkeypatch, tmp_path):
     codex = by_id["codex"]["catalogue"]
     assert codex["model_count_label"] == "Models"
     assert codex["model_count_note"] == ""
+
+
+def test_hermes_is_detected_at_locallocalappdata_and_its_card_counts_yaml_models(
+    monkeypatch, tmp_path
+):
+    """Hermes' home is `%LOCALAPPDATA%\\hermes`, not `~` (7.118.0).
+
+    Both halves of the card are exercised here because both read a document a
+    different way: the install state resolves the CLI's own home rules, and the
+    catalogue count parses MCC's YAML table out of a file the user owns.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    home = tmp_path / "AppData" / "Local" / "hermes"
+    home.mkdir(parents=True)
+    (home / "config.yaml").write_text(
+        "_config_version: 33\n"
+        "model:\n"
+        "  provider: openrouter\n"
+        "providers:\n"
+        "  mcc:\n"
+        '    api: "http://127.0.0.1:8082/v1"\n'
+        "    key_env: MCC_HERMES_API_KEY\n"
+        "    transport: openai_chat\n"
+        "    models:\n"
+        '      "openrouter/configured":\n'
+        "        context_length: 400000\n"
+        '      "openrouter/other": {}\n',
+        encoding="utf-8",
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    entry = next(entry for entry in body["harnesses"] if entry["id"] == "hermes")
+    assert entry["installed"] is False
+    assert entry["install_state"] == "config_only"
+    assert entry["config_found"] is True
+    assert (
+        entry["config_path"]
+        .replace("\\", "/")
+        .endswith("AppData/Local/hermes/config.yaml")
+    )
+    catalogue = entry["catalogue"]
+    assert catalogue["delivery"] == "merge"
+    assert catalogue["merged_key"] == "providers.mcc"
+    assert catalogue["exists"] is True
+    assert catalogue["model_count"] == 2
+    # Hermes warns about unknown provider keys, so MCC's bookkeeping never
+    # reaches its file and the card says "not recorded" rather than zero.
+    assert catalogue["defaulted_model_count"] is None
+    assert catalogue["defaulted_record_in_document"] is False
+
+
+def test_a_hermes_file_without_mccs_block_reports_no_catalogue(monkeypatch, tmp_path):
+    """The user's own config.yaml is not evidence MCC was ever here."""
+
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
+    )
+    home = tmp_path / "AppData" / "Local" / "hermes"
+    home.mkdir(parents=True)
+    (home / "config.yaml").write_text(
+        "_config_version: 33\nproviders:\n  myown:\n    api: https://example.test/v1\n",
+        encoding="utf-8",
+    )
+    app = create_test_app()
+
+    with _local_client(app) as client:
+        body = client.get("/admin/api/harnesses").json()
+
+    entry = next(entry for entry in body["harnesses"] if entry["id"] == "hermes")
+    assert entry["config_found"] is True
+    assert entry["catalogue"]["exists"] is False
+    assert entry["catalogue"]["model_count"] is None

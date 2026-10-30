@@ -136,8 +136,12 @@ FORMATS_WITHOUT_A_CONTEXT_FIELD = frozenset({"gemini_cli"})
 #: ``additionalProperties: false`` at *both* levels it generates -- the root
 #: and the provider entry -- so there is nowhere in the document the record
 #: could live; the launcher and the card read it from
-#: ``GET /admin/api/catalogue-models``.
-FORMATS_WITHOUT_A_DEFAULTED_RECORD = frozenset({"kilo", "openclaw"})
+#: ``GET /admin/api/catalogue-models``. Hermes is the third for a related
+#: reason: it does not reject an unknown key, it *warns* about one
+#: (``hermes_cli/config.py:5037-5041``), so MCC's bookkeeping inside
+#: ``providers.mcc`` would put a warning of MCC's making into somebody else's
+#: tool on every picker load, in a file the user owns.
+FORMATS_WITHOUT_A_DEFAULTED_RECORD = frozenset({"kilo", "openclaw", "hermes"})
 
 
 @pytest.mark.parametrize("format_id", sorted(SERIALISERS))
@@ -341,6 +345,11 @@ FORMATS_WITH_AN_ATTRIBUTION_HEADER: dict[str, tuple[str, ...]] = {
     # ``providers.<id>.headers`` on the provider entry: "Custom headers to
     # send with every request" in the schema OpenClaw generates for itself.
     "openclaw": ("models", "providers", "mcc", "headers"),
+    # ``providers.<id>.extra_headers``, "Per-provider extra HTTP headers" in
+    # Hermes' own normaliser (``hermes_cli/config.py:5150-5155`` of 0.19.0),
+    # which ``normalize_extra_headers`` keeps and the client sends on every
+    # request.
+    "hermes": ("providers", "mcc", "extra_headers"),
 }
 
 #: Qwen Code's is a sixth, and it is not in the table above because its header
@@ -467,6 +476,8 @@ def test_every_harness_that_does_get_a_header_resolves_to_its_registry_id() -> N
         "qwen_code",
         "crush",
         "cline_cli",
+        "openclaw",
+        "hermes",
     ):
         spec = harness_spec(harness_id)
         assert spec.catalogue is not None
