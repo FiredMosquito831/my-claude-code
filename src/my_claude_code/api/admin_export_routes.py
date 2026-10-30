@@ -398,6 +398,11 @@ async def _request_export(
     if raw_requested:
         # The raw path opens its own passes over the same rows; the ordinary
         # iterator is not built at all, so no connection is opened for nothing.
+        # ``row_filters`` is the same thirteen values, spelled once for the two
+        # helpers; the ordinary call below spells them out because the origin
+        # filter-arity guard counts keyword call sites
+        # (tests/core/test_request_log_origin_filters.py), and this dict is
+        # pinned to the whole filter set there.
         return await _stream_with_raw_diagnostics(
             store,
             fmt,
@@ -417,6 +422,8 @@ async def _request_export(
             settings=settings,
         )
 
+    # Spelled out rather than ``**row_filters``: the origin filter-arity guard
+    # counts keyword call sites, so the one this function owns bypasses nothing.
     iterator = store.iter_export_rows(
         columns=sql_columns,
         need_bodies=need_bodies,
@@ -425,7 +432,20 @@ async def _request_export(
         need_ladder="ladder" in selected,
         # The Exit columns (7.88.0) come from ``request_attempts`` the same way.
         need_exits="exit" in selected,
-        **row_filters,
+        provider=provider,
+        model=model,
+        status=status,
+        endpoint=endpoint,
+        key=key,
+        since=since_epoch,
+        until=until_epoch,
+        q=q,
+        local=local,
+        harness=harness,
+        session=session,
+        folder=folder,
+        exit=exit,
+        matched=matched,
     )
 
     def detail_rows() -> Iterator[dict[str, Any]]:
