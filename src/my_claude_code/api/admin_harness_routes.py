@@ -86,9 +86,11 @@ from my_claude_code.config.harness_tiers import (
 from my_claude_code.config.harnesses import (
     PROTOCOL_LABELS,
     HarnessConfigMerge,
+    HarnessNotYetCard,
     HarnessSpec,
     harness_command_lines,
     harness_specs,
+    not_yet_cards,
 )
 from my_claude_code.config.mcp_media import mcp_media_document
 from my_claude_code.config.paths import harness_catalogue_path
@@ -308,7 +310,34 @@ def _harness_payload() -> dict[str, Any]:
     return {
         "harnesses": [
             _harness_entry(spec, rtk.enabled(spec.id)) for spec in harness_specs()
-        ]
+        ],
+        # 7.118.1: the agents MCC has assessed and does not configure yet,
+        # beside the launchable ones because it is the same page's question.
+        # A separate key rather than more entries in ``harnesses``: these are
+        # not harnesses, and every consumer of that list -- the RTK toggles,
+        # the install-target lookup, the tier rails -- is right to ignore them.
+        "not_yet": [_not_yet_entry(card) for card in not_yet_cards()],
+    }
+
+
+def _not_yet_entry(card: HarnessNotYetCard) -> dict[str, Any]:
+    """Return one assessed-but-not-configured card, verbatim from the registry.
+
+    Every string here is rendered as text, never as markup, and the URL only
+    ever reaches an ``href`` (the page refuses anything but https). No probe,
+    no path and no setting: there is nothing about this agent MCC reads or
+    writes.
+    """
+
+    return {
+        "id": card.id,
+        "display_name": card.display_name,
+        "package": card.package,
+        "assessed_on": card.assessed_on,
+        "summary": card.summary,
+        "reason": card.reason,
+        "would_change": card.would_change,
+        "doc_url": card.doc_url,
     }
 
 

@@ -4758,6 +4758,17 @@ if (process.env.MCC_JSDOM_SCENARIO === "in_loop_chip") {
   );
   scenario = prepareInLoopChipScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=not_yet_card (7.118.1): the Coding agents page's "not
+   yet" card -- the registry's own payload under the additive `not_yet` key,
+   the card's dated text and its absent controls, the find box still reaching
+   it, and the DOM the BASE tree (16bc7b23) drew for the equality baseline
+   (admin_jsdom_not_yet_card.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "not_yet_card") {
+  const { prepareNotYetCardScenario } = await import(
+    "./admin_jsdom_not_yet_card.mjs"
+  );
+  scenario = prepareNotYetCardScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

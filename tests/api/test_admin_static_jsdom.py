@@ -21,6 +21,7 @@ from typing import Any, NoReturn, cast
 
 import pytest
 
+from my_claude_code.api.admin_harness_routes import _not_yet_entry
 from my_claude_code.api.marketplace_page import (
     match_charged,
     offers_payload,
@@ -44,6 +45,7 @@ from my_claude_code.config.admin.manifest import (
     SECTIONS,
     ConfigOptionSpec,
 )
+from my_claude_code.config.harnesses import not_yet_cards
 from my_claude_code.config.marketplace_profiles import (
     MarketplaceProfiles,
     parse_profile,
@@ -12390,3 +12392,121 @@ def test_jsdom_in_loop_chip_failure_leaves_the_page_intact(in_loop_chip) -> None
     after = _in_loop_chips(in_loop_chip, "afterFailure")
     assert after, "the model rows must still be there"
     assert all(chips == [] for chips in after.values()), after
+
+
+# --------------------------------------------------------------------------
+# 7.118.1: the Coding agents page's "not yet" card for @deepseek-ai/dsh.
+# One run of admin_jsdom_not_yet_card.mjs (MCC_JSDOM_SCENARIO=not_yet_card) on
+# the registry's own payload -- the server's `_not_yet_entry` output, written to
+# a file and put on the harness's `/admin/api/harnesses` payload under the new
+# `not_yet` key -- and the page compared, byte for byte, with the one the BASE
+# tree (16bc7b23, v7.118.0) drew from the same scenario and the same payload.
+# Its admin.js does not know the key, so it draws no card: that is the equality
+# baseline, and it is what proves the card is the only thing this release adds.
+
+NOT_YET_BASELINE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "coding_agents_not_yet_card_dom_7_118_0.json"
+)
+
+
+@pytest.fixture(scope="module")
+def not_yet_card(tmp_path_factory) -> dict:
+    payload = [_not_yet_entry(card) for card in not_yet_cards()]
+    assert payload, "the registry carries no not-yet card, so nothing would render"
+    path = tmp_path_factory.mktemp("not_yet_card") / "not_yet.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return _run(MCC_JSDOM_SCENARIO="not_yet_card", MCC_JSDOM_NOT_YET_FILE=str(path))
+
+
+def test_jsdom_not_yet_card_scenario_runs_clean(not_yet_card) -> None:
+    assert not_yet_card["fatal"] is None
+    assert not_yet_card["scenarioFatal"] is None
+    assert not_yet_card["scriptErrors"] == []
+    assert not_yet_card["consoleErrors"] == []
+    assert not_yet_card["baseTree"] is False
+
+
+def test_jsdom_not_yet_card_is_drawn_with_its_date_and_its_reason(not_yet_card) -> None:
+    """The card is the whole feature, so its text is the contract.
+
+    A "not yet" without a date, a measurement and the condition that would
+    reverse it is indistinguishable from an agent nobody got round to, and it
+    cannot be re-checked. Every one of those is asserted on the rendered page.
+    """
+
+    card = not_yet_card["card"]
+    assert card["id"] == "dsh"
+    assert card["title"] == "DeepSeek Harness"
+    assert card["badge"] == "Not yet"
+    assert not_yet_card["notYetIds"] == ["dsh"]
+    # What it is, when it was assessed, and what the measurement found.
+    assert "2026-10-30" in card["text"]
+    assert "@deepseek-ai/dsh" in card["text"]
+    assert "replaces the targeted row's whole config" in card["text"]
+    assert "was gone" in card["text"]
+    # Why that matters, and the one thing that would change the decision.
+    assert "hides a provider you configured" in card["text"]
+    assert "What would change this" in card["text"]
+    assert "merges into the existing provider map" in card["text"]
+    # The facts as rows, not only as prose.
+    assert card["rows"] == ["Assessed", "Package", "Launcher", "Package page"]
+    assert card["values"][0] == "2026-10-30"
+    assert card["values"][1] == "@deepseek-ai/dsh"
+    assert card["values"][2] == "None - MCC publishes no command for this agent"
+    assert card["links"] == ["https://www.npmjs.com/package/@deepseek-ai/dsh"]
+
+
+def test_jsdom_not_yet_card_offers_nothing_to_press(not_yet_card) -> None:
+    """It explains; it does not offer. No Configure, no Install, no Undo.
+
+    The four host divs and the `[data-key]` controls are how every other card
+    on this page gets its buttons, so their absence is the mechanical form of
+    "this agent is not configured by MCC".
+    """
+
+    card = not_yet_card["card"]
+    assert card["controls"] == []
+    assert card["installHosts"] == 0
+    assert card["mcpHosts"] == 0
+    assert card["dataKeys"] == 0
+    assert card["hasTiers"] is False
+    # And the two words that would read as support are not on it at all.
+    assert "Install" not in card["text"]
+    assert "Configure" not in card["text"]
+
+
+def test_jsdom_not_yet_card_is_the_only_thing_this_release_added(
+    not_yet_card,
+) -> None:
+    """Every other card, and the whole page around them, is byte-identical.
+
+    The baseline was captured by this same scenario file pointed at the BASE
+    tree's admin_static with the same payload, so the comparison is between one
+    page and the same page plus one card -- no other card, section, host or
+    label moved, and the view gained no child of its own (the card lives inside
+    the CLI list, and the capture takes it out of a clone).
+    """
+
+    baseline = json.loads(NOT_YET_BASELINE.read_text(encoding="utf-8"))
+    assert "BASE tree 16bc7b23" in baseline["written_by"]
+    assert baseline["dom"]["viewChildCount"] == 5
+    assert not_yet_card["dom"]["viewChildCount"] == 5
+    assert not_yet_card["dom"]["children"] == baseline["dom"]["children"]
+    assert [
+        {"id": card["id"], "title": card["title"]} for card in not_yet_card["cards"]
+    ] == baseline["cards"]
+    assert len(not_yet_card["cards"]) == 25
+
+
+def test_jsdom_not_yet_card_is_still_findable_by_the_filter(not_yet_card) -> None:
+    """The find box matches rendered text, so the new card is searchable too."""
+
+    assert not_yet_card["deepseekHits"] == ["dsh"]
+    assert not_yet_card["deepseek"]["visibleCli"] == ["dsh"]
+    assert not_yet_card["deepseek"]["noteHidden"] is True
+    assert not_yet_card["dshHits"] == ["dsh"]
+    assert not_yet_card["dsh"]["visibleCli"] == ["dsh"]
+    # Clearing shows every card again, the not-yet one included.
+    assert "dsh" in not_yet_card["cleared"]["visibleCli"]
