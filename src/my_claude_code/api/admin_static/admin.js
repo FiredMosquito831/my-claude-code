@@ -11162,6 +11162,7 @@ function renderBenchMasterSwitch(field) {
   input.dataset.fieldType = field.type;
   input.disabled = field.locked;
   const onEdit = () => {
+    noteUserEdit(input);
     syncSharedControls(input);
     updateDirtyState();
   };
@@ -11217,6 +11218,7 @@ function renderVisionModeControl(field) {
   input.dataset.fieldType = field.type;
   input.disabled = field.locked;
   const onEdit = () => {
+    noteUserEdit(input);
     syncSharedControls(input);
     const stored = state.fields.get(field.key);
     if (stored) stored.value = input.value;
@@ -13084,6 +13086,23 @@ function providerRotationLabel(provider) {
   return labels[value] || "";
 }
 
+/** Record that a person changed this control, not the page.
+ *
+ * `changedValues()` posts a control only after this mark. Comparing the live
+ * value with the loaded one was enough while every control could show what it
+ * held; a control that cannot hold the saved value (an unlisted option, a
+ * number the box sanitises away) reports a difference nobody made, and the
+ * server reads the resulting "" as "delete the line". The edit event is the
+ * only evidence that a person changed their mind. Every programmatic writer
+ * already dispatches `change` -- "Use default", the chain editor, route undo,
+ * the key manager's rotation select -- so those still count, and
+ * `syncMcpMediaField` deliberately does not, because its value is already
+ * written elsewhere and is not this form's to save.
+ */
+function noteUserEdit(input) {
+  input.dataset.userEdited = "true";
+}
+
 /** Build one field's live control, wired into the dirty/apply machinery.
  *
  * Shared by the generic field grid and the Model Routing view, so a control
@@ -13108,6 +13127,7 @@ function buildFieldControl(field) {
     // master switch). Mirroring on edit is what keeps that a second view of
     // one value rather than a second copy of it.
     const onEdit = () => {
+      noteUserEdit(input);
       syncSharedControls(input);
       updateDirtyState();
     };
@@ -13178,6 +13198,19 @@ function renderField(field) {
 
   const { input, control } = buildFieldControl(field);
   wrapper.append(label, control);
+  // A saved number the box cannot hold is shown as text (see inputForField);
+  // say so, in words, where the reader is looking. Nothing else renders this
+  // line, so a value the box does hold keeps the exact markup it had.
+  if (input.dataset.savedNumber === "true") {
+    const savedNote = document.createElement("div");
+    savedNote.className = "field-saved-number";
+    savedNote.id = `saved-number-${field.key}`;
+    savedNote.textContent =
+      `Saved as "${field.value}" — not a number this box can hold. ` +
+      "Shown exactly as stored; retype it as a number to change it.";
+    wrapper.appendChild(savedNote);
+    describedBy(input, savedNote.id);
+  }
   // Bounds, then provenance, then prose. The range used to be the last
   // sentence of an up-to-80-word paragraph, which is where nobody looked.
   if (field.range_hint) {
@@ -13303,6 +13336,7 @@ function keyManagerForField(field, { idSuffix = "" } = {}) {
     rotationInput.dataset.fieldType = rotationField.type;
     rotationInput.disabled = rotationField.locked;
     const onRotationChange = () => {
+      noteUserEdit(rotationInput);
       syncSharedControls(rotationInput);
       updateDirtyState();
     };
@@ -14050,8 +14084,39 @@ function selectWithDefaultOption(field, options) {
     option("", `Default (${match ? match.label : fallback || "none"})`),
   );
   options.forEach((item) => select.appendChild(option(item.value, item.label)));
-  select.value = field.value ?? "";
+  const saved = field.value ?? "";
+  /* A saved value that no option carries is still the setting in force.
+     Assigning it used to leave `selectedIndex` at -1: the control painted
+     nothing, `input.value` read "", and the next Save posted that "" -- which
+     the server reads as "delete the line". The saved value becomes its own
+     option instead, listed last and selected, so the page shows what the file
+     really says and the control is clean on load. A listed value, and a field
+     nobody set, render exactly as before; "Default (...)" is still how a value
+     is deliberately cleared. */
+  if (saved !== "" && !options.some((item) => item.value === saved)) {
+    const marked = option(saved, `${saved} — saved, not in today's list`);
+    marked.dataset.savedValue = "true";
+    select.appendChild(marked);
+  }
+  select.value = saved;
   return select;
+}
+
+/** Can an `<input type=number>` hold this saved value? (7.121.1)
+ *
+ * The browser's own sanitiser is the only honest oracle: assign the text to a
+ * detached number input and read back what survived. "7_200", " 5", "+5" and
+ * "5." all come back "", while "7200" and "7.2e3" come back unchanged -- the
+ * same rule Chrome and jsdom both implement, so the answer cannot drift from
+ * what the reader's browser would do.
+ */
+function savedNumberFits(value) {
+  const text = value == null ? "" : String(value);
+  if (text === "") return true;
+  const probe = document.createElement("input");
+  probe.type = "number";
+  probe.value = text;
+  return probe.value === text;
 }
 
 function inputForField(field) {
@@ -14138,6 +14203,21 @@ function inputForField(field) {
     input.type = "hidden";
     input.value = field.value || "";
     return input;
+  }
+
+  /* A number box silently refuses text it cannot read as a float: assigning
+     "7_200", " 5", "+5" or "5." leaves `input.value` at "" -- the saved value
+     disappears from a control nobody touched, and the page then reports the
+     emptiness as an unsaved change. A saved value of that shape renders as a
+     text box carrying it verbatim, marked by renderField(); a number the box
+     can hold renders exactly as before. */
+  if (field.type === "number" && !savedNumberFits(field.value)) {
+    const held = document.createElement("input");
+    held.type = "text";
+    held.value = field.value || "";
+    if (field.default) held.placeholder = field.default;
+    held.dataset.savedNumber = "true";
+    return held;
   }
 
   const input = document.createElement("input");
@@ -14502,10 +14582,17 @@ class ModelChainEditor {
   }
 
   syncValue() {
-    this.input.value = this.rows
+    const next = this.rows
       .map((row) => row.combobox.input.value.trim())
       .filter(Boolean)
       .join(",");
+    // A rail gesture writes the whole chain through its hidden input, and
+    // nothing dispatches a change on it -- so this is where an edit is
+    // recorded. Only a value that actually moved counts: a reorder that
+    // leaves the comma-joined text alone, and the initial render (which never
+    // reaches here), are not edits.
+    if (next !== this.input.value) noteUserEdit(this.input);
+    this.input.value = next;
     updateDirtyState();
     // A row's ref is what a pause names, and editing the combobox changes it.
     syncRoutePauseUi();
@@ -14837,6 +14924,15 @@ function changedValues() {
     // every Apply, and it would make the page read dirty from a section the
     // dirty count cannot explain.
     if (input.closest(".agent-tiers")) return;
+    // Nothing nobody touched may be posted. A difference against the loaded
+    // value was the whole test until 7.121.1, and it was enough only while a
+    // control could always display what it held: a select with an unlisted
+    // saved value, or a number box handed "7_200", reported a difference that
+    // no person made, and the "" it submitted meant "delete the line". The
+    // mark below is set by every edit listener (noteUserEdit), so a control
+    // is posted only after someone actually changed it -- and only when the
+    // value really differs, so editing back to the saved value is no change.
+    if (input.dataset.userEdited !== "true") return;
     const value = readFieldValue(input);
     if (value !== input.dataset.original) {
       values[input.dataset.key] = value;

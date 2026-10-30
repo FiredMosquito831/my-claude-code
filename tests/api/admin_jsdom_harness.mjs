@@ -4781,6 +4781,20 @@ if (process.env.MCC_JSDOM_SCENARIO === "raw_diagnostics") {
   );
   scenario = prepareRawDiagnosticsScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=select_blank (7.121.1): every saved value shown -- an
+   option outside today's list becomes its own marked, selected option, and a
+   number the box cannot hold is shown as marked text -- a footer that reads
+   "No changes" on load, an Apply that posts nothing until something is
+   really edited, the one-key body a single edit produces, and the per-view /
+   per-control DOM the BASE tree (f6de93ad) drew for the equality baseline
+   (admin_jsdom_select_blank.mjs). The payload is the server's own
+   /admin/api/config answer for a scratch .env. */
+if (process.env.MCC_JSDOM_SCENARIO === "select_blank") {
+  const { prepareSelectBlankScenario } = await import(
+    "./admin_jsdom_select_blank.mjs"
+  );
+  scenario = prepareSelectBlankScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
