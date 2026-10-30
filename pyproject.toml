@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "7.119.1"
+version = "7.120.0"
 description = "Local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents: 57 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -44,6 +44,13 @@ dependencies = [
     "aiohttp>=3.14.1",
     "jsonschema>=4.25.0",
     "ddgs>=9.14.4",
+    # web_fetch's main-content extraction (7.120.0; RESEARCH-DDG-WEBSEARCH.md R3,
+    # USER DECISIONS Q6). Both are imported inside the fetch path on first use
+    # only -- the startup import contract's deferred list pins that. lxml was
+    # already installed through ddgs (which allowed 6.1.1); trafilatura needs
+    # 6.1.3 or later, so the floor is declared here.
+    "trafilatura>=2.3.1",
+    "lxml>=6.1.3",
     "openpyxl>=3.1.5",
     "pillow>=11.4.0",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",

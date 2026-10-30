@@ -570,8 +570,12 @@ async def test_the_html_request_carries_the_tables_headers(
     assert request.headers["user-agent"] == profiles.BROWSER_USER_AGENT
     assert request.headers["referer"] == "https://html.duckduckgo.com/"
     assert f"my-claude-code/{package_version()}" not in request.headers["user-agent"]
-    # web_fetch keeps its own headers until its own release (DDG-4).
-    assert _WEB_TOOL_HTTP_HEADERS["User-Agent"].startswith("Mozilla/5.0 compatible;")
+    # Since 7.120.0 (DDG-4) the fetch path has its own identity, MCC's product
+    # User-Agent: this hop keeps the browser-class one and the two never mix.
+    assert _WEB_TOOL_HTTP_HEADERS["User-Agent"] == (
+        f"my-claude-code/{package_version()}"
+    )
+    assert _WEB_TOOL_HTTP_HEADERS["User-Agent"] != profiles.BROWSER_USER_AGENT
 
 
 @pytest.mark.asyncio

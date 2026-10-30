@@ -1106,6 +1106,15 @@ MEDIA_UPLOAD_MAX_MB_DEFAULT = 0
 # random 0.5-2 s (Crush); those are references, the value is the operator's.
 WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT = 0.0
 
+# What web_fetch makes of an HTML page's text (7.120.0; RESEARCH-DDG-WEBSEARCH.md
+# R3, USER DECISIONS Q6/Q7). `trafilatura` -- the new default -- keeps the
+# page's main content as markdown with links and tables; it is imported on the
+# first fetch that needs it, never at startup. `basic` is the extractor every
+# release before 7.120.0 used (every text node, one per line) and exists as the
+# escape hatch: it reproduces those releases' bytes exactly, with no marker.
+WEB_FETCH_EXTRACTOR_NAMES: frozenset[str] = frozenset({"trafilatura", "basic"})
+WEB_FETCH_EXTRACTOR_DEFAULT = "trafilatura"
+
 # Which apps get MCC's media MCP server (7.99.0): a comma list of app ids, set
 # by each card's Add / Remove MCP server button on the Coding agents page.
 # Empty -- the default -- adds it nowhere, and every generated document and

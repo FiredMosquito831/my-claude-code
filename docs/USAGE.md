@@ -4793,6 +4793,12 @@ WEB_SEARCH_CHAIN_PAUSED=            # optional: chain entries to skip
 
 A missing API key on an explicitly selected provider **fails visibly** rather than silently degrading — an unconfigured provider is an operator mistake, not an outage.
 
+### Web fetch (7.120.0)
+
+Claude Code's `web_fetch` tool is fulfilled at the proxy by fetching the page and extracting its text. Since 7.120.0 an HTML page is read by **trafilatura** (Apache-2.0, loaded on the first fetch of a process only): the page's **main content**, with headings, lists, links and tables kept as markdown, and the menus, footers and cookie banners around it dropped. The 24,000-character cap stays — a longer page now ends with one line naming what was extracted, e.g. `[web_fetch: truncated to 24000 of 51234 characters extracted]`, instead of stopping silently. The request names `text/markdown` first in its `Accept` header, so a server that can answer in markdown is asked for it, and carries MCC's own product User-Agent (`my-claude-code/<version>`); a Cloudflare bot challenge (a 403 whose `cf-mitigated` header says `challenge`) is retried **once**, as the product and never impersonating a browser. A page the extractor reads as nothing (or fewer than 200 characters) is answered by the old extractor, so a fetch never returns less than it did before. Pages served without a charset — plain `text/html` or `application/pdf` — are read and decoded as UTF-8 instead of failing outright.
+
+`WEB_FETCH_EXTRACTOR` (**Web Fetch Extractor** on Model Config → Web tools) picks the extractor: `trafilatura`, the default above, or `basic`, the escape hatch that returns every text node, one per line — exactly the bytes every release before 7.120.0 returned, with the silent cut and no marker. Nothing else about the tool changes: the same SSRF guard and DNS pinning, the same redirect, size and time limits, and the same `text/plain` result with its title. Details and the measurements: [docs/WEB-SEARCH.md](WEB-SEARCH.md#web-fetch-71200).
+
 15 backends are supported (14 web search services plus Context7's library documentation). Free tiers worth knowing: Exa ($10/month ongoing), Tavily (1,000 credits/month), Brave ($5/month), Serper (2,500 one-time), Linkup ($20 topped up monthly), and DuckDuckGo (keyless, unlimited, lower quality).
 
 ### The setting most worth changing

@@ -1,12 +1,14 @@
 """Outbound HTTP for web_search / web_fetch (client, body caps, logging)."""
 
 import asyncio
+import codecs
 import math
 import socket
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from email.message import Message
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
@@ -40,8 +42,11 @@ from my_claude_code.websearch.registry import (
     search_with_logging,
 )
 
-from . import constants, duckduckgo_lite
+from . import constants, duckduckgo_lite, fetch_extract
 from .constants import (
+    _CLOUDFLARE_CHALLENGE_HEADER,
+    _CLOUDFLARE_CHALLENGE_STATUS,
+    _CLOUDFLARE_CHALLENGE_VALUE,
     _MAX_FETCH_CHARS,
     _MAX_SEARCH_RESULTS,
     _REDIRECT_RESPONSE_BODY_CAP_BYTES,
@@ -822,9 +827,21 @@ async def _legacy_route_scrape(query: str) -> list[dict[str, str]]:
 
 
 async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, str]:
-    """Fetch URL with manual redirects; each hop is DNS-pinned to validated addresses."""
+    """Fetch URL with manual redirects; each hop is DNS-pinned to validated addresses.
+
+    Since 7.120.0 (RESEARCH-DDG-WEBSEARCH.md R3, USER DECISIONS Q6-Q8/Q12) the
+    request names markdown first in its ``Accept`` header and carries MCC's
+    product User-Agent, a Cloudflare challenge (403 + ``cf-mitigated:
+    challenge``) is retried exactly once as the product itself, an HTML page's
+    text is trafilatura's markdown when ``WEB_FETCH_EXTRACTOR`` says so, and
+    the encoding is decided after the body is read -- before it, a
+    ``text/html`` or ``application/pdf`` response without a charset failed
+    outright (DDG-1's pinned finding).
+    """
+
     current_url = url
     redirect_hops = 0
+    challenge_retried = False
     timeout = ClientTimeout(total=_REQUEST_TIMEOUT_S)
 
     while True:
@@ -864,13 +881,33 @@ async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, st
                     current_url = urljoin(str(response.url), location.strip())
                     redirect_hops += 1
                     continue
+                if not challenge_retried and _is_cloudflare_challenge(response):
+                    # One honest second request for the same URL, as MCC's
+                    # product rather than a browser (R3's opencode technique,
+                    # Q12). A second challenge, or any other 403, raises below
+                    # exactly as it always did: challenges are reported, never
+                    # worked around (Q3).
+                    challenge_retried = True
+                    await _drain_aiohttp_body_capped(
+                        response, _REDIRECT_RESPONSE_BODY_CAP_BYTES
+                    )
+                    continue
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "text/plain")
                 final_url = str(response.url)
-                encoding = response.get_encoding() or "utf-8"
                 body_bytes = await _read_aiohttp_body_capped(
                     response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
                 )
+                # The body first, the encoding after (7.120.0). aiohttp's
+                # ``get_encoding`` raises "Cannot compute fallback encoding of a
+                # not yet read body" for a Content-Type without a charset, and
+                # a body streamed under the cap never sets the attribute it
+                # would read -- which is why a plain ``text/html`` or
+                # ``application/pdf`` page failed outright before this release
+                # (DDG-1's pinned finding). The rules are aiohttp's own: a
+                # valid declared charset, else the session's utf-8 fallback
+                # (``ClientSession._resolve_charset``'s default).
+                encoding = _response_encoding(content_type)
         finally:
             await connector.close()
 
@@ -878,15 +915,59 @@ async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, st
 
     text = body_bytes.decode(encoding, errors="replace")
     title = final_url
-    data = text
+    # A non-HTML body is the text itself, cut at the cap exactly as before;
+    # an HTML page's data comes from ``fetch_extract``, which applies the same
+    # cap (with the marker) to the extractor's answer and the silent cut to
+    # today's parser's.
+    data = text[:_MAX_FETCH_CHARS]
     if "html" in content_type.lower():
         parser = HTMLTextParser()
         parser.feed(text)
         title = parser.title or final_url
-        data = "\n".join(parser.text_parts)
+        data = fetch_extract.text_for(
+            text,
+            "\n".join(parser.text_parts),
+            extractor=get_settings().web_fetch_extractor,
+        )
     return {
         "url": final_url,
         "title": title,
         "media_type": "text/plain",
-        "data": data[:_MAX_FETCH_CHARS],
+        "data": data,
     }
+
+
+def _is_cloudflare_challenge(response: aiohttp.ClientResponse) -> bool:
+    """Is this the 403 Cloudflare sends to ask a client to prove itself?"""
+
+    return (
+        response.status == _CLOUDFLARE_CHALLENGE_STATUS
+        and response.headers.get(_CLOUDFLARE_CHALLENGE_HEADER, "").strip().lower()
+        == _CLOUDFLARE_CHALLENGE_VALUE
+    )
+
+
+def _response_encoding(content_type: str) -> str:
+    """The charset a fetched body is decoded with (7.120.0).
+
+    aiohttp's ``ClientResponse.get_encoding`` cannot answer for a body that
+    was streamed rather than ``read()`` -- the attribute it needs stayed
+    ``None``, which is the two-entry failure DDG-1 pinned. This is the same
+    rule, applied once the bytes are in hand: the Content-Type's declared
+    charset when it names one Python knows, else the session's fallback of
+    utf-8 (``aiohttp.ClientSession._resolve_charset``'s default, which MCC
+    never overrides). A declared charset it cannot resolve is ignored exactly
+    as aiohttp ignores it.
+    """
+
+    header = Message()
+    header["content-type"] = content_type
+    declared = header.get_param("charset")
+    if isinstance(declared, tuple):  # RFC 2231 parameter: (charset, lang, value)
+        declared = declared[2]
+    if isinstance(declared, str) and declared.strip():
+        try:
+            return codecs.lookup(declared.strip()).name
+        except LookupError:
+            pass
+    return "utf-8"

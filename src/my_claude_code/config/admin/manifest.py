@@ -1715,6 +1715,31 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "forgery possible. Off refuses those hosts."
         ),
     ),
+    ConfigFieldSpec(
+        "WEB_FETCH_EXTRACTOR",
+        "Web Fetch Extractor",
+        "web_tools",
+        "select",
+        settings_attr="web_fetch_extractor",
+        default="trafilatura",
+        # The provider layer never reads it: a save must not re-sweep
+        # catalogues for a value only the fetch path asks for (7.120.0).
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec("trafilatura", "Main content as markdown (new default)"),
+            ConfigOptionSpec("basic", "Every text node, as before"),
+        ),
+        description=(
+            "What web_fetch makes of an HTML page. Trafilatura keeps the page's main "
+            "content and drops what surrounds it -- menus, footers, cookie banners -- "
+            "with headings, lists, links and tables kept as markdown; it loads on the "
+            "first fetch of a process and adds a one-line marker when a page is cut at "
+            "24,000 characters. Basic is the escape hatch: every text node, one per "
+            "line, the bytes every release before 7.120.0 returned. A page the "
+            "extractor cannot read falls back to basic on its own, so nothing gets "
+            "worse. Takes effect on the next fetch."
+        ),
+    ),
     # ---- Server responsiveness: is the loop keeping up ---------------------
     ConfigFieldSpec(
         "HEALTH_HEARTBEAT_INTERVAL_MS",

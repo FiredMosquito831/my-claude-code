@@ -58,8 +58,31 @@ DDG3_AFTER = "v7.119.0"
 DDG3B_KEY = "moved_by_ddg_3b"
 DDG3B_BEFORE = "v7.119.0"
 DDG3B_AFTER = "v7.119.1"
+#: 7.120.0 (DDG-4) moves every ``web_fetch`` cell whose page the extractor
+#: reads (markdown instead of every text node) plus the two no-charset cells
+#: DDG-1 pinned as failures, which answer now. Same convention, its own block.
+DDG4_KEY = "moved_by_ddg_4"
+DDG4_BEFORE = "v7.119.1"
+DDG4_AFTER = "v7.120.0"
 #: Every moved-cells block, in file order. ``--write`` keeps each verbatim.
-MOVED_KEYS = (DDG2_KEY, DDG3_KEY, DDG3B_KEY)
+MOVED_KEYS = (DDG2_KEY, DDG3_KEY, DDG3B_KEY, DDG4_KEY)
+
+#: Cells whose answer depends on the HTML parser build inside lxml's wheel,
+#: with both real answers recorded (7.120.0). The extractor parses the page
+#: with lxml, whose wheels bundle libxml2; 6.1.3's Windows wheel bundles
+#: 2.11.9 and its manylinux wheel 2.14.6, and they disagree on one HTML5 rule
+#: -- a numeric character reference in the C1 range (``&#149;`` in the cnet
+#: page) is remapped to its Windows-1252 character by the newer parser and
+#: dropped by the older one. THE ANSWER IS A PROPERTY OF THE PLATFORM, not of
+#: this tree, so a cell listed here matches when the run reproduces either
+#: recorded answer; a third answer is a real move and fails.
+PLATFORM_VARIANTS_KEY = "platform_variants"
+#: The two parser builds a wheel ships today. A later lxml that changes its
+#: bundled libxml2 is a new entry here, recorded on purpose.
+PLATFORM_VARIANT_TAGS = {
+    "libxml2-2.11": "lxml 6.1.3's Windows wheel (libxml2 2.11.9)",
+    "libxml2-2.14": "lxml 6.1.3's manylinux and macOS wheels (libxml2 2.14.6)",
+}
 
 
 def canonical(outcome: dict[str, Any]) -> bytes:
@@ -118,9 +141,15 @@ def load_baseline(path: Path = BASELINE_PATH) -> dict[str, Any]:
 def moved_cells(
     baseline: dict[str, Any], cells: dict[str, dict[str, dict[str, Any]]]
 ) -> dict[str, list[str]]:
-    """What differs from the baseline: moved digests, missing and added cells."""
+    """What differs from the baseline: moved digests, missing and added cells.
+
+    A cell listed under ``platform_variants`` matches when the run reproduces
+    any of its recorded answers: the answer depends on the libxml2 build in
+    lxml's wheel, so one pinned digest would fail on half the platforms.
+    """
 
     pinned: dict[str, dict[str, dict[str, Any]]] = baseline["cells"]
+    variants: dict[str, dict[str, Any]] = baseline.get(PLATFORM_VARIANTS_KEY, {})
     moved: list[str] = []
     missing: list[str] = []
     added: list[str] = []
@@ -133,8 +162,12 @@ def moved_cells(
                 missing.append(label)
             elif key not in old:
                 added.append(label)
-            elif old[key]["digest"] != new[key]["digest"]:
-                moved.append(label)
+            else:
+                accepted = {old[key]["digest"]} | {
+                    entry["digest"] for entry in variants.get(label, {}).values()
+                }
+                if new[key]["digest"] not in accepted:
+                    moved.append(label)
     return {"moved": moved, "missing": missing, "added": added}
 
 
@@ -142,6 +175,7 @@ def document(
     cells: dict[str, dict[str, dict[str, Any]]],
     tree: str,
     moved: dict[str, dict[str, Any]] | None = None,
+    variants: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The baseline file: ``moved`` maps each ``MOVED_KEYS`` block to its pairs."""
 
@@ -156,6 +190,7 @@ def document(
         ),
         "generated_on": tree,
         **{key: blocks.get(key, {}) for key in MOVED_KEYS},
+        PLATFORM_VARIANTS_KEY: variants or {},
         "cells": cells,
     }
 
@@ -175,11 +210,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.write:
         # The moved-cells records are this file's history, not its output: a
         # regeneration keeps every pair exactly as the release that moved it
-        # wrote it (a later PR that moves one again must update it on purpose).
+        # wrote it (a later PR that moves one again must update it on purpose),
+        # and the platform-variant answers are recorded on purpose for the same
+        # reason.
         existing = load_baseline(args.out) if args.out.is_file() else {}
         moved = {key: existing.get(key, {}) for key in MOVED_KEYS}
+        variants = existing.get(PLATFORM_VARIANTS_KEY, {})
         text = json.dumps(
-            document(cells, args.tree, moved), indent=1, ensure_ascii=False
+            document(cells, args.tree, moved, variants), indent=1, ensure_ascii=False
         )
         args.out.write_text(text + "\n", encoding="utf-8", newline="\n")
         print(f"wrote {args.out} ({sum(len(v) for v in cells.values())} cells)")
