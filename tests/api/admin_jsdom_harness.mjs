@@ -4769,6 +4769,18 @@ if (process.env.MCC_JSDOM_SCENARIO === "not_yet_card") {
   );
   scenario = prepareNotYetCardScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=raw_diagnostics (7.121.0): the request detail's raw
+   diagnostics -- four collapsed boxes in four honest states from the server's
+   own reader, Raw | Normalized each from its own source and remembered, payload
+   pretty-print, Copy, paging, the per-request export picker, and the card DOM
+   the BASE tree (53d78dab) drew for the equality baseline
+   (admin_jsdom_raw_diagnostics.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "raw_diagnostics") {
+  const { prepareRawDiagnosticsScenario } = await import(
+    "./admin_jsdom_raw_diagnostics.mjs"
+  );
+  scenario = prepareRawDiagnosticsScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

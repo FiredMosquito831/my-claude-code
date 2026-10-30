@@ -9,11 +9,13 @@ contrast, focus rings, breakpoints, or anything else that needs a box to have a
 size. Those remain unverified by any automated check in this repo.
 """
 
+import ast
 import json
 import os
 import re
 import shutil
 import subprocess
+import time
 from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +23,7 @@ from typing import Any, NoReturn, cast
 
 import pytest
 
+from my_claude_code.api import raw_diagnostics as raw_reader
 from my_claude_code.api.admin_harness_routes import _not_yet_entry
 from my_claude_code.api.marketplace_page import (
     match_charged,
@@ -6715,9 +6718,13 @@ def test_jsdom_request_modal_media_metadata_always_preview_only_when_stored(
 def test_jsdom_request_modal_media_is_never_inlined_or_listed(rendered) -> None:
     media = rendered["requestMedia"]
     assert media["dataUris"] == 0
-    # The browser fetches a preview itself; the page's own fetches are only
-    # the detail row.
-    assert media["fetched"] == ["/admin/api/requests/req-media"]
+    # The browser fetches a preview itself; the page's own fetches are the
+    # detail row and, since 7.121.0, one summary of the request's raw
+    # diagnostics (the boxes paint when it arrives, never before).
+    assert media["fetched"] == [
+        "/admin/api/requests/req-media",
+        "/admin/api/requests/raw?id=req-media",
+    ]
     assert media["afterClose"] == {"hidden": True, "children": 0}
     assert media["pageSourcesAfterClose"] == 0
     assert media["chatRowHidden"] is True
@@ -7299,8 +7306,12 @@ def test_choosing_a_tool_name_lists_the_requests_that_carried_it(rendered) -> No
         "216 requests · 2 tools arrays · 1 definition · "
     )
     assert tools["carrierNotes"][1] == "Showing the newest 2."
-    # A listed request opens its own detail.
-    assert tools["carrierOpens"] == ["/admin/api/requests/req-tools"]
+    # A listed request opens its own detail, and that detail asks for its raw
+    # diagnostics summary the same way every other open does (7.121.0).
+    assert tools["carrierOpens"] == [
+        "/admin/api/requests/req-tools",
+        "/admin/api/requests/raw?id=req-tools",
+    ]
 
 
 def test_a_request_older_than_the_recording_says_so(rendered) -> None:
@@ -12538,3 +12549,432 @@ def test_jsdom_not_yet_card_is_still_findable_by_the_filter(not_yet_card) -> Non
     assert not_yet_card["dsh"]["visibleCli"] == ["dsh"]
     # Clearing shows every card again, the not-yet one included.
     assert "dsh" in not_yet_card["cleared"]["visibleCli"]
+
+
+# --------------------------------------------------------------------------
+# 7.121.0: the request detail's raw diagnostics. One run of
+# admin_jsdom_raw_diagnostics.mjs (MCC_JSDOM_SCENARIO=raw_diagnostics) over
+# answers the server's own reader produced from FAKE log files written here --
+# the summary, every page and every normalised answer, keyed the way the
+# scenario's fetch stub looks them up -- so the page renders the server's real
+# sentences. Request 1 has a kind in each of the four states; request 2 has a
+# payload repr (pretty-print), seven SSE frames over three pages, an exception
+# type in server.log and the CLI box. The card with the new section taken out
+# is compared with the one the BASE tree (53d78dab, v7.120.2) drew from the
+# same scenario: the equality that proves the section is the only addition.
+
+RAWV_FIRST = "req_" + "e" * 32
+RAWV_SECOND = "req_" + "f" * 32
+RAWV_RAW_MARKER = "RAW-SSE-ONLY-7121"
+RAWV_NORMALIZED_MARKER = "NORMALIZED-ONLY-7121"
+RAWV_PROMPT_MARKER = "NORMALIZED-PROMPT-7121"
+#: A payload repr with everything the pretty-print must carry exactly: a
+#: quote of each kind, escapes, a NUL, non-ASCII, an integer no JavaScript
+#: number holds, an exponent, a tuple, empties, True/False/None.
+RAWV_PAYLOAD: dict[str, Any] = {
+    "model": "fake-model",
+    "max_tokens": 12345678901234567890123,
+    "temperature": 0.7,
+    "top_p": 1e-05,
+    "stream": True,
+    "stop": None,
+    "metadata": {"empty": {}, "list": [], "flag": False},
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": 'It\'s "quoted" \\ back\nslash ünïcode ⟦x⟧\ttab\x00nul',
+                }
+            ],
+        }
+    ],
+    "pair": (1, 2.5, "three"),
+}
+RAWV_BASELINE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "request_detail_dom_7_120_2.json"
+)
+
+
+def _rawv_sink(marker: str, request_id: str, message: str) -> bytes:
+    text = f"{marker} {request_id} {message}"
+    return text.replace("\r", "\\r").replace("\n", "\\n").encode("utf-8")
+
+
+def _rawv_frame(request_id: str, text: str) -> bytes:
+    frame = (
+        "event: content_block_delta\n"
+        f'data: {{"type":"content_block_delta","delta":{{"type":"text_delta","text":"{text}"}}}}'
+    )
+    return _rawv_sink(
+        "RAW_SSE", request_id, f"SSE_EVENT: content_block_delta - {frame}"
+    )
+
+
+def _rawv_file(path: Path, lines: list[bytes], mtime: float) -> Path:
+    path.write_bytes(b"".join(line + b"\r\n" for line in lines))
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _rawv_answers(folder: Path) -> dict[str, Any]:
+    """Every answer the page will ask for, from the real reader over fake files."""
+
+    now = time.time()
+    logs = folder / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    _rawv_file(
+        logs / "raw-diagnostics.2026-10-30_09-00-00_000001.log",
+        [
+            _rawv_frame(RAWV_FIRST, f"<thinking>{RAWV_RAW_MARKER} {n}</thinking>")
+            for n in range(2)
+        ],
+        now - 3000,
+    )
+    _rawv_file(
+        logs / "raw-diagnostics.2026-10-30_09-30-00_000002.log",
+        [_rawv_sink("RAW_CLI", "-", "Non-JSON output: starting") for _ in range(2)],
+        now - 1800,
+    )
+    active = _rawv_file(
+        logs / "raw-diagnostics.log",
+        [
+            _rawv_sink(
+                "RAW_PAYLOAD",
+                RAWV_SECOND,
+                f"FULL_PAYLOAD [{RAWV_SECOND}]: {RAWV_PAYLOAD!r}",
+            ),
+            *[_rawv_frame(RAWV_SECOND, f"frame {n}") for n in range(7)],
+        ],
+        now - 5,
+    )
+    error = {
+        "time": "2026-10-30 10:00:00.000000+03:00",
+        "level": "ERROR",
+        "message": f"Messages request failed request_id={RAWV_SECOND} exc_type=ValueError",
+        "module": "my_claude_code.api.request_errors",
+        "function": "log_unexpected_api_exception",
+        "line": 0,
+        "request_id": RAWV_SECOND,
+    }
+    server = _rawv_file(
+        logs / "server.log", [json.dumps(error).encode("utf-8")], now - 5
+    )
+    sources = raw_reader.RawSources(raw_log=active, server_log=server)
+    # The harness's own "req-fallback" row, opened for the fallback half of the
+    # DOM equality. Its full payload is the harness's; this file writes only
+    # the fields the raw section reads, and none of these lines is its.
+    fallback = {
+        "id": "req-fallback",
+        "ts_epoch": now - 86_400,
+        "status": "success",
+        "output_text": "the fallback row's answer",
+    }
+    rows = {
+        fallback["id"]: fallback,
+        RAWV_FIRST: {
+            "id": RAWV_FIRST,
+            "ts_epoch": now - 7200,
+            "ts_iso": "2026-10-30T07:00:00+00:00",
+            "endpoint": "/v1/messages",
+            "protocol": "anthropic",
+            "provider": "fake",
+            "requested_model": "fake/model",
+            "resolved_model": "fake/model",
+            "status": "success",
+            "input_text": RAWV_PROMPT_MARKER,
+            "input_chars": len(RAWV_PROMPT_MARKER),
+            "output_text": RAWV_NORMALIZED_MARKER,
+            "output_chars": len(RAWV_NORMALIZED_MARKER),
+        },
+        RAWV_SECOND: {
+            "id": RAWV_SECOND,
+            "ts_epoch": now - 60,
+            "ts_iso": "2026-10-30T08:59:00+00:00",
+            "endpoint": "/v1/messages",
+            "protocol": "anthropic",
+            "provider": "fake",
+            "requested_model": "fake/model",
+            "resolved_model": "fake/model",
+            "status": "error",
+            "error_kind": "api_error",
+            "error_message": "boom",
+            "output_text": "a partial answer",
+            "output_chars": 16,
+        },
+    }
+    settings = {
+        "req-fallback": raw_reader.RawSettings(
+            enabled={"payloads": True, "sse": True, "traceback": True, "cli": False},
+            retain_files=2,
+        ),
+        RAWV_FIRST: raw_reader.RawSettings(
+            enabled={"payloads": True, "sse": True, "traceback": True, "cli": False},
+            retain_files=2,
+        ),
+        RAWV_SECOND: raw_reader.RawSettings(
+            enabled=dict.fromkeys(raw_reader.RAW_KINDS, True), retain_files=2
+        ),
+    }
+    answers: dict[str, Any] = {}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(raw_reader, "PAGE_MAX_LINES", 3)
+        for request_id, row in rows.items():
+            flags = settings[request_id]
+            answers[f"{request_id}|summary"] = raw_reader.raw_summary(
+                sources, request_id, row, flags
+            )
+            for kind in raw_reader.RAW_KINDS:
+                answers[f"{request_id}|{kind}|normalized"] = raw_reader.normalized_view(
+                    request_id, kind, row, flags
+                )
+                start, anchor = 0, None
+                while True:
+                    page = raw_reader.raw_page(
+                        sources,
+                        request_id,
+                        kind,
+                        row,
+                        flags,
+                        start=start,
+                        anchor=anchor,
+                    )
+                    answers[f"{request_id}|{kind}|raw|{start}"] = page
+                    if page.get("next_start") is None:
+                        break
+                    start, anchor = page["next_start"], page["anchor"]
+    return {
+        "order": [RAWV_FIRST, RAWV_SECOND],
+        "rows": rows,
+        "answers": answers,
+        "exportFilename": f"mcc-request-{RAWV_SECOND}-csv-2026-10-30T09-00-00.csv",
+        "exportFailure": {
+            "status": 422,
+            "detail": "XLSX cannot hold this export without cutting it: Excel keeps at "
+            "most 32,767 characters in a cell.",
+        },
+    }
+
+
+@pytest.fixture(scope="module")
+def raw_diagnostics(tmp_path_factory) -> dict:
+    folder = tmp_path_factory.mktemp("raw_diagnostics")
+    data = _rawv_answers(folder)
+    path = folder / "raw_answers.json"
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return _run(MCC_JSDOM_SCENARIO="raw_diagnostics", MCC_JSDOM_RAW_FILE=str(path))
+
+
+def _rawv_jsonable(value: Any) -> Any:
+    if isinstance(value, tuple | list):
+        return [_rawv_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _rawv_jsonable(item) for key, item in value.items()}
+    return value
+
+
+def test_jsdom_raw_diagnostics_scenario_runs_clean(raw_diagnostics) -> None:
+    assert raw_diagnostics["fatal"] is None
+    assert raw_diagnostics["scenarioFatal"] is None
+    assert raw_diagnostics["scriptErrors"] == []
+    assert raw_diagnostics["consoleErrors"] == []
+    assert raw_diagnostics["baseTree"] is False
+    assert raw_diagnostics["missing"] == [], "the page asked for an answer nobody wrote"
+
+
+def test_jsdom_raw_section_is_last_collapsed_and_names_what_it_shows(
+    raw_diagnostics,
+) -> None:
+    assert raw_diagnostics["sectionHidden"] is False
+    assert raw_diagnostics["sectionIsLast"] is True
+    assert "nothing is masked" in raw_diagnostics["warning"]
+    boxes = raw_diagnostics["collapsed"]
+    assert [box["kind"] for box in boxes] == ["payloads", "sse", "traceback", "cli"]
+    assert [box["label"] for box in boxes] == [
+        "API payloads",
+        "SSE events",
+        "API error tracebacks",
+        "CLI diagnostics",
+    ]
+    assert all(box["open"] is False for box in boxes)
+    assert all(
+        box["pressed"] == [["raw", "true"], ["normalized", "false"]] for box in boxes
+    )
+    facts = {box["kind"]: box["facts"] for box in boxes}
+    assert facts["payloads"] == "pruned by rotation"
+    assert facts["sse"].startswith("2 lines · ")
+    assert facts["traceback"] == "no error logged"
+    assert facts["cli"] == "not captured · LOG_RAW_CLI_DIAGNOSTICS is off"
+
+
+def test_jsdom_raw_shows_the_four_honest_states(raw_diagnostics) -> None:
+    raw = raw_diagnostics["rawFirst"]
+    # present
+    assert raw["sse"]["pre"].count(RAWV_RAW_MARKER) == 2
+    assert raw["sse"]["hasCopy"] is True
+    assert any("pruned by rotation" in note for note in raw["sse"]["notes"])
+    # pruned by rotation
+    assert raw["payloads"]["stateHeadline"] == "No raw lines remain."
+    assert "keeps 2 rotated files of 50 MB" in raw["payloads"]["state"]
+    assert "only in normalised form" in raw["payloads"]["state"]
+    assert raw["payloads"]["pre"] is None
+    # nothing to capture
+    assert raw["traceback"]["stateHeadline"] == "No error logged."
+    # the setting is off: which one, where it is, and when it applies
+    cli = raw["cli"]["state"]
+    assert raw["cli"]["stateHeadline"] == "Not captured."
+    # The server writes the name in backticks; the page draws them as <code>,
+    # so the text reads as the bare name.
+    assert "LOG_RAW_CLI_DIAGNOSTICS is off" in cli
+    assert raw["cli"]["codeSpans"] == 1
+    assert "Limits & Resilience → Diagnostics → “Log Raw CLI Diagnostics”" in cli
+    assert raw["cli"]["pre"] is None
+
+
+def test_jsdom_raw_and_normalized_never_show_each_others_text(raw_diagnostics) -> None:
+    raw = raw_diagnostics["rawFirst"]
+    normalized = raw_diagnostics["normalizedFirst"]
+    for view in raw.values():
+        text = f"{view['state']} {view['pre'] or ''} {' '.join(view['notes'])}"
+        assert RAWV_NORMALIZED_MARKER not in text
+        assert RAWV_PROMPT_MARKER not in text
+        assert view["source"].startswith("Raw: ")
+    assert RAWV_NORMALIZED_MARKER in normalized["sse"]["pre"]
+    assert RAWV_RAW_MARKER not in normalized["sse"]["pre"]
+    assert RAWV_PROMPT_MARKER in normalized["payloads"]["pre"]
+    assert normalized["sse"]["source"].startswith(
+        "Normalized: stored in the request log"
+    )
+    assert "requests.output_text" in normalized["sse"]["source"]
+    assert normalized["cli"]["stateHeadline"] == "No normalised form."
+    assert all(view["view"] == "normalized" for view in normalized.values())
+
+
+def test_jsdom_the_view_choice_is_remembered_and_blocked_storage_reads_raw(
+    raw_diagnostics,
+) -> None:
+    normalized = [["raw", "false"], ["normalized", "true"]]
+    raw = [["raw", "true"], ["normalized", "false"]]
+    assert raw_diagnostics["storedAfterNormalized"] == "normalized"
+    assert raw_diagnostics["pressedAfterNormalized"] == [normalized] * 4
+    assert raw_diagnostics["pressedOnReopen"] == [normalized] * 4
+    # Raw is the default and is stored as absence.
+    assert raw_diagnostics["storedAfterRaw"] is None
+    assert raw_diagnostics["blockedStore"] is True, raw_diagnostics.get("blockError")
+    assert raw_diagnostics["pressedWhenBlocked"] == [raw] * 4
+
+
+def test_jsdom_payload_pretty_print_is_labelled_and_lossless(raw_diagnostics) -> None:
+    line = f"FULL_PAYLOAD [{RAWV_SECOND}]: {RAWV_PAYLOAD!r}"
+    assert raw_diagnostics["payloadVerbatim"] == line.replace("\n", "\\n")
+    assert raw_diagnostics["prettyButton"] == "Pretty-print as JSON"
+    assert raw_diagnostics["prettyButtonOn"] == "Show the stored line"
+    assert any(
+        "nothing is evaluated" in note for note in raw_diagnostics["prettyNotes"]
+    )
+    prefix, pretty = raw_diagnostics["prettyPre"].split("\n", 1)
+    assert prefix == f"FULL_PAYLOAD [{RAWV_SECOND}]:"
+    literal = line.split("]: ", 1)[1]
+    assert json.loads(pretty) == _rawv_jsonable(ast.literal_eval(literal))
+    # Digits copied, never rounded through a JavaScript number.
+    assert '"max_tokens": 12345678901234567890123' in pretty
+    assert '"top_p": 1e-05' in pretty
+    assert raw_diagnostics["prettyOffPre"] == raw_diagnostics["payloadVerbatim"]
+
+
+def test_jsdom_copy_copies_exactly_what_the_box_shows(raw_diagnostics) -> None:
+    assert raw_diagnostics["copied"] == [
+        raw_diagnostics["prettyPre"],
+        raw_diagnostics["prettyOffPre"],
+    ]
+
+
+def test_jsdom_paging_loads_every_line_and_sends_the_anchor_back(
+    raw_diagnostics,
+) -> None:
+    pages = raw_diagnostics["ssePages"]
+    assert [page["pre"].count("frame ") for page in pages] == [3, 6, 7]
+    # The page writes an en dash between the two numbers.
+    dash = chr(0x2013)
+    assert pages[0]["more"].startswith(f"Showing lines 1{dash}3 of 7.")
+    assert pages[-1]["more"] == "All 7 recorded lines are shown."
+    assert [f"frame {n}" in pages[-1]["pre"] for n in range(7)] == [True] * 7
+    asked = [
+        url
+        for url in raw_diagnostics["rawUrls"]
+        if "kind=sse" in url and "start=" in url
+    ]
+    assert len(asked) == 2
+    assert all("anchor=" in url and "anchor=&" not in url for url in asked)
+
+
+def test_jsdom_the_traceback_and_cli_boxes_say_what_they_hold(raw_diagnostics) -> None:
+    traceback = raw_diagnostics["traceback"]
+    assert "exc_type=ValueError" in traceback["pre"]
+    assert any(
+        "LOG_API_ERROR_TRACEBACKS was off" in note for note in traceback["notes"]
+    )
+    cli = raw_diagnostics["cli"]
+    assert cli["stateHeadline"] == "Not tied to this request."
+    assert "(2 such lines in the retained window)" in cli["state"]
+
+
+def test_jsdom_the_per_request_export_picker(raw_diagnostics) -> None:
+    assert raw_diagnostics["exportPanelHiddenAtFirst"] is True
+    assert raw_diagnostics["exportPanelOpened"] == {"hidden": False, "expanded": "true"}
+    assert raw_diagnostics["exportKinds"] == [
+        ["payloads", True, "API payloads"],
+        ["sse", True, "SSE events"],
+        ["traceback", True, "API error tracebacks"],
+        ["cli", True, "CLI diagnostics"],
+    ]
+    assert [value for value, _label in raw_diagnostics["exportViews"]] == [
+        "both",
+        "raw",
+        "normalized",
+    ]
+    assert raw_diagnostics["exportFormats"] == ["json", "csv", "xlsx", "txt"]
+    (url,) = raw_diagnostics["exportUrls"][:1]
+    assert url.startswith("/admin/api/requests/raw/export?")
+    assert f"id={RAWV_SECOND}" in url
+    assert "format=csv" in url and "view=raw" in url
+    assert "kinds=payloads%2Csse%2Ctraceback" in url
+    assert raw_diagnostics["downloads"] == [
+        {
+            "filename": f"mcc-request-{RAWV_SECOND}-csv-2026-10-30T09-00-00.csv",
+            "size": 13,
+        }
+    ]
+    assert raw_diagnostics["exportHint"] == "Export downloaded."
+    assert raw_diagnostics["exportFailureHint"].startswith(
+        "Not exported: XLSX cannot hold this export without cutting it"
+    )
+    assert raw_diagnostics["exportEmptyHint"] == "Tick at least one kind to export."
+    assert raw_diagnostics["exportEmptyFetched"] == 0
+    assert raw_diagnostics["exportPanelOnNextOpen"] == {
+        "hidden": True,
+        "expanded": "false",
+        "hint": "",
+    }
+
+
+def test_jsdom_the_raw_section_is_the_only_thing_the_request_detail_gained(
+    raw_diagnostics,
+) -> None:
+    """The card with the raw section taken out of a clone is the base card.
+
+    The baseline was captured by this same scenario file pointed at the BASE
+    tree's admin_static (53d78dab, v7.120.2): the same two rows, the same
+    harness, the same clicks. Every child of the card -- route trace, meta
+    list, wire panes, the whole transcript -- must be byte-identical.
+    """
+
+    baseline = json.loads(RAWV_BASELINE.read_text(encoding="utf-8"))
+    assert "BASE tree 53d78dab" in baseline["written_by"]
+    for key in ("domFirst", "domFallback"):
+        mine = raw_diagnostics[key]
+        base = baseline[key]
+        assert base["childCount"] == 8
+        assert mine["childCount"] == base["childCount"] + 1
+        assert mine["children"] == base["children"], key

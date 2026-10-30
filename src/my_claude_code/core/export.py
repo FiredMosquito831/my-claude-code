@@ -68,6 +68,9 @@ REQUEST_FIELD_IDS: tuple[str, ...] = (
     "media",
     "ladder",
     "tool_catalogue",
+    # 7.121.0, before ``exit`` for the same reason ``exit`` went before
+    # ``origin``: Request origin stays the last group, as it was.
+    "raw_diagnostics",
     # 7.88.0, before ``origin`` so that group stays last, as it was.
     "exit",
     "origin",
@@ -92,7 +95,27 @@ REQUEST_FIELD_LABELS: dict[str, str] = {
     "tool_catalogue": "Tool catalogue",
     "origin": "Request origin",
     "exit": "Exit",
+    "raw_diagnostics": "Raw diagnostics",
 }
+
+#: The Raw diagnostics group (7.121.0): every line the four raw settings
+#: recorded for a request, verbatim, one cell per kind. Opt-in and absent from
+#: the defaults, so an export that does not ask for it is byte-identical to
+#: before; the cells are filled by the export route from the request detail's
+#: own reader, never from SQL.
+RAW_DIAGNOSTICS_FIELD = "raw_diagnostics"
+#: One column per kind, in the request detail's box order: payloads, SSE
+#: events, API error tracebacks, CLI diagnostics.
+RAW_DIAGNOSTICS_COLUMNS: tuple[str, ...] = (
+    "raw_payloads",
+    "raw_sse_events",
+    "raw_error_tracebacks",
+    "raw_cli_diagnostics",
+)
+#: The group reads every request's lines out of the log files, so it is a
+#: scope limit, not a cut: an export matching more requests than this is
+#: refused with "narrow the filter" before a byte is written, never trimmed.
+RAW_DIAGNOSTICS_MAX_REQUESTS = 200
 
 # Selectable fields for the web-search scope.
 WEBSEARCH_FIELD_IDS: tuple[str, ...] = (
@@ -376,6 +399,8 @@ _REQUEST_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     # it per page. Opt-in, so every export that does not ask for it is
     # byte-identical to before -- and Folder stays where it was, in "origin".
     "exit": (),
+    # 7.121.0: read from the log files by the export route, never from SQL.
+    "raw_diagnostics": (),
 }
 
 # Derived detail columns present on every request export, gated by no field.
@@ -419,6 +444,8 @@ _REQUEST_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
     # the exit refusals the request's stored tries show -- a country refused,
     # a bot challenge -- counted, and empty where no ladder was stored.
     "exit": ("exit", "exits", "exit_region_refused", "exit_challenged"),
+    # 7.121.0: one cell per raw kind, filled by the export route.
+    "raw_diagnostics": RAW_DIAGNOSTICS_COLUMNS,
 }
 
 # Reverse map: column -> gating field id.
@@ -497,6 +524,7 @@ _REQUEST_COLUMN_ORDER: tuple[str, ...] = (
     "exits",
     "exit_region_refused",
     "exit_challenged",
+    *RAW_DIAGNOSTICS_COLUMNS,
 )
 
 _REQUEST_COLUMN_LABELS: dict[str, str] = {
@@ -569,6 +597,10 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "exits": "Exits tried",
     "exit_region_refused": "Country refused",
     "exit_challenged": "Challenged",
+    "raw_payloads": "Raw API payloads",
+    "raw_sse_events": "Raw SSE events",
+    "raw_error_tracebacks": "Raw API error tracebacks",
+    "raw_cli_diagnostics": "Raw CLI diagnostics",
 }
 
 
@@ -1508,15 +1540,34 @@ def render_txt(
     headers: list[str],
     title: str,
     summary: str,
+    widths: list[int] | None = None,
 ) -> Iterator[bytes]:
     """Yield a readable report: title, summary, aligned columns, group subtotals.
 
     Column widths are derived from the widest value seen (capped at 40 chars);
     values are padded, never truncated, so long model ids and endpoints survive
     the report.
+
+    Sizing the columns means seeing every row before the first one is written,
+    so by default the rows are held in memory. ``widths`` (7.121.0) is that
+    sizing done beforehand -- :func:`txt_column_widths` over the same rows --
+    and the report then streams a row at a time: the bytes are the same, and an
+    export of raw log lines does not hold all of them at once. Every caller
+    before 7.121.0 passes no ``widths`` and runs the code below unchanged.
     """
     yield f"{title}\n".encode()
     yield f"{summary}\n\n".encode()
+    if widths is not None:
+        yield _txt_row(headers, widths).encode("utf-8")
+        yield _txt_rule(widths).encode("utf-8")
+        for row in rows:
+            values = [
+                "" if row.get(column) is None else _serialize_cell(row.get(column))
+                for column in columns
+            ]
+            yield _txt_row(values, widths).encode("utf-8")
+        yield b"\n"
+        return
     widths = [min(max(len(header), 1), 40) for header in headers]
     pending: list[list[str]] = []
     for row in rows:
@@ -1534,6 +1585,26 @@ def render_txt(
     for values in pending:
         yield _txt_row(values, widths).encode("utf-8")
     yield b"\n"
+
+
+def txt_column_widths(
+    rows: Iterable[dict[str, Any]], columns: list[str], headers: list[str]
+) -> list[int]:
+    """The widths :func:`render_txt` would size its columns to for ``rows``.
+
+    The same rule, step for step -- start from the header capped at 40, widen
+    to each longer value, never past 40 -- so a report streamed with these
+    widths is byte-identical to one :func:`render_txt` buffers itself.
+    """
+
+    widths = [min(max(len(header), 1), 40) for header in headers]
+    for row in rows:
+        for index, column in enumerate(columns):
+            value = row.get(column)
+            length = 0 if value is None else len(_serialize_cell(value))
+            if index < len(widths) and length > widths[index]:
+                widths[index] = min(length, 40)
+    return widths
 
 
 def _txt_row(values: list[str], widths: list[int]) -> str:
