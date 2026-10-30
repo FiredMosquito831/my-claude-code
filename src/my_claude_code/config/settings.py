@@ -230,6 +230,7 @@ from .constants import (
     TRIM_MODE_NAMES,
     VISION_ADAPTER_MODE_DEFAULT,
     VISION_ADAPTER_MODE_NAMES,
+    WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT,
     WITHHELD_FACT_TTL_SECONDS_DEFAULT,
 )
 from .env_files import (
@@ -1990,6 +1991,13 @@ class Settings(BaseSettings):
     # Entries of WEB_SEARCH_CHAIN that are paused (a set: every occurrence).
     web_search_chain_paused: str | None = Field(
         default=None, validation_alias="WEB_SEARCH_CHAIN_PAUSED"
+    )
+    # The least time, in seconds, between two requests of the keyless
+    # DuckDuckGo hop (the "legacy" route entry, 7.119.0). 0 sends them back to
+    # back, as before; read per request, so a save applies to the next search.
+    websearch_legacy_min_interval_seconds: float = Field(
+        default=WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT,
+        validation_alias="WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS",
     )
     # One optional credential per provider; comma-separate multiple keys for rotation.
     ollama_search_api_key: str | None = Field(

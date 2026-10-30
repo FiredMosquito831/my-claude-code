@@ -39,6 +39,17 @@ BASELINE_PATH = corpus.TESTS_DIR / "contracts" / "ddg_harness_baseline.json"
 DDG2_KEY = "moved_by_ddg_2"
 DDG2_BEFORE = "v7.118.1"
 DDG2_AFTER = "v7.118.2"
+#: 7.119.0 (DDG-3) moved twelve ``search:legacy`` cells -- the legacy lite hop
+#: re-implemented as declared data: snippets on the three result pages (and
+#: the edge page's direct-link row found), the four bot-check pages a
+#: ``rate_limit`` naming the check instead of an empty answer, and 403 / 429 /
+#: 5xx worded through the shared status mapping. Same convention, its own
+#: block, pinned by the DDG-3 tests of ``test_ddg_harness_equality.py``.
+DDG3_KEY = "moved_by_ddg_3"
+DDG3_BEFORE = "v7.118.2"
+DDG3_AFTER = "v7.119.0"
+#: Every moved-cells block, in file order. ``--write`` keeps each verbatim.
+MOVED_KEYS = (DDG2_KEY, DDG3_KEY)
 
 
 def canonical(outcome: dict[str, Any]) -> bytes:
@@ -120,8 +131,11 @@ def moved_cells(
 def document(
     cells: dict[str, dict[str, dict[str, Any]]],
     tree: str,
-    moved: dict[str, Any] | None = None,
+    moved: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """The baseline file: ``moved`` maps each ``MOVED_KEYS`` block to its pairs."""
+
+    blocks = moved or {}
     return {
         "about": (
             "Equality baseline of the DDG harness (tests/support/ddg_harness/"
@@ -131,7 +145,7 @@ def document(
             "Pinned by tests/contracts/test_ddg_harness_equality.py."
         ),
         "generated_on": tree,
-        DDG2_KEY: moved or {},
+        **{key: blocks.get(key, {}) for key in MOVED_KEYS},
         "cells": cells,
     }
 
@@ -149,10 +163,11 @@ def main(argv: list[str] | None = None) -> int:
     with offline.guard():
         cells = methods.run_sync(compute_cells())
     if args.write:
-        # The moved-cells record is this file's history, not its output: a
+        # The moved-cells records are this file's history, not its output: a
         # regeneration keeps every pair exactly as the release that moved it
         # wrote it (a later PR that moves one again must update it on purpose).
-        moved = load_baseline(args.out).get(DDG2_KEY, {}) if args.out.is_file() else {}
+        existing = load_baseline(args.out) if args.out.is_file() else {}
+        moved = {key: existing.get(key, {}) for key in MOVED_KEYS}
         text = json.dumps(
             document(cells, args.tree, moved), indent=1, ensure_ascii=False
         )

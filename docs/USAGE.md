@@ -4789,6 +4789,8 @@ WEB_SEARCH_CHAIN_PAUSED=            # optional: chain entries to skip
 
 **`auto` works with zero configuration.** With no keys set it falls back to keyless DuckDuckGo, so search works out of the box. Set any provider key and `auto` prefers it (except Context7).
 
+**The keyless DuckDuckGo hop (7.119.0).** The last hop of `auto` (and the `legacy` chain entry) reads DuckDuckGo's lite page with declared parser profiles: each result now carries its **snippet**, ads are skipped, and `DDGS_REGION` / `DDGS_TIMELIMIT` travel as the page's `kl` / `df` when set. When DuckDuckGo answers with its bot check, the search says so — `web_search rate limited by legacy: DuckDuckGo answered with its bot check instead of results (…)`, code `too_many_requests` — instead of "no results", and a chain moves on to its next entry as it would for a 429. The hop identifies itself as `my-claude-code/<version>`. `WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS` (default `0` = back to back) spaces its requests; only this hop waits. Details: [docs/WEB-SEARCH.md](WEB-SEARCH.md#the-keyless-duckduckgo-hop-71190).
+
 A missing API key on an explicitly selected provider **fails visibly** rather than silently degrading — an unconfigured provider is an operator mistake, not an outage.
 
 15 backends are supported (14 web search services plus Context7's library documentation). Free tiers worth knowing: Exa ($10/month ongoing), Tavily (1,000 credits/month), Brave ($5/month), Serper (2,500 one-time), Linkup ($20 topped up monthly), and DuckDuckGo (keyless, unlimited, lower quality).

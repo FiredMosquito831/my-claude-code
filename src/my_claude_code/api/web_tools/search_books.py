@@ -357,8 +357,12 @@ async def search_key_books(
 async def legacy_scraper_books(settings: Settings) -> SearchKeyBooks:
     """One keyless slot for the old DuckDuckGo scraper as a chain entry.
 
-    The scraper raises raw ``httpx`` errors, which the retry ladder and the
-    pool read natively -- exactly as they read a model provider's.
+    The scraper raises raw ``httpx`` errors for an HTTP error status or a
+    transport failure, which the retry ladder and the pool read natively --
+    exactly as they read a model provider's. Since 7.119.0 it also raises two
+    failures it classified itself, read through :func:`translate_search_error`
+    like any adapter's: DuckDuckGo's bot check (``rate_limit``) and a results
+    page no declared profile can read (``upstream``).
     """
     policy = SearchBooksPolicy.from_settings(settings, "single")
     built_from = (None, policy)

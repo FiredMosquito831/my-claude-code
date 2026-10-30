@@ -350,6 +350,12 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "media_upload_max_mb": LimitRange(
         0.0, 10_000_000.0, "0 sets no limit; the provider's own applies"
     ),
+    # The spacing of the keyless DuckDuckGo hop's requests (7.119.0). 0 waits
+    # for nothing; the hour is a sanity bound on a hand-typed number, the same
+    # one the watchdog interval uses, not an opinion about DuckDuckGo.
+    "websearch_legacy_min_interval_seconds": LimitRange(
+        0.0, 3_600.0, "0 sends the requests back to back"
+    ),
 }
 
 

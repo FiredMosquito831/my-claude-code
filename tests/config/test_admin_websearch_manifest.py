@@ -177,6 +177,7 @@ def test_websearch_field_specs_cover_section_fields() -> None:
         "WEB_SEARCH_FALLBACK_POLICY",
         "WEB_SEARCH_CHAIN",
         "WEB_SEARCH_CHAIN_PAUSED",
+        "WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS",
         "WEBSEARCH_LOG_ENABLED",
         "WEBSEARCH_LOG_CAPTURE_CONTENT",
         "WEBSEARCH_LOG_CONTENT_MAX_CHARS",
@@ -203,6 +204,25 @@ def test_websearch_field_specs_cover_section_fields() -> None:
     }
     assert keys == expected
     assert all(spec["section_id"] == "websearch" for spec in websearch_field_specs())
+
+
+def test_the_legacy_scrape_interval_is_a_bounded_hot_number_that_ships_off() -> None:
+    """7.119.0: the keyless DuckDuckGo hop's spacing, on the Web Search page."""
+
+    field = FIELD_BY_KEY["WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS"]
+    assert field.section_id == "websearch"
+    assert field.field_type == "number"
+    assert field.settings_attr == "websearch_legacy_min_interval_seconds"
+    assert field.default == "0"
+    assert field.restart_required is False
+    # Read per request by the hop; no provider client is rebuilt for it.
+    assert field.affects_providers is False
+    assert field.advanced is False
+    # The bound is config.limits' own, published beside the input.
+    assert (field.minimum, field.maximum) == (0.0, 3600.0)
+    assert field.range_hint.startswith("0 to 3600")
+    assert "back to back" in field.description
+    assert "octos" in field.description and "Crush" in field.description
 
 
 def test_websearch_capture_fields_are_explicit_and_hot() -> None:

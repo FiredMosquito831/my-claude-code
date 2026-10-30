@@ -115,6 +115,19 @@ class TestWebSearchSettings:
         assert settings.websearch_log_capture_content is False
         assert settings.websearch_log_content_max_chars == 1234
 
+    def test_the_legacy_scrape_interval_ships_off_and_reads_seconds(
+        self, monkeypatch
+    ) -> None:
+        """7.119.0: 0 (back to back) unless the operator sets a spacing."""
+
+        assert _settings(monkeypatch).websearch_legacy_min_interval_seconds == 0.0
+        assert (
+            _settings(
+                monkeypatch, WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS="2.5"
+            ).websearch_legacy_min_interval_seconds
+            == 2.5
+        )
+
     def test_content_cap_rejects_unsafe_tiny_values(self, monkeypatch) -> None:
         monkeypatch.setitem(Settings.model_config, "env_file", ())
         monkeypatch.setenv("WEBSEARCH_LOG_CONTENT_MAX_CHARS", "511")

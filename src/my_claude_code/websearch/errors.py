@@ -20,6 +20,16 @@ KIND_DETAIL_BAD_JSON = "bad_json"
 #: for. Set only by :meth:`BaseWebSearchProvider.search` (the route used when
 #: no chain is set); the search chain never raises it.
 KIND_DETAIL_BENCHED = "benched"
+#: 7.119.0: the keyless DuckDuckGo hop (``legacy``) met DuckDuckGo's bot check
+#: instead of results -- HTTP 202, or the check's own markers on a page with
+#: no result. Carried by a :class:`WebSearchRateLimitError`; the sentence a
+#: failed search shows with no chain set names what was seen.
+KIND_DETAIL_CHALLENGE = "challenge"
+#: 7.119.0: the hop's page carries DuckDuckGo's next-page form, so it has
+#: results, yet no declared page profile found a row in it -- the markup
+#: changed (``config/duckduckgo_profiles.py``). Carried by a
+#: :class:`WebSearchUpstreamError`.
+KIND_DETAIL_UNREADABLE_PAGE = "unreadable_page"
 
 
 class WebSearchError(Exception):

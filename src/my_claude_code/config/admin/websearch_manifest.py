@@ -36,6 +36,7 @@ def websearch_field_specs() -> tuple[dict[str, Any], ...]:
         _provider_select_spec(),
         _fallback_policy_spec(),
         *_search_chain_field_specs(),
+        _legacy_interval_spec(),
         *_analytics_field_specs(),
         _searxng_base_url_spec(),
         *_credential_field_specs(),
@@ -238,6 +239,33 @@ def _search_chain_field_specs() -> tuple[dict[str, Any], ...]:
             ),
         },
     )
+
+
+def _legacy_interval_spec() -> dict[str, Any]:
+    """The keyless DuckDuckGo hop's request spacing (7.119.0), off by default.
+
+    Its bounds are ``config.limits.LIMIT_RANGES``'s, attached by the manifest.
+    Read per request by the hop, never by a provider client.
+    """
+
+    return {
+        "key": "WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS",
+        "label": "Legacy Scrape Minimum Interval (s)",
+        "section_id": "websearch",
+        "field_type": "number",
+        "settings_attr": "websearch_legacy_min_interval_seconds",
+        "default": "0",
+        "affects_providers": False,
+        "description": (
+            "The least time between two requests of the keyless DuckDuckGo "
+            "scrape (the legacy entry: the last hop of Auto, or a place in "
+            "the Search Chain). 0 sends them back to back, as before. For "
+            "reference, other projects wait about 3 seconds (octos) or a "
+            "random 0.5 to 2 seconds (Crush); the value is yours. Only this "
+            "hop waits; every other search service is unaffected. Takes "
+            "effect on the next search."
+        ),
+    }
 
 
 def _searxng_base_url_spec() -> dict[str, Any]:

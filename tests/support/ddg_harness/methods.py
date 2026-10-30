@@ -10,11 +10,14 @@ or ``FETCH_METHODS`` and the table and baseline pick them up:
   ``HttpClient2`` gets an ``httpx.MockTransport`` that serves the scenario.
   The backend is pinned because ``auto`` draws engines at random and every
   recorded page is a DuckDuckGo page.
-* ``legacy`` -- the last hop of the ``auto`` route,
-  ``outbound._legacy_web_search_scrape`` (lite endpoint, httpx,
-  ``SearchResultParser``), with ``httpx.AsyncClient`` handed a
-  ``MockTransport``; a failure is classified with the route's own
-  ``outbound._search_error_kind``.
+* ``legacy`` -- the last hop of the ``auto`` route as that route runs it,
+  ``outbound._legacy_route_scrape``: the lite-endpoint request of
+  ``outbound._legacy_web_search_scrape`` read by the declared page profiles
+  (``api/web_tools/duckduckgo_lite.py``, ``config/duckduckgo_profiles.py``;
+  7.119.0, DDG-3 -- before it, ``SearchResultParser`` alone), with an HTTP
+  error status worded through the shared status mapping, and
+  ``httpx.AsyncClient`` handed a ``MockTransport``; a failure is classified
+  with the route's own ``outbound._search_error_kind``.
 * ``web_fetch`` -- ``outbound._run_web_fetch`` end to end with real aiohttp,
   against a loopback ``aiohttp`` server that serves each page with its status,
   ``Content-Type`` and headers; the egress policy allows the loopback target
@@ -193,7 +196,7 @@ async def run_legacy(scenario: SearchScenario, query: str, max_results: int) -> 
     started = time.perf_counter()
     with _legacy_transport(_fake_handler(scenario, requests)):
         try:
-            rows = await outbound._legacy_web_search_scrape(query)
+            rows = await outbound._legacy_route_scrape(query)
         except Exception as error:
             outcome = _error_fields(error, outbound._search_error_kind(error))
         else:
