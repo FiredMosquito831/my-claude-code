@@ -53,12 +53,32 @@ records both answers under ``moved_by_ddg_3b`` (``v7.119.0`` before,
 the new block's before-answer. Every ``ddgs`` and ``web_fetch`` cell is byte
 for byte 7.119.0's (the 315 unmoved cells' digest map hashed the same on both
 files, PROGRESS.md).
+
+**7.120.0 (DDG-4) moves every ``web_fetch`` cell whose page the extractor
+reads, and the two no-charset cells DDG-1 pinned as failures** (spec 5 R3;
+USER DECISIONS Q6-Q8/Q12). The default extractor is trafilatura's
+markdown-with-links, so 283 pages answer with markdown instead of every text
+node; ``fetch_scenarios/html_without_charset`` and ``fetch_scenarios/pdf_bytes``
+used to raise ``RuntimeError`` because aiohttp was asked for the encoding
+before the body was read, and answer now. Each records both answers under
+``moved_by_ddg_4`` (``v7.119.1`` before, ``v7.120.0`` after). The fourteen
+unmoved cells are named: four are responses no extractor reads (plain text,
+JSON, a 404 and the Cloudflare 403) and ten are HTML pages whose extraction was
+under the declared 200-character threshold, where today's parser answered
+exactly as before -- R3's "a page never gets worse", checked mechanically
+rather than trusted. Every ``search:*`` cell is byte for byte 7.119.1's.
+``WEB_FETCH_EXTRACTOR=basic`` reproduces 7.119.1's bytes on every cell but the
+two the encoding fix answers (``tests/api/test_web_fetch_extractor.py``).
 """
 
 import copy
+import hashlib
 
 import pytest
 
+from my_claude_code.api.web_tools import fetch_extract
+from my_claude_code.api.web_tools.constants import _WEB_FETCH_EXTRACTOR_MIN_CHARS
+from my_claude_code.api.web_tools.parsers import HTMLTextParser
 from tests.support.ddg_harness import baseline, corpus, methods, scoring
 
 #: The cells 7.118.2 moves, as they are labelled in the baseline. A later
@@ -227,10 +247,14 @@ def test_the_baseline_records_todays_findings_as_they_are() -> None:
         "url",
         "snippet",
     }
-    # web_fetch asks aiohttp for the encoding before reading the body, so a
-    # response whose Content-Type has no charset fails outright.
-    no_charset = fetch["fetch_scenarios/html_without_charset"]["shape"]
-    assert no_charset["error_class"] == "RuntimeError"
+    # web_fetch asked aiohttp for the encoding before reading the body, so a
+    # response whose Content-Type has no charset failed outright. 7.120.0
+    # reads the body first; DDG-1's pin is kept as the before-answer and the
+    # page answers now.
+    label = "fetch:web_fetch fetch_scenarios/html_without_charset"
+    before = document[baseline.DDG4_KEY][label][baseline.DDG4_BEFORE]["shape"]
+    assert before["error_class"] == "RuntimeError"
+    assert fetch["fetch_scenarios/html_without_charset"]["shape"]["outcome"] == "ok"
 
 
 # --------------------------------------------------------------- 7.118.2 DDG-2
@@ -491,3 +515,136 @@ def test_7_119_1_keeps_every_answer_and_asks_the_html_form_first() -> None:
             [_HTML_REQUEST, _LITE_REQUEST] if label in second_try else [_HTML_REQUEST]
         )
         assert after["requests"] == expected, label
+
+
+# -------------------------------------------------------------- 7.120.0 DDG-4
+
+#: The ``web_fetch`` cells 7.120.0 leaves byte-identical, each for one of the
+#: two reasons an extractor can leave an answer alone. Four are responses no
+#: extractor reads at all; ten are HTML pages whose extraction was under the
+#: declared threshold, where today's parser answered exactly as before.
+UNMOVED_BY_DDG_4 = (
+    # Not HTML, or an error status: decoded (or raised) as they always were.
+    "fetch_scenarios/plain_text",
+    "fetch_scenarios/json_body",
+    "fetch_scenarios/http_404",
+    "fetch_scenarios/http_403_cf_challenge",
+    # HTML pages the extractor read as less than the declared threshold.
+    "ddg_pages/mcc_html_ads_and_edge_cases.html",
+    "ddg_pages/mcc_lite_challenge.html",
+    "ddg_pages/octos_html_challenge_reconstructed.html",
+    "fetch_scenarios/html_with_charset",
+    "readability/mozilla/005-unescape-html-entities",
+    "readability/mozilla/invalid-attributes",
+    "readability/mozilla/js-link-replacement",
+    "readability/mozilla/lazy-image-3",
+    "readability/mozilla/ol",
+    "trafilatura/scmp.com.playbook.html",
+)
+
+
+def test_7_120_0_moves_only_the_web_fetch_cells_it_names() -> None:
+    """The moved set is every ``web_fetch`` cell but the fourteen named here.
+
+    The cell universe is pinned by ``test_the_baseline_has_a_cell_for_every_
+    fixture_and_method``, so this is an exact claim about which answers
+    7.120.0 changes: the pages the extractor reads, plus the two no-charset
+    entries DDG-1 pinned as failures. No ``search:*`` cell is among them.
+    """
+
+    document = baseline.load_baseline()
+    moved = document[baseline.DDG4_KEY]
+    fetch = document["cells"]["fetch:web_fetch"]
+
+    assert {label.split(" ", 1)[1] for label in moved} == set(fetch) - set(
+        UNMOVED_BY_DDG_4
+    )
+    assert all(label.startswith("fetch:web_fetch ") for label in moved)
+    assert len(moved) == 285, len(moved)
+    for key in (baseline.DDG2_KEY, baseline.DDG3_KEY, baseline.DDG3B_KEY):
+        assert set(moved).isdisjoint(document[key]), key
+    for label, entry in moved.items():
+        method, key = label.split(" ", 1)
+        assert set(entry) == {baseline.DDG4_BEFORE, baseline.DDG4_AFTER}, label
+        # The after-answer is what this tree computes and pins in ``cells``.
+        assert entry[baseline.DDG4_AFTER] == document["cells"][method][key], label
+        assert (
+            entry[baseline.DDG4_BEFORE]["digest"]
+            != entry[baseline.DDG4_AFTER]["digest"]
+        ), label
+
+
+def test_7_120_0_the_unmoved_pages_are_the_ones_the_extractor_did_not_beat() -> None:
+    """Every unmoved cell is one the new path answers exactly as before.
+
+    "A page never gets worse" is R3's promise, and this is what makes the
+    fourteen-name list a rule instead of a pile of exceptions. For every
+    unmoved HTML page the new path's own output is recomputed here (fallback,
+    threshold and marker included) and must hash to the pinned answer; and the
+    reason it did not move is one of the two R3 allows: the extractor read the
+    page as shorter than ``_WEB_FETCH_EXTRACTOR_MIN_CHARS`` (so today's parser
+    answered), or its markdown is byte-identical to what today's parser
+    returns (a page with nothing for markdown to add). A response that is not
+    a successful HTML page is decoded or refused before any extraction.
+    """
+
+    pages = {page.key: page for page in corpus.all_extraction_pages()}
+    pinned = baseline.load_baseline()["cells"]["fetch:web_fetch"]
+    for key in UNMOVED_BY_DDG_4:
+        page = pages[key]
+        if page.status >= 400:
+            continue  # refused before any extraction
+        if "html" not in page.content_type:
+            continue  # plain text / JSON: decoded, never extracted
+        body = page.body.decode("utf-8", errors="replace")
+        parser = HTMLTextParser()
+        parser.feed(body)
+        basic = "\n".join(parser.text_parts)
+        data = fetch_extract.text_for(
+            body, basic, extractor=fetch_extract.EXTRACTOR_TRAFILATURA
+        )
+
+        shape = pinned[key]["shape"]
+        assert len(data) == shape["data_chars"], key
+        assert (
+            hashlib.sha256(data.encode("utf-8")).hexdigest() == (shape["data_sha256"])
+        ), key
+
+        extracted = fetch_extract.markdown(body) or ""
+        assert (
+            len(extracted.strip()) < _WEB_FETCH_EXTRACTOR_MIN_CHARS
+            or extracted == basic
+        ), key
+
+
+def test_7_120_0_reads_the_pages_ddg_1_pinned_as_failures() -> None:
+    """The no-charset fix: ``RuntimeError`` before, an extraction after.
+
+    Both cells answer in both extractor modes -- the extractor's own text is
+    shorter than the threshold on each, so today's parser answers and the two
+    modes agree byte for byte.
+    """
+
+    document = baseline.load_baseline()
+    for key in (
+        "fetch_scenarios/html_without_charset",
+        "fetch_scenarios/pdf_bytes",
+    ):
+        label = f"fetch:web_fetch {key}"
+        before = document[baseline.DDG4_KEY][label][baseline.DDG4_BEFORE]["shape"]
+        after = document["cells"]["fetch:web_fetch"][key]["shape"]
+        assert before["error_class"] == "RuntimeError", key
+        assert "Cannot compute fallback encoding" in before["error_text"], key
+        assert after["outcome"] == "ok", key
+        assert after["data_chars"] > 0, key
+
+
+def test_7_120_0_changes_no_search_cell_at_all() -> None:
+    """The fetch release leaves both search methods' answers where they were."""
+
+    document = baseline.load_baseline()
+    moved = set(document[baseline.DDG4_KEY])
+    assert {label for label in moved if label.startswith("search:")} == set()
+    assert set(document["cells"]["search:ddgs"]) and set(
+        document["cells"]["search:legacy"]
+    )

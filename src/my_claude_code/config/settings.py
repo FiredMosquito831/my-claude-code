@@ -230,6 +230,8 @@ from .constants import (
     TRIM_MODE_NAMES,
     VISION_ADAPTER_MODE_DEFAULT,
     VISION_ADAPTER_MODE_NAMES,
+    WEB_FETCH_EXTRACTOR_DEFAULT,
+    WEB_FETCH_EXTRACTOR_NAMES,
     WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT,
     WITHHELD_FACT_TTL_SECONDS_DEFAULT,
 )
@@ -1967,6 +1969,14 @@ class Settings(BaseSettings):
     web_fetch_allow_private_networks: bool = Field(
         default=True, validation_alias="WEB_FETCH_ALLOW_PRIVATE_NETWORKS"
     )
+    # What web_fetch makes of an HTML page's text (7.120.0): "trafilatura" --
+    # main content as markdown with links and tables, imported on the first
+    # fetch that needs it -- or "basic", every text node one per line, the
+    # bytes every release before this one returned (the escape hatch).
+    web_fetch_extractor: str = Field(
+        default=WEB_FETCH_EXTRACTOR_DEFAULT,
+        validation_alias="WEB_FETCH_EXTRACTOR",
+    )
 
     # ==================== Web Search Providers ====================
     # Backend for the proxy-fulfilled web_search server tool:
@@ -2635,6 +2645,24 @@ class Settings(BaseSettings):
                     f"Invalid URL scheme in web_fetch_allowed_schemes: {scheme!r}"
                 )
         return ",".join(schemes)
+
+    @field_validator("web_fetch_extractor")
+    @classmethod
+    def validate_web_fetch_extractor(cls, v: str) -> str:
+        """Reject an unknown extractor rather than quietly pick one.
+
+        A blank value is the admin form clearing a select, not a typo, so it
+        falls back to the shipped default the way the other choice fields do.
+        """
+        value = str(v).strip().lower()
+        if not value:
+            return WEB_FETCH_EXTRACTOR_DEFAULT
+        if value not in WEB_FETCH_EXTRACTOR_NAMES:
+            raise ValueError(
+                "WEB_FETCH_EXTRACTOR must be one of "
+                f"{', '.join(sorted(WEB_FETCH_EXTRACTOR_NAMES))}, got {v!r}"
+            )
+        return value
 
     @field_validator("fallback_skip_kinds")
     @classmethod

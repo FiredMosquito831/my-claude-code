@@ -90,10 +90,25 @@ def _disable_default_websearch_analytics(monkeypatch):
     )
 
 
-def test_web_tool_user_agent_reports_installed_package_version() -> None:
+def test_web_tool_user_agent_reports_the_product_name_and_version() -> None:
+    """7.120.0 (USER DECISIONS Q12): the stale ``free-claude-code`` name is gone.
+
+    ``web_fetch`` presents MCC itself -- the same identity the Cloudflare
+    challenge retry sends -- and no browser is impersonated; the DuckDuckGo hop
+    keeps its own declared browser-class User-Agent.
+    """
+
     assert {
-        "User-Agent": (f"Mozilla/5.0 compatible; free-claude-code/{package_version()}")
+        "User-Agent": f"my-claude-code/{package_version()}",
+        "Accept": (
+            "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, "
+            "text/html;q=0.7, */*;q=0.1"
+        ),
     } == web_tool_constants._WEB_TOOL_HTTP_HEADERS
+    assert (
+        "free-claude-code"
+        not in web_tool_constants._WEB_TOOL_HTTP_HEADERS["User-Agent"]
+    )
 
 
 class FixedProviderModelRouter(ModelRouter):

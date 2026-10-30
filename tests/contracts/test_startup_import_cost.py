@@ -38,20 +38,18 @@ DEFERRED_UNTIL_FIRST_USE: dict[str, str] = {
         "costs more than the import. Nothing counts tokens before the first "
         "request."
     ),
-    # Declared ahead of the code that will import them (DDG-1, 2026-10-25):
-    # the check is "not in sys.modules", so an entry for a package that is not
-    # installed, or not imported by anything yet, holds today and binds the PR
-    # that brings it in.
+    # Declared by the DDG-1 harness (2026-10-25) before the code existed, and
+    # now shipped by 7.120.0's ``web_fetch`` extractor. The check is "not in
+    # sys.modules", so an entry for a package nothing imports holds too.
     "trafilatura": (
-        "Not a dependency yet. RESEARCH-DDG-WEBSEARCH.md R3 / USER DECISIONS Q6 "
-        "take it for web_fetch extraction, imported inside the fetch path on "
-        "first use only: 280-618 ms and ~300 modules measured on 2026-10-24."
+        "web_fetch's extractor since 7.120.0 (RESEARCH-DDG-WEBSEARCH.md R3 / "
+        "USER DECISIONS Q6), imported inside the fetch path on first use only: "
+        "648 ms and 360 modules measured on a cold interpreter (2026-10-30)."
     ),
     "lxml": (
-        "Installed today only as a dependency of ddgs and imported by nothing "
-        "on the startup path; trafilatura needs it (R3). The DuckDuckGo "
-        "lite/html page profiles (R2, 7.119.0) parse with the standard "
-        "library's html.parser instead, so they never load it."
+        "trafilatura's parser, imported by the same first fetch and by nothing "
+        "else on the startup path; the DuckDuckGo lite/html page profiles (R2, "
+        "7.119.0) parse with the standard library's html.parser instead."
     ),
 }
 

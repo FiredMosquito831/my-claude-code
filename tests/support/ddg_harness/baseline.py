@@ -58,8 +58,14 @@ DDG3_AFTER = "v7.119.0"
 DDG3B_KEY = "moved_by_ddg_3b"
 DDG3B_BEFORE = "v7.119.0"
 DDG3B_AFTER = "v7.119.1"
+#: 7.120.0 (DDG-4) moves every ``web_fetch`` cell whose page the extractor
+#: reads (markdown instead of every text node) plus the two no-charset cells
+#: DDG-1 pinned as failures, which answer now. Same convention, its own block.
+DDG4_KEY = "moved_by_ddg_4"
+DDG4_BEFORE = "v7.119.1"
+DDG4_AFTER = "v7.120.0"
 #: Every moved-cells block, in file order. ``--write`` keeps each verbatim.
-MOVED_KEYS = (DDG2_KEY, DDG3_KEY, DDG3B_KEY)
+MOVED_KEYS = (DDG2_KEY, DDG3_KEY, DDG3B_KEY, DDG4_KEY)
 
 
 def canonical(outcome: dict[str, Any]) -> bytes:
