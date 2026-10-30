@@ -69,6 +69,13 @@ exactly as before -- R3's "a page never gets worse", checked mechanically
 rather than trusted. Every ``search:*`` cell is byte for byte 7.119.1's.
 ``WEB_FETCH_EXTRACTOR=basic`` reproduces 7.119.1's bytes on every cell but the
 two the encoding fix answers (``tests/api/test_web_fetch_extractor.py``).
+
+One cell is not a single answer. lxml's wheels bundle libxml2, and 6.1.3's
+Windows wheel (2.11.9) and manylinux/macOS wheels (2.14.6) disagree about one
+HTML5 rule -- a numeric character reference in the C1 range, which the cnet
+page uses for its list bullets. That cell's two real answers are recorded under
+``platform_variants`` and the byte-for-byte test accepts either; a third answer
+is a real move and fails. See the platform-variant tests at the end.
 """
 
 import copy
@@ -648,3 +655,65 @@ def test_7_120_0_changes_no_search_cell_at_all() -> None:
     assert set(document["cells"]["search:ddgs"]) and set(
         document["cells"]["search:legacy"]
     )
+
+
+# ------------------------------------------------- platform-variant answers
+
+#: The one cell whose answer is a property of the platform: lxml's wheels
+#: bundle libxml2, and the two builds disagree on one HTML5 rule.
+PLATFORM_VARIANT_LABEL = "fetch:web_fetch readability/jcharum/cnet-001"
+
+
+def test_the_platform_variant_cell_records_both_parser_builds() -> None:
+    """One page, two real answers: both pinned, and only the text differs.
+
+    The extractor parses with lxml, whose Windows wheel bundles libxml2 2.11.9
+    and whose manylinux/macOS wheels bundle 2.14.6. On this page (a 2011 cnet
+    article) the page writes its list bullets as ``&#149;``, a numeric
+    reference in the C1 range: the newer parser applies HTML5's Windows-1252
+    remap and keeps the bullet, the older one drops it. Nothing in MCC decides
+    that, so both answers are pinned and the byte-for-byte test accepts either.
+    """
+
+    document = baseline.load_baseline()
+    variants = document[baseline.PLATFORM_VARIANTS_KEY]
+    assert set(variants) == {PLATFORM_VARIANT_LABEL}
+    entry = variants[PLATFORM_VARIANT_LABEL]
+    assert set(entry) == set(baseline.PLATFORM_VARIANT_TAGS)
+    for tag, cell in entry.items():
+        assert set(cell) == {"shape", "digest"}, tag
+
+    older = entry["libxml2-2.11"]
+    newer = entry["libxml2-2.14"]
+    assert older["digest"] != newer["digest"]
+    assert older["shape"]["url"] == newer["shape"]["url"]
+    assert older["shape"]["title"] == newer["shape"]["title"]
+    # Exactly the four bullets the newer parser resolves.
+    assert newer["shape"]["data_chars"] - older["shape"]["data_chars"] == 4
+    # The pinned cell is one of the two answers (the one this file was
+    # generated on), so the record and the pin agree.
+    pinned = document["cells"]["fetch:web_fetch"]["readability/jcharum/cnet-001"]
+    assert pinned in (older, newer)
+
+
+def test_a_variant_cells_recorded_answers_are_accepted_and_a_third_is_not() -> None:
+    """The comparison accepts either platform's answer, and nothing else."""
+
+    document = baseline.load_baseline()
+    entry = document[baseline.PLATFORM_VARIANTS_KEY][PLATFORM_VARIANT_LABEL]
+    for tag, recorded in entry.items():
+        cells = copy.deepcopy(document["cells"])
+        cells["fetch:web_fetch"]["readability/jcharum/cnet-001"] = copy.deepcopy(
+            recorded
+        )
+        assert baseline.moved_cells(document, cells) == {
+            "moved": [],
+            "missing": [],
+            "added": [],
+        }, tag
+
+    third = copy.deepcopy(entry["libxml2-2.14"])
+    third["digest"] = ("0" if third["digest"][0] != "0" else "1") + third["digest"][1:]
+    cells = copy.deepcopy(document["cells"])
+    cells["fetch:web_fetch"]["readability/jcharum/cnet-001"] = third
+    assert baseline.moved_cells(document, cells)["moved"] == [PLATFORM_VARIANT_LABEL]

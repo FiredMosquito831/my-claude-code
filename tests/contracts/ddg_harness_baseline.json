@@ -9149,6 +9149,34 @@
    }
   }
  },
+ "platform_variants": {
+  "fetch:web_fetch readability/jcharum/cnet-001": {
+   "libxml2-2.11": {
+    "shape": {
+     "outcome": "ok",
+     "url": "http://fixture.test/readability/4b5bc01277210d996088",
+     "title": "Google+ faces thorny online identity issues | Deep Tech - CNET News",
+     "media_type": "text/plain",
+     "data_chars": 7720,
+     "data_sha256": "e370d209814b3ad3080c0a5c765f51acac02b682023481be019627bd08312e75",
+     "data_head": "# Google+ faces thorny online identity issues\n\nGoogle, trying to take a stand with its new social network, requires peop"
+    },
+    "digest": "e682a81f813952e286b11a8c6b8f620b82b7a5407f24b752f3d8ccda9b174e2f"
+   },
+   "libxml2-2.14": {
+    "shape": {
+     "outcome": "ok",
+     "url": "http://fixture.test/readability/4b5bc01277210d996088",
+     "title": "Google+ faces thorny online identity issues | Deep Tech - CNET News",
+     "media_type": "text/plain",
+     "data_chars": 7724,
+     "data_sha256": "d83c398fa3ebf1079b2f4d6bcac672c80d8a3814da289c97a72869f44cd1463e",
+     "data_head": "# Google+ faces thorny online identity issues\n\nGoogle, trying to take a stand with its new social network, requires peop"
+    },
+    "digest": "d6d4db4866d248274649100c00b3cecebf003c803435eba376e60c2f44a99629"
+   }
+  }
+ },
  "cells": {
   "search:ddgs": {
    "live_html_200": {
