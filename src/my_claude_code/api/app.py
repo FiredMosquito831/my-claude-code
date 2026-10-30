@@ -40,6 +40,7 @@ from .admin_mcp_media_routes import router as admin_mcp_media_router
 from .admin_media_routes import router as admin_media_router
 from .admin_proxy_routes import router as admin_proxy_router
 from .admin_proxy_source_routes import router as admin_proxy_source_router
+from .admin_raw_routes import router as admin_raw_router
 from .admin_routes import router as admin_router
 from .admin_server_routes import router as admin_server_router
 from .admin_websearch_routes import router as admin_websearch_router
@@ -119,6 +120,9 @@ def create_app(services: ApiServices) -> FastAPI:
     app.add_middleware(RequestCorrelationMiddleware)
     app.add_middleware(AdminNoStoreMiddleware)
 
+    # 7.121.0: before ``admin_router``, whose ``/admin/api/requests/{request_id}``
+    # would otherwise answer ``/admin/api/requests/raw`` as a request id.
+    app.include_router(admin_raw_router)
     app.include_router(admin_router)
     app.include_router(admin_custom_router)
     app.include_router(admin_claude_config_router)

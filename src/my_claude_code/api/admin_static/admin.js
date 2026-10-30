@@ -27486,6 +27486,9 @@ async function openRequestDetail(requestId) {
   renderRequestChain(row);
   renderWireRequest(row);
   renderTurnTranscript(row);
+  // 7.121.0: the very last thing in the card. Paints its boxes when the log
+  // files have been read, so the rest of the detail never waits for them.
+  renderRawDiagnostics(row);
   byId("reqDetailModal").hidden = false;
   byId("reqDetailClose").focus();
 }
@@ -29813,6 +29816,588 @@ function renderToolCalls(row) {
   });
 }
 
+/* --------------------------------------------- raw diagnostics (7.121.0) --
+   The last thing in the request detail: one collapsed box per optional log a
+   request can write -- API payloads, SSE events, API error tracebacks, CLI
+   diagnostics -- each with a Raw | Normalized toggle.
+
+   Raw is the lines the log files hold, verbatim, read by
+   /admin/api/requests/raw: every recorded line, a page at a time with a
+   "load more" control, never cut. A box with none says why, in the server's
+   own words -- which setting is off and where it is, pruned by rotation, not
+   tied to a request -- and never shows normalised text in their place.
+   Normalized is what the request log stored, from the same route, so the
+   per-request export (same reader, same renderers) holds exactly what the
+   boxes show. The choice of view is remembered for this browser. */
+
+const RAW_VIEW_STORAGE_KEY = "mcc.rawDiagnosticsView";
+const RAW_VIEWS = ["raw", "normalized"];
+const rawState = { requestId: null, token: 0, boxes: new Map() };
+
+/** Raw unless this browser chose Normalized; a blocked store reads as Raw. */
+function rawViewPreference() {
+  try {
+    return window.localStorage.getItem(RAW_VIEW_STORAGE_KEY) === "normalized"
+      ? "normalized"
+      : "raw";
+  } catch {
+    return "raw";
+  }
+}
+
+/** Remember the view. Raw, the default, is stored as absence. */
+function rememberRawView(view) {
+  try {
+    if (view === "normalized") window.localStorage.setItem(RAW_VIEW_STORAGE_KEY, view);
+    else window.localStorage.removeItem(RAW_VIEW_STORAGE_KEY);
+  } catch {
+    /* Storage is a convenience; the toggle still works for this page. */
+  }
+}
+
+function rawCount(value) {
+  return Number(value || 0).toLocaleString();
+}
+
+/** What a collapsed box says in its summary line. */
+function rawBoxFacts(kind) {
+  if (kind.capture === "present") {
+    const lines = kind.lines_total === 1 ? "1 line" : `${rawCount(kind.lines_total)} lines`;
+    return `${lines} · ${formatImageBytes(Number(kind.bytes_total || 0))}`;
+  }
+  if (kind.capture === "absent_setting") return `not captured · ${kind.setting} is off`;
+  if (kind.capture === "absent_rotated") return "pruned by rotation";
+  return String(kind.headline || "not captured")
+    .replace(/\.$/, "")
+    .toLowerCase();
+}
+
+/** The server's sentences in plain text, with each `backticked` name drawn as
+ *  inline code. Text nodes and <code> elements only -- never markup. */
+function appendRawRichText(paragraph, text) {
+  String(text || "")
+    .split(/`([^`]+)`/)
+    .forEach((part, index) => {
+      if (!part) return;
+      if (index % 2 === 1) {
+        const code = document.createElement("code");
+        code.textContent = part;
+        paragraph.appendChild(code);
+        return;
+      }
+      paragraph.append(part);
+    });
+}
+
+function rawParagraph(className, text) {
+  const paragraph = document.createElement("p");
+  paragraph.className = className;
+  appendRawRichText(paragraph, text);
+  return paragraph;
+}
+
+/** A headline in bold and the sentence after it, both as text. */
+function rawStateParagraph(headline, message) {
+  const paragraph = document.createElement("p");
+  paragraph.className = "req-raw-state";
+  if (headline) {
+    const strong = document.createElement("strong");
+    strong.textContent = headline;
+    paragraph.append(strong, " ");
+  }
+  appendRawRichText(paragraph, message);
+  return paragraph;
+}
+
+function renderRawDiagnostics(row) {
+  const section = byId("reqDetailRaw");
+  const boxes = byId("reqDetailRawBoxes");
+  const status = byId("reqDetailRawStatus");
+  if (!section || !boxes || !status) return;
+  rawState.token += 1;
+  const token = rawState.token;
+  rawState.requestId = row && row.id ? String(row.id) : null;
+  rawState.boxes = new Map();
+  boxes.replaceChildren();
+  resetRawExportPanel();
+  if (!rawState.requestId) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  status.textContent = "Reading the log files for this request…";
+  api(`/admin/api/requests/raw?id=${encodeURIComponent(rawState.requestId)}`)
+    .then((summary) => {
+      if (token === rawState.token) paintRawSummary(summary, token);
+    })
+    .catch((error) => {
+      if (token === rawState.token) {
+        status.textContent = `The log files could not be read: ${error.message || error}`;
+      }
+    });
+}
+
+function paintRawSummary(summary, token) {
+  const status = byId("reqDetailRawStatus");
+  const boxes = byId("reqDetailRawBoxes");
+  if (summary && summary.refused) {
+    status.textContent = String(summary.refused.message || "The log files could not be read.");
+    return;
+  }
+  const kinds = summary && Array.isArray(summary.kinds) ? summary.kinds : [];
+  if (!kinds.length) {
+    status.textContent = "The server sent no raw diagnostics for this request.";
+    return;
+  }
+  status.textContent =
+    Number.isFinite(summary.elapsed_ms) && Number.isFinite(summary.scanned_bytes)
+      ? `${formatImageBytes(summary.scanned_bytes)} of log files read in ${rawCount(summary.elapsed_ms)} ms.`
+      : "";
+  kinds.forEach((kind) => boxes.appendChild(buildRawBox(kind, token)));
+}
+
+function buildRawBox(kind, token) {
+  const pane = document.createElement("details");
+  pane.className = "req-wire-pane req-raw-pane";
+  pane.dataset.rawKind = String(kind.kind || "");
+  pane.open = false;
+
+  const summary = document.createElement("summary");
+  summary.className = "req-wire-head";
+  const label = document.createElement("span");
+  label.className = "req-raw-kind";
+  label.textContent = String(kind.label || kind.kind || "");
+  const facts = document.createElement("span");
+  facts.className = "req-wire-facts";
+  facts.textContent = rawBoxFacts(kind);
+  const toggle = document.createElement("span");
+  toggle.className = "req-raw-views";
+  toggle.setAttribute("role", "group");
+  toggle.setAttribute("aria-label", `${label.textContent} view`);
+  summary.append(label, facts, toggle);
+  pane.appendChild(summary);
+
+  const body = document.createElement("div");
+  body.className = "req-raw-body";
+  pane.appendChild(body);
+
+  const box = { kind, pane, body, toggle, view: rawViewPreference(), cache: {}, token };
+  RAW_VIEWS.forEach((view) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "req-raw-view";
+    button.dataset.view = view;
+    button.textContent = view === "raw" ? "Raw" : "Normalized";
+    button.addEventListener("click", (event) => {
+      // A button in a <summary> must not also toggle the box: it opens it.
+      event.preventDefault();
+      event.stopPropagation();
+      rememberRawView(view);
+      rawState.boxes.forEach((other) => switchRawView(other, view));
+      if (!pane.open) pane.open = true;
+    });
+    toggle.appendChild(button);
+  });
+  syncRawToggle(box);
+  pane.addEventListener("toggle", () => {
+    if (pane.open) showRawView(box);
+  });
+  rawState.boxes.set(box.kind.kind, box);
+  return pane;
+}
+
+function syncRawToggle(box) {
+  box.toggle.querySelectorAll(".req-raw-view").forEach((button) => {
+    const active = button.dataset.view === box.view;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function switchRawView(box, view) {
+  if (box.view === view) return;
+  box.view = view;
+  syncRawToggle(box);
+  if (box.pane.open) showRawView(box);
+}
+
+function rawViewUrl(box, view, extra = "") {
+  const id = encodeURIComponent(rawState.requestId || "");
+  const kind = encodeURIComponent(box.kind.kind);
+  return `/admin/api/requests/raw?id=${id}&kind=${kind}&view=${view}${extra}`;
+}
+
+async function showRawView(box) {
+  const view = box.view;
+  const cached = box.cache[view];
+  if (cached) {
+    renderRawBody(box, view, cached);
+    return;
+  }
+  box.body.replaceChildren(rawParagraph("req-raw-note", "Reading…"));
+  try {
+    const answer = await api(rawViewUrl(box, view));
+    if (box.token !== rawState.token) return;
+    const state = { answer, lines: Array.isArray(answer.lines) ? answer.lines.slice() : [] };
+    box.cache[view] = state;
+    if (box.view === view) renderRawBody(box, view, state);
+  } catch (error) {
+    if (box.token !== rawState.token || box.view !== view) return;
+    box.body.replaceChildren(
+      rawParagraph("req-raw-note", `It could not be read: ${error.message || error}`),
+    );
+  }
+}
+
+function renderRawBody(box, view, state) {
+  const body = box.body;
+  body.replaceChildren();
+  body.dataset.view = view;
+  const answer = state.answer || {};
+  if (view === "raw") {
+    body.appendChild(rawParagraph("req-raw-source", `Raw: ${answer.source || box.kind.source || ""}`));
+    if (answer.refused) {
+      body.appendChild(rawStateParagraph("Not shown.", answer.refused.message));
+      return;
+    }
+    renderRawLines(box, state);
+    return;
+  }
+  const sources = Array.from(
+    new Set((answer.blocks || []).map((block) => String(block.source || ""))),
+  ).filter(Boolean);
+  body.appendChild(
+    rawParagraph(
+      "req-raw-source",
+      `Normalized: stored in the request log${sources.length ? ` — ${sources.join("; ")}` : ""}`,
+    ),
+  );
+  if (answer.state !== "stored") {
+    body.appendChild(rawStateParagraph(answer.headline, answer.message));
+    return;
+  }
+  const pre = document.createElement("pre");
+  pre.className = "requests-detail-body req-raw-lines";
+  pre.textContent = String(answer.text || "");
+  body.appendChild(pre);
+  addCopyButton(body, () => pre.textContent);
+}
+
+/** One line per recorded line; a line too large to carry is its marker. */
+function rawLinesText(lines) {
+  return lines
+    .map((line) => (typeof line.text === "string" ? line.text : String(line.marker || "")))
+    .join("\n");
+}
+
+function renderRawLines(box, state) {
+  const body = box.body;
+  const answer = state.answer;
+  if (answer.capture !== "present") {
+    // The one rule this view exists to keep: an absence is said, never
+    // filled with the normalised text.
+    body.appendChild(rawStateParagraph(answer.headline, answer.message));
+    return;
+  }
+  (answer.notes || []).forEach((note) => body.appendChild(rawParagraph("req-raw-note", note)));
+  const pre = document.createElement("pre");
+  pre.className = "requests-detail-body req-raw-lines";
+  state.pretty = false;
+  const paint = () => {
+    pre.textContent = state.pretty ? prettyPayloadLines(state.lines) : rawLinesText(state.lines);
+  };
+  paint();
+  if (answer.pretty_print) {
+    const toolbar = document.createElement("div");
+    toolbar.className = "req-raw-toolbar";
+    const pretty = document.createElement("button");
+    pretty.type = "button";
+    pretty.className = "ghost-button req-raw-pretty";
+    pretty.textContent = "Pretty-print as JSON";
+    const label = rawParagraph("req-raw-note", "");
+    label.hidden = true;
+    pretty.addEventListener("click", () => {
+      state.pretty = !state.pretty;
+      pretty.textContent = state.pretty ? "Show the stored line" : "Pretty-print as JSON";
+      label.hidden = !state.pretty;
+      label.textContent = state.pretty
+        ? "Pretty-printed in your browser from the Python repr by reading it as a literal — nothing is evaluated. The stored line is the verbatim text."
+        : "";
+      paint();
+    });
+    toolbar.append(pretty, label);
+    body.appendChild(toolbar);
+  }
+  body.appendChild(pre);
+  addCopyButton(body, () => pre.textContent);
+  const more = document.createElement("p");
+  more.className = "req-raw-more";
+  body.appendChild(more);
+  paintRawMore(box, state, more, paint);
+}
+
+function paintRawMore(box, state, more, paint) {
+  const answer = state.answer;
+  const total = Number(answer.lines_total || 0);
+  const shown = state.lines.length;
+  more.replaceChildren();
+  if (answer.next_start == null) {
+    more.textContent =
+      total === 1 ? "The 1 recorded line is shown." : `All ${rawCount(total)} recorded lines are shown.`;
+    return;
+  }
+  more.append(`Showing lines 1–${rawCount(shown)} of ${rawCount(total)}. `);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost-button";
+  button.textContent = `Load more (${rawCount(total - shown)} not shown yet)`;
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "Reading…";
+    try {
+      const page = await api(
+        rawViewUrl(
+          box,
+          "raw",
+          `&start=${encodeURIComponent(answer.next_start)}&anchor=${encodeURIComponent(answer.anchor || "")}`,
+        ),
+      );
+      if (box.token !== rawState.token) return;
+      if (page.refused) {
+        more.replaceChildren(rawStateParagraph("Not shown.", page.refused.message));
+        return;
+      }
+      state.lines.push(...(Array.isArray(page.lines) ? page.lines : []));
+      state.answer = page;
+      paint();
+      paintRawMore(box, state, more, paint);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = `Load more — it failed: ${error.message || error}`;
+    }
+  });
+  more.appendChild(button);
+}
+
+/* "Pretty-print as JSON" for a payload line, which is a Python repr. Read as a
+   literal by the small parser below -- dicts, lists, tuples, strings, numbers,
+   True/False/None -- and never evaluated. Numbers are copied digit for digit
+   rather than through a JavaScript number, so nothing is rounded; anything the
+   parser does not know (a set, bytes, inf) leaves the line as it was and says
+   why. */
+function prettyPayloadLines(lines) {
+  return lines
+    .map((line) => {
+      if (typeof line.text !== "string") return String(line.marker || "");
+      const split = /^([A-Z_]+ \[[^\]\n]*\]: )([\s\S]*)$/.exec(line.text);
+      if (!split) return `${line.text}\n(not pretty-printed: no payload repr found on this line)`;
+      const parsed = pythonLiteralToJson(split[2]);
+      if (!parsed.ok) {
+        return `${line.text}\n(not pretty-printed: ${parsed.error})`;
+      }
+      return `${split[1].trimEnd()}\n${parsed.json}`;
+    })
+    .join("\n\n");
+}
+
+/* The single-character escapes Python's repr writes (and a few it reads). */
+const PYTHON_SIMPLE_ESCAPES = {
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  b: "\b",
+  f: "\f",
+  v: "\v",
+  a: "\x07",
+  0: "\0",
+};
+
+function pythonLiteralToJson(source) {
+  const text = String(source);
+  let at = 0;
+  const fail = (why) => {
+    throw new Error(`${why} at character ${at.toLocaleString()}`);
+  };
+  const skipSpace = () => {
+    while (at < text.length && /\s/.test(text[at])) at += 1;
+  };
+  const readString = () => {
+    const quote = text[at];
+    at += 1;
+    let out = "";
+    while (at < text.length) {
+      const char = text[at];
+      if (char === quote) {
+        at += 1;
+        return out;
+      }
+      if (char !== "\\") {
+        out += char;
+        at += 1;
+        continue;
+      }
+      const next = text[at + 1];
+      at += 2;
+      if (next === "\n") continue;
+      if (Object.prototype.hasOwnProperty.call(PYTHON_SIMPLE_ESCAPES, next)) {
+        out += PYTHON_SIMPLE_ESCAPES[next];
+        continue;
+      }
+      const width = next === "x" ? 2 : next === "u" ? 4 : next === "U" ? 8 : 0;
+      if (!width) fail(`an escape \\${next || ""} this reader does not know`);
+      const hex = text.slice(at, at + width);
+      if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length !== width) fail("a broken escape");
+      out += String.fromCodePoint(parseInt(hex, 16));
+      at += width;
+    }
+    fail("a string that never ends");
+    return out;
+  };
+  const value = (depth) => {
+    if (depth > 2000) fail("nesting too deep");
+    skipSpace();
+    const char = text[at];
+    if (char === "'" || char === '"') return { type: "string", value: readString() };
+    if (char === "{" || char === "[" || char === "(") {
+      const close = char === "{" ? "}" : char === "[" ? "]" : ")";
+      at += 1;
+      const items = [];
+      let sawComma = false;
+      for (;;) {
+        skipSpace();
+        if (text[at] === close) {
+          at += 1;
+          break;
+        }
+        if (items.length && !sawComma) fail("a missing comma");
+        if (char === "{") {
+          const key = value(depth + 1);
+          if (key.type !== "string") fail("a dictionary key that is not a string");
+          skipSpace();
+          if (text[at] !== ":") fail(text[at] === "," || text[at] === "}" ? "a set, which JSON cannot hold" : "a missing colon");
+          at += 1;
+          items.push([key.value, value(depth + 1)]);
+        } else {
+          items.push(value(depth + 1));
+        }
+        skipSpace();
+        sawComma = text[at] === ",";
+        if (sawComma) at += 1;
+        else if (text[at] !== close) fail("an unexpected character");
+      }
+      return char === "{" ? { type: "object", items } : { type: "array", items };
+    }
+    const word = /^(?:True|False|None)\b/.exec(text.slice(at, at + 6));
+    if (word) {
+      at += word[0].length;
+      return { type: "raw", value: word[0] === "True" ? "true" : word[0] === "False" ? "false" : "null" };
+    }
+    const number = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/.exec(text.slice(at, at + 400));
+    if (number && number[0] !== "-" && !/^[A-Za-z_.]/.test(text[at + number[0].length] || "")) {
+      at += number[0].length;
+      return { type: "raw", value: number[0] };
+    }
+    fail("a value JSON cannot hold (not a plain literal)");
+    return null;
+  };
+  const print = (node, indent) => {
+    if (node.type === "string") return JSON.stringify(node.value);
+    if (node.type === "raw") return node.value;
+    if (!node.items.length) return node.type === "object" ? "{}" : "[]";
+    const inner = `${indent}  `;
+    const parts = node.items.map((item) =>
+      node.type === "object"
+        ? `${inner}${JSON.stringify(item[0])}: ${print(item[1], inner)}`
+        : `${inner}${print(item, inner)}`,
+    );
+    const [open, close] = node.type === "object" ? ["{", "}"] : ["[", "]"];
+    return `${open}\n${parts.join(",\n")}\n${indent}${close}`;
+  };
+  try {
+    const root = value(0);
+    skipSpace();
+    if (at !== text.length) fail("text after the value");
+    return { ok: true, json: print(root, "") };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+/* The per-request export: the same reader and the same four renderers as
+   Analytics' Export, for this one request -- every box or some, Raw,
+   Normalized or both. A limit the file cannot meet (XLSX's cell size, a line
+   too large to hold) comes back as the server's sentence, never a short file. */
+function resetRawExportPanel() {
+  const panel = byId("reqRawExportPanel");
+  const toggle = byId("reqRawExportToggle");
+  const hint = byId("reqRawExportHint");
+  if (panel) panel.hidden = true;
+  if (toggle) toggle.setAttribute("aria-expanded", "false");
+  if (hint) hint.textContent = "";
+}
+
+function toggleRawExportPanel() {
+  const panel = byId("reqRawExportPanel");
+  const toggle = byId("reqRawExportToggle");
+  panel.hidden = !panel.hidden;
+  toggle.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+}
+
+function rawExportFilename(response, requestId, format) {
+  const disposition = (response.headers && response.headers.get
+    ? response.headers.get("Content-Disposition")
+    : "") || "";
+  const named = /filename="([^"]+)"/.exec(disposition);
+  if (named) return named[1];
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `mcc-request-${String(requestId).replace(/[^A-Za-z0-9_-]/g, "_")}-${format}-${stamp}.${format}`;
+}
+
+async function runRawRequestExport() {
+  const requestId = rawState.requestId;
+  const hint = byId("reqRawExportHint");
+  if (!requestId) return;
+  const kinds = Array.from(
+    document.querySelectorAll('input[name="reqRawExportKind"]:checked'),
+  ).map((input) => input.value);
+  if (!kinds.length) {
+    hint.textContent = "Tick at least one kind to export.";
+    return;
+  }
+  const format = byId("reqRawExportFormat").value;
+  const params = new URLSearchParams({
+    id: requestId,
+    format,
+    kinds: kinds.join(","),
+    view: byId("reqRawExportView").value,
+  });
+  hint.textContent = "Preparing the export…";
+  try {
+    const response = await fetch(`/admin/api/requests/raw/export?${params}`, {
+      cache: "no-store",
+      headers: { Accept: "application/octet-stream" },
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try {
+        const body = await response.json();
+        detail = body.detail || detail;
+      } catch (_) {
+        /* non-JSON error body */
+      }
+      throw new Error(detail || `Export failed (${response.status})`);
+    }
+    const blob = await response.blob();
+    downloadBlob(rawExportFilename(response, requestId, format), blob);
+    hint.textContent = "Export downloaded.";
+  } catch (error) {
+    hint.textContent = `Not exported: ${error.message || error}`;
+  }
+}
+
 function clearChart(canvas) {
   const context = canvas.getContext("2d");
   context.clearRect(0, 0, canvas.width, canvas.height);
@@ -29820,6 +30405,8 @@ function clearChart(canvas) {
 
 function closeRequestDetail() {
   byId("reqDetailModal").hidden = true;
+  // An answer still on its way about this request paints nothing now.
+  rawState.token += 1;
   // A player left in a hidden modal would go on playing; removing it stops it.
   const media = byId("reqDetailMedia");
   if (media) {
@@ -29888,6 +30475,11 @@ const EXPORT_FIELDS = {
     { id: "media", label: "Media" },
     { id: "ladder", label: "Upstream retry ladder" },
     { id: "tool_catalogue", label: "Tool catalogue" },
+    // 7.121.0: every line the raw diagnostics settings recorded for each
+    // request, verbatim, one column per kind -- the request detail's boxes.
+    // Opt-in and not a default, so an export that does not ask for it is
+    // byte-identical; at most 200 requests, never with Group by.
+    { id: "raw_diagnostics", label: "Raw diagnostics" },
     // 7.88.0: the Requests table's Exit column -- the answering exit and every
     // exit tried. Opt-in like the others; Folder stays in Request origin.
     { id: "exit", label: "Exit" },
@@ -30249,6 +30841,10 @@ document.addEventListener("visibilitychange", () => {
 byId("reqDetailClose").addEventListener("click", closeRequestDetail);
 byId("reqDetailModal").addEventListener("click", (event) => {
   if (event.target === byId("reqDetailModal")) closeRequestDetail();
+});
+byId("reqRawExportToggle").addEventListener("click", toggleRawExportPanel);
+byId("reqRawExportDownload").addEventListener("click", () => {
+  runRawRequestExport();
 });
 document.addEventListener("keydown", (event) => {
   trapRequestDetailFocus(event);

@@ -206,6 +206,8 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | 1-hour cache writes priced as 1-hour writes | Anthropic's 5 min / 1 h split of each request's cache writes is recorded, and 1-hour writes are priced at a rate a source states (the provider's own list, LiteLLM when on, OpenRouter's live list) or shown as not priced with the reason; requests before 7.111.0 keep their 5-minute price | **Analytics** page | [Guide](docs/USAGE.md#what-a-request-cost) |
 | Exports | JSON export of anything the filters currently select | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Attempt-level export | One row per model the chain tried, not per request, so the fallbacks that spent the time are in the file too | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
+| Raw diagnostics, per request | Four collapsed boxes at the bottom of a request's detail — API payloads, SSE events, API error tracebacks, CLI diagnostics — with a Raw \| Normalized toggle; every recorded line is shown a page at a time, never cut, and an empty box says which setting to turn on | **Analytics** page | [Guide](docs/USAGE.md#raw-diagnostics-the-raw-log-of-one-request-71210) |
+| Raw diagnostics export | One request's raw and normalised material in any of the four export formats, through the same reader and renderers as Analytics, plus an opt-in Raw diagnostics field in the Analytics export itself (off by default; up to 200 requests) | **Analytics** page | [Guide](docs/USAGE.md#raw-diagnostics-the-raw-log-of-one-request-71210) |
 | Web search analytics | Separate route and attempt analytics with full captured input/output | **Web Search** page | [Guide](docs/USAGE.md#10-web-search) |
 
 ### Platform

@@ -522,6 +522,47 @@ class TestEveryStatsCallerPassesFullFilterArity:
         keys = {key.value for key in filters.keys if isinstance(key, ast.Constant)}
         assert keys == set(FILTERS)
 
+    def test_the_request_export_forwards_its_whole_filter_set(self) -> None:
+        """``_request_export`` keeps an explicit call and one dict (7.121.0).
+
+        The raw-diagnostics export hands its filters to two helpers as one
+        dict, which the arity guard above cannot see into; this pins that dict
+        to the whole set, the way the cost route's ``**filters`` is pinned.
+        """
+
+        tree = ast.parse(Path(inspect.getfile(admin_export_routes)).read_text("utf-8"))
+        (route,) = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "_request_export"
+        ]
+        (filters,) = [
+            node.value
+            for node in ast.walk(route)
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "row_filters"
+        ]
+        assert isinstance(filters, ast.Dict)
+        keys = {key.value for key in filters.keys if isinstance(key, ast.Constant)}
+        # ``matched`` rides along beside the filters: it is a search's own
+        # answer, not one of the toolbar's.
+        assert keys - {"matched"} == set(FILTERS)
+        # And the export's own call still spells them out, which is what the
+        # arity guard counts.
+        explicit = [
+            node
+            for node in ast.walk(route)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "iter_export_rows"
+            and not any(keyword.arg is None for keyword in node.keywords)
+        ]
+        assert len(explicit) == 1
+        assert {keyword.arg for keyword in explicit[0].keywords if keyword.arg} >= set(
+            FILTERS
+        ) - {"since", "until"}
+
     @pytest.mark.parametrize("method", CACHED_METHODS)
     def test_every_filter_owns_a_slot_in_every_cache_key(self, store, method) -> None:
         call = getattr(store, method)

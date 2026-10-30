@@ -1896,6 +1896,83 @@
                     <pre id="reqDetailOutput" class="requests-detail-body"></pre>
                   </section>
                 </div>
+
+                <!-- 7.121.0: every optional log this request wrote, at the very
+                     bottom: one collapsed box per kind, Raw or Normalized, and a
+                     per-request export of all of it. -->
+                <section
+                  id="reqDetailRaw"
+                  class="req-raw"
+                  aria-labelledby="reqDetailRawTitle"
+                  hidden
+                >
+                  <h4 id="reqDetailRawTitle" class="req-chain-title">Raw diagnostics</h4>
+                  <p class="req-raw-warning">
+                    Raw lines are shown exactly as they were logged &mdash; prompts,
+                    answers and anything pasted into them, credentials included &mdash;
+                    and nothing is masked. This page is reachable only from this
+                    computer.
+                  </p>
+                  <p id="reqDetailRawStatus" class="req-raw-status" role="status"></p>
+                  <div id="reqDetailRawBoxes" class="req-raw-boxes"></div>
+                  <div class="req-raw-export">
+                    <button
+                      id="reqRawExportToggle"
+                      class="secondary-button"
+                      type="button"
+                      aria-expanded="false"
+                      aria-controls="reqRawExportPanel"
+                    >
+                      Export this request&hellip;
+                    </button>
+                    <div id="reqRawExportPanel" class="req-raw-export-panel" hidden>
+                      <fieldset class="export-fields">
+                        <legend>Include</legend>
+                        <div class="export-field-grid">
+                          <label class="export-field">
+                            <input type="checkbox" name="reqRawExportKind" value="payloads" checked />
+                            <span>API payloads</span>
+                          </label>
+                          <label class="export-field">
+                            <input type="checkbox" name="reqRawExportKind" value="sse" checked />
+                            <span>SSE events</span>
+                          </label>
+                          <label class="export-field">
+                            <input type="checkbox" name="reqRawExportKind" value="traceback" checked />
+                            <span>API error tracebacks</span>
+                          </label>
+                          <label class="export-field">
+                            <input type="checkbox" name="reqRawExportKind" value="cli" checked />
+                            <span>CLI diagnostics</span>
+                          </label>
+                        </div>
+                      </fieldset>
+                      <div class="export-row">
+                        <label class="export-row-label" for="reqRawExportView">View</label>
+                        <select id="reqRawExportView">
+                          <option value="both" selected>Raw and Normalized</option>
+                          <option value="raw">Raw only</option>
+                          <option value="normalized">Normalized only</option>
+                        </select>
+                      </div>
+                      <div class="export-row">
+                        <label class="export-row-label" for="reqRawExportFormat">Format</label>
+                        <select id="reqRawExportFormat">
+                          <option value="json" selected>JSON</option>
+                          <option value="csv">CSV</option>
+                          <option value="xlsx">XLSX</option>
+                          <option value="txt">TXT</option>
+                        </select>
+                      </div>
+                      <div class="export-row">
+                        <button id="reqRawExportDownload" class="secondary-button" type="button">
+                          Download
+                        </button>
+                        <span id="reqRawExportHint" class="last-updated" role="status"></span>
+                      </div>
+                    </div>
+                  </div>
+                </section>
               </div>
             </div>
 
@@ -5625,6 +5702,67 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   message that survived a whole ladder. Attempts recorded before
                   6.12.0 show no ladder &mdash; not measured, not &ldquo;there were no
                   retries&rdquo;.
+                </p>
+                <h4 id="guide-raw-diagnostics">The raw log, per request (7.121.0)</h4>
+                <p>
+                  At the very bottom of a request&rsquo;s detail there are now four
+                  collapsed boxes &mdash; <strong>API payloads</strong>,
+                  <strong>SSE events</strong>, <strong>API error tracebacks</strong> and
+                  <strong>CLI diagnostics</strong> &mdash; for the four optional logs a
+                  request can write. They are the raw material itself, not a rendering
+                  of it: the payload MCC sent, a Python repr and not JSON (there is a
+                  labelled <strong>Pretty-print as JSON</strong> button beside it, which
+                  reads it as a literal in your browser and never evaluates anything);
+                  the server-sent events exactly as written, with the model&rsquo;s own
+                  <code>&lt;thinking&gt;</code> tags and whitespace intact; the
+                  provider&rsquo;s own frames where MCC records them (the Anthropic
+                  Messages and OpenAI Responses doors) &mdash; and, where it does not
+                  (OpenAI Chat Completions, Gemini), the box says so rather than passing
+                  MCC&rsquo;s re-encoding off as the provider&rsquo;s bytes.
+                </p>
+                <p>
+                  Each box has a <strong>Raw | Normalized</strong> toggle. Raw is the
+                  recorded lines, every one of them: a box reads them a page at a time
+                  with a <strong>Load more</strong> control and never drops a line, and
+                  if the log rotates while you are paging it says so instead of showing
+                  the wrong lines under the right numbers. Normalized is what the request
+                  log stored &mdash; the prompt, the answer, the reasoning, the tool
+                  calls, the wire body per attempt &mdash; labelled with the column each
+                  part comes from. The two views never stand in for each other: an empty
+                  Raw box says <em>why</em> it is empty (the setting is off, and where
+                  it is; the request is older than the retained window; the data exists
+                  only in normalised form), in the server&rsquo;s own words. The choice
+                  of view is remembered for this browser, and each box has a
+                  <strong>Copy</strong> button that copies exactly what is on screen.
+                </p>
+                <p class="guide-note">
+                  <strong>Nothing is masked here, on purpose.</strong> These lines hold
+                  prompt text, answer text and whatever was pasted into them, credentials
+                  included &mdash; that is what a raw log is for. The route is
+                  loopback-only like every other admin route, and the page says what it
+                  is showing. <strong>Export this request&hellip;</strong> writes the
+                  boxes to one file in any of the four export formats (Raw, Normalized or
+                  both; any subset of the four), through the same reader and renderers as
+                  the Analytics export, so the file is exactly what you looked at. The
+                  Analytics export&rsquo;s field list gains an opt-in
+                  <strong>Raw diagnostics</strong> group &mdash; one column per kind,
+                  each cell headed by the request id, the source and the line count, and
+                  the lines in full &mdash; off by default (an export that does not ask
+                  for it is byte-identical to before), limited to 200 requests, and
+                  never combined with Group by.
+                </p>
+                <p class="guide-note">
+                  <strong>Turn the logs on first.</strong> The four boxes read the
+                  settings on <strong>Limits &amp; Resilience &rarr; Diagnostics</strong>:
+                  <code>LOG_RAW_API_PAYLOADS</code>, <code>LOG_RAW_SSE_EVENTS</code>,
+                  <code>LOG_API_ERROR_TRACEBACKS</code> and
+                  <code>LOG_RAW_CLI_DIAGNOSTICS</code>. Save applies them; a request
+                  makes a new row and new lines, so turn one on, make the request again,
+                  then open its detail. The raw file holds about an hour of your traffic
+                  at 50 MB per rotation with <code>SERVER_LOG_RETAIN_FILES</code> kept,
+                  and the boxes quote the window they actually found. Managed CLI output
+                  is the one thing that cannot be tied to a request: the CLI runs
+                  outside any HTTP request, so it carries no request id.
                 </p>
                 <h4>How long each model took to say anything</h4>
                 <p>

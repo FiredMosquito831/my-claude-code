@@ -750,6 +750,27 @@ def current_active_log_path() -> Path | None:
     return _current_path
 
 
+def server_log_nominal_path() -> Path | None:
+    """The nominal ``server.log`` path ``configure_logging`` adopted, or ``None``.
+
+    Read-only (7.121.0): the request detail's raw-diagnostics viewer reads a
+    request's ERROR lines back out of this file and its rotated siblings. The
+    nominal name, not the active one, because the rotated parts and every
+    process's ``server.<pid>.log`` fallback are named after it.
+    """
+
+    return _current_path
+
+
+def log_rotation_bytes() -> int:
+    """The size at which ``server.log`` and ``raw-diagnostics.log`` rotate.
+
+    Read at call time, so a reader quoting the bound quotes the one in force.
+    """
+
+    return _MAX_LOG_BYTES
+
+
 # ============================================================================
 # Raw diagnostics (7.113.4)
 # ============================================================================
@@ -901,6 +922,18 @@ class _RawDiagnosticsSink:
 #: The installed sink and its loguru id, or ``None`` when no raw setting is on.
 _raw_sink_id: int | None = None
 _raw_sink: _RawDiagnosticsSink | None = None
+
+
+def raw_diagnostics_log_path() -> Path | None:
+    """The raw-diagnostics file ``configure_raw_diagnostics`` adopted, or ``None``.
+
+    Read-only (7.121.0), for the request detail's raw-diagnostics viewer and
+    the exports that share its reader. Bootstrap always passes the path, even
+    with every raw setting off, so a running server knows where the file is
+    (or would be) whether or not it exists; ``None`` only before that call.
+    """
+
+    return _raw_path
 
 
 def _forget_raw_sink() -> None:

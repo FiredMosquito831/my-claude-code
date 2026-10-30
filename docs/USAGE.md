@@ -5045,6 +5045,77 @@ Three things to know before you read the numbers:
 - **Empty means never measured, never zero.** `TTFT (ms)` and `First reasoning (ms)` did not exist before 7.4.0 and are not backfilled; `Attempt output tokens` is filled only on the winning attempt (and on a vision *describe* hop); `Attempt cost (USD)` only where an attempt reported its own usage. A skipped attempt has no latency at all — only a reason.
 - **It is detail only.** There is no Group by for this scope: averaging latency across attempts of different models inside one request is the number the per-model `p50 TTFT` cards already answer properly.
 
+**Raw diagnostics** is an opt-in field in the Model requests scope: one column
+per kind (`Raw API payloads`, `Raw SSE events`, `Raw API error tracebacks`,
+`Raw CLI diagnostics`), each cell a one-line provenance header — the request
+id, the source file, the capture state, the line count and byte count — and
+then every line recorded for that request, in full. It is off by default, so
+an export that does not ask for it is byte-identical to one made before 7.121.0.
+It reads the log files rather than the database, so it is limited to **200
+requests** (a wider filter is refused with "narrow the filter", never trimmed)
+and cannot be combined with Group by. XLSX refuses when a line would not fit
+Excel's 32,767-character cell, naming the request; JSON, CSV and TXT carry
+every line whole.
+
+#### Raw diagnostics: the raw log of one request (7.121.0)
+
+At the very bottom of a request's detail are four collapsed boxes for the four
+optional logs a request can write, each with a **Raw | Normalized** toggle:
+
+| Box | Setting | What Raw shows |
+| --- | --- | --- |
+| API payloads | `LOG_RAW_API_PAYLOADS` | the outbound payload MCC logged, as a Python repr (not JSON), with a labelled **Pretty-print as JSON** button that reads it as a literal in the browser — nothing is evaluated |
+| SSE events | `LOG_RAW_SSE_EVENTS` | every server-sent event, one per line, `\n` escaped: the model's output as produced, `<thinking>` tags and all |
+| API error tracebacks | `LOG_API_ERROR_TRACEBACKS` | the `server.log` ERROR lines carrying this request id; with the setting off, the exception type only, and the box says which setting to turn on |
+| CLI diagnostics | `LOG_RAW_CLI_DIAGNOSTICS` | the managed CLI's own lines — which carry no request id, so the box says so instead of inventing one |
+
+**Nothing recorded is dropped.** A box reads its lines a page at a time —
+4,000 lines or 8 MB, whichever comes first, always ending on a whole line —
+with a **Load more** control showing how many remain; the rest stays on disk
+until asked for. A scan stops only when it has read the retained window or at
+a hard limit (30 s, or a single line over 64 MB), and then it **refuses with a
+message naming the limit** rather than present part of the answer as the whole.
+A line over the limit is marked in place with its file and byte offset. If the
+log rotates while you page, the next page is refused rather than renumbered.
+The one honest absence is a request whose lines rotation already pruned, and
+the box says that, with the window it found.
+
+Raw and Normalized never stand in for each other. **Normalized** is what the
+request log stored — prompt text, answer, reasoning, tool calls and the
+per-attempt wire body — labelled with the column each part comes from; an
+empty Raw box explains its absence in the server's own words (the setting is
+off and where it lives; the request is older than the retained window; only a
+normalised form exists) and never shows normalised text as raw. The view
+choice is remembered for this browser (Raw is the default), and each box has a
+**Copy** button that copies exactly what is on screen.
+
+**Export this request…** writes the boxes to one file, named for the request,
+its format and a timestamp (an .ext of the format you chose), with a picker for
+the kinds, Raw / Normalized / both, and the same four formats as the Analytics
+export. It
+reads through the same reader and the same renderers, so the file holds
+exactly what the boxes showed; a limit the format cannot meet (XLSX's cell
+size, a line too large to hold, a disk with no room for the copy) comes back
+as a sentence, never a shorter file.
+
+Two facts worth knowing before reading any of it:
+
+- **Nothing is masked.** Raw lines are exactly what was logged — prompts,
+  answers, pasted text, credentials included. That is why the route is
+  loopback-only and JSON-only, as every other admin route is; the section
+  carries the warning in its own words. `server.log` lines were redacted when
+  they were written, and are returned as written.
+- **Raw upstream bytes exist only on two doors.** The Anthropic Messages and
+  OpenAI Responses providers log the provider's own frames. OpenAI Chat
+  Completions and Gemini log no upstream frame, so for those the SSE box shows
+  MCC's own stream to the client and says that the provider's raw bytes were
+  never captured — it does not pass one off as the other.
+
+To get data, turn a setting on in **Limits & Resilience → Diagnostics** and
+make the request again: Save applies payloads, SSE and CLI diagnostics at once
+(no restart), and tracebacks are read live too. Historical requests never gain
+raw lines; they keep their normalised form.
+
 #### Why the totals stop rising
 
 The request detail view shows the outbound body per attempt: sampling and reasoning parameters are stored whole however large the body is, and only the message and tool structure degrades to counts and names under `REQUEST_LOG_WIRE_BODY_MAX_CHARS`. On the Models page, *reasoning requested* and *reasoning returned* are independent measurements — what left, and whether thinking text came back.

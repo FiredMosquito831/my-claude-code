@@ -7,6 +7,7 @@ threadpool, so SQLite work stays off the event loop and a large export never
 loads the whole table into memory.
 """
 
+import asyncio
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from my_claude_code.api import raw_diagnostics
 from my_claude_code.api.admin_websearch_routes import get_websearch_log_store
 from my_claude_code.application.search_jobs import is_search
 from my_claude_code.config.settings import Settings
@@ -81,6 +83,8 @@ def _render(
     headers: list[str],
     filename: str,
     exported_at: str,
+    *,
+    txt_widths: list[int] | None = None,
 ) -> Iterator[bytes]:
     if fmt == "json":
         return export_engine.render_json_array(rows)
@@ -94,6 +98,7 @@ def _render(
         headers,
         title=f"Export {filename}",
         summary=f"Exported {exported_at}",
+        widths=txt_widths,
     )
 
 
@@ -104,12 +109,37 @@ def _stream(
     headers: list[str],
     filename: str,
     exported_at: str,
+    *,
+    txt_widths: list[int] | None = None,
 ) -> StreamingResponse:
-    body = _render(fmt, rows, columns, headers, filename, exported_at)
+    body = _render(
+        fmt, rows, columns, headers, filename, exported_at, txt_widths=txt_widths
+    )
     return StreamingResponse(
         body,
         media_type=export_engine.media_type(fmt),
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def stream_export(
+    fmt: export_engine.Format,
+    rows: Iterator[dict[str, Any]],
+    columns: list[str],
+    headers: list[str],
+    filename: str,
+    exported_at: str,
+    *,
+    txt_widths: list[int] | None = None,
+) -> StreamingResponse:
+    """The one streaming path every export takes, for the request detail too.
+
+    7.121.0: the per-request raw-diagnostics export renders through exactly
+    these renderers, so its four formats are the Analytics export's four.
+    """
+
+    return _stream(
+        fmt, rows, columns, headers, filename, exported_at, txt_widths=txt_widths
     )
 
 
@@ -274,6 +304,17 @@ async def _request_export(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
+    raw_requested = export_engine.RAW_DIAGNOSTICS_FIELD in selected
+    if raw_requested and dims:
+        # A request's own log lines have no group total; a silently ignored
+        # field would hand back a file without what was asked for.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Raw diagnostics are one request's own log lines and cannot be "
+                "grouped: clear Group by, or untick Raw diagnostics."
+            ),
+        )
 
     exported_at = datetime.now(UTC).isoformat()
     filename = export_engine.export_filename(
@@ -336,6 +377,53 @@ async def _request_export(
     output_columns = sql_columns + derived_columns
     headers = export_engine.request_detail_headers(output_columns)
     need_bodies = export_engine.requires_request_bodies(selected)
+    row_filters: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "status": status,
+        "endpoint": endpoint,
+        "key": key,
+        "since": since_epoch,
+        "until": until_epoch,
+        "q": q,
+        "local": local,
+        "harness": harness,
+        "session": session,
+        "folder": folder,
+        "exit": exit,
+        "matched": matched,
+    }
+    key_names = credential_name_index()
+
+    if raw_requested:
+        # The raw path opens its own passes over the same rows; the ordinary
+        # iterator is not built at all, so no connection is opened for nothing.
+        # ``row_filters`` is the same thirteen values, spelled once for the two
+        # helpers; the ordinary call below spells them out because the origin
+        # filter-arity guard counts keyword call sites
+        # (tests/core/test_request_log_origin_filters.py), and this dict is
+        # pinned to the whole filter set there.
+        return await _stream_with_raw_diagnostics(
+            store,
+            fmt,
+            selected,
+            output_columns,
+            headers,
+            filename,
+            exported_at,
+            row_args={
+                "columns": sql_columns,
+                "need_bodies": need_bodies,
+                "need_ladder": "ladder" in selected,
+                "need_exits": "exit" in selected,
+                **row_filters,
+            },
+            key_names=key_names,
+            settings=settings,
+        )
+
+    # Spelled out rather than ``**row_filters``: the origin filter-arity guard
+    # counts keyword call sites, so the one this function owns bypasses nothing.
     iterator = store.iter_export_rows(
         columns=sql_columns,
         need_bodies=need_bodies,
@@ -360,14 +448,158 @@ async def _request_export(
         matched=matched,
     )
 
-    key_names = credential_name_index()
-
     def detail_rows() -> Iterator[dict[str, Any]]:
         for row in iterator:
             export_engine.compute_request_detail_derived(row, selected, key_names)
             yield {column: row.get(column) for column in output_columns}
 
     return _stream(fmt, detail_rows(), output_columns, headers, filename, exported_at)
+
+
+def _matched_request_ids(
+    store: RequestLogStore, row_args: dict[str, Any], limit: int
+) -> list[str] | None:
+    """The ids the export will hold, or ``None`` past ``limit``.
+
+    Read through the same iterator and filters as the export itself, so the
+    bound counts exactly the rows the file would carry.
+    """
+
+    only_ids: dict[str, Any] = dict(row_args)
+    only_ids.update(
+        columns=["id", "ts_epoch", "stream"],
+        need_bodies=False,
+        need_ladder=False,
+        need_exits=False,
+    )
+    rows = store.iter_export_rows(**only_ids)
+    ids: list[str] = []
+    try:
+        for row in rows:
+            ids.append(str(row["id"]))
+            if len(ids) > limit:
+                return None
+    finally:
+        rows.close()
+    return ids
+
+
+async def _stream_with_raw_diagnostics(
+    store: RequestLogStore,
+    fmt: export_engine.Format,
+    selected: list[str],
+    output_columns: list[str],
+    headers: list[str],
+    filename: str,
+    exported_at: str,
+    *,
+    row_args: dict[str, Any],
+    key_names: dict[str, str] | None,
+    settings: Settings,
+) -> StreamingResponse:
+    """The request export with the Raw diagnostics group (7.121.0).
+
+    Everything that can refuse runs before the first byte: the 200-request
+    scope bound, the one read of the log window into a temporary file, XLSX's
+    cell limit and TXT's column sizing. A refusal is a 4xx/5xx with a sentence;
+    a file is never written short. The rows themselves are the ordinary export
+    rows plus one cell per raw kind, read from the request detail's own reader.
+    """
+
+    limit = export_engine.RAW_DIAGNOSTICS_MAX_REQUESTS
+    ids = await asyncio.to_thread(_matched_request_ids, store, row_args, limit)
+    if ids is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Raw diagnostics read every request's lines out of the log files, "
+                f"so one export holds at most {limit} requests and this filter "
+                f"matches more. Narrow the filter or the period, or export one "
+                f"request from its detail."
+            ),
+        )
+    flags = raw_diagnostics.raw_settings_from(settings)
+    columns = dict(
+        zip(
+            raw_diagnostics.RAW_KINDS,
+            export_engine.RAW_DIAGNOSTICS_COLUMNS,
+            strict=True,
+        )
+    )
+    try:
+        bulk = await asyncio.to_thread(
+            raw_diagnostics.prepare_bulk_raw,
+            raw_diagnostics.current_sources(),
+            ids,
+            flags,
+            columns,
+        )
+    except raw_diagnostics.RawScanRefused as refusal:
+        raise HTTPException(
+            status_code=refusal.status, detail=refusal.message
+        ) from None
+
+    def rows_with_raw() -> Iterator[dict[str, Any]]:
+        iterator = store.iter_export_rows(**row_args)
+        try:
+            for row in iterator:
+                export_engine.compute_request_detail_derived(row, selected, key_names)
+                row.update(bulk.cells(row))
+                yield {column: row.get(column) for column in output_columns}
+        finally:
+            iterator.close()
+
+    widths: list[int] | None = None
+    try:
+        if fmt == "xlsx":
+            longest, where = await asyncio.to_thread(_longest_raw_cell, rows_with_raw())
+            raw_diagnostics.check_xlsx_cells(longest, where)
+        elif fmt == "txt":
+            widths = await asyncio.to_thread(
+                export_engine.txt_column_widths,
+                rows_with_raw(),
+                output_columns,
+                headers,
+            )
+    except raw_diagnostics.RawScanRefused as refusal:
+        bulk.close()
+        raise HTTPException(
+            status_code=refusal.status, detail=refusal.message
+        ) from None
+    except BaseException:
+        bulk.close()
+        raise
+
+    def streamed() -> Iterator[dict[str, Any]]:
+        try:
+            yield from rows_with_raw()
+        finally:
+            bulk.close()
+
+    return _stream(
+        fmt,
+        streamed(),
+        output_columns,
+        headers,
+        filename,
+        exported_at,
+        txt_widths=widths,
+    )
+
+
+def _longest_raw_cell(rows: Iterator[dict[str, Any]]) -> tuple[int, str]:
+    longest = 0
+    where = ""
+    for row in rows:
+        for column in export_engine.RAW_DIAGNOSTICS_COLUMNS:
+            value = row.get(column)
+            if isinstance(value, str) and len(value) > longest:
+                longest = len(value)
+                where = (
+                    f"request {row.get('id')}'s "
+                    f"{export_engine.request_detail_headers([column])[0]} cell"
+                )
+    return longest, where
 
 
 async def _attempt_export(

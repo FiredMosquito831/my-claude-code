@@ -8303,6 +8303,122 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
+/* 7.121.0: the request detail's raw diagnostics, last in the card. Each box
+   is a wire pane; its Raw | Normalized toggle is two small buttons at the end
+   of the summary line, and its text is the detail's own body style. */
+.req-raw {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.req-raw-warning,
+.req-raw-status,
+.req-raw-note,
+.req-raw-source,
+.req-raw-more {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.req-raw-warning {
+  color: var(--warn);
+}
+
+.req-raw-boxes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.req-raw-pane[open] {
+  border-color: var(--line-strong);
+}
+
+.req-raw-kind {
+  font-weight: 600;
+}
+
+.req-raw-views {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.req-raw-view {
+  padding: 1px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.req-raw-view.is-active {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.req-raw-view:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Positioned so the Copy button can sit at its top right, as on the Guide. */
+.req-raw-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 10px 10px;
+}
+
+.req-raw-state {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.req-raw-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.req-raw-pretty {
+  font-size: 11px;
+}
+
+/* Wrapped, never scrolled sideways; the detail body's 260px cap keeps a
+   two-megabyte payload inside its box. */
+.req-raw-lines {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.req-raw-export {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.req-raw-export-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-self: stretch;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
 .req-wire-body {
   margin: 0;
   border: 0;
