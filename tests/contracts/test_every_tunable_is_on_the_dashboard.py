@@ -24,18 +24,27 @@ asked about, found by the 7.24.0 audit in
    6.11.0 contract -- or one of the bootstrap names listed here, each of which
    is read before ``Settings`` exists or by a different process entirely. A
    name that is neither is a tunable nobody can see.
+4. **"On a page" was taken on trust (7.121.2).** A ``Settings`` key with a
+   manifest field passed every check above while thirteen of them -- the
+   web-search key-rotation policies -- were rendered by nothing. Every
+   ``Settings`` key now has to reach a real form control in
+   ``settings_control_map.json`` (proved equal to the page by the jsdom
+   suite), and the only ``Settings`` keys allowed to lack one are named below.
 """
 
+import json
 import re
 from pathlib import Path
 
 from pydantic import AliasChoices
 
 from my_claude_code.config.admin.manifest import FIELDS, env_keys
+from my_claude_code.config.admin.values import ROUTE_PAUSE_KEYS
 from my_claude_code.config.settings import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src" / "my_claude_code"
+CONTROL_MAP = Path(__file__).with_name("settings_control_map.json")
 
 
 def _env_key(name: str) -> str:
@@ -279,6 +288,56 @@ def test_the_bootstrap_list_does_not_claim_a_settings_key() -> None:
         "A bootstrap name that is also a Settings alias hides a field that "
         "does work: " + ", ".join(overlap)
     )
+
+
+# ---------------------------------------------------------- 4. a control
+
+#: ``Settings`` keys with no form control, and the reason the page needs none.
+#: Only the route pause lists: each model on a route's rail has its own Pause
+#: button on Model Config, which writes the list through POST
+#: /admin/api/config/route-pause at once, with no Apply (6.35.1); a form
+#: control for the same list would be a second writer competing with it.
+#: Adding a name here because the test went red is how a setting disappears.
+SETTINGS_WITHOUT_A_FORM_CONTROL = frozenset(
+    paused_key for _model, _chain, paused_key in ROUTE_PAUSE_KEYS
+)
+
+#: A nested settings model is not an env var (``NIM`` is populated from
+#: ``NIM_*`` keys, each with its own field); see
+#: ``test_every_setting_has_an_admin_field.py``.
+_NESTED_GROUPS = frozenset({"NIM"})
+
+
+def test_every_settings_key_has_a_control_on_its_page() -> None:
+    """A tunable is on the dashboard only if a control on its page edits it."""
+
+    entries = json.loads(CONTROL_MAP.read_text(encoding="utf-8"))["fields"]
+    problems: list[str] = []
+    for name in Settings.model_fields:
+        key = _env_key(name)
+        if key in _NESTED_GROUPS:
+            continue
+        entry = entries.get(key)
+        if entry is None:
+            problems.append(f"{key}: no entry in settings_control_map.json")
+            continue
+        if key in SETTINGS_WITHOUT_A_FORM_CONTROL:
+            if entry["control"] is not None:
+                problems.append(
+                    f"{key}: listed as having no form control, but it has one"
+                )
+            continue
+        if entry["control"] != f"field-{key}":
+            problems.append(f"{key}: no form control on the {entry['page']!r} page")
+    assert not problems, "\n".join(problems)
+
+
+def test_the_no_control_list_is_exactly_the_pause_lists() -> None:
+    """The escape hatch names nothing that is not a route pause list."""
+
+    settings_keys = {_env_key(name) for name in Settings.model_fields}
+    assert settings_keys >= SETTINGS_WITHOUT_A_FORM_CONTROL
+    assert len(SETTINGS_WITHOUT_A_FORM_CONTROL) == len(ROUTE_PAUSE_KEYS)
 
 
 def test_the_six_promoted_knobs_stay_exposed() -> None:

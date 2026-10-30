@@ -138,6 +138,9 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     // offers, additive (Brave's own `strict` option stays compared). The ddgs
     // drawer's corrected help texts are taken out of both sides by the test.
     'select[data-key="DDGS_SAFESEARCH"] option[value="strict"]',
+    // 7.121.2: each card's key-pool rotation field, additive -- the thirteen
+    // web-search `_ROTATION` settings had no control anywhere before.
+    '[data-websearch-provider] .field[data-key$="_ROTATION"]',
   ];
   const stripped = (node) => {
     if (!node) return null;

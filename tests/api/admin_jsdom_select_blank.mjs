@@ -64,6 +64,15 @@ const SAVED_NUMBER_KEY = "MODEL_DISCOVERY_REFRESH_SECONDS";
 const EDIT_KEY = "DDGS_REGION";
 const EDIT_VALUE = "uk-en";
 
+/** 7.121.2: a Web Search card's rotation field -- the one `.field` a card
+ *  gained. Matched by key suffix inside #webSearchGrid only, so a provider
+ *  card's rotation select (Providers page, key manager) is never touched. */
+const WS_ROTATION_FIELD = '.field[data-key$="_ROTATION"]';
+
+/** The value the round trip picks for every web-search rotation control: a
+ *  listed option no fixture line holds, so each edit is a real change. */
+const ROTATION_EDIT_VALUE = "round_robin";
+
 export function prepareSelectBlankScenario({ window, ROUTES }) {
   const doc = window.document;
   const flat = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "");
@@ -177,16 +186,20 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     return { clickable: true, disabled, body: next ? next.body : null };
   };
 
-  /** Every settings view's DOM, with this release's own markup taken out of a
-   *  clone: the marked option, the saved-number note, and the saved-number
-   *  control itself (replaced by an inert marker, because its *shape* is the
-   *  one control change this release makes and the per-control cells below
-   *  are where that is measured). Line endings are normalised so a CRLF
-   *  artefact cannot read as a page difference. */
+  /** Every settings view's DOM, with this arc's own markup taken out of a
+   *  clone: the marked option, the saved-number note, the saved-number control
+   *  itself (replaced by an inert marker, because its *shape* is the one
+   *  control change 7.121.1 makes and the per-control cells below are where
+   *  that is measured), and 7.121.2's rotation field on each Web Search card
+   *  (a whole new `.field`, so it is removed). Line endings are normalised so a
+   *  CRLF artefact cannot read as a page difference. */
   const captureViews = () => {
     const views = {};
     doc.querySelectorAll(".admin-view[data-view]").forEach((view) => {
       const clone = view.cloneNode(true);
+      clone
+        .querySelectorAll(`#webSearchGrid ${WS_ROTATION_FIELD}`)
+        .forEach((node) => node.remove());
       clone.querySelectorAll("[data-saved-value]").forEach((node) => node.remove());
       clone.querySelectorAll(".field-saved-number").forEach((node) => node.remove());
       clone.querySelectorAll(`[data-key="${SAVED_NUMBER_KEY}"]`).forEach((node) => {
@@ -239,6 +252,51 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     };
   };
 
+  /** 7.121.2: every setting, the page it belongs to and the control that edits
+   *  it THERE. The page is the view the field's manifest section rendered into
+   *  -- `renderSections` draws one `#section-<id>` per section inside the view
+   *  whose VIEW_GROUPS entry claims it (a `const` the harness's eval cannot
+   *  reach, so it is read through what it drew) -- and the control is looked
+   *  up inside that page only, so a setting edited only from some other page
+   *  reads as uncovered. `control` is the element's id, or null when that page
+   *  has no form control for the key. */
+  const captureControlMap = () => {
+    const map = {};
+    payload.fields.forEach((field) => {
+      const section = doc.getElementById(`section-${field.section}`);
+      const host = section ? section.closest(".admin-view[data-view]") : null;
+      const page = host ? host.dataset.view : null;
+      const control = host
+        ? host.querySelector(
+            `input[data-key="${field.key}"], select[data-key="${field.key}"], ` +
+              `textarea[data-key="${field.key}"]`,
+          )
+        : null;
+      map[field.key] = { page, control: control ? control.id || "" : null };
+    });
+    return map;
+  };
+
+  /** One web-search rotation control, read where 7.121.2 puts it: inside its
+   *  provider's card on the Web Search page. */
+  const rotationControl = (key) =>
+    doc.querySelector(`#webSearchGrid [data-websearch-provider] select[data-key="${key}"]`);
+  const rotationCell = (key) => {
+    const select = rotationControl(key);
+    if (!select) return null;
+    const chosen = select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
+    const card = select.closest("[data-websearch-provider]");
+    return {
+      id: select.id,
+      card: card ? card.dataset.websearchProvider : null,
+      view: (select.closest(".admin-view[data-view]") || { dataset: {} }).dataset.view || null,
+      value: select.value,
+      shown: flat(chosen),
+      marked: Boolean(chosen && chosen.dataset.savedValue === "true"),
+      label: flat((select.closest(".field[data-key]") || doc).querySelector("label > span")),
+    };
+  };
+
   const stableFooter = async () => {
     let previous = null;
     for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -286,6 +344,7 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     });
 
     out.coverage = captureCoverage(fieldKeys);
+    out.controlMap = captureControlMap();
     out.controlKeys = Object.keys(captureControls(fieldKeys)).filter(
       (key) => doc.querySelector(`[data-key="${key}"]`) !== null,
     ).length;
@@ -349,6 +408,52 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     const afterTouch = submits().SELECT_BLANK_UNTOUCHED_PROBE;
     out.untouchedProbe.afterTouch = afterTouch === undefined ? null : afterTouch;
     built.control.remove();
+    // The probe's edit counted while it was in the page; recount without it.
+    window.eval("updateDirtyState()");
+
+    /* --- 7.121.2: the web-search rotation controls, value shown -> edited ->
+       saved -> shown. `MCC_JSDOM_CONFIG_AFTER_FILE` is what the server answers
+       after saving exactly the body this edit should produce -- the Python test
+       built it by running that body through the real save path -- so the page
+       is reloaded from the server's own answer, as it is after a real Apply.
+       Absent on the base tree, where no card carries one. */
+    const rotationKeys = payload.fields
+      .filter((field) => field.section === "websearch" && field.key.endsWith("_ROTATION"))
+      .map((field) => field.key)
+      .sort();
+    out.rotation = { keys: rotationKeys, before: {} };
+    rotationKeys.forEach((key) => {
+      out.rotation.before[key] = rotationCell(key);
+    });
+    const present = rotationKeys.filter((key) => rotationControl(key));
+    out.rotation.present = present.length;
+    const afterPath = process.env.MCC_JSDOM_CONFIG_AFTER_FILE || "";
+    if (afterPath && present.length) {
+      const saved = JSON.parse(readFileSync(afterPath, "utf8"));
+      out.rotation.footerBeforeEdits = await stableFooter();
+      present.forEach((key) => {
+        const select = rotationControl(key);
+        select.value = ROTATION_EDIT_VALUE;
+        select.dispatchEvent(new window.Event("change", { bubbles: true }));
+      });
+      out.rotation.footerAfterEdits = await stableFooter();
+      out.rotation.submitted = submits();
+      ROUTES["/admin/api/config"] = saved;
+      out.rotation.apply = await clickApply();
+      await waitFor(() =>
+        rotationKeys.every((key) => {
+          const cell = rotationCell(key);
+          return cell && cell.value === ROTATION_EDIT_VALUE;
+        }),
+      );
+      await wait(300);
+      out.rotation.after = {};
+      rotationKeys.forEach((key) => {
+        out.rotation.after[key] = rotationCell(key);
+      });
+      out.rotation.footerAfterSave = await stableFooter();
+      ROUTES["/admin/api/config"] = payload;
+    }
 
     out.scriptErrors = scriptErrors;
     out.consoleErrors = consoleErrors;

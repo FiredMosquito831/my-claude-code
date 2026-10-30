@@ -27,10 +27,13 @@ renders, the tag is there, the collapse persists) lives in
 ``tests/api/test_admin_static_jsdom.py``.
 """
 
+import json
 import re
 from pathlib import Path
 
 from my_claude_code.config.admin.manifest import FIELDS
+
+CONTROL_MAP = Path(__file__).with_name("settings_control_map.json")
 
 STATIC = (
     Path(__file__).resolve().parents[2]
@@ -211,4 +214,81 @@ def test_the_advanced_tag_is_emitted_and_styled() -> None:
     assert 'tag.textContent = "advanced"' in ADMIN_JS
     assert re.search(r"\.advanced-tag\s*\{", ADMIN_CSS), (
         "admin.js applies .advanced-tag but admin.css never styles it"
+    )
+
+
+# ------------------------------------------------------------- hosting ---
+# Hidden is not only `display: none`. The generic grid in renderSections()
+# leaves two kinds of field out because another renderer draws them -- and
+# until 7.121.2 one kind, the thirteen web-search `_ROTATION` fields, was left
+# out with nothing drawing it at all: savable in .env, visible nowhere. These
+# pin the skip to exactly those two kinds and each kind to its host, and check
+# every skipped field against the control map the jsdom suite proves is the
+# page.
+
+#: The grid's one filter, as written in renderSections(). A new clause here is
+#: a new way for a field to vanish, so it must be argued in this test first.
+_GRID_SKIP_PREDICATE = (
+    '!field.key.endsWith("_ROTATION") && '
+    '!(field.section === "websearch" && field.advanced)'
+)
+
+
+def _function_body(name: str) -> str:
+    body = re.search(rf"function {name}\([^)]*\) \{{(.*?)\n\}}", ADMIN_JS, re.S)
+    assert body, f"admin.js no longer defines {name}()"
+    return body.group(1)
+
+
+def test_the_grid_skips_only_the_two_kinds_another_renderer_draws() -> None:
+    skip = re.search(
+        r"const gridFields = advancedLast\(\s*sectionFields\.filter\(\s*"
+        r"\(field\) =>\s*(?P<predicate>.*?),?\s*\),\s*\);",
+        ADMIN_JS,
+        re.S,
+    )
+    assert skip, "renderSections() no longer builds gridFields from one filter"
+    predicate = " ".join(skip.group("predicate").split())
+    assert predicate == _GRID_SKIP_PREDICATE, (
+        "renderSections() now leaves a different set of fields out of the grid: "
+        f"{predicate!r}. Every field it skips must be drawn somewhere else."
+    )
+
+
+def test_each_skipped_kind_has_its_host() -> None:
+    """Provider rotation -> the key manager; web-search rotation -> its card;
+    web-search options -> the card's Advanced options group."""
+
+    assert "const rotationField = state.fields.get(`${field.key}_ROTATION`);" in (
+        _function_body("keyManagerForField")
+    ), "keyManagerForField() no longer draws a provider pool's rotation select"
+    assert "card.appendChild(renderField(rotationField))" in (
+        _function_body("renderWebSearchProviders")
+    ), "a Web Search card no longer draws its key pool's rotation field (7.121.2)"
+    assert "details.appendChild(renderField(field))" in (
+        _function_body("renderWebSearchAdvanced")
+    ), "renderWebSearchAdvanced() no longer draws the cards' option fields"
+
+
+def test_every_field_the_grid_skips_has_a_control_on_its_page() -> None:
+    entries = json.loads(CONTROL_MAP.read_text(encoding="utf-8"))["fields"]
+    skipped = [
+        field
+        for field in FIELDS
+        if field.key.endswith("_ROTATION")
+        or (field.section_id == "websearch" and field.advanced)
+    ]
+    web_search_rotations = [
+        field
+        for field in skipped
+        if field.section_id == "websearch" and field.key.endswith("_ROTATION")
+    ]
+    assert len(web_search_rotations) == 13, "the scan no longer finds the 13"
+    missing = sorted(
+        field.key
+        for field in skipped
+        if (entries.get(field.key) or {}).get("control") != f"field-{field.key}"
+    )
+    assert not missing, (
+        f"these fields are left out of the generic grid and drawn by nothing: {missing}"
     )
