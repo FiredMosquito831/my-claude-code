@@ -10,6 +10,7 @@ size. Those remain unverified by any automated check in this repo.
 """
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -42,12 +43,18 @@ from my_claude_code.api.model_admin import (
 from my_claude_code.application import marketplace as application_marketplace
 from my_claude_code.application.marketplace import market_snapshot_from_payload
 from my_claude_code.application.prompt_cache import adapt_prompt_cache_minutes
+from my_claude_code.config import paths
 from my_claude_code.config.admin.manifest import (
     FIELD_BY_KEY,
     FIELDS,
     SECTIONS,
     ConfigOptionSpec,
 )
+from my_claude_code.config.admin.persistence import (
+    commit_prepared_admin_update,
+    prepare_admin_update,
+)
+from my_claude_code.config.admin.values import ROUTE_PAUSE_KEYS
 from my_claude_code.config.harnesses import not_yet_cards
 from my_claude_code.config.marketplace_profiles import (
     MarketplaceProfiles,
@@ -61,6 +68,7 @@ from my_claude_code.config.prompt_cache_lifetimes import (
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.upstream_ladder import _TIMES
+from tests.support.select_blank_payload import FIXTURE_ENV, build_payload
 from tests.support.websearch_page_fixture import PROBE as WS_PROBE
 from tests.support.websearch_page_fixture import websearch_page_fixture
 
@@ -12978,3 +12986,467 @@ def test_jsdom_the_raw_section_is_the_only_thing_the_request_detail_gained(
         assert base["childCount"] == 8
         assert mine["childCount"] == base["childCount"] + 1
         assert mine["children"] == base["children"], key
+
+
+# ==================================================================== 7.121.1
+# Every saved value shown, and only real edits saved.
+#
+# A value outside a control's options rendered blank, a number box could not
+# hold "7_200", the dirty count read the untouched control as changed, and
+# Apply posted "" for it -- which the server reads as "delete the line". With
+# no edit at all, one Save deleted five settings (the investigation's table:
+# NVIDIA_NIM_API_KEY_ROTATION, DDGS_BACKEND, LOG_LEVEL, PROXY_CHECK_ENABLED,
+# MODEL_DISCOVERY_REFRESH_SECONDS). The scenario renders the server's own
+# /admin/api/config answer for a scratch .env holding exactly those values
+# (tests/support/select_blank_payload.py) and measures what the page shows,
+# what it would submit, and the exact Apply body.
+
+SELECT_BLANK_BASELINE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "select_blank_dom_7_121_0.json"
+)
+
+#: The saved values no option carries -- the measured wipe sources.
+UNLISTED_SAVED = {
+    "NVIDIA_NIM_API_KEY_ROTATION": "on_error",
+    "DDGS_BACKEND": "brave,mojeek",
+    "LOG_LEVEL": "debug",
+    "PROXY_CHECK_ENABLED": "True",
+}
+
+#: The saved number no `<input type=number>` can hold.
+SAVED_NUMBER_KEY = "MODEL_DISCOVERY_REFRESH_SECONDS"
+SAVED_NUMBER = "7_200"
+
+#: A websearch rotation select with no control at all until the coverage
+#: release. It is in the file and must never be posted by any save here.
+UNRENDERED_ROTATION = "TAVILY_API_KEY_ROTATION"
+
+#: Fields whose control is not a form control because the page edits them some
+#: other way: the rail pause buttons write their own endpoint, and the three
+#: oauth_login fields are buttons that start a login. Each group is asserted
+#: below against the code that really renders it.
+PAUSE_LIST_FIELDS = frozenset(
+    {
+        "MODEL_PAUSED",
+        "MODEL_FABLE_PAUSED",
+        "MODEL_HAIKU_PAUSED",
+        "MODEL_IMAGE_PAUSED",
+        "MODEL_MYTHOS_PAUSED",
+        "MODEL_OPUS_PAUSED",
+        "MODEL_ASR_PAUSED",
+        "MODEL_SONNET_PAUSED",
+        "MODEL_TTS_PAUSED",
+        "MODEL_VIDEO_PAUSED",
+        "MODEL_VISION_PAUSED",
+    }
+)
+OAUTH_ACTION_FIELDS = frozenset(
+    {"ANTHROPIC_OAUTH_MANAGE", "CHATGPT_OAUTH_IMPORT_CODEX", "CHATGPT_OAUTH_LOGIN"}
+)
+
+
+def _marked_label(value: str) -> str:
+    return f"{value} — saved, not in today's list"
+
+
+@pytest.fixture(scope="module")
+def select_blank(tmp_path_factory) -> dict:
+    """The real settings page, rendered from the server's own payload.
+
+    The .env and the payload are built here rather than committed: the payload
+    is `_config_response()` over a scratch managed file, so the page sees the
+    manifests' own 547 fields and cannot drift from them.
+    """
+
+    root = tmp_path_factory.mktemp("select_blank")
+    payload_path = root / "config.json"
+    payload = build_payload(payload_path)
+    assert len(payload["fields"]) == len(FIELDS), "the payload is not the manifest"
+    return _run(
+        MCC_JSDOM_SCENARIO="select_blank",
+        MCC_JSDOM_CONFIG_FILE=str(payload_path),
+    )
+
+
+def test_jsdom_the_select_blank_scenario_runs_clean(select_blank) -> None:
+    assert select_blank["fatal"] is None
+    assert select_blank["scenarioFatal"] is None
+    assert select_blank["scriptErrors"] == []
+    assert select_blank["consoleErrors"] == []
+    # The tree this runs on has the fix: the marked option exists.
+    assert select_blank["baseTree"] is False
+
+
+def test_jsdom_an_unlisted_saved_value_is_its_own_selected_option(select_blank) -> None:
+    """The value the file holds is shown, selected, and still selectable.
+
+    Listed last on purpose: a value that IS in today's list renders exactly the
+    options it always did, in the order it always had them.
+    """
+
+    for key, saved in UNLISTED_SAVED.items():
+        cell = select_blank["fields"][key]
+        assert cell["present"] is True, key
+        assert cell["tag"] == "select", key
+        assert cell["optionValues"][-1] == saved, key
+        assert cell["optionLabels"][-1] == _marked_label(saved), key
+        assert cell["savedOption"] == _marked_label(saved), key
+        assert cell["selectedIndex"] == len(cell["optionValues"]) - 1, key
+        # The control holds the saved value, so the page is not blank and the
+        # value compares equal to what was loaded.
+        assert cell["value"] == saved, key
+        assert cell["original"] == saved, key
+        assert cell["shown"] == _marked_label(saved), key
+        # Still the deliberate clear, still first, still enabled.
+        assert cell["optionLabels"][0].startswith("Default ("), key
+        assert cell["disabled"] is False, key
+
+
+def test_jsdom_a_listed_saved_value_renders_exactly_as_before(select_blank) -> None:
+    """Nothing is marked where the saved value is a listed option."""
+
+    safesearch = select_blank["fields"]["DDGS_SAFESEARCH"]
+    assert safesearch["shown"] == "strict (older spelling, read as on)"
+    assert safesearch["savedOption"] is None
+    assert safesearch["optionValues"] == ["", "", "on", "moderate", "off", "strict"]
+    assert safesearch["selectedIndex"] == 5
+
+    extractor = select_blank["fields"]["WEB_FETCH_EXTRACTOR"]
+    assert extractor["shown"] == "Every text node, as before"
+    assert extractor["savedOption"] is None
+
+    # A number the box CAN hold keeps its number box, its bounds and its value.
+    rows = select_blank["fields"]["REQUEST_LOG_MAX_ROWS"]
+    assert (rows["tag"], rows["type"]) == ("input", "number")
+    assert rows["value"] == "20000"
+    assert rows["savedNote"] is None
+
+    # A plain text value was never at risk; it still shows what is saved.
+    language = select_blank["fields"]["BRAVE_SEARCH_LANG"]
+    assert (language["tag"], language["type"], language["value"]) == (
+        "input",
+        "text",
+        "en",
+    )
+    assert language["savedNote"] is None
+
+
+def test_jsdom_a_number_box_that_cannot_hold_the_saved_value_shows_it_as_text(
+    select_blank,
+) -> None:
+    """`7_200` is a legal setting and an illegal number-input value.
+
+    The browser sanitises it to "", which is how the number vanished. Rendered
+    as text, marked with the reason, it is visible and untouched.
+    """
+
+    cell = select_blank["fields"][SAVED_NUMBER_KEY]
+
+    assert (cell["tag"], cell["type"]) == ("input", "text")
+    assert cell["value"] == SAVED_NUMBER
+    assert cell["original"] == SAVED_NUMBER
+    assert cell["shown"] == SAVED_NUMBER
+    assert cell["savedNote"] == (
+        f'Saved as "{SAVED_NUMBER}" — not a number this box can hold. '
+        "Shown exactly as stored; retype it as a number to change it."
+    )
+    assert cell["submits"] is None
+
+
+def test_jsdom_an_untouched_page_has_no_unsaved_changes(select_blank) -> None:
+    """Seven values the page could not display used to read as five edits."""
+
+    assert select_blank["footerOnLoad"] == "No changes"
+    assert select_blank["changedOnLoad"] == []
+
+
+def test_jsdom_apply_with_no_edit_posts_nothing(select_blank) -> None:
+    """The body that used to carry five `""` is not sent at all."""
+
+    applied = select_blank["applyOnLoad"]
+
+    assert applied["clickable"] is True
+    assert applied["disabled"] is True
+    assert applied["body"] is None
+    assert select_blank["footerAfterEmptyApply"] == "No changes"
+
+
+def test_jsdom_one_edit_posts_exactly_one_key(select_blank) -> None:
+    """Typing one region sends one region -- not that plus five blanks."""
+
+    edit = select_blank["afterEdit"]
+
+    assert edit["typed"] == "uk-en"
+    assert edit["footer"] == "1 unsaved change"
+    assert edit["submitted"] == ["DDGS_REGION"]
+    assert select_blank["applyAfterEdit"]["body"] == {
+        "values": {"DDGS_REGION": "uk-en"}
+    }
+
+
+def test_jsdom_no_unlisted_value_is_ever_submitted_untouched(select_blank) -> None:
+    """Every value the page cannot display stays out of every Apply body."""
+
+    bodies = [
+        select_blank["applyOnLoad"]["body"],
+        select_blank["applyAfterEdit"]["body"],
+    ]
+    for body in bodies:
+        if body is None:
+            continue
+        for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, UNRENDERED_ROTATION):
+            assert key not in body["values"], key
+    for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, UNRENDERED_ROTATION):
+        assert select_blank["fields"][key].get("submits") is None, key
+
+
+def test_jsdom_a_control_nobody_touched_is_never_posted(select_blank) -> None:
+    """The rule itself, isolated from every display fix.
+
+    The marked option and the saved-number text remove today's fabricated
+    differences, so a value-diff against the loaded config would pass every
+    page-level test above -- and would still be the wrong rule. The probe is a
+    real control in the document whose value genuinely differs from what was
+    loaded and that nobody has touched: it is not a change until an edit event
+    says so. That is what makes the event, not the difference, the evidence.
+    """
+
+    probe = select_blank["untouchedProbe"]
+
+    assert probe["valueDiffersFromOriginal"] is True
+    assert probe["beforeTouch"] is True
+    assert probe["afterTouch"] == "different"
+
+
+def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
+    select_blank,
+) -> None:
+    """The DOM this release adds is the only DOM that moved.
+
+    The baseline is the same scenario, the same harness and the same payload
+    run against the BASE tree f6de93ad: every settings view with the marked
+    options, the saved-number note and the saved-number control normalised out
+    of a clone, and every one of the 547 controls' own markup. One control is
+    allowed to move (the number box that becomes a text box); everything else
+    is byte-identical.
+    """
+
+    baseline = json.loads(SELECT_BLANK_BASELINE.read_text(encoding="utf-8"))
+    base = baseline["base"]
+
+    assert select_blank["views"] == base["views"]
+
+    moved = sorted(
+        key
+        for key, html in base["controls"].items()
+        if select_blank["controls"].get(key) != html
+    )
+    assert moved == [SAVED_NUMBER_KEY]
+
+    before = base["controls"][SAVED_NUMBER_KEY]
+    after = select_blank["controls"][SAVED_NUMBER_KEY]
+    assert 'type="number"' in before
+    assert 'type="text"' in after
+    assert 'data-saved-number="true"' in after
+    assert "data-saved-number" not in before
+
+
+def test_jsdom_only_the_cells_this_release_names_moved(select_blank) -> None:
+    """The base tree's five broken cells, and nothing else, are what changed."""
+
+    baseline = json.loads(SELECT_BLANK_BASELINE.read_text(encoding="utf-8"))
+    base = baseline["base"]
+    record = baseline["moved_by_7_121_1"]
+
+    moved = sorted(
+        key
+        for key, cell in base["fields"].items()
+        if select_blank["fields"].get(key) != cell
+    )
+    assert moved == sorted([*UNLISTED_SAVED, SAVED_NUMBER_KEY])
+    assert sorted(record["fields"]) == moved
+    for key, entry in record["fields"].items():
+        assert entry["before"] == base["fields"][key], key
+        assert entry["after"] == select_blank["fields"][key], key
+
+    # The base page said "5 unsaved changes" on load, and its Apply posted the
+    # five ""; this tree says none, and posts nothing.
+    assert record["footerOnLoad"] == {
+        "before": "5 unsaved changes",
+        "after": "No changes",
+    }
+    assert record["changedOnLoad"]["before"] == sorted(
+        [*UNLISTED_SAVED, SAVED_NUMBER_KEY]
+    )
+    assert record["changedOnLoad"]["after"] == []
+    assert record["applyOnLoad"]["before"]["body"] == {
+        "values": dict.fromkeys([*UNLISTED_SAVED, SAVED_NUMBER_KEY], "")
+    }
+    assert record["applyOnLoad"]["after"] == select_blank["applyOnLoad"]
+    # The base tree posted a control nobody had touched; this one does not.
+    assert record["untouchedProbe"] == {
+        "before": {
+            "valueDiffersFromOriginal": True,
+            "beforeTouch": False,
+            "afterTouch": "different",
+        },
+        "after": {
+            "valueDiffersFromOriginal": True,
+            "beforeTouch": True,
+            "afterTouch": "different",
+        },
+    }
+    assert record["views"] == []
+
+
+def test_jsdom_the_saved_fixture_matches_the_committed_baseline() -> None:
+    """A fixture edit that forgets to regenerate the baseline fails here.
+
+    Regenerate with the base tree on purpose, never to make a run pass: the
+    baseline is what pins the page as it was before this release.
+    """
+
+    baseline = json.loads(SELECT_BLANK_BASELINE.read_text(encoding="utf-8"))
+
+    assert (
+        baseline["fixture_env_sha256"]
+        == hashlib.sha256(FIXTURE_ENV.encode("utf-8")).hexdigest()
+    )
+    assert baseline["payload_field_count"] == len(FIELDS)
+    assert "f6de93ad" in baseline["written_by"]
+
+
+def test_jsdom_every_setting_without_a_form_control_is_named_and_hosted(
+    select_blank,
+) -> None:
+    """A setting the page cannot edit is a setting nobody can change.
+
+    Three groups have no `[data-key]` form control and are (or will be)
+    editable some other way. Naming them here is what makes a NEW setting
+    without a control a failure instead of a silent gap:
+
+    * the rail pause buttons write ``ROUTE_PAUSE_KEYS`` through their own
+      endpoint -- there is a control per model row, and a second form control
+      for the same list would be a second way to write it;
+    * the three ``oauth_login`` fields are buttons that start a login;
+    * the websearch ``_ROTATION`` selects have NO control anywhere: filtered
+      out of the grid (admin.js, the ``_ROTATION`` predicate) and rendered by
+      nothing. That is the coverage gap the next release closes; until then
+      the exact set is pinned so it cannot grow.
+    """
+
+    without = set(select_blank["coverage"]["withoutControl"])
+    rotations = {
+        field.key
+        for field in FIELDS
+        if field.section_id == "websearch" and field.key.endswith("_ROTATION")
+    }
+
+    assert len(rotations) == 13
+    assert without == rotations | PAUSE_LIST_FIELDS | OAUTH_ACTION_FIELDS
+
+    # Each pause list is exactly one the route-pause endpoint writes.
+    assert {
+        paused_key for _model_key, _chain_key, paused_key in ROUTE_PAUSE_KEYS
+    } == PAUSE_LIST_FIELDS
+    # Each "no control" oauth field is the button-rendering type.
+    for key in OAUTH_ACTION_FIELDS:
+        assert FIELD_BY_KEY[key].field_type == "oauth_login", key
+    # Each rotation that has no control is a select whose widget already
+    # exists -- the coverage release needs no new control type.
+    for key in rotations:
+        assert FIELD_BY_KEY[key].field_type == "select", key
+
+    assert select_blank["coverage"]["fieldCount"] == len(FIELDS)
+    assert select_blank["coverage"]["controlCount"] == len(FIELDS) - len(without)
+
+
+def _scratch_managed_env(tmp_path, monkeypatch) -> Path:
+    """A scratch config directory holding the fixture .env, and nothing else."""
+
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.delenv("MCC_ENV_FILE", raising=False)
+    monkeypatch.chdir(tmp_path)
+    paths.reset_config_dir_cache()
+    managed = tmp_path / "config" / ".env"
+    managed.parent.mkdir(parents=True)
+    managed.write_text(FIXTURE_ENV, encoding="utf-8")
+    return managed
+
+
+def _valued_lines(text: str) -> dict[str, str]:
+    """The file's `KEY=value` lines by key, verbatim, so bytes are compared."""
+
+    lines: dict[str, str] = {}
+    for line in text.splitlines():
+        match = re.match(r"^([A-Z][A-Z0-9_]*)=", line)
+        if match:
+            lines[match.group(1)] = line
+    return lines
+
+
+def test_the_one_edit_body_changes_one_key_and_nothing_else(
+    select_blank, tmp_path, monkeypatch
+) -> None:
+    """The page's own Apply body, through the server's real save path.
+
+    The first save normalises the whole file layout (the 7.113.0 caveat), so it
+    is done once before anything is compared; from there every other key's line
+    has to survive byte for byte.
+    """
+
+    body = select_blank["applyAfterEdit"]["body"]
+    assert body == {"values": {"DDGS_REGION": "uk-en"}}
+
+    managed = _scratch_managed_env(tmp_path, monkeypatch)
+    first = prepare_admin_update({})
+    assert first.valid, first.errors
+    commit_prepared_admin_update(first)
+    normalised = managed.read_bytes()
+    before = _valued_lines(normalised.decode("utf-8"))
+
+    prepared = prepare_admin_update(body["values"])
+    assert prepared.valid, prepared.errors
+    commit_prepared_admin_update(prepared)
+
+    written = managed.read_bytes()
+    after = _valued_lines(written.decode("utf-8"))
+
+    # Exactly one key appeared, and no value was removed or rewritten.
+    assert set(after) - set(before) == {"DDGS_REGION"}
+    assert set(before) <= set(after)
+    for key, line in before.items():
+        assert after[key] == line, key
+    assert after["DDGS_REGION"] == "DDGS_REGION=uk-en"
+
+    # The five values the unfixed page deleted are still in the file, and the
+    # unmanaged line was never its to write.
+    for key, saved in UNLISTED_SAVED.items():
+        assert after[key] == f"{key}={saved}", key
+    assert after[SAVED_NUMBER_KEY] == f"{SAVED_NUMBER_KEY}={SAVED_NUMBER}"
+    assert "MCC_SMOKE_MARKER=keep-me" in after.values()
+
+    # One rolling copy, holding exactly what the save replaced.
+    assert (managed.parent / ".env.previous").read_bytes() == normalised
+
+
+def test_the_same_body_saved_twice_is_a_no_op(
+    select_blank, tmp_path, monkeypatch
+) -> None:
+    """Equality has a trap: the first Save normalises the layout. The second
+    save of the same body must not move a byte."""
+
+    body = select_blank["applyAfterEdit"]["body"]
+    managed = _scratch_managed_env(tmp_path, monkeypatch)
+
+    for _ in range(2):
+        prepared = prepare_admin_update(body["values"])
+        assert prepared.valid, prepared.errors
+        commit_prepared_admin_update(prepared)
+    settled = managed.read_bytes()
+
+    again = prepare_admin_update(body["values"])
+    assert again.valid, again.errors
+    commit_prepared_admin_update(again)
+
+    assert managed.read_bytes() == settled

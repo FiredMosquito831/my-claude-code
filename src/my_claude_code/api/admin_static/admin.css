@@ -4389,6 +4389,17 @@ audio.req-media-preview {
   margin-top: 4px;
 }
 
+/* 7.121.1: a number the number box cannot hold ("7_200", " 5", "+5") is shown
+   as text, and this line says why. Amber, not muted: it describes a value the
+   page cannot treat like every other number, not a caption. */
+.field-saved-number {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--warn);
+  margin-top: 4px;
+  max-width: 62ch;
+}
+
 /* A derived readout: what the numbers above it add up to, in words. Full
    contrast, because it is the answer and not a caption. */
 .field-hint {
