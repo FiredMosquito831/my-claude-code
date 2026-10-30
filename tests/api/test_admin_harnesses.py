@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,7 +13,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.config import rtk as rtk_config
-from my_claude_code.config.harnesses import harness_ids
+from my_claude_code.config.harnesses import harness_ids, harness_spec
 from my_claude_code.config.rtk import RtkState
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.reasoning import ReasoningEffort
@@ -548,22 +549,37 @@ def test_clines_catalogue_says_what_its_number_counts(monkeypatch, tmp_path):
     assert codex["model_count_note"] == ""
 
 
-def test_hermes_is_detected_at_locallocalappdata_and_its_card_counts_yaml_models(
+def _hermes_home(tmp_path: Path) -> Path:
+    """Where Hermes' own rules put ``config.yaml`` on *this* platform.
+
+    Asked of the registry rather than spelled out here: a Windows CI leg
+    resolves ``%LOCALAPPDATA%\\hermes`` (redirected to *tmp_path* by
+    ``_set_home``) and a Linux leg resolves ``~/.hermes``. The rung table
+    itself is asserted platform by platform in
+    ``tests/config/test_harness_config_merge_hermes.py``; this helper keeps the
+    card's test about the card.
+    """
+
+    spec = harness_spec("hermes")
+    assert spec.catalogue is not None and spec.catalogue.merge is not None
+    return spec.catalogue.merge.resolve(os.environ, sys.platform).parent
+
+
+def test_hermes_is_detected_where_its_own_rules_look_and_counts_yaml_models(
     monkeypatch, tmp_path
 ):
-    """Hermes' home is `%LOCALAPPDATA%\\hermes`, not `~` (7.118.0).
+    """Both halves of the card, and both read a document a different way.
 
-    Both halves of the card are exercised here because both read a document a
-    different way: the install state resolves the CLI's own home rules, and the
-    catalogue count parses MCC's YAML table out of a file the user owns.
+    The install state resolves the CLI's own home rules, and the catalogue
+    count parses MCC's YAML table out of a file the user owns (7.118.0).
     """
 
     _set_home(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
     )
-    home = tmp_path / "AppData" / "Local" / "hermes"
-    home.mkdir(parents=True)
+    home = _hermes_home(tmp_path)
+    home.mkdir(parents=True, exist_ok=True)
     (home / "config.yaml").write_text(
         "_config_version: 33\n"
         "model:\n"
@@ -588,11 +604,7 @@ def test_hermes_is_detected_at_locallocalappdata_and_its_card_counts_yaml_models
     assert entry["installed"] is False
     assert entry["install_state"] == "config_only"
     assert entry["config_found"] is True
-    assert (
-        entry["config_path"]
-        .replace("\\", "/")
-        .endswith("AppData/Local/hermes/config.yaml")
-    )
+    assert Path(entry["config_path"]) == home / "config.yaml"
     catalogue = entry["catalogue"]
     assert catalogue["delivery"] == "merge"
     assert catalogue["merged_key"] == "providers.mcc"
@@ -611,8 +623,8 @@ def test_a_hermes_file_without_mccs_block_reports_no_catalogue(monkeypatch, tmp_
     monkeypatch.setattr(
         "my_claude_code.api.admin_harness_routes.shutil.which", lambda name: None
     )
-    home = tmp_path / "AppData" / "Local" / "hermes"
-    home.mkdir(parents=True)
+    home = _hermes_home(tmp_path)
+    home.mkdir(parents=True, exist_ok=True)
     (home / "config.yaml").write_text(
         "_config_version: 33\nproviders:\n  myown:\n    api: https://example.test/v1\n",
         encoding="utf-8",
