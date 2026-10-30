@@ -11,7 +11,7 @@ DDG-1…6).
 | `tests/fixtures/ddg/` | Search pages (two Apache-2.0 octos pages, three MCC-authored synthetic pages), `LICENSE-octos.txt`, and `scenarios.json` (which page or fake body each search scenario serves, with which status or transport failure, and the outcome class the spec asks for). |
 | `tests/fixtures/extraction/` | `trafilatura_eval.tar.xz` (106 annotated pages + `evaldata.json`), `python_readability_pages.tar.xz` (181 fixtures with ideal summaries), each with a `*.SOURCE.txt` sidecar (origin, commit, licence, archive and member sha256), and `mcc_fetch_scenarios.json` (response shapes no recorded page covers). |
 | `corpus.py` | Loads the fixtures, checks every archive hash, parses `SOURCE` lines. |
-| `methods.py` | MCC's real code over the fixtures: `ddgs` (the provider with `DDGS_BACKEND=duckduckgo`, real `ddgs` package, mock HTTP transport), `legacy` (`outbound._legacy_route_scrape`: the lite-page hop read by the declared page profiles of 7.119.0, as the route with no chain set runs it; mock transport), `web_fetch` (`outbound._run_web_fetch` against a loopback aiohttp server). |
+| `methods.py` | MCC's real code over the fixtures: `ddgs` (the provider with `DDGS_BACKEND=duckduckgo`, real `ddgs` package, mock HTTP transport), `legacy` (`outbound._legacy_route_scrape`: the hop read by the declared page profiles of 7.119.0 — since 7.119.1 the html form first and the lite page as its second try — as the route with no chain set runs it; mock transport), `web_fetch` (`outbound._run_web_fetch` against a loopback aiohttp server). |
 | `scoring.py` | Search and extraction scores. |
 | `baseline.py` | Equality baselines (`tests/contracts/ddg_harness_baseline.json`). |
 | `table.py` | The before/after table. |
@@ -46,7 +46,9 @@ uv run --offline python -m tests.support.ddg_harness.baseline --write --tree <sh
   names the cells its purpose changes and proves every other cell byte-identical; then it
   regenerates the baseline on its own tree and records each moved cell's two answers under
   its own `moved_by_ddg_<n>` block (DDG-2: `moved_by_ddg_2`, 2 `ddgs` cells; DDG-3:
-  `moved_by_ddg_3`, 12 `legacy` cells). `--write` keeps every such block verbatim.
+  `moved_by_ddg_3`, 12 `legacy` cells; DDG-3b: `moved_by_ddg_3b`, all 16 `legacy` cells,
+  their request only — the fake serves one page to every request, so each answer stayed
+  7.119.0's). `--write` keeps every such block verbatim.
 * The baseline pins today's defects as they are (D1–D3 of the spec, and `web_fetch` failing on
   a response with no charset parameter); `test_the_baseline_records_todays_findings_as_they_are`
   names them.

@@ -4359,14 +4359,17 @@ mcc-gemini</code></pre>
                 </p>
                 <p>
                   <strong>The keyless DuckDuckGo hop.</strong> The last hop of
-                  <code>auto</code> reads DuckDuckGo's lite page and returns each result
-                  with its snippet, skipping ads; <code>DDGS_REGION</code> and
-                  <code>DDGS_TIMELIMIT</code> reach it as the page's region and time
-                  fields when set. When DuckDuckGo answers with its bot check, the search
-                  says so as a rate limit instead of reporting no results, and a search
-                  chain moves on to its next entry. To space its requests, set
+                  <code>auto</code> submits DuckDuckGo's html search form first, and asks
+                  its lite page only when that page has no result and no bot check; it
+                  returns each result with its snippet, skipping ads;
+                  <code>DDGS_REGION</code> and <code>DDGS_TIMELIMIT</code> reach it as
+                  the page's region and time fields when set. When DuckDuckGo answers
+                  with its bot check, the search says so as a rate limit instead of
+                  reporting no results, and a search chain moves on to its next entry.
+                  To space its requests, set
                   <code>WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS</code> on this page
-                  (<code>0</code>, the default, sends them back to back).
+                  (<code>0</code>, the default, sends them back to back; the html and
+                  lite requests of one search count as two).
                 </p>
                 <p>
                   <strong>The setting most worth changing.</strong> By default most

@@ -48,8 +48,18 @@ DDG2_AFTER = "v7.118.2"
 DDG3_KEY = "moved_by_ddg_3"
 DDG3_BEFORE = "v7.118.2"
 DDG3_AFTER = "v7.119.0"
+#: 7.119.1 (DDG-3b) moved all sixteen ``search:legacy`` cells again -- the hop
+#: completed to R2: the html form asked first (``POST`` with ``q`` and ``b``),
+#: the lite page only as the second try. Every cell's answer is 7.119.0's;
+#: what moved is the request the fake upstream saw (the html form instead of
+#: the lite page, and the lite page after it on the two pages with nothing).
+#: Same convention, its own block; ``moved_by_ddg_3`` is kept verbatim as the
+#: record of 7.119.0 (its after-answer is this block's before-answer).
+DDG3B_KEY = "moved_by_ddg_3b"
+DDG3B_BEFORE = "v7.119.0"
+DDG3B_AFTER = "v7.119.1"
 #: Every moved-cells block, in file order. ``--write`` keeps each verbatim.
-MOVED_KEYS = (DDG2_KEY, DDG3_KEY)
+MOVED_KEYS = (DDG2_KEY, DDG3_KEY, DDG3B_KEY)
 
 
 def canonical(outcome: dict[str, Any]) -> bytes:
