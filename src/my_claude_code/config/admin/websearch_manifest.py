@@ -259,11 +259,12 @@ def _legacy_interval_spec() -> dict[str, Any]:
         "description": (
             "The least time between two requests of the keyless DuckDuckGo "
             "scrape (the legacy entry: the last hop of Auto, or a place in "
-            "the Search Chain). 0 sends them back to back, as before. For "
-            "reference, other projects wait about 3 seconds (octos) or a "
-            "random 0.5 to 2 seconds (Crush); the value is yours. Only this "
-            "hop waits; every other search service is unaffected. Takes "
-            "effect on the next search."
+            "the Search Chain). A search's html request and the lite request "
+            "that may follow it count as two. 0 sends them back to back, as "
+            "before. For reference, other projects wait about 3 seconds "
+            "(octos) or a random 0.5 to 2 seconds (Crush); the value is "
+            "yours. Only this hop waits; every other search service is "
+            "unaffected. Takes effect on the next search."
         ),
     }
 

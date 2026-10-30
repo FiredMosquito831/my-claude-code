@@ -11,13 +11,15 @@ or ``FETCH_METHODS`` and the table and baseline pick them up:
   The backend is pinned because ``auto`` draws engines at random and every
   recorded page is a DuckDuckGo page.
 * ``legacy`` -- the last hop of the ``auto`` route as that route runs it,
-  ``outbound._legacy_route_scrape``: the lite-endpoint request of
+  ``outbound._legacy_route_scrape``: the requests of
   ``outbound._legacy_web_search_scrape`` read by the declared page profiles
   (``api/web_tools/duckduckgo_lite.py``, ``config/duckduckgo_profiles.py``;
-  7.119.0, DDG-3 -- before it, ``SearchResultParser`` alone), with an HTTP
-  error status worded through the shared status mapping, and
-  ``httpx.AsyncClient`` handed a ``MockTransport``; a failure is classified
-  with the route's own ``outbound._search_error_kind``.
+  7.119.0, DDG-3 -- before it, ``SearchResultParser`` alone; since 7.119.1,
+  DDG-3b, the html form first and the lite page as its second try), with an
+  HTTP error status worded through the shared status mapping, and
+  ``httpx.AsyncClient`` handed a ``MockTransport`` that serves the scenario's
+  page to every request; a failure is classified with the route's own
+  ``outbound._search_error_kind``.
 * ``web_fetch`` -- ``outbound._run_web_fetch`` end to end with real aiohttp,
   against a loopback ``aiohttp`` server that serves each page with its status,
   ``Content-Type`` and headers; the egress policy allows the loopback target

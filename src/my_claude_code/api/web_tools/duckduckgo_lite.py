@@ -1,37 +1,44 @@
 """The keyless DuckDuckGo hop of the web search route (``legacy``), 7.119.0.
 
-``outbound._legacy_web_search_scrape`` makes the request; this module decides
-what is asked and what the answer means, from the declared table in
-``config/duckduckgo_profiles.py``:
+``outbound._legacy_web_search_scrape`` sends the requests; this module decides
+what is asked, in which order, and what each answer means, from the declared
+table in ``config/duckduckgo_profiles.py`` (the module keeps the name it had
+when the hop asked only the lite page):
 
-1. **What is asked** (:func:`request_params`): the lite endpoint's query
-   field, plus ``kl`` / ``df`` when ``DDGS_REGION`` / ``DDGS_TIMELIMIT`` are
-   set -- the ``ddgs`` provider's own options, read the way its adapter reads
-   them. With neither set the request is byte for byte the one every earlier
-   release made. :func:`pace` spaces consecutive requests of this hop by
+1. **What is asked, in which order** (:func:`search`, 7.119.1;
+   RESEARCH-DDG-WEBSEARCH.md 5 R2): the html page's own search form first --
+   ``POST`` with ``q`` and ``b``, its declared ``Referer`` and ``Sec-Fetch-*``
+   headers and the static browser-class User-Agent -- and the lite page as the
+   second try, only when the html page held no result and no bot check.
+   :func:`request_fields` adds ``kl`` / ``df`` when ``DDGS_REGION`` /
+   ``DDGS_TIMELIMIT`` are set -- the ``ddgs`` provider's own options, read the
+   way its adapter reads them, once per search. :func:`pace` spaces every two
+   requests of this hop, the html and lite requests of one search included, by
    ``WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS``; 0, the default, never waits.
-2. **What the page says** (:func:`read_answer`): the first page profile that
-   finds a result row gives each result's title, destination and snippet. A
-   destination behind DuckDuckGo's ``/l/?uddg=`` redirect is decoded once; an
-   ad's ``y.js`` link and an ad row are never results. When no profile finds a
-   row, the pre-7.119.0 anchor scan (``parsers.SearchResultParser``) runs as
-   the last fallback, so a layout change degrades to the old answer and never
-   below it.
+2. **What the page says** (:func:`read_answer`): the page profile of the kind
+   the request asked for reads the answer first, then the others; the first
+   that finds a result row gives each result's title, destination and
+   snippet. A destination behind DuckDuckGo's ``/l/?uddg=`` redirect is
+   decoded once; an ad's ``y.js`` link and an ad row are never results. When
+   no profile finds a row, the pre-7.119.0 anchor scan
+   (``parsers.SearchResultParser``) runs as the last fallback, so a layout
+   change degrades to the old answer and never below it.
 3. **What a page with no result is** -- never "no results" when the page says
    otherwise: HTTP 202 or one of the bot check's own markers is a
    :class:`WebSearchRateLimitError` naming what was seen
-   (``KIND_DETAIL_CHALLENGE``), reported and never solved or worked around; a
-   page that carries DuckDuckGo's next-page form yet has no row any profile
-   can read is a :class:`WebSearchUpstreamError`
-   (``KIND_DETAIL_UNREADABLE_PAGE``): its results exist and MCC cannot read
-   them; anything else is an honest empty answer.
+   (``KIND_DETAIL_CHALLENGE``), reported at once and never solved or worked
+   around -- no second try follows a bot check; a page that carries
+   DuckDuckGo's next-page form yet has no row any profile can read is a
+   :class:`WebSearchUpstreamError` (``KIND_DETAIL_UNREADABLE_PAGE``): its
+   results exist and MCC cannot read them; anything else is an honest empty
+   answer.
 
 An HTTP error status and a transport failure are NOT read here: the hop raises
-them exactly as before 7.119.0, so the search chain's ``legacy`` entry
-classifies them with the model path's own classifier and decides exactly as it
-did. The route used with no chain set words them through
-:func:`status_failure` -- the adapters' shared status mapping -- instead of
-passing a raw ``httpx`` error on.
+them exactly as before 7.119.0 and makes no further request, so the search
+chain's ``legacy`` entry classifies them with the model path's own classifier
+and decides exactly as it did. The route used with no chain set words them
+through :func:`status_failure` -- the adapters' shared status mapping --
+instead of passing a raw ``httpx`` error on.
 
 The page is read with the standard library's ``html.parser`` into a small
 tree, the parser technology of the pre-7.119.0 scraper: nothing new is
@@ -52,9 +59,9 @@ from my_claude_code.config.duckduckgo_profiles import (
     AD_LINK,
     CHALLENGE_MARKERS,
     CHALLENGE_STATUSES,
-    LITE_REQUEST,
     PAGE_PROFILES,
     REDIRECT,
+    REQUESTS,
     DuckDuckGoPageProfile,
     DuckDuckGoRequest,
 )
@@ -77,33 +84,39 @@ from .parsers import SearchResultParser
 #: The provider id the hop's results and failures carry (route rows, digest).
 PROVIDER_ID = WEB_SEARCH_CHAIN_LEGACY_ENTRY
 
-#: The one request the hop makes (``config/duckduckgo_profiles.py``).
-LITE: DuckDuckGoRequest = LITE_REQUEST
-
 
 # --------------------------------------------------------------------------- #
 # What is asked
 
 
-def request_params(
-    query: str, options: Mapping[str, str] | None = None
-) -> dict[str, str]:
-    """The query string the lite endpoint is asked with.
+def read_options() -> dict[str, str]:
+    """The ``ddgs`` provider's set options, read now.
 
-    ``options`` are the ``ddgs`` provider's set options; when omitted they are
-    read here, per request (process environment, else the dotenv files), so a
-    dashboard save applies to the next search. An option that is not set is
-    not sent.
+    Read once per search (process environment, else the dotenv files), so a
+    dashboard save applies to the next search and both of one search's
+    requests ask with the same values.
     """
 
-    if options is None:
-        options = read_websearch_options("ddgs", WEBSEARCH_CATALOG["ddgs"])
-    params = {LITE.query_field: query}
-    for option, page_field in LITE.option_fields:
+    return read_websearch_options("ddgs", WEBSEARCH_CATALOG["ddgs"])
+
+
+def request_fields(
+    request: DuckDuckGoRequest, query: str, options: Mapping[str, str]
+) -> dict[str, str]:
+    """The fields one declared request sends, in the order it sends them.
+
+    The query field, the request's fixed fields, then each forwarded option
+    that is set (``options`` are the ``ddgs`` provider's set options). An
+    option that is not set is not sent.
+    """
+
+    fields = {request.query_field: query}
+    fields.update(request.fixed_fields)
+    for option, page_field in request.option_fields:
         value = options.get(option, "").strip()
         if value:
-            params[page_field] = value
-    return params
+            fields[page_field] = value
+    return fields
 
 
 class LitePacing:
@@ -150,7 +163,11 @@ _PACING = LitePacing()
 
 
 async def pace(interval: float) -> float:
-    """Space this request from the hop's previous one (``0``: no wait at all)."""
+    """Space this request from the hop's previous one (``0``: no wait at all).
+
+    Every request the hop sends takes one turn: a search's html request, and
+    its lite request when one follows, are two.
+    """
 
     return await _PACING.wait_turn(interval)
 
@@ -377,7 +394,7 @@ class PageProfile:
     """A declared page profile with every selector read."""
 
     kind: str
-    row: Selector | None
+    rows: tuple[Selector, ...]
     link: Selector
     snippet: Selector
     skip: tuple[Selector, ...]
@@ -393,7 +410,7 @@ def compile_profile(profile: DuckDuckGoPageProfile) -> PageProfile:
 
     return PageProfile(
         kind=profile.kind,
-        row=None if profile.row is None else parse_selector(profile.row),
+        rows=tuple(parse_selector(text) for text in profile.rows),
         link=parse_selector(profile.link),
         snippet=parse_selector(profile.snippet),
         skip=tuple(parse_selector(text) for text in profile.skip),
@@ -453,57 +470,97 @@ def _result(link: Node, page_url: str) -> dict[str, str] | None:
     return {"title": title, "url": url, "snippet": ""}
 
 
+class _Results:
+    """Results in page order, each destination once."""
+
+    def __init__(self) -> None:
+        self.found: list[dict[str, str]] = []
+        self._seen: set[str] = set()
+
+    def keep(self, result: dict[str, str] | None) -> dict[str, str] | None:
+        if result is None or result["url"] in self._seen:
+            return None
+        self._seen.add(result["url"])
+        self.found.append(result)
+        return result
+
+
+def _unwrapped_results(
+    tree: Node, profile: PageProfile, page_url: str
+) -> list[dict[str, str]]:
+    # No row element: a title link opens a result and the next snippet
+    # belongs to it (a link that is not kept -- an ad, a repeat -- takes the
+    # snippet after it out of play too).
+    results = _Results()
+    current: dict[str, str] | None = None
+    for node in tree.walk():
+        if profile.skip and profile.skipped(node):
+            continue
+        if profile.link.matches(node):
+            current = results.keep(_result(node, page_url))
+        elif (
+            current is not None
+            and not current["snippet"]
+            and profile.snippet.matches(node)
+        ):
+            current["snippet"] = node.text()
+    return results.found
+
+
+def _row_results(
+    tree: Node, profile: PageProfile, row: Selector, page_url: str
+) -> list[dict[str, str]]:
+    results = _Results()
+    for node in tree.walk():
+        if not row.matches(node) or profile.skipped(node):
+            continue
+        link = profile.link.first_under(node)
+        if link is None:
+            continue
+        result = results.keep(_result(link, page_url))
+        if result is None:
+            continue
+        snippet = profile.snippet.first_under(node)
+        if snippet is not None:
+            result["snippet"] = snippet.text()
+    return results.found
+
+
 def profile_results(
     tree: Node, profile: PageProfile, page_url: str
 ) -> list[dict[str, str]]:
-    """Every result one profile reads off the page, in page order, each URL once."""
+    """Every result one profile reads off the page, in page order, each URL once.
 
-    found: list[dict[str, str]] = []
-    seen: set[str] = set()
+    A profile with row alternatives reads with the first one that finds a
+    result; the rows it skips (ads) are skipped under every alternative.
+    """
 
-    def keep(result: dict[str, str] | None) -> dict[str, str] | None:
-        if result is None or result["url"] in seen:
-            return None
-        seen.add(result["url"])
-        found.append(result)
-        return result
-
-    if profile.row is None:
-        # No row element: a title link opens a result and the next snippet
-        # belongs to it (a link that is not kept -- an ad, a repeat -- takes
-        # the snippet after it out of play too).
-        current: dict[str, str] | None = None
-        for node in tree.walk():
-            if profile.skip and profile.skipped(node):
-                continue
-            if profile.link.matches(node):
-                current = keep(_result(node, page_url))
-            elif (
-                current is not None
-                and not current["snippet"]
-                and profile.snippet.matches(node)
-            ):
-                current["snippet"] = node.text()
-        return found
-    for row in tree.walk():
-        if not profile.row.matches(row) or profile.skipped(row):
-            continue
-        link = profile.link.first_under(row)
-        if link is None:
-            continue
-        result = keep(_result(link, page_url))
-        if result is None:
-            continue
-        snippet = profile.snippet.first_under(row)
-        if snippet is not None:
-            result["snippet"] = snippet.text()
-    return found
+    if not profile.rows:
+        return _unwrapped_results(tree, profile, page_url)
+    for row in profile.rows:
+        found = _row_results(tree, profile, row, page_url)
+        if found:
+            return found
+    return []
 
 
-def read_results(tree: Node, page_url: str) -> list[dict[str, str]]:
-    """The results of the first profile that finds any (capped at MCC's ten)."""
+def profiles_for(kind: str) -> tuple[PageProfile, ...]:
+    """Every declared profile: the one of ``kind`` first, the rest in table order."""
 
-    for profile in PROFILES:
+    return (
+        *(profile for profile in PROFILES if profile.kind == kind),
+        *(profile for profile in PROFILES if profile.kind != kind),
+    )
+
+
+def read_results(tree: Node, page_url: str, kind: str) -> list[dict[str, str]]:
+    """The results of the first profile that finds any (capped at MCC's ten).
+
+    The page kind the request asked for reads first: an html answer by the
+    html row, a lite answer by the lite row, then every other declared row.
+    """
+
+    for profile in profiles_for(kind):
         rows = profile_results(tree, profile, page_url)
         if rows:
             return rows[:_MAX_SEARCH_RESULTS]
@@ -543,10 +600,16 @@ def _challenge_message(status: int, markers: tuple[str, ...]) -> str:
 
 
 def read_answer(
-    *, status: int, text: str, page_url: str, headers: Mapping[str, str]
+    *,
+    kind: str,
+    status: int,
+    text: str,
+    page_url: str,
+    headers: Mapping[str, str],
 ) -> list[dict[str, str]]:
     """The results of one 2xx answer, or the failure it really is.
 
+    ``kind`` is the page kind the request asked for; its profile reads first.
     Results win: a page that has results is read as results, whatever else it
     says. With none, the old anchor scan has the last word; then HTTP 202 or a
     marker of the bot check is a rate limit naming what was seen, a page that
@@ -555,7 +618,7 @@ def read_answer(
     """
 
     tree = parse_page(text)
-    results = read_results(tree, page_url)
+    results = read_results(tree, page_url, kind)
     if results:
         return results
     scan = SearchResultParser()
@@ -579,6 +642,81 @@ def read_answer(
             "(config/duckduckgo_profiles.py)",
             kind_detail=KIND_DETAIL_UNREADABLE_PAGE,
         )
+    return []
+
+
+# --------------------------------------------------------------------------- #
+# The walk: the html form first, the lite page as the second try
+
+
+@dataclass(frozen=True, slots=True)
+class Page:
+    """A 2xx answer to one of the hop's requests, as it was received."""
+
+    status: int
+    text: str
+    url: str
+    headers: Mapping[str, str]
+
+
+#: Sends one declared request with its fields and returns its 2xx page. An HTTP
+#: error status or a transport failure is raised as the HTTP library raised it.
+type FetchPage = Callable[[DuckDuckGoRequest, dict[str, str]], Awaitable[Page]]
+
+
+async def search(
+    query: str,
+    fetch: FetchPage,
+    *,
+    interval: float,
+    options: Mapping[str, str] | None = None,
+) -> list[dict[str, str]]:
+    """The hop's answer for ``query``: its requests in the declared order.
+
+    Each request first takes its turn of the interval (:func:`pace`), then its
+    answer is read (:func:`read_answer`, the request's own page kind first):
+
+    * results end the hop with them;
+    * DuckDuckGo's bot check ends it at once with the rate limit that names
+      it -- no second try follows a bot check (never solved, never worked
+      around);
+    * a page with no result and no sign of a check -- an empty page, or one
+      MCC cannot read -- lets the next request try: the lite page after the
+      html form (R2: "the second try when html yields nothing and no
+      challenge").
+
+    When no request yields a result, a page MCC could not read is the
+    failure (the first one: its results exist); otherwise the answer is
+    honestly empty. An HTTP error status or a transport failure from
+    ``fetch`` ends the hop as it was raised, with no further request.
+    ``options`` are the ``ddgs`` provider's set options, read once here when
+    omitted, so every request of one search asks the same thing.
+    """
+
+    if options is None:
+        options = read_options()
+    unreadable: WebSearchUpstreamError | None = None
+    for request in REQUESTS:
+        await pace(interval)
+        page = await fetch(request, request_fields(request, query, options))
+        try:
+            results = read_answer(
+                kind=request.kind,
+                status=page.status,
+                text=page.text,
+                page_url=page.url,
+                headers=page.headers,
+            )
+        except WebSearchUpstreamError as error:
+            # The one upstream failure read_answer raises: a results page no
+            # profile reads. The next page kind may still read one.
+            if unreadable is None:
+                unreadable = error
+            continue
+        if results:
+            return results
+    if unreadable is not None:
+        raise unreadable
     return []
 
 

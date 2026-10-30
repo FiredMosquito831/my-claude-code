@@ -442,15 +442,21 @@ _LITE_CHALLENGE = corpus.body_after_source_line(
 )
 
 
+#: The hosts the real legacy hop asks: the html form first, the lite page as
+#: its second try (7.119.1).
+_DUCKDUCKGO_HOSTS = frozenset({"html.duckduckgo.com", "lite.duckduckgo.com"})
+
+
 def _real_legacy_hop(
     monkeypatch, upstream: Upstream, lite: httpx.Response | Exception
 ) -> list[httpx.Request]:
-    """The real legacy hop (7.119.0) answered by ``lite``; Exa/Tavily as scripted."""
+    """The real legacy hop (7.119.0) answered by ``lite`` on every DuckDuckGo
+    request; Exa/Tavily as scripted."""
 
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host != "lite.duckduckgo.com":
+        if request.url.host not in _DUCKDUCKGO_HOSTS:
             return upstream.handler(request)
         seen.append(request)
         if isinstance(lite, httpx.RequestError):
@@ -503,7 +509,8 @@ async def test_the_legacy_hops_bot_check_falls_through_like_its_429(
     assert [(t["status"], t.get("charged")) for t in recorded.tries(0)] == [
         (429, "rate_limit")
     ]
-    assert len(seen) == 1
+    # 7.119.1: the check met on the html form ends the hop -- no lite try.
+    assert [request.url.host for request in seen] == ["html.duckduckgo.com"]
 
     await _search(settings, "the next search")
 
@@ -539,9 +546,10 @@ async def test_the_legacy_hops_http_and_transport_failures_still_reach_the_chain
     """7.119.0 classifies these only on the route with no chain set: the chain
     keeps reading the hop's own httpx error with the model path's classifier,
     so every decision it made in 7.118.2 is the decision it makes now
-    (measured on all sixteen DDG-1 scenarios, both retry settings)."""
+    (measured on all sixteen DDG-1 scenarios, both retry settings). 7.119.1:
+    met on the html form, the failure ends the hop there -- no lite try."""
 
-    _real_legacy_hop(monkeypatch, upstream, lite)
+    seen = _real_legacy_hop(monkeypatch, upstream, lite)
     settings = _settings(WEB_SEARCH_CHAIN="legacy,exa", PROVIDER_RETRY_ATTEMPTS="1")
 
     results = await _search(settings)
@@ -550,6 +558,7 @@ async def test_the_legacy_hops_http_and_transport_failures_still_reach_the_chain
     assert recorded.rows[0].failure_kind == failure_kind
     assert recorded.rows[0].error_kind == "upstream"
     assert [t["kind"] for t in recorded.tries(0)] == [try_kind]
+    assert [request.url.host for request in seen] == ["html.duckduckgo.com"]
 
 
 @pytest.mark.asyncio

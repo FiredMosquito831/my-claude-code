@@ -39,6 +39,20 @@ their scenarios declare, the two transport failures stay as they were, and
 every ``ddgs`` and ``web_fetch`` cell is byte for byte 7.118.2's (the 319
 unmoved cells' digest map hashed the same on both files, PROGRESS.md); no
 request the fake upstream saw moved.
+
+**7.119.1 (DDG-3b) moves all sixteen ``search:legacy`` cells, on purpose, and
+only their request** (spec 5 R2; USER DECISIONS Q12). The hop asks the html
+form first -- ``POST https://html.duckduckgo.com/html/`` with ``q`` and ``b``
+-- and the lite page only as its second try, when the html page held no
+result and no bot check. The fake upstream serves each scenario's page to
+every request, so every answer is 7.119.0's byte for byte; what moved is the
+request it saw: the html form in all sixteen, followed by 7.119.0's own lite
+request on the two pages with nothing (``empty_200``, ``garbage_200``). Each
+records both answers under ``moved_by_ddg_3b`` (``v7.119.0`` before,
+``v7.119.1`` after); ``moved_by_ddg_3`` stays verbatim, its after-answer being
+the new block's before-answer. Every ``ddgs`` and ``web_fetch`` cell is byte
+for byte 7.119.0's (the 315 unmoved cells' digest map hashed the same on both
+files, PROGRESS.md).
 """
 
 import copy
@@ -70,6 +84,39 @@ MOVED_BY_DDG_3 = tuple(
         "live_html_200",
     )
 )
+
+#: The cells 7.119.1 moves (DDG-3b): every ``search:legacy`` cell.
+MOVED_BY_DDG_3B = tuple(
+    f"search:legacy {key}"
+    for key in (
+        "challenge_html_200",
+        "challenge_html_202",
+        "challenge_lite_200",
+        "challenge_lite_202",
+        "edge_html_200",
+        "empty_200",
+        "garbage_200",
+        "http_403",
+        "http_429",
+        "http_500",
+        "http_502",
+        "http_503",
+        "lite_results_200",
+        "live_html_200",
+        "transport_refused",
+        "transport_timeout",
+    )
+)
+
+
+def _answer_of(document: dict, label: str, release: str) -> dict:
+    """A cell's pinned answer as of ``release`` (7.119.0 or 7.119.1)."""
+
+    method, key = label.split(" ", 1)
+    later = document[baseline.DDG3B_KEY].get(label)
+    if release == baseline.DDG3B_BEFORE and later is not None:
+        return later[baseline.DDG3B_BEFORE]
+    return document["cells"][method][key]
 
 
 @pytest.mark.local_serial
@@ -290,9 +337,12 @@ def test_7_119_0_moves_only_the_twelve_legacy_cells_it_names() -> None:
     assert all(label.startswith("search:legacy ") for label in moved)
     assert set(moved).isdisjoint(document[baseline.DDG2_KEY])
     for label, entry in moved.items():
-        method, key = label.split(" ", 1)
         assert set(entry) == {baseline.DDG3_BEFORE, baseline.DDG3_AFTER}, label
-        assert entry[baseline.DDG3_AFTER] == document["cells"][method][key], label
+        # The after-answer is 7.119.0's: this tree's cell, or -- for a cell
+        # 7.119.1 moved again -- the before-answer of ``moved_by_ddg_3b``.
+        assert entry[baseline.DDG3_AFTER] == _answer_of(
+            document, label, baseline.DDG3B_BEFORE
+        ), label
         assert (
             entry[baseline.DDG3_BEFORE]["digest"]
             != entry[baseline.DDG3_AFTER]["digest"]
@@ -375,3 +425,69 @@ def test_7_119_0_reports_every_bot_check_and_status_as_what_it_is() -> None:
         scenario: scoring.outcome_class(cell["shape"])
         for scenario, cell in cells.items()
     } == {scenario: by_id[scenario].expect for scenario in cells}
+
+
+# -------------------------------------------------------------- 7.119.1 DDG-3b
+
+#: What the fake upstream saw from 7.119.0: the lite page, once.
+_LITE_REQUEST = {
+    "method": "GET",
+    "url": "https://lite.duckduckgo.com/lite/?q=omarchy+linux",
+    "form": [],
+}
+#: What it sees first from 7.119.1: the html page's own form, q and b.
+_HTML_REQUEST = {
+    "method": "POST",
+    "url": "https://html.duckduckgo.com/html/",
+    "form": [["b", ""], ["q", "omarchy linux"]],
+}
+
+
+def test_7_119_1_moves_only_the_sixteen_legacy_cells_it_names() -> None:
+    """Every ``search:legacy`` cell, each with both answers; no ``ddgs`` and no
+    ``web_fetch`` cell -- those are the byte-for-byte test's, as 7.119.0 left
+    them."""
+
+    document = baseline.load_baseline()
+    moved = document[baseline.DDG3B_KEY]
+    assert tuple(sorted(moved)) == MOVED_BY_DDG_3B
+    assert {label.split(" ", 1)[1] for label in moved} == set(
+        document["cells"]["search:legacy"]
+    )
+    assert set(moved).isdisjoint(document[baseline.DDG2_KEY])
+    for label, entry in moved.items():
+        method, key = label.split(" ", 1)
+        assert set(entry) == {baseline.DDG3B_BEFORE, baseline.DDG3B_AFTER}, label
+        assert entry[baseline.DDG3B_AFTER] == document["cells"][method][key], label
+        assert (
+            entry[baseline.DDG3B_BEFORE]["digest"]
+            != entry[baseline.DDG3B_AFTER]["digest"]
+        ), label
+    # 7.119.0's record of the cells it moved ends where this block begins.
+    for label, entry in document[baseline.DDG3_KEY].items():
+        assert entry[baseline.DDG3_AFTER] == moved[label][baseline.DDG3B_BEFORE]
+
+
+def test_7_119_1_keeps_every_answer_and_asks_the_html_form_first() -> None:
+    """R2: the html form first, the lite page only when it yields nothing.
+
+    Each fake scenario serves its page to every request, so each answer --
+    results, snippets, error class and text -- is 7.119.0's byte for byte;
+    the request is what moved. The lite page follows the html form only on the
+    two pages that hold nothing and no check; after a bot check, an HTTP error
+    status or a transport failure on the html form, the hop asks nothing more.
+    """
+
+    moved = baseline.load_baseline()[baseline.DDG3B_KEY]
+    second_try = {"search:legacy empty_200", "search:legacy garbage_200"}
+    for label, entry in moved.items():
+        before = entry[baseline.DDG3B_BEFORE]["shape"]
+        after = entry[baseline.DDG3B_AFTER]["shape"]
+        assert {
+            name: value for name, value in before.items() if name != "requests"
+        } == {name: value for name, value in after.items() if name != "requests"}, label
+        assert before["requests"] == [_LITE_REQUEST], label
+        expected = (
+            [_HTML_REQUEST, _LITE_REQUEST] if label in second_try else [_HTML_REQUEST]
+        )
+        assert after["requests"] == expected, label

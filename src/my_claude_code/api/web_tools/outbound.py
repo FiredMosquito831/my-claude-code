@@ -16,6 +16,7 @@ from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from aiohttp.abc import AbstractResolver, ResolveResult
 from loguru import logger
 
+from my_claude_code.config.duckduckgo_profiles import DuckDuckGoRequest
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.websearch.models import WebSearchResponse
 from my_claude_code.websearch.errors import (
@@ -45,7 +46,6 @@ from .constants import (
     _MAX_SEARCH_RESULTS,
     _REDIRECT_RESPONSE_BODY_CAP_BYTES,
     _REQUEST_TIMEOUT_S,
-    _SEARCH_HOP_HTTP_HEADERS,
     _WEB_FETCH_REDIRECT_STATUSES,
     _WEB_TOOL_HTTP_HEADERS,
 )
@@ -733,43 +733,71 @@ def _web_search_response_items(response: WebSearchResponse) -> list[dict[str, st
 
 
 async def _legacy_web_search_scrape(query: str) -> list[dict[str, str]]:
-    """The keyless DuckDuckGo hop: one lite-page request, read as declared data.
+    """The keyless DuckDuckGo hop: the html form first, the lite page second.
 
-    7.119.0 (DDG-3): what is asked and how the answer is read live in
-    ``config/duckduckgo_profiles.py`` and ``duckduckgo_lite``: ``kl`` / ``df``
-    from ``DDGS_REGION`` / ``DDGS_TIMELIMIT`` when set, MCC's product
-    User-Agent, ``WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS`` between consecutive
-    requests (0, the default, never waits), snippets, ads skipped, and a bot
-    check raised as a rate limit instead of an empty answer. The client is
-    the one this hop always built -- httpx's own TLS defaults, redirects
-    followed, the same timeout and body cap. An HTTP error status and a
-    transport failure are raised exactly as before (``raise_for_status``
-    before the body is read): the search chain's ``legacy`` entry classifies
-    them with the model path's classifier and decides as it always did, and
-    the route used with no chain words them in :func:`_legacy_route_scrape`.
+    7.119.0 (DDG-3) declared the hop as data; 7.119.1 (DDG-3b, spec 5 R2)
+    completes it. What is asked, in which order, and what each answer means
+    live in ``config/duckduckgo_profiles.py`` and ``duckduckgo_lite.search``:
+    the html page's own search form posted with its declared ``Referer`` and
+    ``Sec-Fetch-*`` headers and the static browser-class User-Agent, then --
+    only when that page held no result and no bot check -- the lite page;
+    ``kl`` / ``df`` from ``DDGS_REGION`` / ``DDGS_TIMELIMIT`` when set;
+    ``WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS`` before every request (0, the
+    default, never waits); snippets, ads skipped, and a bot check raised as a
+    rate limit instead of an empty answer. The client is the one this hop
+    always built -- httpx's own TLS defaults, redirects followed, the same
+    timeout and body cap -- shared by the search's requests. An HTTP error
+    status and a transport failure are raised exactly as before
+    (``raise_for_status`` before the body is read) and end the hop: the search
+    chain's ``legacy`` entry classifies them with the model path's classifier
+    and decides as it always did, and the route used with no chain words them
+    in :func:`_legacy_route_scrape`.
     """
 
-    await duckduckgo_lite.pace(get_settings().websearch_legacy_min_interval_seconds)
-    async with (
-        httpx.AsyncClient(
-            timeout=_REQUEST_TIMEOUT_S,
-            follow_redirects=True,
-            headers=_SEARCH_HOP_HTTP_HEADERS,
-        ) as client,
-        client.stream(
-            duckduckgo_lite.LITE.method,
-            duckduckgo_lite.LITE.endpoint,
-            params=duckduckgo_lite.request_params(query),
-        ) as response,
-    ):
+    async with httpx.AsyncClient(
+        timeout=_REQUEST_TIMEOUT_S, follow_redirects=True
+    ) as client:
+
+        async def fetch(
+            request: DuckDuckGoRequest, fields: dict[str, str]
+        ) -> duckduckgo_lite.Page:
+            return await _duckduckgo_page(client, request, fields)
+
+        return await duckduckgo_lite.search(
+            query,
+            fetch,
+            interval=get_settings().websearch_legacy_min_interval_seconds,
+        )
+
+
+async def _duckduckgo_page(
+    client: httpx.AsyncClient, request: DuckDuckGoRequest, fields: dict[str, str]
+) -> duckduckgo_lite.Page:
+    """One declared request of the hop: its 2xx page, or httpx's own error.
+
+    ``POST`` sends the fields as a form body, ``GET`` as the query string; the
+    request's declared headers replace the client's defaults of the same
+    name. The body is read under the hop's cap only after a 2xx status.
+    """
+
+    headers = dict(request.headers)
+    if request.method == "POST":
+        stream = client.stream(
+            request.method, request.endpoint, headers=headers, data=fields
+        )
+    else:
+        stream = client.stream(
+            request.method, request.endpoint, headers=headers, params=fields
+        )
+    async with stream as response:
         response.raise_for_status()
         body_bytes = await _read_response_body_capped(
             response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
         )
-    return duckduckgo_lite.read_answer(
+    return duckduckgo_lite.Page(
         status=response.status_code,
         text=body_bytes.decode("utf-8", errors="replace"),
-        page_url=str(response.url),
+        url=str(response.url),
         headers=response.headers,
     )
 
