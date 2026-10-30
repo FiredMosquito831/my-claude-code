@@ -66,8 +66,8 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
+import primp
 import pytest
-from ddgs import http_client as ddgs_http_client
 
 from tests.support.offline_tokenizer import install_offline_tokenizer
 from tests.support.token_host_block import (
@@ -818,8 +818,9 @@ def _install_interceptors() -> None:
 # * the connection -- ``socket.socket.connect``/``connect_ex`` (sync sockets,
 #   ``create_connection``, ssl, and asyncio's selector loop, which calls
 #   ``sock.connect``) and the proactor loop's ``sock_connect`` (``ConnectEx``);
-# * the one client that does neither: ``ddgs``' ``HttpClient`` drives
-#   ``primp``, a Rust HTTP stack with its own resolver.
+# * the one client that does neither: ``primp`` (the Rust HTTP stack with its
+#   own resolver that ``ddgs`` drives since 9.16.x), gated on its own request
+#   verbs.
 #
 # Loopback is always allowed -- the suite serves fake upstreams, proxies and
 # SOCKS servers on 127.0.0.1 -- and so are IP literals for a *lookup* (no query
@@ -918,6 +919,44 @@ def _connect_target(address: Any) -> Any:
 
 _network_gate_installed = False
 
+#: The request verbs ``primp.Client`` exposes. ``request`` takes a method and a
+#: URL; the shorthands take the URL alone. All of them are gated on the host.
+PRIMP_REQUEST_VERBS = (
+    "request",
+    "get",
+    "head",
+    "options",
+    "delete",
+    "post",
+    "put",
+    "patch",
+)
+
+
+def _gated_primp_verb(verb: str, real):
+    """One ``primp.Client`` request verb, refusing a non-local host.
+
+    Same refusal text as the old ``ddgs.http_client.HttpClient.request`` gate,
+    so ``tests/contracts/test_hermetic_guard.py`` keeps naming one thing.
+    """
+
+    def gated(self, *args, **kwargs):
+        url = kwargs.get("url")
+        if url is None:
+            url = (
+                args[1]
+                if verb == "request" and len(args) > 1
+                else args[0]
+                if args
+                else ""
+            )
+        host = urllib.parse.urlsplit(str(url)).hostname
+        if not is_local_host(host):
+            _refuse_network("ddgs (primp) request to", str(url))
+        return real(self, *args, **kwargs)
+
+    return gated
+
 
 def _install_network_gate() -> None:
     """Install the gate for this process. Idempotent.
@@ -994,18 +1033,21 @@ def _install_network_gate() -> None:
 
     _intercept(proactor, "sock_connect", gated_proactor_sock_connect)
 
-    # ``ddgs`` (the DuckDuckGo web-search adapter) drives ``primp``: Rust,
-    # with its own resolver and sockets, invisible to everything above.
-    real_ddgs_request = ddgs_http_client.HttpClient.request
-
-    def gated_ddgs_request(self, *args, **kwargs):
-        url = kwargs.get("url", args[1] if len(args) > 1 else "")
-        host = urllib.parse.urlsplit(str(url)).hostname
-        if not is_local_host(host):
-            _refuse_network("ddgs (primp) request to", str(url))
-        return real_ddgs_request(self, *args, **kwargs)
-
-    _intercept(ddgs_http_client.HttpClient, "request", gated_ddgs_request)
+    # ``primp`` (the client underneath ``ddgs``, the DuckDuckGo web-search
+    # adapter) is Rust, with its own resolver and sockets, invisible to
+    # everything above. The gate sits on the client class itself rather than on
+    # ``ddgs``: since ``ddgs`` 9.16.x every engine drives ``primp`` directly,
+    # and a harness that replaces the client (tests/support/ddg_harness) must
+    # be able to serve pages without tripping this gate -- replacing
+    # ``primp.Client`` wholesale does that, because only the real class's verbs
+    # are gated. The shorthands are gated too: primp implements ``get``/``post``
+    # natively, not through Python's ``request``.
+    for primp_verb in PRIMP_REQUEST_VERBS:
+        _intercept(
+            primp.Client,
+            primp_verb,
+            _gated_primp_verb(primp_verb, getattr(primp.Client, primp_verb)),
+        )
 
 
 @pytest.fixture(autouse=True)

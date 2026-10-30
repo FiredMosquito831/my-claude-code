@@ -76,6 +76,21 @@ HTML5 rule -- a numeric character reference in the C1 range, which the cnet
 page uses for its list bullets. That cell's two real answers are recorded under
 ``platform_variants`` and the byte-for-byte test accepts either; a third answer
 is a real move and fails. See the platform-variant tests at the end.
+
+**7.120.1 (DDG-5) moves exactly one cell, on purpose** (spec 5 R4; USER
+DECISIONS Q14). ``ddgs`` 9.16.x drives ``primp`` instead of its own httpx-based
+``HttpClient2``, so the library's timeout wrapper names primp's exception in
+the detail text: ``search:ddgs transport_timeout`` answers ``... timed out:
+timed out`` where it answered ``... timed out: Request timed out:
+ReadTimeout('timed out')``. It is the same ``TimeoutException``, the same
+``WebSearchUpstreamError`` with ``kind_detail=timeout``, and the fake upstream
+sees the same POST; only the library's own wording moves. It records both
+answers under ``moved_by_ddg_5`` (``v7.120.0`` before, ``v7.120.1`` after).
+Every other cell -- all 15 remaining ``ddgs`` cells, every ``search:legacy``
+and every ``web_fetch`` cell -- is byte for byte 7.120.0's: 9.16.x changed the
+transport and the packaging, not the DuckDuckGo engine (the same xpath,
+payload, aggregator and ranker), and a refused connection still reports
+``ConnectError`` by that name.
 """
 
 import copy
@@ -134,6 +149,11 @@ MOVED_BY_DDG_3B = tuple(
         "transport_timeout",
     )
 )
+
+
+#: The cells 7.120.1 moves (DDG-5): the one `ddgs` cell whose detail text is
+#: the library's own timeout wrapper, which changed transport with the bump.
+MOVED_BY_DDG_5 = ("search:ddgs transport_timeout",)
 
 
 def _answer_of(document: dict, label: str, release: str) -> dict:
@@ -655,6 +675,99 @@ def test_7_120_0_changes_no_search_cell_at_all() -> None:
     assert set(document["cells"]["search:ddgs"]) and set(
         document["cells"]["search:legacy"]
     )
+
+
+# -------------------------------------------------------------- 7.120.1 DDG-5
+
+
+def test_7_120_1_moves_only_the_transport_timeout_cell_it_names() -> None:
+    """Exactly this cell, with both answers; its class and request do not move.
+
+    ``ddgs`` 9.16.x wraps ``primp``'s timeout in the library's own
+    ``TimeoutException``, which MCC has always classified as ``upstream`` with
+    ``kind_detail=timeout``. What moved is the library's detail text.
+    """
+
+    document = baseline.load_baseline()
+    moved = document[baseline.DDG5_KEY]
+    assert tuple(sorted(moved)) == MOVED_BY_DDG_5
+    assert all(label.startswith("search:ddgs ") for label in moved)
+    for label, entry in moved.items():
+        method, key = label.split(" ", 1)
+        assert set(entry) == {baseline.DDG5_BEFORE, baseline.DDG5_AFTER}, label
+        # The after-answer is what this tree computes and pins in ``cells``.
+        assert entry[baseline.DDG5_AFTER] == document["cells"][method][key], label
+        before = entry[baseline.DDG5_BEFORE]
+        after = entry[baseline.DDG5_AFTER]
+        assert before["digest"] != after["digest"], label
+        # Everything the adapter decides is unchanged; only the library's own
+        # wording moved (it names the new transport's exception, not httpx's).
+        for field in ("outcome", "kind", "kind_detail", "error_class", "requests"):
+            assert before["shape"][field] == after["shape"][field], (label, field)
+        assert "ReadTimeout" in before["shape"]["error_text"]
+        assert "ReadTimeout" not in after["shape"]["error_text"]
+        assert after["shape"]["error_text"].startswith("ddgs: ddgs search timed out: ")
+
+
+def test_7_120_1_leaves_every_other_search_and_fetch_cell_byte_identical() -> None:
+    """The bump moved the transport and the packaging, not the engine.
+
+    9.16.x keeps the DuckDuckGo engine's xpath, payload, aggregator and ranker,
+    so every other ``ddgs`` answer -- the ten row results, the bot checks, the
+    statuses, the empty page, and a refused connection, whose ``primp``
+    exception names itself exactly as ``httpx``'s did -- is 7.120.0's.
+    """
+
+    document = baseline.load_baseline()
+    moved = set(document[baseline.DDG5_KEY])
+    ddgs_cells = {f"search:ddgs {key}" for key in document["cells"]["search:ddgs"]}
+    assert len(ddgs_cells) == 16
+    assert ddgs_cells - moved == ddgs_cells - set(MOVED_BY_DDG_5)
+    refused = document["cells"]["search:ddgs"]["transport_refused"]["shape"]
+    assert (refused["error_class"], refused["kind"], refused["kind_detail"]) == (
+        "WebSearchUpstreamError",
+        "upstream",
+        None,
+    )
+    assert refused["error_text"].endswith(
+        "ConnectError: ConnectError('connection refused')"
+    )
+    # The legacy hop and web_fetch never touch the package; their pins stand.
+    assert set(document["cells"]) == {
+        "search:ddgs",
+        "search:legacy",
+        "fetch:web_fetch",
+    }
+    assert not any(label.startswith(("search:legacy", "fetch:")) for label in moved)
+
+
+@pytest.mark.local_serial
+def test_the_ddgs_engine_keeps_tls_verification_on() -> None:
+    """DDG-5's transport is ``primp``; MCC still never weakens TLS for it.
+
+    Every ``primp.Client`` the package builds over a harness run is recorded
+    (``methods.PRIMP_CLIENTS``). Each must be constructed with ``verify=True``,
+    no custom CA, and the browser impersonation the library itself sets --
+    MCC passes neither, so the impersonation is the engine's own default and
+    not an MCC decision (spec 5 Q3, 2.3; USER DECISIONS Q3).
+    """
+
+    scenario = next(
+        scenario
+        for scenario in corpus.search_corpus().scenarios
+        if scenario.id == "live_html_200"
+    )
+    methods.PRIMP_CLIENTS.clear()
+    run = methods.run_sync(methods.run_ddgs(scenario, "omarchy linux", 10))
+    assert run.outcome["outcome"] == "results"
+    clients = list(methods.PRIMP_CLIENTS)
+    methods.PRIMP_CLIENTS.clear()
+    assert clients, "the ddgs engine built no primp client: the fake is not used"
+    for kwargs in clients:
+        assert kwargs["verify"] is True, kwargs
+        assert kwargs["ca_cert_file"] is None, kwargs
+        assert kwargs["impersonate"] == "random", kwargs
+        assert kwargs["impersonate_os"] == "random", kwargs
 
 
 # ------------------------------------------------- platform-variant answers

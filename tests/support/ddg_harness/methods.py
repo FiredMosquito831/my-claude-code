@@ -5,9 +5,12 @@ or ``FETCH_METHODS`` and the table and baseline pick them up:
 
 * ``ddgs`` -- the ``ddgs`` provider path: MCC's real ``DdgsWebSearchProvider``
   (``websearch/adapters/ddgs.py``) with ``DDGS_BACKEND=duckduckgo``, the real
-  ``ddgs`` package and its real ``HttpClient2.request`` (status handling and
-  exception mapping). Only the HTTP transport underneath is replaced: every
-  ``HttpClient2`` gets an ``httpx.MockTransport`` that serves the scenario.
+  ``ddgs`` package and its real status handling and exception mapping. Only the
+  HTTP transport underneath is replaced: since 9.16.x the package's engines
+  drive ``primp`` through ``ddgs.http_client.HttpClient``, so every
+  ``primp.Client`` built inside gets a fake that serves the scenario
+  (``_ddgs_transport``; before 9.16.x, DDG-1 to DDG-4, it was
+  ``HttpClient2`` over an ``httpx.MockTransport``).
   The backend is pinned because ``auto`` draws engines at random and every
   recorded page is a DuckDuckGo page.
 * ``legacy`` -- the last hop of the ``auto`` route as that route runs it,
@@ -40,10 +43,11 @@ from typing import Any
 from urllib.parse import parse_qsl
 
 import httpx
+import primp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
-from ddgs import http_client2
+from ddgs import http_client as ddgs_http_client
 
 from my_claude_code.api.web_tools import outbound
 from my_claude_code.api.web_tools.egress import WebFetchEgressPolicy
@@ -75,8 +79,38 @@ class Run:
 # The fake upstream for both search paths
 
 
+#: A fake transport failure: the scenario's transport name -> the exception the
+#: fake socket raises for it, built from the request it saw. ``httpx`` for the
+#: legacy hop (it uses MCC's own ``httpx.AsyncClient``); ``primp`` for the
+#: ``ddgs`` package's client, which has its own exceptions since 9.16.x -- the
+#: library maps ``primp.TimeoutError`` to its ``TimeoutException`` and every
+#: other exception to ``DDGSException``.
+type Failures = dict[str, Callable[[httpx.Request], BaseException]]
+
+HTTPX_TRANSPORT_FAILURES: Failures = {
+    "timeout": lambda request: httpx.ReadTimeout("timed out", request=request),
+    "refused": lambda request: httpx.ConnectError(
+        "connection refused", request=request
+    ),
+}
+PRIMP_TRANSPORT_FAILURES: Failures = {
+    "timeout": lambda request: primp.TimeoutError("timed out"),
+    "refused": lambda request: primp.ConnectError("connection refused"),
+}
+
+#: Every constructor ``primp.Client`` that ``ddgs`` built during a harness run,
+#: newest last -- the keyword arguments as the library passed them. The harness
+#: proves two things with it (``test_the_ddgs_engine_keeps_tls_verification_on``):
+#: TLS verification is on (``verify=True``; MCC never passes ``verify=False`` or
+#: a custom CA) and the browser impersonation is the library's own default
+#: (``impersonate="random"``, set by ``ddgs.http_client.HttpClient``, not by MCC).
+PRIMP_CLIENTS: list[dict[str, Any]] = []
+
+
 def _fake_handler(
-    scenario: SearchScenario, requests: list[dict[str, Any]]
+    scenario: SearchScenario,
+    requests: list[dict[str, Any]],
+    failures: Failures = HTTPX_TRANSPORT_FAILURES,
 ) -> Callable[[httpx.Request], httpx.Response]:
     def handler(request: httpx.Request) -> httpx.Response:
         form = (
@@ -87,10 +121,8 @@ def _fake_handler(
         requests.append(
             {"method": request.method, "url": str(request.url), "form": form}
         )
-        if scenario.transport == "timeout":
-            raise httpx.ReadTimeout("timed out", request=request)
-        if scenario.transport == "refused":
-            raise httpx.ConnectError("connection refused", request=request)
+        if scenario.transport in failures:
+            raise failures[scenario.transport](request)
         return httpx.Response(
             scenario.status or 200,
             content=scenario.body,
@@ -105,29 +137,37 @@ def _fake_handler(
 def _ddgs_transport(
     handler: Callable[[httpx.Request], httpx.Response],
 ) -> Iterator[None]:
-    """Every ``ddgs`` ``HttpClient2`` built inside gets the mock transport."""
+    """Every ``primp.Client`` the ``ddgs`` package builds inside is the fake.
 
-    def init(
-        self: http_client2.HttpClient2,
-        headers: dict[str, str] | None = None,
-        proxy: str | None = None,
-        timeout: int | None = 10,
-        *,
-        verify: bool | str = True,
-    ) -> None:
-        # The real constructor only builds an httpx.Client (proxy, TLS context,
-        # HTTP/2); the mock transport stands in for all of it. ``request`` --
-        # the status and exception handling -- stays the library's own.
-        del proxy, verify
-        self.client = httpx.Client(
-            headers=headers,
-            timeout=timeout,
-            follow_redirects=False,
-            transport=httpx.MockTransport(handler),
-        )
+    Since 9.16.x (DDG-5) the engines drive ``primp`` through
+    ``ddgs.http_client.HttpClient``: the client underneath is replaced here, so
+    the library's own construction (proxy, timeout, ``verify=True`` and its own
+    ``impersonate="random"`` default -- recorded in ``PRIMP_CLIENTS``), its
+    status handling (``BaseSearchEngine.request``: 200 -> text, anything else
+    ``None``), its exception mapping (``HttpClient.request``: ``primp.TimeoutError``
+    -> ``TimeoutException``, anything else -> ``DDGSException``) and its parsing
+    all stay the library's own. Only the socket underneath is the fake: the
+    request is rebuilt as the same ``httpx.Request`` the baseline was recorded
+    over, so what the fake upstream sees (method, URL, form) is unchanged.
+    """
+
+    class FakePrimpClient:
+        def __init__(self, **kwargs: Any) -> None:
+            PRIMP_CLIENTS.append(kwargs)
+
+        def headers_update(self, headers: Any) -> None:
+            del headers  # the browser headers the engine sets; not recorded
+
+        def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+            forwarded = {
+                key: kwargs[key]
+                for key in ("params", "content", "data", "json")
+                if kwargs.get(key) is not None
+            }
+            return handler(httpx.Request(method, url, **forwarded))
 
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(http_client2.HttpClient2, "__init__", init)
+        patch.setattr(ddgs_http_client.primp, "Client", FakePrimpClient)
         yield
 
 
@@ -168,7 +208,7 @@ async def run_ddgs(scenario: SearchScenario, query: str, max_results: int) -> Ru
         options={"DDGS_BACKEND": "duckduckgo"},
     )
     started = time.perf_counter()
-    with _ddgs_transport(_fake_handler(scenario, requests)):
+    with _ddgs_transport(_fake_handler(scenario, requests, PRIMP_TRANSPORT_FAILURES)):
         try:
             response = await DdgsWebSearchProvider(config).search(
                 query, max_results=max_results

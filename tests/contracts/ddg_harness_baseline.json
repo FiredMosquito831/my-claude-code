@@ -1,6 +1,6 @@
 {
  "about": "Equality baseline of the DDG harness (tests/support/ddg_harness/baseline.py): today's output of every search and fetch method on every fixture under tests/fixtures/ddg and tests/fixtures/extraction, as a readable shape and the sha256 of the canonical outcome JSON. Pinned by tests/contracts/test_ddg_harness_equality.py.",
- "generated_on": "ad901f76 (v7.119.1) + DDG-4 (v7.120.0)",
+ "generated_on": "ad901f76 (v7.119.1) + DDG-4 (v7.120.0) + DDG-5 (v7.120.1)",
  "moved_by_ddg_2": {
   "search:ddgs live_html_200": {
    "v7.118.1": {
@@ -9149,6 +9149,70 @@
    }
   }
  },
+ "moved_by_ddg_5": {
+  "search:ddgs transport_timeout": {
+   "v7.120.0": {
+    "shape": {
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "ddgs: ddgs search timed out: Request timed out: ReadTimeout('timed out')",
+     "kind": "upstream",
+     "kind_detail": "timeout",
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "POST",
+       "url": "https://html.duckduckgo.com/html/",
+       "form": [
+        [
+         "b",
+         ""
+        ],
+        [
+         "l",
+         "us-en"
+        ],
+        [
+         "q",
+         "omarchy linux"
+        ]
+       ]
+      }
+     ]
+    },
+    "digest": "daf7ee60370205c1dda1b360d09b423d71153aba747a58c1dd80edc3691be432"
+   },
+   "v7.120.1": {
+    "shape": {
+     "error_class": "WebSearchUpstreamError",
+     "error_text": "ddgs: ddgs search timed out: timed out",
+     "kind": "upstream",
+     "kind_detail": "timeout",
+     "outcome": "error",
+     "requests": [
+      {
+       "method": "POST",
+       "url": "https://html.duckduckgo.com/html/",
+       "form": [
+        [
+         "b",
+         ""
+        ],
+        [
+         "l",
+         "us-en"
+        ],
+        [
+         "q",
+         "omarchy linux"
+        ]
+       ]
+      }
+     ]
+    },
+    "digest": "2e39c51deb1d18903c9ffafc9e9e889beda2b2fc4c8cc81a07cb33a82fd0c6af"
+   }
+  }
+ },
  "platform_variants": {
   "fetch:web_fetch readability/jcharum/cnet-001": {
    "libxml2-2.11": {
@@ -9689,7 +9753,7 @@
    "transport_timeout": {
     "shape": {
      "error_class": "WebSearchUpstreamError",
-     "error_text": "ddgs: ddgs search timed out: Request timed out: ReadTimeout('timed out')",
+     "error_text": "ddgs: ddgs search timed out: timed out",
      "kind": "upstream",
      "kind_detail": "timeout",
      "outcome": "error",
@@ -9714,7 +9778,7 @@
       }
      ]
     },
-    "digest": "daf7ee60370205c1dda1b360d09b423d71153aba747a58c1dd80edc3691be432"
+    "digest": "2e39c51deb1d18903c9ffafc9e9e889beda2b2fc4c8cc81a07cb33a82fd0c6af"
    },
    "transport_refused": {
     "shape": {

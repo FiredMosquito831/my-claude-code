@@ -51,6 +51,14 @@ DEFERRED_UNTIL_FIRST_USE: dict[str, str] = {
         "else on the startup path; the DuckDuckGo lite/html page profiles (R2, "
         "7.119.0) parse with the standard library's html.parser instead."
     ),
+    "primp": (
+        "The Rust HTTP client ``ddgs`` drives since 9.16.x (DDG-5, "
+        "RESEARCH-DDG-WEBSEARCH.md R4), imported by the package's engine module "
+        "on the first real search and by nothing on the startup path: building "
+        "the app loads only the ``ddgs`` shell and its exceptions module "
+        "(measured 2026-10-30: first use 28.9 ms / 57 modules after the bump, "
+        "against 163.7 ms / 77 before)."
+    ),
 }
 
 _PROBE = "\n".join(
