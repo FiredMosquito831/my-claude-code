@@ -3865,6 +3865,12 @@ def python_step_rig(tmp_path: Path) -> PythonStepRig:
 def _running_powershell_or_skip(powershell: str) -> None:
     if not powershell:
         pytest.skip("no PowerShell on this host")
+    # Windows hosts only: these cases run a .cmd and the installer's Windows
+    # shapes. The Linux runners DO carry pwsh (`_powershells` finds it), and
+    # pwsh there cannot execute a .cmd -- the CI run on b3151562 caught exactly
+    # that in test_a_native_command_writing_to_stderr_and_exiting_0_does_not_abort.
+    if os.name != "nt":
+        pytest.skip("the Windows installer scenarios run on Windows hosts")
 
 
 @pytest.mark.parametrize(
