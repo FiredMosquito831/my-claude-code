@@ -1085,8 +1085,13 @@ function Test-ManagedPythonUsable {
     param([string] $Version)
 
     $uvPath = Resolve-UvPath "the Python installation"
+    # --no-project on purpose: the verification must not depend on a project
+    # the installer happens to be run from. `uv python find` in a project
+    # discovers that project's environment (and its pyproject), so a user who
+    # runs the install inside their own repository could otherwise get a
+    # "no interpreter found" for a project reason rather than for uv's folder.
     $found = Invoke-QuietNativeCapture -FilePath $uvPath -Arguments @(
-        "python", "find", "--python-preference", "only-managed", $Version
+        "python", "find", "--no-project", "--python-preference", "only-managed", $Version
     )
     if ([string]::IsNullOrWhiteSpace($found)) {
         return $false

@@ -3615,8 +3615,10 @@ def test_install_sh_a_link_warning_with_a_working_python_continues(
     assert LINK_WARNING_INFO in output, output
     installs = [c for c in posix_harness.calls() if c.startswith("uv:python install")]
     assert len(installs) == 2, installs
+    # The verification is uv's own answer, independent of any project the
+    # installer happened to be run from, and managed-only on purpose.
     assert any(
-        "uv:python find --python-preference only-managed 3.14.0" in c
+        "uv:python find --no-project --python-preference only-managed 3.14.0" in c
         for c in posix_harness.calls()
     )
 

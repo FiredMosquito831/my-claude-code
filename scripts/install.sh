@@ -907,8 +907,13 @@ run_uv_python_install() {
 # make this check pass. The interpreter is then RUN, because a folder left by a
 # half-finished install is not an installed interpreter.
 managed_python_path() {
+    # --no-project on purpose: the verification must not depend on a project
+    # the installer happens to be run from (that project's environment and
+    # pyproject could answer for reasons that have nothing to do with uv's
+    # managed folder).
     managed_python_candidate=$(
-        "$uv_bin" python find --python-preference only-managed "$PYTHON_VERSION" 2>/dev/null |
+        "$uv_bin" python find --no-project --python-preference only-managed \
+            "$PYTHON_VERSION" 2>/dev/null |
             head -n 1
     ) || managed_python_candidate=""
     [ -n "$managed_python_candidate" ] || return 1
