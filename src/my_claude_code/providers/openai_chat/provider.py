@@ -1845,6 +1845,21 @@ class _OpenAIChatStreamRunner:
                             logger.debug("{} finish_reason: {}", tag, finish_reason)
 
                         reasoning = self._provider._profile.reasoning_delta(delta)
+                        legacy_call = getattr(delta, "function_call", None)
+                        # Where this model actually generated. Stamped on the
+                        # raw chunk, not on the SSE MCC forwards, because the
+                        # forwarded events are assembled: tool arguments are
+                        # held until their JSON parses, and a reasoning delta
+                        # the client's policy hides is never forwarded at all
+                        # while its tokens are still in the count the rate
+                        # divides. One basis, end to end.
+                        if (
+                            reasoning
+                            or delta.content
+                            or delta.tool_calls
+                            or legacy_call
+                        ):
+                            recovery.generation.stamp()
                         if shape is not None and reasoning:
                             shape.note_field(
                                 self._provider._profile.reasoning_delta_field,
@@ -1854,24 +1869,22 @@ class _OpenAIChatStreamRunner:
                             shape.note_field("content", len(delta.content))
                         if shape is not None and delta.tool_calls:
                             shape.note_field("tool_calls", len(delta.tool_calls))
-                        if shape is not None:
+                        if shape is not None and legacy_call is not None:
                             # Read through ``getattr`` like ``chunk.usage``
                             # above: MCC's own chunk declares this field, but a
                             # chunk object that does not carry it is not an
                             # error, and an AttributeError on the reply path
                             # would turn a real answer into an internal 500.
-                            legacy_call = getattr(delta, "function_call", None)
-                            if legacy_call is not None:
-                                # Recording only (7.115.1): the deprecated
-                                # single-call shape this door parses and has
-                                # never read. Counting it says whether a host
-                                # used it -- the one blind spot the 2026-10-29
-                                # investigation left open -- without changing
-                                # one byte of what the client receives.
-                                shape.note_field(
-                                    "function_call",
-                                    _legacy_function_call_chars(legacy_call),
-                                )
+                            # Recording only (7.115.1): the deprecated
+                            # single-call shape this door parses and has
+                            # never read. Counting it says whether a host
+                            # used it -- the one blind spot the 2026-10-29
+                            # investigation left open -- without changing
+                            # one byte of what the client receives.
+                            shape.note_field(
+                                "function_call",
+                                _legacy_function_call_chars(legacy_call),
+                            )
                         if output_reasoning and reasoning is not None:
                             for event in hold_events(ledger.ensure_thinking_block()):
                                 yield event
@@ -1962,6 +1975,21 @@ class _OpenAIChatStreamRunner:
                         raise TruncatedProviderStreamError(
                             "Provider stream ended without finish_reason."
                         )
+                    if shape is not None:
+                        # The Chat door substitutes a ``cl100k`` estimate when
+                        # the host reports no ``completion_tokens``. An
+                        # estimate cannot back a rate -- not even over a
+                        # measured clock -- so the count is marked and the
+                        # window is deliberately not stored: a group rate reads
+                        # these columns only, and it must not be able to
+                        # include a number nobody measured.
+                        if usage_int(usage_info, "completion_tokens") is None:
+                            shape.note_estimated_tokens()
+                        else:
+                            shape.note_generation(
+                                recovery.generation.first_at,
+                                recovery.generation.last_at,
+                            )
                     record_response_shape(shape)
                     break
 

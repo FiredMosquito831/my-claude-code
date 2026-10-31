@@ -847,6 +847,19 @@ class ResponseShape:
     #: Per open thinking block: ``[thinking chars, signature chars]``, keyed by
     #: the block's index, until its ``content_block_stop``. Never stored.
     open_thinking: dict[int, list[int]] = field(default_factory=dict)
+    #: The first and last delta of *any* kind the upstream stream carried, in
+    #: milliseconds from ``started_at`` -- the window a generation rate may be
+    #: divided by (7.122.2). Taken where the provider parses its own frames,
+    #: before the commit holdback, so a release, a recovery flush or a
+    #: buffered tool call cannot move it. ``None`` means no token-bearing
+    #: delta was seen, which is "not measured" and never a zero-length window.
+    gen_first_ms: int | None = None
+    gen_last_ms: int | None = None
+    #: Whether the output-token count this reply will report was estimated
+    #: rather than reported by the host (the Chat door's ``cl100k`` fallback).
+    #: An estimate cannot back a rate, so the display suppresses it and marks
+    #: the count instead.
+    estimated_tokens: bool = False
 
     def note_chunk(self, now: float) -> None:
         """Record that a chunk arrived, timing the first one."""
@@ -862,6 +875,25 @@ class ResponseShape:
     def note_finish(self, reason: object) -> None:
         if isinstance(reason, str) and reason:
             self.finish_reason = reason[:64]
+
+    def note_generation(self, first_at: float | None, last_at: float | None) -> None:
+        """Record the provider's generation window on this reply's own clock.
+
+        ``first_at``/``last_at`` are monotonic stamps from
+        :class:`~my_claude_code.core.generation_rate.GenerationClock`, taken
+        before the holdback. Stored as milliseconds from ``started_at`` --
+        the same basis as ``first_chunk_ms`` beside them -- so the row means
+        "this attempt started generating here". A window that ends before it
+        began is not a measurement and is dropped rather than repaired.
+        """
+        if first_at is None or last_at is None or last_at < first_at:
+            return
+        self.gen_first_ms = max(0, int((first_at - self.started_at) * 1000))
+        self.gen_last_ms = max(0, int((last_at - self.started_at) * 1000))
+
+    def note_estimated_tokens(self) -> None:
+        """Mark that this reply's output-token count is an estimate."""
+        self.estimated_tokens = True
 
     def count_reasoning(self, name: str, amount: int = 1) -> None:
         """Count one reasoning structure the reply carried (no text)."""
@@ -904,6 +936,14 @@ class ResponseShape:
             out["reasoning"] = {
                 name: self.reasoning[name] for name in sorted(self.reasoning)
             }
+        # Written only when the provider took the clock, so every reply that
+        # predates it -- and every non-streamed one, which has nothing to
+        # measure -- keeps exactly the payload it always had.
+        if self.gen_first_ms is not None and self.gen_last_ms is not None:
+            out["gen_first_ms"] = self.gen_first_ms
+            out["gen_last_ms"] = self.gen_last_ms
+        if self.estimated_tokens:
+            out["estimated_tokens"] = True
         if len(json.dumps(out, default=str)) > RESPONSE_SHAPE_MAX_CHARS:
             out["usage_keys"] = []
             out["_degraded"] = True

@@ -1671,7 +1671,8 @@ def test_the_request_table_names_the_client_that_sent_each_row(rendered) -> None
         "Turn",
         "Tokens",
         "Cost",
-        "TTFT",
+        # 7.122.2: named for what it measures -- the first *visible byte*.
+        "First byte",
         "Duration",
         "Details",
     ]
@@ -4128,24 +4129,29 @@ def test_jsdom_request_row_shows_winner_ttft_and_fallback_loss(rendered) -> None
     assert unmeasured["text"] == "\u2014"
 
 
-def test_jsdom_output_rate_uses_the_winner_ttft(rendered) -> None:
-    """Both halves of the rate must come from the same model.
+def test_jsdom_the_generation_rate_and_the_throughput_are_two_numbers(
+    rendered,
+) -> None:
+    """One measured window, and one whole request: both are shown, and they differ.
 
-    The winner produced 340 tokens over (2,100 - 300) ms: 188.9 tok/s. The old
-    form -- the request's 6,812 ms minus the request's 4,712 ms TTFT -- read
-    161.9 because the predecessors' stall had been taken out of the
-    denominator; putting the winner's TTFT into the request's duration would
-    read 52.2 for the same reason in reverse. Neither is a rate any model
-    achieved.
+    The winner produced 340 tokens between its first and last delta -- 500 ms
+    to 1,900 ms into the attempt -- so its generation rate is 242.9 tok/s. The
+    whole request took 6,812 ms for the same 340 tokens: 49.9 tok/s. The
+    retired number, 188.9, was neither: it divided the tokens by
+    ``duration - ttft`` of the attempt (2,100 - 300 ms), a window that starts
+    when MCC released the first byte rather than when the model produced one.
     """
 
     pairs = dict(rendered["latencyViews"]["detailPairs"])
 
-    assert pairs["Output rate"] == "188.9 tok/s"
+    assert pairs["Generation rate"] == "242.9 tok/s"
+    assert pairs["Throughput (whole request)"] == "49.9 tok/s"
     assert pairs["Duration"] == "6812 ms"
-    assert pairs["TTFT (winner)"] == "300 ms"
-    assert pairs["TTFT (incl. fallbacks)"] == "4712 ms"
+    assert pairs["First visible byte (winner)"] == "300 ms"
+    assert pairs["First visible byte (incl. fallbacks)"] == "4712 ms"
     assert pairs["Lost to fallbacks"].startswith("4412 ms")
+    # The retired label is gone from the dialog entirely.
+    assert "Output rate" not in pairs
 
 
 def test_jsdom_request_chain_renders_per_attempt_latency(rendered) -> None:
@@ -4155,23 +4161,27 @@ def test_jsdom_request_chain_renders_per_attempt_latency(rendered) -> None:
     assert views["chainHidden"] is False
     first, second, winner, _skipped = views["attemptMetrics"]
 
-    # The model that timed out never produced a first token, and a dash is the
+    # The model that timed out never produced a first byte, and a dash is the
     # only honest thing to print for one.
-    assert dict(first)["TTFT"] == "\u2014"
+    assert dict(first)["first byte"] == "\u2014"
     assert dict(first)["ended"] == "upstream_timeout"
-    assert dict(second)["TTFT"] == "1.4s"
+    assert dict(second)["first byte"] == "1.4s"
     assert dict(winner) == {
-        "TTFT": "300 ms",
+        "first byte": "300 ms",
         "first reasoning": "460 ms",
-        "generating": "1.8s",
+        "after first byte": "1.8s",
         "tokens out": "340",
-        "rate": "188.9 tok/s",
+        # 340 tokens over the measured 1.4 s window ...
+        "generation": "242.9 tok/s",
+        # ... and the same tokens over this attempt's whole 2,100 ms.
+        "throughput": "161.9 tok/s",
         "ended": "answered",
     }
-    # A failed attempt produced no answer to count, so its rate is refused
+    # A failed attempt produced no answer to count, so both rates are refused
     # rather than computed from the request's tokens -- those belong to
     # whichever model answered.
-    assert dict(second)["rate"] == "\u2014"
+    assert dict(second)["generation"] == "\u2014"
+    assert dict(second)["throughput"] == "\u2014"
     assert dict(second)["tokens out"] == "\u2014"
 
 
@@ -4181,7 +4191,9 @@ def test_jsdom_skipped_attempt_renders_dashes_and_its_bench_reason(rendered) -> 
     views = rendered["latencyViews"]
     skipped = dict(views["attemptMetrics"][3])
 
-    assert [skipped[name] for name in ("TTFT", "first reasoning", "generating")] == [
+    assert [
+        skipped[name] for name in ("first byte", "first reasoning", "after first byte")
+    ] == [
         "\u2014",
         "\u2014",
         "\u2014",
@@ -4203,12 +4215,13 @@ def test_jsdom_model_latency_breakdown_keeps_failures_apart(rendered) -> None:
         "Outcome",
         "Attempts",
         "Share",
-        "TTFT measured",
-        "p50 TTFT",
+        "First byte measured",
+        "p50 first byte",
         "Avg first reasoning",
-        "Avg generating",
+        "Avg after first byte",
         "Tokens out",
-        "tok/s",
+        "Generation rate",
+        "Throughput",
     ]
     answered = next(row for row in panel["rows"] if row[1] == "answered")
     failed = next(
@@ -4223,9 +4236,63 @@ def test_jsdom_model_latency_breakdown_keeps_failures_apart(rendered) -> None:
     # The denominator travels with the number, always.
     assert answered[4] == "12"
     assert "12 of 12 attempts carry a measurement" in panel["p50Titles"][1]
-    # Sums over a group only part of which was measured are not a rate.
+    # A group rate is computed in SQL and refused when part of the group has
+    # no measurement; the tokens are what the group reported upstream.
     assert failed[9] == "\u2014"
-    assert answered[9] == "212.5 tok/s"
+    assert failed[10] == "\u2014"
+    assert answered[9] == "255.0 tok/s"
+    assert answered[10] == "170.0 tok/s"
+
+
+def test_jsdom_a_group_window_below_the_minimum_says_so(rendered) -> None:
+    """Every attempt measured, every window under 500 ms: not a number."""
+
+    panel = rendered["latencyViews"]["panel"]
+    short = next(row for row in panel["rows"] if row[0] == "gamma/model-03")
+
+    assert short[4] == "5"
+    assert short[9] == "not measured \u2014 shorter than the timing window"
+    # Throughput needs no window, so the group still has a rate to show.
+    assert short[10] == "41.2 tok/s"
+
+
+def test_jsdom_a_group_written_before_the_clock_keeps_its_throughput(rendered) -> None:
+    """Legacy rows are not given a generation rate; they are given the one they have."""
+
+    panel = rendered["latencyViews"]["panel"]
+    legacy = next(row for row in panel["rows"] if row[0] == "delta/model-04")
+
+    assert legacy[9] == "\u2014"
+    assert legacy[10] == "22.5 tok/s"
+
+
+def test_jsdom_the_display_rules_for_the_rows_that_cannot_carry_a_rate(
+    rendered,
+) -> None:
+    """Short window, no clock, and an estimate: each says which it is.
+
+    These are the same functions the dialog calls, driven with one row each,
+    because the three cases cannot all be the fallback fixture at once.
+    """
+
+    rules = rendered["latencyViews"]["rateRules"]
+
+    assert rules["short"] == "not measured \u2014 shorter than the timing window"
+    assert rules["legacy"] == "not measured \u2014 no generation clock before 7.122.2"
+    # The legacy row still carries a throughput, which is the whole reason the
+    # second number exists.
+    assert rules["legacyThroughput"] == "161.9 tok/s"
+    # Without the server's minimums the page refuses to compute a rate rather
+    # than keeping a private copy of them.
+    assert rules["noMinimums"] == "\u2014"
+    # An estimated count suppresses both rates and marks the number instead.
+    assert rules["estimated"] == "not measured \u2014 the token count is an estimate"
+    assert rules["estimatedThroughput"] == (
+        "not measured \u2014 the token count is an estimate"
+    )
+    assert rules["estimatedTokens"] == "~1,240 est."
+    assert rules["attemptRate"] == "242.9 tok/s"
+    assert rules["attemptThroughput"] == "161.9 tok/s"
 
 
 def test_jsdom_unmeasured_latency_renders_dashes_not_zeroes(rendered) -> None:
@@ -4238,7 +4305,9 @@ def test_jsdom_unmeasured_latency_renders_dashes_not_zeroes(rendered) -> None:
 
     assert unmeasured[2] == "4,416"
     assert unmeasured[4] == "0"
-    assert unmeasured[5:] == ["\u2014"] * 5
+    # p50, avg first reasoning, avg after first byte, tokens out, generation
+    # rate and throughput: six cells with nothing measured behind any of them.
+    assert unmeasured[5:] == ["\u2014"] * 6
     # And the panel says so in words rather than leaving an empty column.
     note = views["notMeasured"]["note"]
     assert note.startswith("Nothing measured yet")
@@ -4256,7 +4325,7 @@ def test_jsdom_models_page_latency_chip_is_absent_when_unmeasured(rendered) -> N
 
     assert len(chips) == 1
     assert chips[0]["text"] == (
-        "last 7d: p50 TTFT 312 ms, p95 1.4s over 14 of 15 attempts"
+        "last 7d: p50 first byte 312 ms, p95 1.4s over 14 of 15 attempts"
     )
     assert "failed ones included" in chips[0]["title"]
     # Both outcomes in the tooltip: the headline is the answering group, and
@@ -7375,7 +7444,8 @@ EXISTING_REQUEST_COLUMNS = [
     "Turn",
     "Tokens",
     "Cost",
-    "TTFT",
+    # 7.122.2: named for what it measures -- the first *visible byte*.
+    "First byte",
     "Duration",
     "Details",
 ]
@@ -7945,7 +8015,8 @@ REQUESTS_TABLE_HEADERS = [
     "Turn",
     "Tokens",
     "Cost",
-    "TTFT",
+    # 7.122.2: named for what it measures -- the first *visible byte*.
+    "First byte",
     "Duration",
     "Details",
 ]
@@ -12980,6 +13051,30 @@ def test_jsdom_the_per_request_export_picker(raw_diagnostics) -> None:
     }
 
 
+#: One ``<dt>label</dt><dd>value</dd>`` pair of the request dialog's meta list.
+_META_PAIR = re.compile(r"<dt>(.*?)</dt><dd>(.*?)</dd>", re.S)
+
+#: The two rows 7.122.2 renamed, with the values they carry unchanged.
+_RELABELLED_META_ROWS = {
+    "TTFT (winner)": "First visible byte (winner)",
+    "TTFT (incl. fallbacks)": "First visible byte (incl. fallbacks)",
+}
+
+#: The two rows 7.122.2 added, in the order they are drawn.
+_ADDED_META_ROWS = ["Generation rate", "Throughput (whole request)"]
+
+
+def _meta_pairs(html: str) -> list[tuple[str, str]]:
+    return [(match.group(1), match.group(2)) for match in _META_PAIR.finditer(html)]
+
+
+def _child_with_id(children: list[str], element_id: str) -> int:
+    for index, html in enumerate(children):
+        if f'id="{element_id}"' in html[:240]:
+            return index
+    raise AssertionError(f"no child carries id={element_id}")
+
+
 def test_jsdom_the_raw_section_is_the_only_thing_the_request_detail_gained(
     raw_diagnostics,
 ) -> None:
@@ -12987,8 +13082,14 @@ def test_jsdom_the_raw_section_is_the_only_thing_the_request_detail_gained(
 
     The baseline was captured by this same scenario file pointed at the BASE
     tree's admin_static (53d78dab, v7.120.2): the same two rows, the same
-    harness, the same clicks. Every child of the card -- route trace, meta
-    list, wire panes, the whole transcript -- must be byte-identical.
+    harness, the same clicks. Every child of the card -- route trace, images,
+    media, wire panes, the whole transcript -- must be byte-identical.
+
+    7.122.2 changes exactly two of them, both named here: the meta list gained
+    a generation rate and a throughput and renamed its two first-byte rows
+    (values untouched), and the route timeline swapped its one "rate" cell for
+    the generation and throughput pair. Every other child is still the base
+    tree's bytes.
     """
 
     baseline = json.loads(RAWV_BASELINE.read_text(encoding="utf-8"))
@@ -12998,7 +13099,64 @@ def test_jsdom_the_raw_section_is_the_only_thing_the_request_detail_gained(
         base = baseline[key]
         assert base["childCount"] == 8
         assert mine["childCount"] == base["childCount"] + 1
-        assert mine["children"] == base["children"], key
+        before, after = base["children"], mine["children"]
+        meta = _child_with_id(before, "reqDetailMeta")
+        chain = _child_with_id(before, "reqDetailChain")
+        assert _child_with_id(after, "reqDetailMeta") == meta
+        assert _child_with_id(after, "reqDetailChain") == chain
+
+        # Every pre-existing fact is still there, unchanged, in its order.
+        # The one row 7.122.2 *removed* is named rather than ignored: it was
+        # replaced by the two rates below, and its old value is the number the
+        # entire fix exists because of.
+        was = _meta_pairs(before[meta])
+        assert any(label == "Output rate" for label, _value in was), key
+        expected = [
+            (_RELABELLED_META_ROWS.get(label, label), value)
+            for label, value in was
+            if label != "Output rate"
+        ]
+        pairs = _meta_pairs(after[meta])
+        labels = {label for label, _ in expected}
+        assert [
+            (label, value) for label, value in pairs if label in labels
+        ] == expected, key
+        # And the only rows that were added are the two rates.
+        assert [
+            label for label, _ in pairs if label not in labels
+        ] == _ADDED_META_ROWS, key
+
+        # The attempt timeline: the retired "rate" cell, replaced by the two.
+        if key == "domFallback":
+            assert ">rate<" in before[chain]
+            assert ">rate<" not in after[chain]
+            assert ">generation<" in after[chain]
+            assert ">throughput<" in after[chain]
+        for index, (was, now) in enumerate(zip(before, after, strict=True)):
+            if index in (meta, chain):
+                continue
+            assert now == was, (key, index)
+
+
+def test_the_help_text_names_the_two_rates_and_the_first_byte() -> None:
+    """The page's own prose, which the baseline comparisons exclude.
+
+    7.122.2 replaced one rate with two and renamed a measurement it had been
+    mislabelling. The help is part of the product: it says what each number
+    divides by, and it no longer claims a first *token* anywhere.
+    """
+
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert "Generation rate" in html
+    assert "Throughput" in html
+    assert "first visible byte" in html
+    # The measured evidence, which is what makes the change credible.
+    assert "429,152 tok/s" in html
+    # The claims the fix retired, and the wording that went with them.
+    assert "Output rate</em> is measured from the winner" not in html
+    assert "p50 TTFT" not in html
+    assert "tokens out, tok/s and what ended" not in html
 
 
 # ==================================================================== 7.121.1
@@ -13017,6 +13175,14 @@ def test_jsdom_the_raw_section_is_the_only_thing_the_request_detail_gained(
 SELECT_BLANK_BASELINE = (
     Path(__file__).resolve().parents[1] / "fixtures" / "select_blank_dom_7_121_0.json"
 )
+
+#: 7.122.2 rewords the user-facing help in exactly these two views -- "TTFT"
+#: becomes the time to the first visible byte, and the single "Output rate"
+#: becomes a generation rate with a throughput beside it. They are excluded
+#: from the byte-for-byte comparisons against earlier baselines and checked by
+#: :func:`test_the_help_text_names_the_two_rates_and_the_first_byte` instead,
+#: the same way 7.122.0 excluded the view it redrew.
+RELABELLED_VIEWS = frozenset({"guide", "requests"})
 
 #: The saved values no option carries -- the measured wipe sources.
 UNLISTED_SAVED = {
@@ -13263,6 +13429,12 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
     to move are named: the number box that becomes a text box (7.121.1), and
     the thirteen web-search rotation selects that did not exist (7.121.2).
     Everything else is byte-identical.
+
+    7.122.2 rewords the user-facing help -- "TTFT" becomes the time to the
+    first visible byte, and the single "Output rate" becomes a generation rate
+    and a throughput -- so the two views that hold that prose are excluded
+    here and checked directly by
+    :func:`test_the_help_text_names_the_two_rates_and_the_first_byte`.
     """
 
     baseline = json.loads(SELECT_BLANK_BASELINE.read_text(encoding="utf-8"))
@@ -13275,8 +13447,12 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
     assert {
         key: value
         for key, value in select_blank["views"].items()
-        if key != "get_started"
-    } == {key: value for key, value in base["views"].items() if key != "get_started"}
+        if key not in RELABELLED_VIEWS and key != "get_started"
+    } == {
+        key: value
+        for key, value in base["views"].items()
+        if key not in RELABELLED_VIEWS and key != "get_started"
+    }
 
     moved = sorted(
         key
@@ -13537,12 +13713,17 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
     )
 
     # 7.122.0 (see the 7.121.0 test above): Get Started is redrawn by its own
-    # release; every other view is unchanged.
+    # release; every other view is unchanged. 7.122.2 rewords the help in the
+    # Guide and on the Requests page, which are checked directly below.
     assert {
         key: value
         for key, value in select_blank["views"].items()
-        if key != "get_started"
-    } == {key: value for key, value in base["views"].items() if key != "get_started"}
+        if key not in RELABELLED_VIEWS and key != "get_started"
+    } == {
+        key: value
+        for key, value in base["views"].items()
+        if key not in RELABELLED_VIEWS and key != "get_started"
+    }
     assert record["views"] == []
 
     mine = {key: _sha256(html) for key, html in select_blank["controls"].items()}
@@ -14365,9 +14546,11 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
 ) -> None:
     """The base-written baseline: the same scenario on the BASE tree 12357c96.
 
-    Only Get Started is this release's subject, so its view is excluded; every
-    other view -- the Guide and Docs included -- is byte-identical to the page
-    the base tree drew for the same payload.
+    Only Get Started is that release's subject, so its view is excluded; every
+    other view -- the Docs included -- is byte-identical to the page the base
+    tree drew for the same payload. 7.122.2 rewords the help in the Guide and
+    on the Requests page (see :data:`RELABELLED_VIEWS`), so those two are
+    excluded here as well and checked directly.
     """
 
     baseline = json.loads(GET_STARTED_BASELINE.read_text(encoding="utf-8"))
@@ -14376,10 +14559,14 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
 
     mine = dict(get_started["viewsOnLoad"])
     base_without = {
-        key: value for key, value in base.items() if key != GET_STARTED_VIEW
+        key: value
+        for key, value in base.items()
+        if key != GET_STARTED_VIEW and key not in RELABELLED_VIEWS
     }
     mine_without = {
-        key: value for key, value in mine.items() if key != GET_STARTED_VIEW
+        key: value
+        for key, value in mine.items()
+        if key != GET_STARTED_VIEW and key not in RELABELLED_VIEWS
     }
     assert set(base_without) == set(mine_without)
     moved = sorted(

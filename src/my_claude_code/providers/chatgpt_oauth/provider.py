@@ -33,6 +33,7 @@ from my_claude_code.core.diagnostics import (
     redacted_exception_traceback,
 )
 from my_claude_code.core.failures import ExecutionFailure
+from my_claude_code.core.generation_rate import GenerationClock
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningAdaptationKind,
@@ -59,6 +60,7 @@ from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
     alias_responses_body_tool_names,
     history_thinking_marker,
+    note_responses_generation_delta,
     responses_tool_name_codec,
 )
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
@@ -1051,15 +1053,27 @@ class ChatGPTOAuthProvider(BaseProvider):
                         )
                         yield ledger.message_start()
                         shape = start_response_shape()
+                        # Where the model generated, from the protocol's own
+                        # ``*.delta`` events -- before the converter buffers
+                        # answer text and before a reasoning delta the client
+                        # hides is dropped. Kept here rather than on the
+                        # converter because the token total it will be
+                        # divided into includes reasoning.
+                        generation = GenerationClock()
                         async for event in iter_chatgpt_oauth_sse_events(
                             response.aiter_raw()
                         ):
                             note_responses_event_shape(shape, event)
+                            note_responses_generation_delta(generation, event)
                             for sse_event in converter.feed(event):
                                 yield sse_event
 
                         for sse_event in converter.finish():
                             yield sse_event
+                        if shape is not None:
+                            shape.note_generation(
+                                generation.first_at, generation.last_at
+                            )
                         record_response_shape(shape)
                     finally:
                         await response.aclose()

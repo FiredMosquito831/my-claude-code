@@ -230,7 +230,7 @@ def test_the_latency_cache_key_shape_changed_so_stored_answers_do_not_survive(
         key = latency_by_model_cache_key(store, since=None)
     finally:
         store.close()
-    assert key.endswith("|shape=v2-interrupted")
+    assert key.endswith("|shape=v3-generation-rate")
     assert key.split("|")[1] == "since="
 
 

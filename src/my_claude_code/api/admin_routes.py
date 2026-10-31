@@ -233,6 +233,7 @@ from my_claude_code.core.client_fingerprint import (
     NON_REGISTRY_HARNESS_LABELS,
 )
 from my_claude_code.core.credential_refresh_scope import refresh_exit
+from my_claude_code.core.generation_rate import GEN_MIN_TOKENS, GEN_MIN_WINDOW_MS
 from my_claude_code.core.loop_health import (
     BUSY_MARKER_HEADER,
     BUSY_MARKER_VALUE,
@@ -5421,6 +5422,12 @@ def _latency_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "models": len({str(row["model_ref"]) for row in rows}),
         "attempts": sum(int(row["attempts"] or 0) for row in rows),
         "ttft_measured": sum(int(row["ttft_measured"] or 0) for row in rows),
+        # The two minimums every generation rate in the page is decided by.
+        # Declared once in ``core.generation_rate`` -- the same constants the
+        # SQL applies per attempt -- and handed to the page with the data, so
+        # the dashboard cannot hold a second, drifting copy (7.122.2).
+        "generation_min_window_ms": GEN_MIN_WINDOW_MS,
+        "generation_min_tokens": GEN_MIN_TOKENS,
         # One "sampled" row makes the whole readout sampled: the cap is on the
         # single pull every group's percentiles are bucketed out of.
         "p50_source": (

@@ -2101,7 +2101,16 @@ function marketplaceOffersView(offers, current) {
   );
   mktFactRow(facts, "Success", mktNumber(perf.success_pct, "%"), "last 30 min, this model");
   mktFactRow(facts, "Time to first token", mktNumber(perf.ttft_ms, "ms"));
-  mktFactRow(facts, "Speed", mktNumber(perf.tps, "tok/s"));
+  // The marketplace's own number, not MCC's: this rows reads the feed's
+  // `avgTps` verbatim. Labelled as the claim it is (7.122.2) -- the rates MCC
+  // measures are on the request log's pages, from a stored window, and the
+  // two must never look like the same kind of fact.
+  mktFactRow(
+    facts,
+    "Published speed",
+    mktNumber(perf.tps, "tok/s"),
+    "the marketplace's own claim, not measured here",
+  );
   mktFactRow(
     facts,
     "Prompt-cache hit",
@@ -27372,27 +27381,31 @@ function renderRequestStatsCards(stats) {
     ["Avg duration", stats.avg_duration_ms != null ? `${stats.avg_duration_ms} ms` : "—"],
     ["p50 duration", stats.p50_duration_ms != null ? `${stats.p50_duration_ms} ms` : "—"],
     ["p95 duration", stats.p95_duration_ms != null ? `${stats.p95_duration_ms} ms` : "—"],
-    // TTFT percentiles, beside the duration ones they mirror. They arrive from
-    // their own request (an exact scan of `requests.ttft_ms`, ~0.8 s on a
-    // 4.5 GB log) rather than from `stats`, which is rollup-served in a tenth
-    // of that on the unfiltered load. Until it lands they say so; a window
-    // whose rows all predate TTFT instrumentation says that instead, because
-    // "not measured yet" and "instant" are different answers.
-    ["p50 TTFT", ttftPercentileText("p50_ttft_ms")],
-    ["p95 TTFT", ttftPercentileText("p95_ttft_ms")],
+    // First-visible-byte percentiles, beside the duration ones they mirror.
+    // They arrive from their own request (an exact scan of `requests.ttft_ms`,
+    // ~0.8 s on a 4.5 GB log) rather than from `stats`, which is
+    // rollup-served in a tenth of that on the unfiltered load. Until it lands
+    // they say so; a window whose rows all predate the instrumentation says
+    // that instead, because "not measured yet" and "instant" are different
+    // answers. Labelled for what they measure since 7.122.2: the column is
+    // the first byte MCC's stream released, which a holdback can move to the
+    // end of a short answer, and calling it a first *token* was false on 76%
+    // of one real log.
+    ["p50 first visible byte", ttftPercentileText("p50_ttft_ms")],
+    ["p95 first visible byte", ttftPercentileText("p95_ttft_ms")],
     // Two averages, because they answer different questions and were one
     // number until now: the first is what clients waited, fallbacks included;
     // the second is what the models that answered actually took. Their gap is
     // the cost of the routing, and it is large -- 8.6 s at route attempt 0
     // against 25.2 s above it on the log this was measured on.
     [
-      "Avg TTFT (incl. fallbacks)",
+      "Avg first byte (incl. fallbacks)",
       stats.avg_ttft_ms != null ? `${stats.avg_ttft_ms} ms` : "—",
     ],
     [
-      "Avg TTFT (winner)",
+      "Avg first byte (winner)",
       stats.avg_ttft_winner_ms != null ? `${stats.avg_ttft_winner_ms} ms` : "—",
-      "the answering model's own first token; measured from 7.4.0 on",
+      "the answering model's own first visible byte; measured from 7.4.0 on",
     ],
   ];
   if (stats.counting) {
@@ -28257,31 +28270,178 @@ function latencyPercentileCell(row) {
     row.p50_ttft_ms == null ? NOT_MEASURED : formatChainDuration(row.p50_ttft_ms);
   cell.title =
     row.p95_ttft_ms == null
-      ? "No first-token time was measured for this group."
+      ? "No first visible byte was measured for this group."
       : `p95 ${formatChainDuration(row.p95_ttft_ms)} — one attempt in twenty` +
-        ` waited at least this long. Median shown; ${row.ttft_measured} of` +
-        ` ${row.attempts} attempts carry a measurement.`;
+        ` took at least this long to show its first byte. Median shown;` +
+        ` ${row.ttft_measured} of ${row.attempts} attempts carry a measurement.`;
   return cell;
 }
 
-/** Group tokens per second, or a dash whenever the two halves disagree.
- *
- * `tokens_out` sums every attempt in the group; `avg_generating_ms` averages
- * only those that carry both a duration and a first-token time. Multiplying
- * one by the other's count when the two sets differ produces a number no
- * model ever achieved, so the rate is refused unless every attempt in the
- * group was measured.
- */
-function formatGroupRate(row) {
-  const attempts = Number(row.attempts || 0);
-  const measured = Number(row.ttft_measured || 0);
-  const generating = row.avg_generating_ms;
-  if (row.tokens_out == null || generating == null) return NOT_MEASURED;
-  if (!attempts || measured !== attempts) return NOT_MEASURED;
-  const seconds = (Number(generating) * attempts) / 1000;
-  if (seconds <= 0) return NOT_MEASURED;
-  return `${(Number(row.tokens_out) / seconds).toFixed(1)} tok/s`;
+/* ------------------------------------------------------- the two rates --
+   Every rate on this page is now one of two facts, and until 7.122.2 they
+   were one mixed number. A **generation rate** divides the tokens a host
+   reported by the window in which it produced them -- the first to the last
+   delta of any kind, reasoning included, both taken before MCC's holdback.
+   A **throughput** divides the same tokens by the whole request: routing,
+   thinking and the client's wait. The retired form,
+   `tokens / (duration - ttft)`, took a count that includes reasoning and
+   divided it by a window that starts at the first byte MCC chose to release
+   -- the end of the answer for a held-back stream -- and on a real log it
+   printed 429,152 tok/s for a 68 s request.
+
+   The two minimums are the server's, declared once in
+   `core/generation_rate.py` and handed over with each payload. A page that
+   did not receive them refuses to print a rate rather than guessing a pair. */
+
+//: A window that exists but is too short to divide by.
+const SHORT_WINDOW_NOTE = "not measured — shorter than the timing window";
+//: A token count nobody measured, over a clock that was.
+const ESTIMATE_TOKEN_NOTE = "not measured — the token count is an estimate";
+//: No window at all: recorded before 7.122.2, or nothing streamed.
+const NO_GENERATION_CLOCK_NOTE =
+  "not measured — no generation clock before 7.122.2";
+
+/** The server's two minimums, from the payload that carried the rows. */
+function generationMinimums(payload) {
+  return {
+    windowMs: payload ? payload.generation_min_window_ms : null,
+    tokens: payload ? payload.generation_min_tokens : null,
+  };
 }
+
+/** Whether both minimums actually arrived with this payload. */
+function hasGenerationMinimums(minimums) {
+  return (
+    Number.isFinite(Number(minimums && minimums.windowMs)) &&
+    Number.isFinite(Number(minimums && minimums.tokens))
+  );
+}
+
+/** Tokens per second over a measured generation window, or null.
+ *
+ * null whenever the window or the count is missing, below the server's
+ * minimums, or unusable -- a rate is never guessed from a partial pair.
+ */
+function generationRate(tokens, firstMs, lastMs, minimums) {
+  if (tokens == null || firstMs == null || lastMs == null) return null;
+  const count = Number(tokens);
+  const windowMs = Number(lastMs) - Number(firstMs);
+  const minWindow = Number(minimums && minimums.windowMs);
+  const minTokens = Number(minimums && minimums.tokens);
+  if (!Number.isFinite(minWindow) || !Number.isFinite(minTokens)) return null;
+  if (!Number.isFinite(count) || count <= 0) return null;
+  if (!Number.isFinite(windowMs) || windowMs <= 0) return null;
+  if (windowMs < minWindow || count < minTokens) return null;
+  return (count * 1000) / windowMs;
+}
+
+/** Tokens per second over a whole request or attempt, or null. */
+function throughputRate(tokens, durationMs) {
+  if (tokens == null || durationMs == null) return null;
+  const count = Number(tokens);
+  const duration = Number(durationMs);
+  if (!Number.isFinite(count) || count <= 0) return null;
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  return (count * 1000) / duration;
+}
+
+/** One rate as the display writes it: a number with its unit, or a dash. */
+function formatRate(rate) {
+  return rate == null ? NOT_MEASURED : `${Number(rate).toFixed(1)} tok/s`;
+}
+
+/** The estimated-token marker on the shape of a reply, if it carries one. */
+function estimatedTokens(attempt) {
+  const shape = attempt && attempt.params && attempt.params.response_shape;
+  return !!(shape && shape.estimated_tokens);
+}
+
+/** One attempt's generation rate, or the reason it has none.
+ *
+ * The window is the attempt's own; the count is the attempt's own, which only
+ * the attempt that answered (or a describe hop) carries. An estimated count
+ * suppresses the rate and says so rather than printing a mixed basis.
+ */
+function attemptGenerationRateText(attempt, minimums) {
+  if (!attempt) return NOT_MEASURED;
+  if (estimatedTokens(attempt)) return ESTIMATE_TOKEN_NOTE;
+  if (attempt.tokens_out == null) return NOT_MEASURED;
+  if (attempt.gen_first_ms == null || attempt.gen_last_ms == null) {
+    return NO_GENERATION_CLOCK_NOTE;
+  }
+  if (!hasGenerationMinimums(minimums)) return NOT_MEASURED;
+  const rate = generationRate(
+    attempt.tokens_out,
+    attempt.gen_first_ms,
+    attempt.gen_last_ms,
+    minimums,
+  );
+  return rate == null ? SHORT_WINDOW_NOTE : formatRate(rate);
+}
+
+/** One attempt's throughput: its own tokens over its own wall clock. */
+function attemptThroughputText(attempt) {
+  if (!attempt) return NOT_MEASURED;
+  if (estimatedTokens(attempt)) return ESTIMATE_TOKEN_NOTE;
+  return formatRate(throughputRate(attempt.tokens_out, attempt.duration_ms));
+}
+
+/** The request's headline rate: the answering attempt's window, its tokens. */
+function requestGenerationRateText(row) {
+  const answered = answeringAttempt(row);
+  if (!answered || row.tokens_out == null) return NOT_MEASURED;
+  if (estimatedTokens(answered)) return ESTIMATE_TOKEN_NOTE;
+  if (answered.gen_first_ms == null || answered.gen_last_ms == null) {
+    return NO_GENERATION_CLOCK_NOTE;
+  }
+  const minimums = generationMinimums(row);
+  if (!hasGenerationMinimums(minimums)) return NOT_MEASURED;
+  const rate = generationRate(
+    row.tokens_out,
+    answered.gen_first_ms,
+    answered.gen_last_ms,
+    minimums,
+  );
+  return rate == null ? SHORT_WINDOW_NOTE : formatRate(rate);
+}
+
+/** The request's throughput: its tokens over its whole duration. */
+function requestThroughputText(row) {
+  const answered = answeringAttempt(row);
+  if (answered && estimatedTokens(answered)) return ESTIMATE_TOKEN_NOTE;
+  return formatRate(throughputRate(row.tokens_out, row.duration_ms));
+}
+
+/** One group's generation rate, or the reason the aggregate has none. */
+function formatGroupGenerationRate(row) {
+  if (row.gen_rate != null) return formatRate(row.gen_rate);
+  const attempts = Number(row.attempts || 0);
+  const clock = Number(row.gen_clock_measured || 0);
+  if (!attempts || !clock) return NOT_MEASURED;
+  if (clock < attempts) {
+    return (
+      `not measured — ${clock} of ${attempts} attempts carry a window`
+    );
+  }
+  return SHORT_WINDOW_NOTE;
+}
+
+/** The sentence under a rate cell: what it divides by, and by what rule. */
+function generationRateTitle(minimums) {
+  const minWindow = minimums && minimums.windowMs;
+  const minTokens = minimums && minimums.tokens;
+  return (
+    "The host's own token count over the window it produced them in: first" +
+    " to last delta of any kind, reasoning included, both observed before" +
+    ` MCC's holdback. Refused below ${minWindow} ms of window or` +
+    ` ${minTokens} tokens, and where any part of the rows has no window.`
+  );
+}
+
+const THROUGHPUT_TITLE =
+  "The same tokens over the whole request -- routing, thinking and the" +
+  " client's wait included. Every stored row can support this one, including" +
+  " rows written before the generation window existed.";
 
 function renderRequestModelLatency(latency) {
   const container = byId("reqModelLatency");
@@ -28295,6 +28455,7 @@ function renderRequestModelLatency(latency) {
     return;
   }
   const rows = latency.rows || [];
+  const minimums = generationMinimums(latency);
   // Each model's own total, so an outcome row can say what share of that
   // model's attempts it was -- which is the failure share, read off the
   // failed row, without a column that means nothing on the other rows.
@@ -28311,12 +28472,13 @@ function renderRequestModelLatency(latency) {
         "Outcome",
         "Attempts",
         "Share",
-        "TTFT measured",
-        "p50 TTFT",
+        "First byte measured",
+        "p50 first byte",
         "Avg first reasoning",
-        "Avg generating",
+        "Avg after first byte",
         "Tokens out",
-        "tok/s",
+        "Generation rate",
+        "Throughput",
       ],
       rows.map((row) => {
         const attempts = Number(row.attempts || 0);
@@ -28337,7 +28499,11 @@ function renderRequestModelLatency(latency) {
           row.tokens_out == null
             ? NOT_MEASURED
             : formatAnalyticsNumber(Number(row.tokens_out)),
-          formatGroupRate(row),
+          rateCell(
+            formatGroupGenerationRate(row),
+            generationRateTitle(minimums),
+          ),
+          rateCell(formatGroupThroughput(row), THROUGHPUT_TITLE),
         ];
       }),
       "No attempts in this range.",
@@ -28345,25 +28511,52 @@ function renderRequestModelLatency(latency) {
   );
 }
 
+/** One rate cell: the number, and the basis of it on hover. */
+function rateCell(text, title) {
+  const cell = document.createElement("span");
+  cell.className = "req-rate-cell";
+  cell.textContent = text;
+  cell.title = title;
+  return cell;
+}
+
+/** One group's throughput: the same tokens over the group's whole wall clock. */
+function formatGroupThroughput(row) {
+  return formatRate(row.throughput);
+}
+
 /* Why the panel says what it says, in the panel. "Nothing measured" and
    "nothing happened" are different answers and an empty table says neither --
    and on any log that predates 7.4.0 the first one is the true one for every
-   row in it, because there is no backfill. */
+   row in it, because there is no backfill.
+
+   Since 7.122.2 the note also names the two rules the rates are decided by,
+   with the numbers the server sent rather than a copy of its own: the window
+   has to exist on every attempt in the group, and it has to be long enough to
+   divide by. */
 function latencyPanelNote(latency) {
   const attempts = Number(latency.attempts || 0);
   const measured = Number(latency.ttft_measured || 0);
+  const minimums = generationMinimums(latency);
   const scope =
     "Every route attempt in the window, including the ones whose request row" +
     " names a different model. Not narrowed by the filters above.";
+  const rates = hasGenerationMinimums(minimums)
+    ? ` The generation rate divides the group's tokens by its own measured` +
+      ` windows, and is refused below ${minimums.windowMs} ms of window or` +
+      ` ${minimums.tokens} tokens, or where part of the group has no window.` +
+      " Throughput divides the same tokens by the whole request, which every" +
+      " stored row can support."
+    : "";
   if (!attempts) {
     return `No route attempts in this range. ${scope}`;
   }
   if (!measured) {
     return (
       `Nothing measured yet: none of the ${formatAnalyticsNumber(attempts)}` +
-      " attempts in this range carries a first-token time. Attempts recorded" +
-      " before 7.4.0 never had one and cannot be given one; the next requests" +
-      ` this server handles will fill this in. ${scope}`
+      " attempts in this range carries a time to its first visible byte." +
+      " Attempts recorded before 7.4.0 never had one and cannot be given one;" +
+      ` the next requests this server handles will fill this in. ${scope}`
     );
   }
   const source =
@@ -28374,7 +28567,8 @@ function latencyPanelNote(latency) {
   const asOf = latencyAsOfNote(latency);
   return (
     `${formatAnalyticsNumber(measured)} of ${formatAnalyticsNumber(attempts)}` +
-    ` attempts carry a first-token time.${source} ${scope}${asOf}`
+    ` attempts carry a time to their first visible byte.${source}` +
+    `${rates} ${scope}${asOf}`
   );
 }
 
@@ -29174,7 +29368,7 @@ function buildTtftCell(row) {
   const shown = measured ? row.ttft_winner_ms : row.ttft_ms;
   if (shown == null) {
     td.textContent = NOT_MEASURED;
-    td.title = "No first-token time was recorded for this request.";
+    td.title = "No time to a first visible byte was recorded for this request.";
     return td;
   }
   td.appendChild(document.createTextNode(`${Math.round(shown)} ms`));
@@ -29188,7 +29382,8 @@ function buildTtftCell(row) {
   const client = row.ttft_ms == null ? null : `${Math.round(row.ttft_ms)} ms`;
   td.title = measured
     ? [
-        `The model that answered took ${Math.round(shown)} ms to its first token.`,
+        `The model that answered took ${Math.round(shown)} ms to its first` +
+          " visible byte.",
         client === null
           ? ""
           : `The client waited ${client}${
@@ -29692,16 +29887,26 @@ async function openRequestDetail(requestId) {
     // the host reported it, so every other row reads as it always did.
     ["Cache writes by lifetime", formatCacheWriteSplit(row)],
     ["Cache hit", formatRowCacheHit(row)],
-    ["Tokens out", formatOptionalNumber(row.tokens_out)],
+    ["Tokens out", formatTokensOut(row)],
     ["+ adapter (in/out)", formatAdapterTokens(row)],
     ["Estimated input", formatEstimatedInput(row)],
-    ["Output rate", formatOutputRate(row)],
+    // Two numbers, because one could not say both what the model did and what
+    // the request cost (7.122.2). The generation rate divides the host's
+    // tokens by the window it produced them in; the throughput divides the
+    // same tokens by the whole request. The retired "Output rate" divided by
+    // `duration - ttft`, which on a held-back stream is the end of the answer
+    // -- 429,152 tok/s for a 68 s request on the log this was found on.
+    ["Generation rate", requestGenerationRateText(row)],
+    ["Throughput (whole request)", requestThroughputText(row)],
     // Three numbers where there was one, because one could not tell them
     // apart: what the answering model took, what the client waited, and the
     // difference -- which is the chain's own cost and belongs to neither
     // model. The third row is omitted entirely when there is nothing to say.
-    ["TTFT (winner)", formatMilliseconds(row.ttft_winner_ms)],
-    ["TTFT (incl. fallbacks)", formatMilliseconds(row.ttft_ms)],
+    // Both are times to the first *visible byte*, which is what they measure:
+    // MCC's holdback can push the first byte to the end of a short answer, so
+    // calling it a first token was false on 76% of one real log (7.122.2).
+    ["First visible byte (winner)", formatMilliseconds(row.ttft_winner_ms)],
+    ["First visible byte (incl. fallbacks)", formatMilliseconds(row.ttft_ms)],
     ["Lost to fallbacks", formatFallbackLoss(row)],
     ["Duration", row.duration_ms != null ? `${Math.round(row.duration_ms)} ms` : "—"],
     // Empty-delta keepalives (STREAM_KEEPALIVE_MODE=frames, 7.47.0). Absent
@@ -30213,73 +30418,18 @@ function formatFallbackLoss(row) {
   return `${Math.round(lost)} ms (charged to models that did not answer)`;
 }
 
-/** The first-token time of the model that actually answered, or null.
+/** Output tokens, with the estimate marker when nobody measured them.
  *
- * Falls back to the request's own figure for rows written before per-attempt
- * measurement: on those the two are the same claim, because there is nothing
- * finer to say.
+ * The Chat door substitutes a `cl100k` estimate when a host reports no
+ * `completion_tokens`. The count is still the best number there is, but it is
+ * not a measurement -- and a rate divided by it would be an estimate wearing
+ * a measured clock's clothes, so the marker travels with the number (7.122.2).
  */
-function winnerTtftMs(row) {
-  if (row.ttft_winner_ms != null) return Number(row.ttft_winner_ms);
-  return row.ttft_ms == null ? null : Number(row.ttft_ms);
-}
-
-/** Output tokens per second, excluding the wait before the first one.
- *
- * Measured on the *answering attempt* wherever the log has one, because both
- * halves of the sum have to come from the same model. The old form subtracted
- * the request's TTFT from the request's duration, and on a fallback request
- * that is one model's clock minus another's: the predecessors' stall was
- * taken out of the denominator and the rate came out too high, the worse the
- * fallback the better it looked. Taking the winner's TTFT out of the
- * *request's* duration is the same mistake the other way round -- the
- * predecessors' 4.5 s would stay in the denominator and a model producing
- * 9,900 tok/s would be reported at 1.1.
- *
- * The request-level arithmetic is still the fallback, for rows written before
- * per-attempt measurement, and it uses the winner's TTFT where there is one.
- *
- * Refuses to compute rather than guessing: an unmeasured first token is not a
- * first token at zero, so a row with no TTFT gets a dash where it used to get
- * ``tokens / duration`` presented as a generating rate.
- */
-function formatOutputRate(row) {
+function formatTokensOut(row) {
+  if (row.tokens_out == null) return NOT_MEASURED;
+  const count = Number(row.tokens_out).toLocaleString();
   const answered = answeringAttempt(row);
-  if (answered && answered.outcome === "succeeded" && answered.ttft_ms != null) {
-    // The winner's own token count is filled from 7.4.0 on; before that the
-    // request's is the only one there is, and on the attempt that answered
-    // the client they are the same tokens.
-    const rate = formatAttemptRate({
-      duration_ms: answered.duration_ms,
-      ttft_ms: answered.ttft_ms,
-      tokens_out: answered.tokens_out ?? row.tokens_out,
-    });
-    if (rate !== NOT_MEASURED) return rate;
-  }
-  const tokens = Number(row.tokens_out || 0);
-  const duration = Number(row.duration_ms || 0);
-  const ttft = winnerTtftMs(row);
-  if (!tokens || !duration || ttft == null) return NOT_MEASURED;
-  const generating = duration - ttft;
-  if (generating <= 0) return NOT_MEASURED;
-  return `${(tokens / (generating / 1000)).toFixed(1)} tok/s`;
-}
-
-/** The same arithmetic for one attempt, from the attempt's own numbers.
- *
- * The winning attempt is the only one that carries a token count -- a failed
- * attempt produced no answer to count -- so every other row is a dash here
- * rather than a rate computed from the request's tokens, which belong to
- * whichever model answered.
- */
-function formatAttemptRate(attempt) {
-  const tokens = Number(attempt.tokens_out || 0);
-  const duration = Number(attempt.duration_ms || 0);
-  const ttft = attempt.ttft_ms == null ? null : Number(attempt.ttft_ms);
-  if (!tokens || !duration || ttft == null) return NOT_MEASURED;
-  const generating = duration - ttft;
-  if (generating <= 0) return NOT_MEASURED;
-  return `${(tokens / (generating / 1000)).toFixed(1)} tok/s`;
+  return estimatedTokens(answered) ? `~${count} est.` : count;
 }
 
 function formatTurnSummary(row) {
@@ -30831,18 +30981,18 @@ function attemptEndedBy(attempt) {
  * Dropping the row for skipped attempts would reintroduce "the fallback was
  * never tried" as something the panel does not mention.
  */
-function appendAttemptMetrics(item, attempt) {
+function appendAttemptMetrics(item, attempt, minimums) {
   const row = document.createElement("div");
   row.className = "req-chain-metrics";
   const ttft = attempt.ttft_ms == null ? null : Number(attempt.ttft_ms);
   const duration = attempt.duration_ms == null ? null : Number(attempt.duration_ms);
   // NULL whenever either input is, and refused when the subtraction would be
-  // negative: a generating time of "-40 ms" is a measurement error, not a
-  // measurement.
-  const generating =
+  // negative: a time after the first byte of "-40 ms" is a measurement error,
+  // not a measurement.
+  const afterFirstByte =
     ttft == null || duration == null || duration - ttft < 0 ? null : duration - ttft;
   const cells = [
-    ["TTFT", ttft == null ? NOT_MEASURED : formatChainDuration(ttft)],
+    ["first byte", ttft == null ? NOT_MEASURED : formatChainDuration(ttft)],
     [
       "first reasoning",
       attempt.first_reasoning_ms == null
@@ -30850,8 +31000,8 @@ function appendAttemptMetrics(item, attempt) {
         : formatChainDuration(attempt.first_reasoning_ms),
     ],
     [
-      "generating",
-      generating == null ? NOT_MEASURED : formatChainDuration(generating),
+      "after first byte",
+      afterFirstByte == null ? NOT_MEASURED : formatChainDuration(afterFirstByte),
     ],
     [
       "tokens out",
@@ -30859,7 +31009,12 @@ function appendAttemptMetrics(item, attempt) {
         ? NOT_MEASURED
         : Number(attempt.tokens_out).toLocaleString(),
     ],
-    ["rate", formatAttemptRate(attempt)],
+    // The two numbers this row used to print as one "rate" (7.122.2): what
+    // the model produced per second of its own generation, and what this
+    // attempt delivered per second of wall clock. Both from the attempt's own
+    // columns; neither ever divides by `duration - ttft`.
+    ["generation", attemptGenerationRateText(attempt, minimums)],
+    ["throughput", attemptThroughputText(attempt)],
     ["ended", attemptEndedBy(attempt)],
   ];
   cells.forEach(([label, value]) => {
@@ -30875,12 +31030,19 @@ function appendAttemptMetrics(item, attempt) {
     if (label === "ended" && gatewayTraceIdOf(attempt)) {
       cell.title = `${value}. ${GATEWAY_NO_REASON_TITLE}`;
     }
+    if (label === "generation") {
+      cell.title = generationRateTitle(minimums);
+    }
+    if (label === "throughput") {
+      cell.title = THROUGHPUT_TITLE;
+    }
     row.appendChild(cell);
   });
   row.title =
     "Measured on this attempt alone. A dash is a measurement that was never" +
-    " taken: attempts recorded before 7.4.0 carry no first-token time, and a" +
-    " model that was never asked has no latency at all.";
+    " taken: attempts recorded before 7.4.0 carry no time to their first" +
+    " visible byte, a model that was never asked has no latency at all, and" +
+    " the generation window itself is only recorded from 7.122.2 on.";
   item.appendChild(row);
 }
 
@@ -31060,7 +31222,7 @@ function renderRequestChain(row) {
     }
     head.appendChild(credential);
     item.appendChild(head);
-    appendAttemptMetrics(item, attempt);
+    appendAttemptMetrics(item, attempt, generationMinimums(row));
 
     // The reason, which is the entire point of the panel.
     const reason = attempt.error_message || "";
@@ -36922,16 +37084,20 @@ function appendLatencyChip(row, modelRef) {
       : `, p95 ${formatChainDuration(headline.p95_ttft_ms)}`;
   const chip = buildModelsChip(
     "latency",
-    `last ${days}d: p50 TTFT ${formatChainDuration(headline.p50_ttft_ms)}${p95}` +
-      ` over ${entry.ttft_measured} of ${entry.attempts} attempts`,
+    `last ${days}d: p50 first byte ${formatChainDuration(headline.p50_ttft_ms)}` +
+      `${p95} over ${entry.ttft_measured} of ${entry.attempts} attempts`,
   );
   chip.title = [
-    `Median time to this model's first token when it ${
+    // "First visible byte", not "first token" (7.122.2): the number is the
+    // first byte MCC's stream released, and the commit holdback can release it
+    // at the end of a short answer. On one real log it sat in the last 10% of
+    // the request on 76% of a week's rows.
+    `Median time to this model's first visible byte when it ${
       CHAIN_OUTCOME_LABELS[headline.outcome] || headline.outcome
     }.`,
     "The denominator counts every attempt this model served in the window," +
       " failed ones included; only attempts recorded from 7.4.0 on carry a" +
-      " first-token time.",
+      " first-byte time.",
     entry.outcomes
       .map(
         (item) =>

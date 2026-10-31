@@ -612,6 +612,12 @@ class AnthropicMessagesProvider(BaseProvider):
                             # while LOG_RAW_SSE_EVENTS is on, and nothing is
                             # written while it is off.
                             logger.debug("SSE_EVENT: {} {}", tag, event.strip())
+                        # Where this model actually generated: the first and
+                        # last frame carrying any part of its output, reasoned
+                        # or written, taken before the holdback can delay
+                        # either. The rate divides this host's own token count
+                        # -- reasoning included -- by exactly this window.
+                        recovery.generation.observe(event)
                         for held_event in recovery.push(event):
                             yield (
                                 held_event
@@ -623,6 +629,11 @@ class AnthropicMessagesProvider(BaseProvider):
                             held_event
                             if tool_names is None
                             else decode_anthropic_sse_event(held_event, tool_names)
+                        )
+                    if shape is not None:
+                        shape.note_generation(
+                            recovery.generation.first_at,
+                            recovery.generation.last_at,
                         )
                     record_response_shape(shape)
                     return

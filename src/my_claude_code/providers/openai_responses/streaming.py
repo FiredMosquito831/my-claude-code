@@ -21,6 +21,7 @@ from my_claude_code.core.anthropic.thinking import (
     ContentType,
     ThinkTagParser,
 )
+from my_claude_code.core.generation_rate import GenerationClock
 from my_claude_code.core.reported_cost import (
     record_reported_reasoning,
     reported_reasoning_tokens,
@@ -495,6 +496,27 @@ _RESPONSES_SHAPE_FIELDS = {
     "response.reasoning_text.delta": "reasoning",
     "response.function_call_arguments.delta": "tool_calls",
 }
+
+
+def note_responses_generation_delta(clock: GenerationClock, event: Any) -> None:
+    """Stamp ``clock`` when a raw Responses event carries model output.
+
+    The Responses API names every fragment of output ``*.delta`` -- answer
+    text, reasoning summary text, reasoning text, function-call arguments and
+    refusals -- and names its lifecycle frames anything else. That is the
+    protocol's own spelling of "this frame is a token-bearing delta", so the
+    window it measures counts exactly what the token total counts, including
+    reasoning the client's policy never sees.
+
+    Taken on the raw event rather than on the Anthropic SSE the converter
+    emits, because the converter assembles: answer text is buffered while
+    think tags are parsed, and a delta released at the end of the stream was
+    generated long before MCC released it (7.122.2).
+    """
+    if not isinstance(event, Mapping):
+        return
+    if str(event.get("type", "")).endswith(".delta"):
+        clock.stamp()
 
 
 def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:

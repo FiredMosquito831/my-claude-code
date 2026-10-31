@@ -41,6 +41,7 @@ from my_claude_code.core.cancelled_reasons import (
     sub_label_case_sql,
 )
 from my_claude_code.core.client_fingerprint import harness_from_headers
+from my_claude_code.core.generation_rate import GEN_MIN_TOKENS, GEN_MIN_WINDOW_MS
 from my_claude_code.core.media_store import (
     MediaOutputRecord,
     delete_media_files,
@@ -652,6 +653,11 @@ _LIST_METADATA_COLUMNS = (
     # can show what a turn contained without loading the transcript.
     "thinking_chars",
     "tool_call_count",
+    # How many of the output tokens the host said were reasoning. Projected so
+    # a list row's ``thought only`` label can tell a turn that reasoned with
+    # its text withheld from one that produced nothing (7.122.2) -- without
+    # it, that label would be refused for every row in a list view.
+    "reasoning_tokens",
     # How many images or documents the request carried. A count, not pixels,
     # so a list row can say "this turn had a screenshot in it" for free.
     "input_image_count",
@@ -2314,6 +2320,24 @@ _ATTEMPT_ADDED_COLUMNS = (
     # chain and every row that predates the column. The literal ``"direct"`` is
     # a chain rung the operator chose, and the two are different facts.
     ("proxy_label", "ALTER TABLE request_attempts ADD COLUMN proxy_label TEXT"),
+    # Added in 7.122.2. The first and last delta of any kind this attempt's
+    # upstream stream carried -- reasoning, text and tool arguments alike --
+    # in milliseconds from that attempt's own stream start. Their difference
+    # is the only window a generation rate may be divided by: every displayed
+    # rate used to divide the host's token count (reasoning included) by
+    # ``duration_ms - ttft_ms``, and ``ttft_ms`` is the first byte MCC chose
+    # to release -- on a held-back stream that is the end of the answer, which
+    # printed 429,152 tok/s for a 68 s request.
+    #
+    # NULL is "not measured", which is every row written before this release
+    # (nothing in the log recorded where a stream's deltas were, so there is
+    # nothing to backfill) and every reply that carried no delta at all -- a
+    # non-streamed one has nothing to time. The columns hold raw stamps only;
+    # whether the window is long enough to divide by is a display rule, and
+    # the aggregate still uses these two columns directly
+    # (``latency_by_model``).
+    ("gen_first_ms", "ALTER TABLE request_attempts ADD COLUMN gen_first_ms REAL"),
+    ("gen_last_ms", "ALTER TABLE request_attempts ADD COLUMN gen_last_ms REAL"),
 )
 
 # Written in this order by ``_record_to_row``. The INSERT's column list, its
@@ -2466,6 +2490,8 @@ _ATTEMPT_INSERT_COLUMNS = (
     "ttft_ms",
     "first_reasoning_ms",
     "proxy_label",
+    "gen_first_ms",
+    "gen_last_ms",
 )
 
 #: Key under which the attempt export hands the parsed ``request_attempts.params``
@@ -2915,6 +2941,16 @@ class RouteAttempt:
     # every attempt on a provider with no proxy chain -- and is deliberately
     # distinct from "direct".
     proxy_label: str | None = None
+    # The first and last delta of any kind this attempt's upstream stream
+    # carried, in milliseconds from that attempt's own stream start. Their
+    # difference is the only window a generation rate may be divided by, and
+    # both are taken before MCC's holdback so a release, a recovery flush or a
+    # buffered tool call cannot move either. None on every attempt whose
+    # provider took no clock -- including every row written before 7.122.2,
+    # which is not backfillable -- and on any reply that carried no delta.
+    # Never zero on an unmeasured row: zero is a measured zero-length window.
+    gen_first_ms: float | None = None
+    gen_last_ms: float | None = None
 
 
 # ---------------------------------------------------- recovery observability --
@@ -7673,6 +7709,12 @@ class RequestLogStore:
                 attempt.ttft_ms,
                 attempt.first_reasoning_ms,
                 attempt.proxy_label,
+                # The window this attempt's tokens were produced in. Both or
+                # neither: the two are one measurement, and half of it cannot
+                # be divided. NULL on every attempt whose provider took no
+                # clock and on every row written before 7.122.2.
+                attempt.gen_first_ms,
+                attempt.gen_last_ms,
             )
             for record in batch
             for attempt in record.attempts
@@ -7932,7 +7974,7 @@ class RequestLogStore:
                 " error_message, duration_ms, params, wire_body, reasoning_emitted,"
                 " key_index, key_label, ladder_tries, tokens_in, tokens_out,"
                 " cost_usd, cost_source, ts_epoch, ttft_ms, first_reasoning_ms,"
-                " proxy_label"
+                " proxy_label, gen_first_ms, gen_last_ms"
                 " FROM request_attempts"
                 " WHERE request_id = ? ORDER BY attempt",
                 (request_id,),
@@ -7990,6 +8032,12 @@ class RequestLogStore:
                 # signal, or a row written before 7.4.0. Drawn as a dash.
                 "ttft_ms": row["ttft_ms"],
                 "first_reasoning_ms": row["first_reasoning_ms"],
+                # The window this attempt's tokens were produced in, on this
+                # attempt's own stream clock. NULL is "not measured" -- no
+                # delta was seen, or the row predates 7.122.2 -- and is drawn
+                # as a dash, never as a zero-length window.
+                "gen_first_ms": row["gen_first_ms"],
+                "gen_last_ms": row["gen_last_ms"],
             }
             for row in _merge_skip_rows(rows, packed)
         ]
@@ -9457,6 +9505,12 @@ class RequestLogStore:
         data["media"] = media
         data["route_attempts"] = attempts
         data["tool_catalogue"] = tool_catalogue
+        # The two minimums the page decides every generation rate by, handed
+        # over with the row rather than repeated in the dashboard. One
+        # declaration in ``core.generation_rate``, one in the SQL above, and
+        # none in the JS (7.122.2).
+        data["generation_min_window_ms"] = GEN_MIN_WINDOW_MS
+        data["generation_min_tokens"] = GEN_MIN_TOKENS
         return data
 
     @staticmethod
@@ -9825,7 +9879,7 @@ class RequestLogStore:
                     # that raised the question. The last three are the same
                     # for its success sub-label.
                     " ttft_ms, duration_ms, output_chars, thinking_chars,"
-                    " tool_call_count, tokens_out, optimization"
+                    " tool_call_count, tokens_out, optimization, reasoning_tokens"
                     f" FROM requests{page_where}"
                     " ORDER BY ts_epoch DESC, id DESC LIMIT ?"
                 )
@@ -9857,6 +9911,7 @@ class RequestLogStore:
                         output_chars=parent["output_chars"],
                         tool_call_count=parent["tool_call_count"],
                         thinking_chars=parent["thinking_chars"],
+                        reasoning_tokens=parent["reasoning_tokens"],
                         tokens_out=parent["tokens_out"],
                         optimization=parent["optimization"],
                     )
@@ -9890,7 +9945,7 @@ class RequestLogStore:
                     " error_kind, error_message, duration_ms, params,"
                     " reasoning_emitted, key_index, key_label, ladder_tries,"
                     " tokens_in, tokens_out, cost_usd, cost_source, ttft_ms,"
-                    " first_reasoning_ms, proxy_label"
+                    " first_reasoning_ms, proxy_label, gen_first_ms, gen_last_ms"
                     " FROM request_attempts"
                     f" WHERE request_id IN ({markers})",
                     request_ids,
@@ -9926,6 +9981,11 @@ class RequestLogStore:
                 "ttft_ms": row["ttft_ms"],
                 "first_reasoning_ms": row["first_reasoning_ms"],
                 "proxy_label": row["proxy_label"],
+                # The generation window, exported raw so the rate the export
+                # derives can be checked rather than trusted. NULL on every
+                # row written before 7.122.2 and on replies with no delta.
+                "gen_first_ms": row["gen_first_ms"],
+                "gen_last_ms": row["gen_last_ms"],
                 ATTEMPT_PARAMS_KEY: _loads_or_none(row["params"]),
             }
             for row in rows
@@ -11705,6 +11765,18 @@ class RequestLogStore:
         written before 7.4.0 is unmeasured, and is not backfillable: nothing in
         the log records when each attempt's own stream began.
 
+        Two rates come back beside the tokens, and they answer two questions
+        (7.122.2). ``gen_rate`` divides the group's tokens by the group's own
+        measured generation windows -- ``gen_first_ms`` .. ``gen_last_ms``,
+        the first and last token-bearing delta of the upstream stream -- and is
+        refused unless every attempt in the group carries one and it meets the
+        minimums. ``throughput`` divides the same tokens by ``duration_ms``:
+        the whole request, routing and thinking and the client's wait
+        included, which is the only rate a row written before 7.122.2 can
+        support. Both are computed from stored columns in SQL; neither ever
+        subtracts a first-byte time from a duration, which is the arithmetic
+        that printed 429,152 tok/s for a 68 s answer.
+
         Percentiles are computed in Python over the ``ttft_ms`` column for the
         window. SQLite has no percentile function here, and the existing
         duration percentiles use a bucket histogram that this column has no
@@ -11750,6 +11822,37 @@ class RequestLogStore:
                     else (" AND a.ts_epoch >= ?" if dated else " AND r.ts_epoch >= ?")
                 )
                 args: list[Any] = [] if since is None else [since]
+                # The rate's two minimums, applied per attempt here rather
+                # than in the dashboard, so a group rate cannot be assembled
+                # from attempts the display would have refused one by one.
+                # They come from the one module that declares them.
+                has_clock = (
+                    "a.gen_first_ms IS NOT NULL AND a.gen_last_ms IS NOT NULL"
+                    " AND a.tokens_out IS NOT NULL"
+                )
+                rate_window = (
+                    f"{has_clock}"
+                    f" AND (a.gen_last_ms - a.gen_first_ms) >= {GEN_MIN_WINDOW_MS}"
+                    f" AND a.tokens_out >= {GEN_MIN_TOKENS}"
+                )
+                # Throughput's two halves, paired: a group's tokens over a
+                # group's wall clock only means something when the same rows
+                # carried both. A failed attempt has a duration and no token
+                # count, and including its clock in the divisor would report a
+                # rate lower than any model produced.
+                paired = "a.tokens_out IS NOT NULL AND a.duration_ms IS NOT NULL"
+                gen_tokens = (
+                    f"SUM(CASE WHEN {rate_window} THEN a.tokens_out ELSE 0 END)"
+                )
+                gen_ms = (
+                    "SUM(CASE WHEN"
+                    f" {rate_window} THEN a.gen_last_ms - a.gen_first_ms ELSE 0 END)"
+                )
+                gen_rows = f"SUM(CASE WHEN {rate_window} THEN 1 ELSE 0 END)"
+                clock_rows = f"SUM(CASE WHEN {has_clock} THEN 1 ELSE 0 END)"
+                paired_tokens = f"SUM(CASE WHEN {paired} THEN a.tokens_out ELSE 0 END)"
+                paired_ms = f"SUM(CASE WHEN {paired} THEN a.duration_ms ELSE 0 END)"
+                paired_rows = f"SUM(CASE WHEN {paired} THEN 1 ELSE 0 END)"
                 rows = conn.execute(
                     "SELECT a.model_ref AS model_ref,"
                     f" {_LATENCY_OUTCOME_GROUP_SQL} AS outcome,"
@@ -11759,7 +11862,32 @@ class RequestLogStore:
                     " AVG(a.ttft_ms) AS avg_ttft_ms,"
                     " AVG(a.first_reasoning_ms) AS avg_first_reasoning_ms,"
                     " AVG(a.duration_ms - a.ttft_ms) AS avg_generating_ms,"
-                    " SUM(a.tokens_out) AS tokens_out"
+                    " SUM(a.tokens_out) AS tokens_out,"
+                    # The generation rate: this group's tokens over this
+                    # group's measured generation windows, refused unless every
+                    # attempt in the group was measured. Summing the windows
+                    # rather than averaging them is what keeps the numerator
+                    # and the denominator on the same rows.
+                    f" {gen_tokens} AS gen_tokens,"
+                    f" {gen_ms} AS gen_ms,"
+                    f" {gen_rows} AS gen_measured,"
+                    # How many attempts carry a clock at all, before the
+                    # minimums: the difference between this and ``gen_measured``
+                    # is what lets the panel say "shorter than the timing
+                    # window" rather than "never measured". Two different
+                    # facts, and only one of them is about the answer's length.
+                    f" {clock_rows} AS gen_clock_measured,"
+                    # Throughput: the whole request -- routing, thinking and
+                    # the client's wait included -- which every stored row can
+                    # support, unlike a generation window.
+                    f" {paired_tokens} AS paired_tokens,"
+                    f" {paired_ms} AS paired_ms,"
+                    f" {paired_rows} AS paired_measured,"
+                    f" CASE WHEN {gen_rows} = COUNT(*) AND {gen_ms} > 0"
+                    f" THEN {gen_tokens} * 1000.0 / {gen_ms} END AS gen_rate,"
+                    f" CASE WHEN {paired_rows} = COUNT(*)"
+                    f" AND {paired_ms} > 0 THEN {paired_tokens} * 1000.0"
+                    f" / {paired_ms} END AS throughput"
                     " FROM request_attempts a"
                     f"{join}"
                     f" WHERE a.model_ref IS NOT NULL AND {_LATENCY_OUTCOMES_SQL}"
@@ -11831,6 +11959,20 @@ class RequestLogStore:
                     "tokens_out": (
                         None if row["tokens_out"] is None else int(row["tokens_out"])
                     ),
+                    # The headline rate, from the two stored window columns.
+                    # NULL when the group was not measured end to end, when its
+                    # window was shorter than the minimum, or when its token
+                    # count was below the minimum -- a number the dashboard
+                    # must never print for those rows.
+                    "gen_rate": _rounded(row["gen_rate"]),
+                    "gen_measured": int(row["gen_measured"] or 0),
+                    "gen_clock_measured": int(row["gen_clock_measured"] or 0),
+                    # The whole-request rate, always available from columns
+                    # every stored row carries. Beside the generation rate, not
+                    # instead of it: it is the only honest number a row written
+                    # before 7.122.2 has.
+                    "throughput": _rounded(row["throughput"]),
+                    "throughput_measured": int(row["paired_measured"] or 0),
                     "p50_ttft_ms": _rounded(_percentile(measured, 0.50)),
                     "p95_ttft_ms": _rounded(_percentile(measured, 0.95)),
                     "p50_source": "sampled" if truncated else "exact",

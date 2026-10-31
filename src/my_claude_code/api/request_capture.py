@@ -116,6 +116,30 @@ def _is_describe(attempt: RouteAttempt) -> bool:
     return isinstance(params, dict) and params.get("kind") == "describe"
 
 
+def _generation_window(
+    shape: Mapping[str, Any] | None,
+) -> tuple[float | None, float | None]:
+    """This attempt's generation window, both halves or neither.
+
+    The two stamps are one measurement: half of a window cannot be divided
+    into, and a window that ends before it began is a measurement error rather
+    than a very fast answer. ``None`` on every attempt whose reply carried no
+    token-bearing delta -- including every reply recorded before the window
+    existed -- which the display reads as "not measured".
+    """
+    if not isinstance(shape, Mapping):
+        return None, None
+    first = shape.get("gen_first_ms")
+    last = shape.get("gen_last_ms")
+    for value in (first, last):
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None, None
+    assert isinstance(first, int | float) and isinstance(last, int | float)
+    if last < first:
+        return None, None
+    return float(first), float(last)
+
+
 def _estimated_image_tokens(image: ImageInput, family: str) -> int:
     """What the estimator expects this one picture to cost on this host.
 
@@ -579,6 +603,7 @@ class RequestCapture:
         )
         ladder = self._ladder_payload(attempt)
         key_index, key_label = self._attempt_credential(ladder)
+        gen_first_ms, gen_last_ms = _generation_window(shape)
         self._attempts.append(
             RouteAttempt(
                 attempt=attempt.attempt,
@@ -623,6 +648,15 @@ class RequestCapture:
                 # measured", which is every attempt on a provider with no
                 # chain.
                 proxy_label=None if ladder is None else ladder_proxy_label(ladder),
+                # The window this attempt's tokens were produced in, lifted out
+                # of the reply's shape for the same reason ``proxy_label`` is
+                # lifted out of the ladder: the group rate divides by it in
+                # SQL, and a JSON scan per row is not a rate anyone can ask
+                # for. None is "not measured" -- no token-bearing delta, or a
+                # row written before 7.122.2 -- and is never a zero-length
+                # window.
+                gen_first_ms=gen_first_ms,
+                gen_last_ms=gen_last_ms,
             )
         )
 

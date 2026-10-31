@@ -264,7 +264,12 @@ def latency_by_model_cache_key(store: RequestLogStore, *, since: float | None) -
     """
 
     window = "" if since is None else str(int(since))
-    return "|".join([store.data_mark(), f"since={window}", "shape=v2-interrupted"])
+    # v3-generation-rate (7.122.2): every row gained ``gen_rate``,
+    # ``gen_measured``, ``gen_clock_measured``, ``throughput`` and
+    # ``throughput_measured``, and the retired ``tok/s`` column went. A stored
+    # v2 document would render a panel with no rates at all until new traffic
+    # arrived, so the token moves with the shape.
+    return "|".join([store.data_mark(), f"since={window}", "shape=v3-generation-rate"])
 
 
 @dataclass(frozen=True)

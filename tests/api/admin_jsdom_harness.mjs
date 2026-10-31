@@ -2915,6 +2915,11 @@ const ROUTES = {
     models: 2,
     attempts: 4431,
     ttft_measured: 14,
+    // The two minimums every rate on the page is decided by, exactly as the
+    // server declares them (core/generation_rate.py). The dashboard keeps no
+    // copy of its own, so a payload without these suppresses every rate.
+    generation_min_window_ms: 500,
+    generation_min_tokens: 8,
     p50_source: "sampled",
     stale: true,
     computed_at: 1788500000,
@@ -2928,6 +2933,11 @@ const ROUTES = {
         avg_first_reasoning_ms: null,
         avg_generating_ms: null,
         tokens_out: null,
+        gen_rate: null,
+        gen_measured: 0,
+        gen_clock_measured: 0,
+        throughput: null,
+        throughput_measured: 0,
         p50_ttft_ms: null,
         p95_ttft_ms: null,
         p50_source: "sampled",
@@ -2941,6 +2951,14 @@ const ROUTES = {
         avg_first_reasoning_ms: 520.0,
         avg_generating_ms: 1600.0,
         tokens_out: 4080,
+        // 4,080 tokens over 16.0 s of measured generation: every attempt
+        // carries a window, so the group rate is a rate.
+        gen_rate: 255.0,
+        gen_measured: 12,
+        gen_clock_measured: 12,
+        // The same tokens over the whole 24.0 s those attempts took.
+        throughput: 170.0,
+        throughput_measured: 12,
         p50_ttft_ms: 312.0,
         p95_ttft_ms: 1400.0,
         p50_source: "sampled",
@@ -2954,8 +2972,54 @@ const ROUTES = {
         avg_first_reasoning_ms: null,
         avg_generating_ms: 41000.0,
         tokens_out: null,
+        gen_rate: null,
+        gen_measured: 0,
+        gen_clock_measured: 0,
+        throughput: null,
+        throughput_measured: 0,
         p50_ttft_ms: 9000.0,
         p95_ttft_ms: 12000.0,
+        p50_source: "sampled",
+      },
+      {
+        // Every attempt has a clock and every one is shorter than the
+        // minimum: "not measured — shorter than the timing window", not a
+        // number and not a dash.
+        model_ref: "gamma/model-03",
+        outcome: "succeeded",
+        attempts: 5,
+        ttft_measured: 5,
+        avg_ttft_ms: 210.0,
+        avg_first_reasoning_ms: null,
+        avg_generating_ms: 40.0,
+        tokens_out: 120,
+        gen_rate: null,
+        gen_measured: 0,
+        gen_clock_measured: 5,
+        throughput: 41.2,
+        throughput_measured: 5,
+        p50_ttft_ms: 205.0,
+        p95_ttft_ms: 260.0,
+        p50_source: "sampled",
+      },
+      {
+        // Written before 7.122.2: no window at all, so no generation rate --
+        // but the throughput is a fact the row can still support.
+        model_ref: "delta/model-04",
+        outcome: "succeeded",
+        attempts: 9,
+        ttft_measured: 9,
+        avg_ttft_ms: 380.0,
+        avg_first_reasoning_ms: null,
+        avg_generating_ms: 900.0,
+        tokens_out: 900,
+        gen_rate: null,
+        gen_measured: 0,
+        gen_clock_measured: 0,
+        throughput: 22.5,
+        throughput_measured: 9,
+        p50_ttft_ms: 370.0,
+        p95_ttft_ms: 900.0,
         p50_source: "sampled",
       },
     ],
@@ -3199,10 +3263,12 @@ const ROUTES = {
     ttft_ms: 4712,
     ttft_winner_ms: 300,
     // The whole request, predecessors included -- deliberately NOT the
-    // winner's 2,100 ms, so a rate computed from the request's duration and
-    // the winner's TTFT is visibly the wrong number (52.2 tok/s against the
-    // 188.9 the model actually produced).
+    // winner's 2,100 ms, so a throughput computed from the request's duration
+    // is visibly a different number from the generation rate.
     duration_ms: 6812,
+    // The two minimums, as the server hands them over with the row.
+    generation_min_window_ms: 500,
+    generation_min_tokens: 8,
     route_attempt: 2,
     route_attempts: [
       {
@@ -3248,6 +3314,12 @@ const ROUTES = {
         ttft_ms: 300,
         first_reasoning_ms: 460,
         tokens_out: 340,
+        // The measured generation window: first delta at 500 ms into the
+        // attempt, last at 1,900 ms. 340 tokens over 1.4 s is 242.9 tok/s --
+        // and NOT 188.9, which is what the retired `duration - ttft`
+        // arithmetic printed for the same attempt.
+        gen_first_ms: 500,
+        gen_last_ms: 1900,
         error_kind: null,
         error_message: null,
         params: null,
@@ -11719,6 +11791,77 @@ const latencyViews = {};
     .filter(Boolean);
   const chain = doc.getElementById("reqDetailChain");
   latencyViews.chainHidden = chain.hidden;
+  // --- the display rules the modal applies to the rows that cannot carry a
+  // rate: a window below the minimum, a row written before the clock existed,
+  // and a token count nobody measured. The same functions the modal calls,
+  // driven with one row each.
+  latencyViews.rateRules = window.eval(`(() => {
+    const minimums = { generation_min_window_ms: 500, generation_min_tokens: 8 };
+    const winner = {
+      attempt: 0,
+      provider: "commandcode",
+      model_ref: "commandcode/kimi-k3",
+      outcome: "succeeded",
+      duration_ms: 2100,
+      ttft_ms: 300,
+      tokens_out: 340,
+    };
+    const estimated = {
+      ...winner,
+      tokens_out: 1240,
+      gen_first_ms: 500,
+      gen_last_ms: 1900,
+      params: { response_shape: { estimated_tokens: true } },
+    };
+    return {
+      short: requestGenerationRateText({
+        ...minimums,
+        tokens_out: 12,
+        duration_ms: 900,
+        route_attempts: [
+          { ...winner, tokens_out: 12, duration_ms: 900, gen_first_ms: 860, gen_last_ms: 880 },
+        ],
+      }),
+      legacy: requestGenerationRateText({
+        ...minimums,
+        tokens_out: 340,
+        duration_ms: 2100,
+        route_attempts: [{ ...winner }],
+      }),
+      legacyThroughput: requestThroughputText({
+        ...minimums,
+        tokens_out: 340,
+        duration_ms: 2100,
+        route_attempts: [{ ...winner }],
+      }),
+      noMinimums: requestGenerationRateText({
+        tokens_out: 340,
+        duration_ms: 2100,
+        route_attempts: [{ ...winner, gen_first_ms: 500, gen_last_ms: 1900 }],
+      }),
+      estimated: requestGenerationRateText({
+        ...minimums,
+        tokens_out: 1240,
+        duration_ms: 2100,
+        route_attempts: [estimated],
+      }),
+      estimatedThroughput: requestThroughputText({
+        ...minimums,
+        tokens_out: 1240,
+        duration_ms: 2100,
+        route_attempts: [estimated],
+      }),
+      estimatedTokens: formatTokensOut({
+        tokens_out: 1240,
+        route_attempts: [estimated],
+      }),
+      attemptRate: attemptGenerationRateText(
+        { ...winner, gen_first_ms: 500, gen_last_ms: 1900 },
+        { windowMs: 500, tokens: 8 },
+      ),
+      attemptThroughput: attemptThroughputText(winner),
+    };
+  })()`);
   latencyViews.attemptMetrics = Array.from(
     chain.querySelectorAll(".req-chain-metrics"),
   ).map((row) =>
@@ -11758,6 +11901,8 @@ const latencyViews = {};
       models: 1,
       attempts: 4416,
       ttft_measured: 0,
+      generation_min_window_ms: 500,
+      generation_min_tokens: 8,
       p50_source: "exact",
       stale: false,
       rows: [
@@ -11770,6 +11915,11 @@ const latencyViews = {};
           avg_first_reasoning_ms: null,
           avg_generating_ms: null,
           tokens_out: null,
+          gen_rate: null,
+          gen_measured: 0,
+          gen_clock_measured: 0,
+          throughput: null,
+          throughput_measured: 0,
           p50_ttft_ms: null,
           p95_ttft_ms: null,
           p50_source: "exact",
@@ -11931,6 +12081,8 @@ const cancelledViews = {};
       models: 1,
       attempts: 15,
       ttft_measured: 15,
+      generation_min_window_ms: 500,
+      generation_min_tokens: 8,
       p50_source: "exact",
       stale: false,
       rows: [
@@ -11943,6 +12095,11 @@ const cancelledViews = {};
           avg_first_reasoning_ms: null,
           avg_generating_ms: 1600.0,
           tokens_out: 4080,
+          gen_rate: 255.0,
+          gen_measured: 10,
+          gen_clock_measured: 10,
+          throughput: 170.0,
+          throughput_measured: 10,
           p50_ttft_ms: 312.0,
           p95_ttft_ms: 1400.0,
           p50_source: "exact",
@@ -11956,6 +12113,11 @@ const cancelledViews = {};
           avg_first_reasoning_ms: null,
           avg_generating_ms: null,
           tokens_out: null,
+          gen_rate: null,
+          gen_measured: 0,
+          gen_clock_measured: 0,
+          throughput: null,
+          throughput_measured: 0,
           p50_ttft_ms: 9000.0,
           p95_ttft_ms: 12000.0,
           p50_source: "exact",
@@ -11969,6 +12131,11 @@ const cancelledViews = {};
           avg_first_reasoning_ms: null,
           avg_generating_ms: null,
           tokens_out: null,
+          gen_rate: null,
+          gen_measured: 0,
+          gen_clock_measured: 0,
+          throughput: null,
+          throughput_measured: 0,
           p50_ttft_ms: 600000.0,
           p95_ttft_ms: 604000.0,
           p50_source: "exact",
