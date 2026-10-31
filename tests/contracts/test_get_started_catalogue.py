@@ -194,9 +194,13 @@ def test_every_setting_key_is_edited_on_the_page_the_row_opens() -> None:
     wrong = []
     for entry in _entries():
         for target in entry["opens"]:
-            key = target.get("key")
-            if not key:
+            # The parser keeps the target's kind and value apart (one target
+            # has exactly one of them), so every assertion reads `kind` first:
+            # a `target.get("key")` here was silently None for every row and
+            # made this test vacuous -- caught by mangling a key on purpose.
+            if target.get("kind") != "key":
                 continue
+            key = target["value"]
             mapped = CONTROL_MAP.get(key)
             if mapped is None:
                 wrong.append(f"{entry['id']}: {key} is not a setting")
@@ -214,11 +218,11 @@ def test_every_section_target_is_claimed_by_the_view_it_opens() -> None:
     views = _view_groups()
 
     wrong = [
-        f"{entry['id']}: section {target['section']} is not one of {target['view']}"
+        f"{entry['id']}: section {target['value']} is not one of {target['view']}"
         for entry in _entries()
         for target in entry["opens"]
-        if target.get("section")
-        and target["section"] not in views.get(target["view"], [])
+        if target.get("kind") == "section"
+        and target["value"] not in views.get(target["view"], [])
     ]
     assert wrong == []
 
@@ -228,10 +232,10 @@ def test_every_id_target_is_declared_in_the_markup() -> None:
 
     missing = sorted(
         {
-            f"{entry['id']} -> #{target['id']}"
+            f"{entry['id']} -> #{target['value']}"
             for entry in _entries()
             for target in entry["opens"]
-            if target.get("id") and target["id"] not in declared
+            if target.get("kind") == "id" and target["value"] not in declared
         }
     )
     assert missing == []
@@ -243,10 +247,10 @@ def test_every_docs_target_is_a_bundled_document() -> None:
     assert {"clients", "messaging", "oauth-providers"} <= slugs
     missing = sorted(
         {
-            f"{entry['id']} -> {target['doc']}"
+            f"{entry['id']} -> {target['value']}"
             for entry in _entries()
             for target in entry["opens"]
-            if target.get("doc") and target["doc"] not in slugs
+            if target.get("kind") == "doc" and target["value"] not in slugs
         }
     )
     assert missing == []
@@ -262,23 +266,30 @@ def test_every_query_target_is_a_filter_on_the_page_that_has_one() -> None:
     }
 
     wrong = [
-        f"{entry['id']}: {kind} on {target['view']}"
+        f"{entry['id']}: {target['kind']} on {target['view']}"
         for entry in _entries()
         for target in entry["opens"]
-        for kind, views in allowed.items()
-        if kind in target and target["view"] not in views
+        if target.get("kind") in allowed
+        and target["view"] not in allowed[target["kind"]]
     ]
     assert wrong == []
     empty = sorted(
         {
-            f"{entry['id']}: {kind}"
+            f"{entry['id']}: {target['kind']}"
             for entry in _entries()
             for target in entry["opens"]
-            for kind in allowed
-            if kind in target and not target[kind].strip()
+            if target.get("kind") in allowed and not target["value"].strip()
         }
     )
     assert empty == []
+    # And the table really does use all three (the scan is not vacuous).
+    used = {
+        target["kind"]
+        for entry in _entries()
+        for target in entry["opens"]
+        if target.get("kind") in allowed
+    }
+    assert used == set(allowed)
 
 
 def test_every_value_chip_names_a_setting_on_the_same_page() -> None:
