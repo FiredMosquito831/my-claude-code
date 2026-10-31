@@ -175,6 +175,9 @@ from my_claude_code.config.model_refs import (
     parse_provider_type,
 )
 from my_claude_code.config.onboarding import (
+    MAX_SKIPPED as MAX_ONBOARDING_SKIPPED,
+)
+from my_claude_code.config.onboarding import (
     OnboardingState,
     OnboardingStep,
 )
@@ -185,7 +188,10 @@ from my_claude_code.config.onboarding import (
     detect_agents as detect_onboarding_agents,
 )
 from my_claude_code.config.onboarding import (
-    load_persisted as load_onboarding_persisted,
+    is_skippable_id as is_onboarding_skippable_id,
+)
+from my_claude_code.config.onboarding import (
+    read_persisted as read_onboarding_persisted,
 )
 from my_claude_code.config.onboarding import (
     save_persisted as save_onboarding_persisted,
@@ -445,10 +451,16 @@ class ClaudeSettingsPathPayload(BaseModel):
 
 
 class OnboardingUpdatePayload(BaseModel):
-    """Partial onboarding checklist update submitted by the admin UI."""
+    """Partial onboarding checklist update submitted by the admin UI.
+
+    ``skipped`` (7.122.0) is the WHOLE list of optional cards hidden with "Not
+    for me" when present -- the page sends the list it wants, so a card is
+    hidden and shown again by the same field. Absent leaves the list alone.
+    """
 
     dismissed: bool | None = None
     visited: list[str] | None = None
+    skipped: list[str] | None = None
 
 
 class DesktopUpdatePayload(BaseModel):
@@ -1490,17 +1502,30 @@ def _onboarding_step_response(step: OnboardingStep) -> dict[str, Any]:
             }
             for agent in step.agents
         ],
+        # 7.122.0, appended last so every key above serialises as before.
+        "measurable": step.measurable,
     }
 
 
-def _onboarding_state_response(state: OnboardingState) -> dict[str, Any]:
+def _onboarding_state_response(
+    state: OnboardingState, request_log: dict[str, Any] | None = None
+) -> dict[str, Any]:
     return {
         "dismissed": state.dismissed,
         "steps": [_onboarding_step_response(step) for step in state.steps],
         "required_total": state.required_total,
         "required_done": state.required_done,
         "complete": state.complete,
+        # 7.122.0, appended last: the cards hidden with "Not for me", and what
+        # "Check it worked" needs to say about the newest request.
+        "skipped": list(state.skipped),
+        "request_log": request_log if request_log is not None else _NO_REQUEST_LOG,
     }
+
+
+#: The ``request_log`` answer when nothing could be read: logging off, or the
+#: store unreadable. ``last`` is ``None`` whenever there is no row to name.
+_NO_REQUEST_LOG: dict[str, Any] = {"enabled": False, "total": 0, "last": None}
 
 
 async def _claude_settings_configured(settings: Settings) -> bool:
@@ -1523,17 +1548,72 @@ async def _claude_settings_configured(settings: Settings) -> bool:
     return status.state == "configured"
 
 
-async def _onboarding_has_requests(settings: Settings) -> bool:
-    """Return whether the request log has at least one recorded request."""
+async def _claude_settings_configured_anywhere(settings: Settings) -> bool:
+    """Whether ANY Claude Code settings file this machine has points here.
+
+    7.122.0 (decision 2): the native file, ``CLAUDE_CONFIG_DIR``'s, and every
+    WSL distribution's -- the same discovery and the same per-file reading the
+    Configure Claude Code page shows (``_claude_settings_target``). Never
+    raises: a world that cannot be probed, or a file that cannot be read,
+    simply contributes nothing.
+    """
+
+    expected_base_url, expected_auth_token = _claude_settings_expectations(settings)
+    try:
+        discovered = await asyncio.to_thread(discover_settings_files)
+    except Exception:
+        return False
+    for entry in discovered:
+        try:
+            status = await asyncio.to_thread(
+                read_status,
+                path=Path(entry.path),
+                expected_base_url=expected_base_url,
+                expected_auth_token=expected_auth_token,
+            )
+        except ClaudeSettingsError, OSError:
+            continue
+        if status.state == "configured":
+            return True
+    return False
+
+
+def _onboarding_last_request(row: Mapping[str, Any]) -> dict[str, Any]:
+    """The newest request, as "Check it worked" names it: never any text.
+
+    Ids, the time and who answered for whom -- the columns a list row already
+    shows. Prompt and answer bodies stay in the log.
+    """
+
+    return {
+        "id": str(row.get("id") or ""),
+        "ts_epoch": row.get("ts_epoch"),
+        "status": row.get("status"),
+        "provider": row.get("provider"),
+        "resolved_model": row.get("resolved_model"),
+        "requested_model": row.get("requested_model"),
+        "harness": row.get("harness"),
+        "optimization": row.get("optimization"),
+    }
+
+
+async def _onboarding_request_log(settings: Settings) -> dict[str, Any]:
+    """Whether the request log is on, how many rows it holds, and the newest.
+
+    One read, the same one this route has always made to decide whether a
+    first request has landed (``list_requests(limit=1)`` is the counting
+    form), so "Check it worked" costs no query of its own. Never raises.
+    """
 
     store = _request_log_store_or_none(settings)
     if store is None:
-        return False
+        return dict(_NO_REQUEST_LOG)
     try:
-        _rows, total = await asyncio.to_thread(store.list_requests, limit=1, offset=0)
+        rows, total = await asyncio.to_thread(store.list_requests, limit=1, offset=0)
     except Exception:
-        return False
-    return total > 0
+        return {"enabled": True, "total": 0, "last": None}
+    last = _onboarding_last_request(rows[0]) if rows and total > 0 else None
+    return {"enabled": True, "total": int(total), "last": last}
 
 
 async def _onboarding_harness_usage(settings: Settings) -> dict[str, int]:
@@ -1556,9 +1636,12 @@ async def _onboarding_harness_usage(settings: Settings) -> dict[str, int]:
         return {}
 
 
-async def _build_onboarding_state(settings: Settings) -> OnboardingState:
+async def _build_onboarding_state(
+    settings: Settings,
+) -> tuple[OnboardingState, dict[str, Any]]:
     claude_settings_configured = await _claude_settings_configured(settings)
-    has_requests = await _onboarding_has_requests(settings)
+    request_log = await _onboarding_request_log(settings)
+    has_requests = request_log["total"] > 0
     usage = await _onboarding_harness_usage(settings)
     # Off the event loop: the desktop probes stat a dozen directories and read
     # the registry, which is exactly what every other probe on this page does
@@ -1566,11 +1649,25 @@ async def _build_onboarding_state(settings: Settings) -> OnboardingState:
     agents = await asyncio.to_thread(
         detect_onboarding_agents, env=os.environ, harness_requests=usage
     )
-    return build_onboarding_state(
+    # 7.122.0: the other settings files (CLAUDE_CONFIG_DIR's, WSL's) are read
+    # only when nothing cheaper has already answered "connected" -- the step's
+    # answer is the same either way, and an agent with traffic never pays for
+    # a probe across the WSL boundary on the first page of every load.
+    if not (
+        claude_settings_configured
+        or has_requests
+        or any(agent.connected for agent in agents)
+    ):
+        claude_settings_configured = await _claude_settings_configured_anywhere(
+            settings
+        )
+    state = build_onboarding_state(
         claude_settings_configured=claude_settings_configured,
         has_requests=has_requests,
         agents=agents,
+        request_log_enabled=bool(request_log["enabled"]),
     )
+    return state, request_log
 
 
 @router.get("/admin/api/onboarding")
@@ -1579,8 +1676,8 @@ async def get_onboarding(
     settings: Settings = Depends(get_settings),
 ):
     require_loopback_admin(request)
-    state = await _build_onboarding_state(settings)
-    return _onboarding_state_response(state)
+    state, request_log = await _build_onboarding_state(settings)
+    return _onboarding_state_response(state, request_log)
 
 
 @router.post("/admin/api/onboarding")
@@ -1590,7 +1687,21 @@ async def update_onboarding(
     settings: Settings = Depends(get_settings),
 ):
     require_loopback_admin(request)
-    dismissed, visited = await asyncio.to_thread(load_onboarding_persisted)
+    if payload.skipped is not None and (
+        len(payload.skipped) > MAX_ONBOARDING_SKIPPED
+        or not all(is_onboarding_skippable_id(item) for item in payload.skipped)
+    ):
+        # The page only ever sends its own catalogue ids; anything else is a
+        # stray client, refused whole rather than half-stored.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "skipped must list at most "
+                f"{MAX_ONBOARDING_SKIPPED} card ids, each a short lowercase word"
+            ),
+        )
+    persisted = await asyncio.to_thread(read_onboarding_persisted)
+    dismissed, visited = persisted.dismissed, list(persisted.visited)
 
     if payload.dismissed is not None:
         dismissed = payload.dismissed
@@ -1598,10 +1709,13 @@ async def update_onboarding(
         visited = sorted(set(visited) | set(payload.visited))
 
     await asyncio.to_thread(
-        save_onboarding_persisted, dismissed=dismissed, visited=visited
+        save_onboarding_persisted,
+        dismissed=dismissed,
+        visited=visited,
+        skipped=payload.skipped,
     )
-    state = await _build_onboarding_state(settings)
-    return _onboarding_state_response(state)
+    state, request_log = await _build_onboarding_state(settings)
+    return _onboarding_state_response(state, request_log)
 
 
 # --------------------------------------------------------------------- config-dir status

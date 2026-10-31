@@ -4795,6 +4795,20 @@ if (process.env.MCC_JSDOM_SCENARIO === "select_blank") {
   );
   scenario = prepareSelectBlankScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=get_started (7.122.0): the redesigned Get Started --
+   four essentials in four states, nine status cards, the collapsed filterable
+   niche list, the collapsed read-only advanced section (current values, never
+   suggested ones), the raw-log warning, "Not for me" and Show hidden through
+   the server's skipped list, Dismiss and its Undo, every Open button landing
+   on the element it names, zero setting writes, and every view's DOM for the
+   BASE tree equality baseline (admin_jsdom_get_started.mjs). The payloads are
+   the server's own answers, written by the Python test. */
+if (process.env.MCC_JSDOM_SCENARIO === "get_started") {
+  const { prepareGetStartedScenario } = await import(
+    "./admin_jsdom_get_started.mjs"
+  );
+  scenario = prepareGetStartedScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
@@ -14603,8 +14617,14 @@ const exitFacts = {};
    7.99.0, the user's 2026-10-18 12:53 amendment: Get Started points at the
    Coding agents buttons. The step is the server's (config/onboarding.py); the
    Python test pins this fixture's words to it, so what is asserted here is
-   that the generic renderer shows it, opens it as the next step, and links
-   the Guide section through the declared anchor table. */
+   that the renderer shows it and links the Guide section through the declared
+   anchor table.
+
+   7.122.0: the optional media step is no longer a row of the essentials list
+   -- it is rendered inside the "Media & agent tools" card, whose folded "How
+   to do it" block carries the step's label, its instructions and its Guide
+   links. This scenario reads it there (and records that the essentials list
+   no longer holds it, which is the redesign, not a loss). */
 const getStartedMedia = {};
 {
   ROUTES["/admin/api/onboarding"] = {
@@ -14644,17 +14664,35 @@ const getStartedMedia = {};
       await settle();
       await new Promise((resolve) => setTimeout(resolve, 80));
     }
-    const steps = Array.from(doc.querySelectorAll("#getStartedSteps .get-started-step"));
-    getStartedMedia.steps = steps.map((step) => ({
-      label: step.querySelector(".get-started-step-header strong")?.textContent || null,
-      expanded: step.classList.contains("expanded"),
-      guides: Array.from(step.querySelectorAll(".get-started-step-guides .guide-link")).map(
-        (link) => ({ anchor: link.dataset.guideAnchor, text: link.textContent }),
-      ),
-      instructions: Array.from(
-        step.querySelectorAll(".get-started-step-instructions li"),
-      ).map((item) => (item.textContent || "").replace(/\s+/g, " ").trim()),
-    }));
+    const card = doc.querySelector(
+      '#getStartedFeatures [data-get-started-card="media_tools"]',
+    );
+    const notes = card?.querySelector(".get-started-card-steps") || null;
+    getStartedMedia.cards = card ? 1 : 0;
+    getStartedMedia.steps = notes
+      ? [
+          {
+            label:
+              (notes.querySelector(".get-started-card-steps-label")?.textContent || "").trim() ||
+              null,
+            // The folded block is closed until a reader opens it: it is a
+            // card's detail now, not the page's next action.
+            expanded: notes.open === true,
+            guides: Array.from(notes.querySelectorAll(".guide-link")).map((link) => ({
+              anchor: link.dataset.guideAnchor,
+              text: link.textContent,
+            })),
+            instructions: Array.from(notes.querySelectorAll(".get-started-step-instructions li")).map(
+              (item) => (item.textContent || "").replace(/\s+/g, " ").trim(),
+            ),
+          },
+        ]
+      : [];
+    // The essentials list holds the four essentials only; an optional step is
+    // not one of them any more.
+    getStartedMedia.mediaStepInEssentialsList = Array.from(
+      doc.querySelectorAll("#getStartedSteps .get-started-step"),
+    ).some((row) => (row.textContent || "").includes("media server"));
   }
 }
 

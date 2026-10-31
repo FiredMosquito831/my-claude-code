@@ -1,0 +1,80 @@
+{
+ "written_by": "the BASE tree 12357c96 (v7.121.3): its admin_static, drawn by tests/api/admin_jsdom_get_started.mjs (MCC_JSDOM_SCENARIO=get_started) with the world file that test writes -- the server's own /admin/api/config payload, four onboarding payloads built by build_state + _onboarding_state_response, and the provider/route/tier values the page reads. Regenerate only from a base tree, never from a branch: MCC_JSDOM_SCENARIO=get_started MCC_JSDOM_GET_STARTED_FILE=<world.json> node tests/api/admin_jsdom_harness.mjs <base>/src/my_claude_code/api/admin_static",
+ "views": {
+  "get_started": {
+   "children": 1,
+   "length": 7557,
+   "sha256": "8c104c457020160000b835d168d09ddf1e00904f3ecd398d16aea40cefa74bcb"
+  },
+  "providers": {
+   "children": 6,
+   "length": 217355,
+   "sha256": "a063cea9e9f6695434799ba5d23d8cb88503a9077f66503500954d1e677ee90d"
+  },
+  "proxying": {
+   "children": 13,
+   "length": 13333,
+   "sha256": "bf60806d9b378ee4f122f488aa0b4bc9eb3d124efa144da2e3ce0fce473268af"
+  },
+  "marketplaces": {
+   "children": 11,
+   "length": 5810,
+   "sha256": "f99688a5b820cb5adec3fb0a20311583cd72f69c1a71b16155e0721564d285a5"
+  },
+  "claude": {
+   "children": 5,
+   "length": 18572,
+   "sha256": "dd181b07240a5ae163ca6986ed0a504a25f96345f05a8b9f595e17636c59e543"
+  },
+  "coding_agents": {
+   "children": 5,
+   "length": 63837,
+   "sha256": "3a5a90df3f7339482e36bb97387f7120121b6ec0a0cbb8fcc0d1b9b217d5c54e"
+  },
+  "model_config": {
+   "children": 2,
+   "length": 92566,
+   "sha256": "d560a234094dbda19e9afcf7789a02da7bc84befe6adf85a962bb11417196252"
+  },
+  "models": {
+   "children": 4,
+   "length": 7464,
+   "sha256": "2fe70f6f83b3c527e25aae19aaa598966328b0c2253d23cc4e6f87997a65bfe2"
+  },
+  "messaging": {
+   "children": 1,
+   "length": 10870,
+   "sha256": "e09b291115f31fd831a65aaef3a07ec63d401cbab337e7ec0c5d227c9ab8e91e"
+  },
+  "requests": {
+   "children": 23,
+   "length": 56718,
+   "sha256": "95c347b6ae0688838cc0f4cf414837d080e032995bc9ab53aaf0b7e9d48e2d85"
+  },
+  "optimizer": {
+   "children": 6,
+   "length": 16758,
+   "sha256": "8e5363b2a213d920e542fd5b00aaaec8607a1db6aa64c442195e21e3ef9438eb"
+  },
+  "web_search": {
+   "children": 6,
+   "length": 101821,
+   "sha256": "a7827d34c1cfdcd0af12eb4ac9629285d1543ab7fe03c5bd56a64987276c340f"
+  },
+  "limits": {
+   "children": 1,
+   "length": 136006,
+   "sha256": "8f9b73c1d5f899337aaf91b072f6c5deffacdc90e0a6f97b73c01168a5fa0948"
+  },
+  "guide": {
+   "children": 1,
+   "length": 356962,
+   "sha256": "be5bd466881d2fc89a8218e401188d4482ef8f64d88e1fff760cb75be529dd01"
+  },
+  "docs": {
+   "children": 1,
+   "length": 1978,
+   "sha256": "b6d305a3ce3592db4a8aa0bb7b83b5fb51f1905497d3d35458be481fdb49c315"
+  }
+ }
+}

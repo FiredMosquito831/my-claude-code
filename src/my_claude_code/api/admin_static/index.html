@@ -33,7 +33,10 @@
       <main class="main">
         <header class="topbar">
           <div>
-            <h2 id="pageTitle">Providers</h2>
+            <!-- 7.122.0 (U11): the static default is the page the server opens
+                 for a new install, so the first paint is never the Providers
+                 grid with no nav. admin.js replaces this once it knows. -->
+            <h2 id="pageTitle">Get Started</h2>
           </div>
         </header>
 
@@ -41,65 +44,89 @@
         <div id="proxyStoreBanner" class="proxy-store-banner" role="alert" hidden></div>
 
         <div id="adminViews" class="admin-views">
-          <section id="view-get_started" class="admin-view" data-view="get_started" hidden>
+          <section id="view-get_started" class="admin-view active" data-view="get_started">
+            <!-- 7.122.0: the page is a map of MCC. Essentials (the server's
+                 required steps), the nine main features as status cards, one
+                 collapsed filterable list of the niche ones, and one collapsed
+                 read-only section about limits, raw logs and testing. Only
+                 this panel changes; every other view is untouched.
+                 Deliberately no nested <section> here: the docs drift guard
+                 scans from this id to the first </section>. -->
             <section class="settings-section" id="getStartedPanel">
               <div class="section-heading">
                 <div>
                   <h3>Get Started</h3>
-                  <p>
-                    My Claude Code speaks Anthropic's API locally. Point your coding
-                    agent at this server, and it routes each request to whichever
-                    provider you configure below &mdash; your provider keys stay on this
-                    machine and never reach Anthropic or anywhere else.
+                  <p class="get-started-lead">
+                    My Claude Code is a local router. Your coding agents send their
+                    requests to this server, and it forwards each one to the provider
+                    and model you chose &mdash; your provider keys never leave this
+                    machine. Four essentials make it work; everything after them is
+                    optional.
                   </p>
-                  <p>
-                    <strong>There are two ways to run it, and this page is the same
-                    either way.</strong> The <strong>server with its web dashboard</strong>
-                    is what the one-line installer gives you: <code>mcc-server</code> plus
-                    the <code>mcc-*</code> agent launchers on your <code>PATH</code>, and
-                    this dashboard in a browser tab. The <strong>desktop app</strong> is a
-                    real window with its own icon and tray, downloaded as an installer
-                    from the release page &mdash; and it <em>installs and starts the
-                    server for you</em> on first launch, in front of you, then renders
-                    exactly this page inside itself. Neither excludes the other; the app
-                    is a window onto the server, not a second copy of it. If you are
-                    reading this in a browser tab you are on the first path, and
-                    <code>mcc-desktop</code> gets you the second without downloading
-                    anything else.
-                  </p>
-                  <p>
-                    <strong>Which one should you pick?</strong> Take the
-                    <strong>server and this dashboard</strong> if MCC lives on a
-                    headless box, a VPS or behind SSH, if you work inside WSL (which has
-                    no tray), if you run it as a service or from CI, or if you simply
-                    prefer starting and stopping things yourself. Take the
-                    <strong>desktop app</strong> for everyday use: it installs the server
-                    if it is missing, starts it on launch, watches its health and
-                    reconnects on its own after an update, lives in the tray &mdash;
-                    closing the window puts it there, <em>Quit</em> in the tray menu ends
-                    it &mdash; and can start at login. Both share one configuration
-                    directory, one <code>.env</code> and this dashboard, both can sit on
-                    the same machine, and a desktop install still puts every
-                    <code>mcc-*</code> command on your <code>PATH</code>. One caveat
-                    worth knowing before you download: the macOS disk image is unsigned,
-                    so opening it directly needs a single
-                    <code>xattr -d com.apple.quarantine</code> command &mdash; letting
-                    <code>mcc-desktop</code> fetch the same binary skips that.
-                  </p>
+                  <details class="get-started-about" id="getStartedAbout">
+                    <summary>Server or desktop app?</summary>
+                    <p>
+                      My Claude Code speaks Anthropic's API locally. Point your coding
+                      agent at this server, and it routes each request to whichever
+                      provider you configure below &mdash; your provider keys stay on this
+                      machine and never reach Anthropic or anywhere else.
+                    </p>
+                    <p>
+                      <strong>There are two ways to run it, and this page is the same
+                      either way.</strong> The <strong>server with its web dashboard</strong>
+                      is what the one-line installer gives you: <code>mcc-server</code> plus
+                      the <code>mcc-*</code> agent launchers on your <code>PATH</code>, and
+                      this dashboard in a browser tab. The <strong>desktop app</strong> is a
+                      real window with its own icon and tray, downloaded as an installer
+                      from the release page &mdash; and it <em>installs and starts the
+                      server for you</em> on first launch, in front of you, then renders
+                      exactly this page inside itself. Neither excludes the other; the app
+                      is a window onto the server, not a second copy of it. If you are
+                      reading this in a browser tab you are on the first path, and
+                      <code>mcc-desktop</code> gets you the second without downloading
+                      anything else.
+                    </p>
+                    <p>
+                      <strong>Which one should you pick?</strong> Take the
+                      <strong>server and this dashboard</strong> if MCC lives on a
+                      headless box, a VPS or behind SSH, if you work inside WSL (which has
+                      no tray), if you run it as a service or from CI, or if you simply
+                      prefer starting and stopping things yourself. Take the
+                      <strong>desktop app</strong> for everyday use: it installs the server
+                      if it is missing, starts it on launch, watches its health and
+                      reconnects on its own after an update, lives in the tray &mdash;
+                      closing the window puts it there, <em>Quit</em> in the tray menu ends
+                      it &mdash; and can start at login. Both share one configuration
+                      directory, one <code>.env</code> and this dashboard, both can sit on
+                      the same machine, and a desktop install still puts every
+                      <code>mcc-*</code> command on your <code>PATH</code>. One caveat
+                      worth knowing before you download: the macOS disk image is unsigned,
+                      so opening it directly needs a single
+                      <code>xattr -d com.apple.quarantine</code> command &mdash; letting
+                      <code>mcc-desktop</code> fetch the same binary skips that.
+                    </p>
+                  </details>
                 </div>
               </div>
               <div id="getStartedProgress" class="get-started-progress" aria-live="polite"></div>
               <div id="configDirBanner" class="config-dir-banner" role="status" aria-live="polite" hidden></div>
               <ol id="getStartedSteps" class="get-started-steps"></ol>
-              <div class="get-started-footer">
+              <div id="getStartedFeatures" class="get-started-features"></div>
+              <div id="getStartedMore" class="get-started-more"></div>
+              <div id="getStartedAdvanced" class="get-started-advanced"></div>
+              <div id="getStartedFooter" class="get-started-footer">
+                <!-- The Dismiss button is declared here and never rebuilt: the
+                     page re-renders after every visit and every save, and a
+                     footer cleared with textContent would take it with it. -->
+                <div id="getStartedFooterStatus" class="get-started-footer-status"></div>
                 <button id="getStartedDismissButton" class="secondary-button" type="button">
-                  Dismiss checklist
+                  Don't open this on start
                 </button>
               </div>
             </section>
           </section>
 
-          <section id="view-providers" class="admin-view active" data-view="providers">
+          <section id="view-providers" class="admin-view" data-view="providers" hidden>
             <section class="settings-section" id="versionPanel" aria-label="Version and updates">
               <div class="section-heading">
                 <div>

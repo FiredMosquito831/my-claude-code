@@ -1,17 +1,26 @@
 """Tests for config/onboarding.py."""
 
+import json
+import os
 import re
+import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY
 from my_claude_code.config.onboarding import (
+    MAX_SKIPPED,
     OnboardingAgent,
     OnboardingError,
     build_state,
     detect_agents,
+    is_skippable_id,
     load_persisted,
+    normalize_skipped,
+    read_persisted,
     save_persisted,
 )
 from my_claude_code.config.paths import onboarding_state_path
@@ -186,8 +195,9 @@ class TestBuildState:
 
         state = build_state(claude_settings_configured=False, has_requests=False)
 
-        non_optional_ids = {"provider", "models", "client"}
-        assert state.required_total == len(non_optional_ids)
+        # 7.122.0 (decision 2): "Check it worked" is the fourth essential.
+        non_optional_ids = {"provider", "models", "client", "analytics"}
+        assert state.required_total == len(non_optional_ids) == 4
         assert {
             step.id for step in state.steps if not step.optional
         } == non_optional_ids
@@ -198,10 +208,12 @@ class TestBuildState:
         _set_home(monkeypatch, tmp_path)
         monkeypatch.setenv("NVIDIA_NIM_API_KEY", "test-key")
 
-        state = build_state(claude_settings_configured=True, has_requests=False)
+        # 7.122.0: the fourth essential is a first request, so it is given here.
+        state = build_state(claude_settings_configured=True, has_requests=True)
 
-        # models is always done (MODEL has a manifest default), provider and
-        # client are satisfied above; every optional step here is undone.
+        # models is always done (MODEL has a manifest default), provider,
+        # client and analytics are satisfied above; every optional step here
+        # is undone.
         optional_steps = [step for step in state.steps if step.optional]
         assert any(not step.done for step in optional_steps)
         assert state.complete is True
@@ -460,3 +472,365 @@ class TestConnectAgentsStep:
 
         _set_home(monkeypatch, tmp_path)
         assert detect_agents(env={}) is not None
+
+
+def _step(state, step_id):
+    return next(step for step in state.steps if step.id == step_id)
+
+
+class TestConnectACodingAgent:
+    """Essential 3 (7.122.0, decision 2): ANY agent reaching MCC counts.
+
+    Until 7.122.0 the step read only the native settings.json, so a user who
+    ran ``mcc-claude`` -- or Claude Code inside WSL, or Codex, or a desktop
+    app -- could never finish it while the same page listed Claude Code as
+    Connected, and the dashboard reopened Get Started on every load (U2).
+    """
+
+    def test_a_launcher_only_claude_code_user_is_connected(self, monkeypatch, tmp_path):
+        """The U2 case: mcc-claude sent requests, no settings.json points here."""
+
+        _set_home(monkeypatch, tmp_path)
+        agents = (
+            OnboardingAgent(
+                id="claude",
+                display_name="Claude Code",
+                kind="cli",
+                installed=True,
+                command="mcc-claude",
+                requests_7d=5,
+            ),
+        )
+
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=agents
+        )
+
+        assert _step(state, "client").done is True
+        assert _step(state, "client").label == "Connect a coding agent"
+
+    def test_another_agents_traffic_connects_it(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        agents = (
+            OnboardingAgent(
+                id="codex",
+                display_name="Codex CLI",
+                kind="cli",
+                installed=False,
+                requests_7d=1,
+            ),
+        )
+
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=agents
+        )
+
+        assert _step(state, "client").done is True
+
+    def test_a_desktop_app_whose_file_points_here_connects_it(
+        self, monkeypatch, tmp_path
+    ):
+        _set_home(monkeypatch, tmp_path)
+        agents = (
+            OnboardingAgent(
+                id="codex_desktop",
+                display_name="Codex desktop",
+                kind="desktop",
+                installed=True,
+                state="configured",
+            ),
+        )
+
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=agents
+        )
+
+        assert _step(state, "client").done is True
+
+    def test_any_logged_request_connects_it_however_old(self, monkeypatch, tmp_path):
+        """An idle week must not bring the page back for a working setup."""
+
+        _set_home(monkeypatch, tmp_path)
+        state = build_state(claude_settings_configured=False, has_requests=True)
+
+        assert _step(state, "client").done is True
+
+    def test_claude_settings_pointing_here_connect_it(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        state = build_state(claude_settings_configured=True, has_requests=False)
+
+        assert _step(state, "client").done is True
+
+    def test_nothing_connected_leaves_it_to_do(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        agents = (
+            OnboardingAgent(
+                id="claude", display_name="Claude Code", kind="cli", installed=True
+            ),
+            OnboardingAgent(
+                id="codex_desktop",
+                display_name="Codex desktop",
+                kind="desktop",
+                installed=True,
+                state="installed",
+            ),
+        )
+
+        state = build_state(
+            claude_settings_configured=False, has_requests=False, agents=agents
+        )
+
+        assert _step(state, "client").done is False
+        assert state.complete is False
+
+    def test_the_old_connect_agents_step_is_unchanged(self, monkeypatch, tmp_path):
+        """The pinned optional step keeps its own rule and words."""
+
+        _set_home(monkeypatch, tmp_path)
+        state = build_state(claude_settings_configured=True, has_requests=True)
+        step = _step(state, "connect_agents")
+
+        assert step.done is False  # no agent passed: its rule is the agents'
+        assert step.label == "Connect your coding agents (optional)"
+        assert step.optional is True
+
+
+class TestCheckItWorked:
+    """Essential 4 (7.122.0, decision 2), and when MCC cannot measure it."""
+
+    def test_it_is_an_essential_done_by_a_first_request(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        before = build_state(claude_settings_configured=True, has_requests=False)
+        after = build_state(claude_settings_configured=True, has_requests=True)
+
+        assert _step(before, "analytics").optional is False
+        assert _step(before, "analytics").done is False
+        assert _step(after, "analytics").done is True
+        assert after.required_done == before.required_done + 1
+        assert _step(after, "analytics").label == (
+            "Check it worked — see your first request in Analytics"
+        )
+
+    def test_with_the_request_log_off_it_is_not_measured_and_not_counted(
+        self, monkeypatch, tmp_path
+    ):
+        _set_home(monkeypatch, tmp_path)
+        monkeypatch.setenv("NVIDIA_NIM_API_KEY", "test-key")
+
+        state = build_state(
+            claude_settings_configured=True,
+            has_requests=False,
+            request_log_enabled=False,
+        )
+
+        step = _step(state, "analytics")
+        assert step.measurable is False
+        assert step.optional is False
+        assert state.required_total == 3
+        # Provider, model and agent are done, and nothing else is counted.
+        assert state.required_done == 3
+        assert state.complete is True
+
+    def test_every_other_step_is_always_measurable(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        state = build_state(
+            claude_settings_configured=False,
+            has_requests=False,
+            request_log_enabled=False,
+        )
+
+        assert [step.id for step in state.steps if not step.measurable] == ["analytics"]
+
+
+class TestWebSearchStepWords:
+    """U3: web search works with no key, and keys are added from Manage keys."""
+
+    def test_the_step_no_longer_asks_for_a_key_first(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        step = _step(
+            build_state(claude_settings_configured=False, has_requests=False),
+            "websearch",
+        )
+
+        text = " ".join((step.description, *step.instructions))
+        assert "no key" in step.description
+        assert "Manage keys" in text and "Add key" in text
+        assert "field that appears below" not in text
+        assert "Click Apply" not in text
+
+
+class TestHiddenCards:
+    """ "Not for me" (7.122.0, decision 5): stored in MCC's config folder."""
+
+    def test_a_hidden_list_round_trips(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+
+        save_persisted(
+            dismissed=False, visited=["guide"], skipped=["proxying", "reasoning"]
+        )
+
+        persisted = read_persisted()
+        assert persisted.skipped == ("proxying", "reasoning")
+        assert persisted.visited == ("guide",)
+        state = build_state(claude_settings_configured=False, has_requests=False)
+        assert state.skipped == ("proxying", "reasoning")
+
+    def test_a_file_written_before_7_122_reads_as_nothing_hidden(
+        self, monkeypatch, tmp_path
+    ):
+        _set_home(monkeypatch, tmp_path)
+        path = onboarding_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"dismissed": True, "visited": ["guide"]}), encoding="utf-8"
+        )
+
+        assert load_persisted() == (True, ["guide"])
+        assert read_persisted().skipped == ()
+        assert (
+            build_state(claude_settings_configured=False, has_requests=False).skipped
+            == ()
+        )
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "not json{{{",
+            "[1, 2]",
+            '{"dismissed": false, "skipped": "proxying"}',
+            '{"dismissed": false, "skipped": {"a": 1}}',
+            "",
+        ],
+    )
+    def test_a_damaged_file_hides_nothing_and_never_raises(
+        self, monkeypatch, tmp_path, content
+    ):
+        _set_home(monkeypatch, tmp_path)
+        path = onboarding_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+        assert read_persisted().skipped == ()
+        assert (
+            build_state(claude_settings_configured=False, has_requests=False).skipped
+            == ()
+        )
+
+    def test_only_well_formed_ids_are_ever_kept(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        path = onboarding_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "skipped": [
+                        "reasoning",
+                        "<img src=x onerror=alert(1)>",
+                        "Proxying",
+                        "../../etc",
+                        "a" * 65,
+                        7,
+                        None,
+                        "reasoning",
+                        "fallback_chains",
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert read_persisted().skipped == ("fallback_chains", "reasoning")
+
+    def test_the_hidden_list_is_capped(self):
+        many = [f"card_{index:03d}" for index in range(MAX_SKIPPED + 40)]
+
+        assert len(normalize_skipped(many)) == MAX_SKIPPED
+        assert is_skippable_id("more_api") is True
+        assert is_skippable_id("") is False
+        assert is_skippable_id("x y") is False
+
+    def test_a_save_that_does_not_mention_the_list_keeps_it(
+        self, monkeypatch, tmp_path
+    ):
+        """Dismiss and a visit can never un-hide a card."""
+
+        _set_home(monkeypatch, tmp_path)
+        save_persisted(dismissed=False, visited=[], skipped=["proxying"])
+
+        save_persisted(dismissed=True, visited=["guide"])
+
+        assert read_persisted().skipped == ("proxying",)
+        assert read_persisted().dismissed is True
+
+    def test_an_empty_list_shows_everything_again(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        save_persisted(dismissed=False, visited=[], skipped=["proxying"])
+
+        save_persisted(dismissed=False, visited=[], skipped=[])
+
+        assert read_persisted().skipped == ()
+
+    def test_the_file_is_written_by_the_owner_only_writer(self, monkeypatch, tmp_path):
+        """Atomic and owner-only: the staged write proxy_chains.json uses."""
+
+        from my_claude_code.config import onboarding
+
+        _set_home(monkeypatch, tmp_path)
+        calls = []
+        real = onboarding.write_owner_only_bytes
+
+        def spy(path, content):
+            calls.append((path, content))
+            return real(path, content)
+
+        monkeypatch.setattr(onboarding, "write_owner_only_bytes", spy)
+
+        save_persisted(dismissed=True, visited=["guide"], skipped=["proxying"])
+
+        assert calls == [
+            (
+                onboarding_state_path(),
+                b'{"dismissed": true, "visited": ["guide"], "skipped": ["proxying"]}',
+            )
+        ]
+        assert not list(onboarding_state_path().parent.glob("*.fcc-tmp"))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+    def test_the_file_is_0600_on_posix(self, monkeypatch, tmp_path):
+        _set_home(monkeypatch, tmp_path)
+        old = os.umask(0o022)
+        try:
+            save_persisted(dismissed=False, visited=[], skipped=["proxying"])
+        finally:
+            os.umask(old)
+
+        assert stat.S_IMODE(onboarding_state_path().stat().st_mode) == 0o600
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows access lists")
+    @pytest.mark.spawns_process
+    @pytest.mark.local_serial
+    def test_the_file_is_owner_only_on_windows(self, monkeypatch, tmp_path):
+        """Read back with ``icacls``: this user, SYSTEM and Administrators."""
+
+        _set_home(monkeypatch, tmp_path)
+        save_persisted(dismissed=False, visited=[], skipped=["proxying"])
+        path = onboarding_state_path()
+
+        completed = subprocess.run(
+            ["icacls", str(path)], capture_output=True, text=True, check=True
+        )
+        lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+        lines[0] = lines[0][len(str(path)) :].strip()
+        entries = [
+            line
+            for line in lines
+            if ":" in line and not line.startswith("Successfully")
+        ]
+        assert len(entries) == 3, entries
+        assert all(entry.endswith(":(F)") for entry in entries), entries
+        assert not any("(I)" in entry for entry in entries), entries
+        principals = sorted(
+            entry.rsplit(":", 1)[0].split("\\")[-1] for entry in entries
+        )
+        user = os.environ.get("USERNAME") or os.getlogin()
+        assert principals == sorted(["Administrators", "SYSTEM", user]), entries

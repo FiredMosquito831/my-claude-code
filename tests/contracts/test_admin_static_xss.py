@@ -239,6 +239,42 @@ def test_no_adjacent_html_injection_vectors_exist() -> None:
 
 
 @pytest.mark.local_serial
+def test_a_hostile_onboarding_payload_renders_as_text(rendered_open: dict) -> None:
+    """7.122.0: Get Started's server strings, probed for the first time.
+
+    Until 7.122.0 this harness served the onboarding answer EMPTY, so the one
+    page a new user opens first was never given a hostile payload. Now every
+    step label, description, instruction, agent name, agent command and the
+    newest request's model arrives markup-shaped, and the page is forced onto
+    Get Started.
+    """
+
+    page = rendered_open["getStarted"]
+
+    assert page["visible"] is True
+    # Nine cards minus the one the payload's `skipped` list hides ("reasoning"):
+    # a hostile hidden-card id cannot break the list either.
+    assert page["cardCount"] == 8
+    assert page["moreRows"] == 22
+    assert "reasoning" not in page["cardIds"]
+    labels = [row["label"] for row in page["rows"]]
+    assert PROBE["label"] in labels
+    assert PROBE["display_name"] in labels
+    instructions = [item for row in page["rows"] for item in row["instructions"]]
+    assert PROBE["description"] in instructions
+    agents = [name for row in page["rows"] for name in row["agentNames"]]
+    assert PROBE["display_name"] in agents
+    commands = [code for row in page["rows"] for code in row["agentCommands"]]
+    assert "<img src=x onerror=alert(4)>mcc-evil" in commands
+    # The newest request's model reaches step 4's line as text.
+    lines = " ".join(row["line"] or "" for row in page["rows"])
+    assert PROBE["description"] in lines
+    # Nothing markup-shaped became an element.
+    tags = set(page["panelTags"])
+    assert not {"IMG", "SCRIPT", "B", "I"} & tags, tags
+
+
+@pytest.mark.local_serial
 def test_a_coding_agent_card_renders_its_name_and_path_as_text(
     rendered_open: dict,
 ) -> None:

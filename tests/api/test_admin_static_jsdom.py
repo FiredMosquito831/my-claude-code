@@ -10373,12 +10373,17 @@ def test_get_started_points_at_the_add_mcp_server_button(
         if step.id == "media_tools"
     )
     (step,) = rendered["getStartedMedia"]["steps"]
-    # The fixture's words are the server's step, so this is the real item.
+    # The fixture's words are the server's step, so this is the real item --
+    # rendered inside the "Media & agent tools" card since 7.122.0, whose
+    # "How to do it" block carries the step's label, instructions and Guide
+    # link. The essentials list holds the four essentials only.
     assert step["label"] == server_step.label
     assert step["instructions"] == list(server_step.instructions[:2])
     assert server_step.view == "coding_agents"
     assert server_step.target == "#mcpMediaServerCard"
-    assert step["expanded"] is True
+    assert rendered["getStartedMedia"]["cards"] == 1
+    assert step["expanded"] is False
+    assert rendered["getStartedMedia"]["mediaStepInEssentialsList"] is False
     assert step["guides"] == [
         {"anchor": "guide-media-mcp", "text": "Guide: media server"}
     ]
@@ -13263,7 +13268,15 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
     baseline = json.loads(SELECT_BLANK_BASELINE.read_text(encoding="utf-8"))
     base = baseline["base"]
 
-    assert select_blank["views"] == base["views"]
+    # 7.122.0 redraws Get Started itself, which this baseline digests along
+    # with the other fourteen views; every OTHER view is still byte-identical.
+    # The Get Started page has its own base-written baseline now
+    # (get_started_dom_7_122_0.json, test_jsdom_get_started_*).
+    assert {
+        key: value
+        for key, value in select_blank["views"].items()
+        if key != "get_started"
+    } == {key: value for key, value in base["views"].items() if key != "get_started"}
 
     moved = sorted(
         key
@@ -13523,7 +13536,13 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
         == hashlib.sha256(FIXTURE_ENV.encode("utf-8")).hexdigest()
     )
 
-    assert select_blank["views"] == base["views"]
+    # 7.122.0 (see the 7.121.0 test above): Get Started is redrawn by its own
+    # release; every other view is unchanged.
+    assert {
+        key: value
+        for key, value in select_blank["views"].items()
+        if key != "get_started"
+    } == {key: value for key, value in base["views"].items() if key != "get_started"}
     assert record["views"] == []
 
     mine = {key: _sha256(html) for key, html in select_blank["controls"].items()}
@@ -13737,3 +13756,635 @@ def test_the_same_body_saved_twice_is_a_no_op(
     commit_prepared_admin_update(again)
 
     assert managed.read_bytes() == settled
+
+
+# ------------------------------------------------- Get Started (7.122.0)
+# The redesigned page: four essentials in four states, nine status cards, the
+# collapsed filterable niche list, the collapsed read-only advanced section,
+# the raw-log warning, "Not for me" and Show hidden through the server's
+# skipped list, Dismiss with its Undo, and every Open button landing on the
+# element it declares. The payloads are the server's own answers, written to a
+# world file here and read by tests/api/admin_jsdom_get_started.mjs.
+
+GET_STARTED_BASELINE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "get_started_dom_7_122_0.json"
+)
+#: The view this release redraws; every OTHER view is compared with the base.
+GET_STARTED_VIEW = "get_started"
+
+
+def _get_started_agents(*, traffic: bool = True, configured_desktop: bool = True):
+    from my_claude_code.config.onboarding import OnboardingAgent
+
+    return (
+        OnboardingAgent(
+            id="claude",
+            display_name="Claude Code",
+            kind="cli",
+            installed=True,
+            command="mcc-claude",
+            requests_7d=5 if traffic else 0,
+        ),
+        OnboardingAgent(
+            id="codex",
+            display_name="Codex CLI",
+            kind="cli",
+            installed=True,
+            command="mcc-codex",
+            requests_7d=1 if traffic else 0,
+        ),
+        OnboardingAgent(
+            id="opencode",
+            display_name="OpenCode",
+            kind="cli",
+            installed=True,
+            command="mcc-opencode",
+        ),
+        OnboardingAgent(
+            id="claude_desktop",
+            display_name="Claude Desktop",
+            kind="desktop",
+            installed=True,
+            state="configured" if configured_desktop else "installed",
+        ),
+    )
+
+
+def _get_started_onboarding() -> dict:
+    """The four payloads the scenario renders, built by the real code.
+
+    ``build_state`` decides every step and ``_onboarding_state_response``
+    serialises it exactly as ``GET /admin/api/onboarding`` answers, so the
+    words on the page are the server's.
+    """
+    from my_claude_code.api.admin_routes import _onboarding_state_response
+    from my_claude_code.config.onboarding import build_state
+
+    fresh_log = {"enabled": True, "total": 0, "last": None}
+    launcher_log = {
+        "enabled": True,
+        "total": 5,
+        "last": {
+            "id": "r-launcher",
+            "ts_epoch": time.time() - 120,
+            "status": "success",
+            "provider": "p1",
+            "resolved_model": "p1/fake-small",
+            "requested_model": "claude-sonnet-5",
+            "harness": "claude",
+            "optimization": None,
+        },
+    }
+    variants = {}
+    variants["fresh"] = _onboarding_state_response(
+        build_state(
+            claude_settings_configured=False,
+            has_requests=False,
+            agents=_get_started_agents(traffic=False, configured_desktop=False),
+        ),
+        dict(fresh_log),
+    )
+    variants["launcher"] = _onboarding_state_response(
+        build_state(
+            claude_settings_configured=False,
+            has_requests=True,
+            agents=_get_started_agents(),
+        ),
+        dict(launcher_log),
+    )
+    variants["wsl"] = _onboarding_state_response(
+        build_state(
+            claude_settings_configured=True,
+            has_requests=False,
+            agents=_get_started_agents(traffic=False, configured_desktop=False),
+        ),
+        dict(fresh_log),
+    )
+    variants["log_off"] = _onboarding_state_response(
+        build_state(
+            claude_settings_configured=True,
+            has_requests=False,
+            agents=_get_started_agents(traffic=False, configured_desktop=False),
+            request_log_enabled=False,
+        ),
+        {"enabled": False, "total": 0, "last": None},
+    )
+    variants["empty"] = {
+        "dismissed": True,
+        "steps": [],
+        "required_total": 0,
+        "required_done": 0,
+        "complete": True,
+        "skipped": [],
+        "request_log": {"enabled": True, "total": 0, "last": None},
+    }
+    return variants
+
+
+def _get_started_onboarding_in_a_clean_shell() -> dict:
+    """``_get_started_onboarding`` with no credential in the environment.
+
+    A fresh install is a machine with no provider key set anywhere, and the
+    process environment outranks every file, so this is the only way the four
+    variants stay the same on a developer machine, on CI and on a base tree.
+    """
+    from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
+    from my_claude_code.config.websearch_catalog import WEBSEARCH_CATALOG
+
+    names = {"TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "MODEL"}
+    for descriptor in PROVIDER_CATALOG.values():
+        if descriptor.credential_env:
+            names.add(descriptor.credential_env)
+    for descriptor in WEBSEARCH_CATALOG.values():
+        if descriptor.credential_env:
+            names.add(descriptor.credential_env)
+    with pytest.MonkeyPatch.context() as patch:
+        for name in names:
+            patch.delenv(name, raising=False)
+        return _get_started_onboarding()
+
+
+def _get_started_world(root: Path, *, raw_logs_on: bool = False) -> Path:
+    """Write the world file the scenario renders, and return its path.
+
+    The config payload is the server's own answer for a fake managed ``.env``
+    (``tests/support/select_blank_payload.py``); this adds the three values the
+    page reads off it that a fixture file cannot state -- provider status,
+    route status and the manual-only web-search ids -- and, for the raw run,
+    switches one raw-log setting on.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    payload = build_payload(root / "config.json")
+    by_key = {field["key"]: field for field in payload["fields"]}
+
+    def set_value(key: str, value: str) -> None:
+        field = by_key[key]
+        field["value"] = value
+        field["configured"] = bool(value.strip())
+        field["set"] = True
+        field["source"] = "managed_env"
+
+    # A working setup: Zen's free tiers on four routes, one fallback chain, a
+    # vision adapter, one media rail, and no key for nvidia_nim (which the
+    # Haiku route names).
+    set_value("MODEL_FABLE", "opencode/muse-spark-1.3-contributor-free")
+    set_value("MODEL_OPUS", "opencode/muse-spark-1.3-contributor-free")
+    set_value("MODEL_MYTHOS", "opencode/muse-spark-1.3-contributor-free")
+    set_value("MODEL_SONNET", "opencode/muse-spark-1.3-contributor-free")
+    set_value("MODEL_FALLBACKS", "groq/llama-3.3-70b")
+    set_value("MODEL_VISION", "groq/llama-4-scout")
+    set_value("MODEL_IMAGE", "p1/image-1")
+    set_value("MCP_MEDIA_APPS", "claude,codex")
+    set_value("ENABLE_WEB_SERVER_TOOLS", "true")
+    set_value("LOG_RAW_SSE_EVENTS", "true" if raw_logs_on else "false")
+
+    world = {
+        "config": payload,
+        "world": {
+            "provider_status": [
+                {
+                    "provider_id": "opencode",
+                    "display_name": "OpenCode Zen",
+                    "status": "free_ready",
+                    "label": "Free models ready",
+                    "credential_env": "OPENCODE_API_KEY",
+                    "key_count": 0,
+                    "kind": "remote",
+                },
+                {
+                    "provider_id": "groq",
+                    "display_name": "Groq",
+                    "status": "configured",
+                    "label": "Configured",
+                    "credential_env": "GROQ_API_KEY",
+                    "key_count": 2,
+                    "kind": "remote",
+                },
+                {
+                    "provider_id": "nvidia_nim",
+                    "display_name": "NVIDIA NIM",
+                    "status": "missing_key",
+                    "label": "Missing key",
+                    "credential_env": "NVIDIA_NIM_API_KEY",
+                    "key_count": 0,
+                    "kind": "remote",
+                },
+            ],
+            "route_status": {
+                "providers": {
+                    "nvidia_nim": {
+                        "state": "no_credentials",
+                        "action": "add_key",
+                        "display_name": "NVIDIA NIM",
+                    }
+                }
+            },
+            "websearch_manual_only": ["context7"],
+            "harness_tiers": {
+                "tiers": [
+                    {"id": "best", "label": "Best"},
+                    {"id": "good", "label": "Good"},
+                ],
+                "harnesses": {
+                    "claude": {
+                        "best": {"override": None},
+                        "good": {"override": None},
+                    },
+                    "codex": {
+                        "best": {"override": "groq/llama-3.3-70b"},
+                        "good": {"override": None},
+                    },
+                },
+            },
+            "marketplaces": {"views": []},
+            "raw_logs_on": raw_logs_on,
+        },
+        # The four onboarding payloads are built with every provider and
+        # web-search credential cleared: `load_value_state` treats the process
+        # environment as its highest layer, and a test shell that exports one
+        # (the suite itself does, for hermeticity) would otherwise change which
+        # essentials the fixture reports as done.
+        "onboarding": _get_started_onboarding_in_a_clean_shell(),
+    }
+    path = root / ("world-raw.json" if raw_logs_on else "world.json")
+    path.write_text(json.dumps(world, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _get_started_run(tmp_path: Path, *, raw_logs_on: bool, mode: str) -> dict:
+    with pytest.MonkeyPatch.context() as patch:
+        home = tmp_path / "home"
+        home.mkdir()
+        patch.setenv("HOME", str(home))
+        patch.setenv("USERPROFILE", str(home))
+        patch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+        patch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
+        patch.delenv("MCC_CONFIG_DIR", raising=False)
+        patch.delenv("MCC_ENV_FILE", raising=False)
+        world = _get_started_world(tmp_path, raw_logs_on=raw_logs_on)
+    return _run(
+        MCC_JSDOM_SCENARIO="get_started",
+        MCC_JSDOM_GET_STARTED_FILE=str(world),
+        MCC_JSDOM_GET_STARTED_MODE=mode,
+    )
+
+
+@pytest.fixture(scope="module")
+def get_started(tmp_path_factory) -> dict:
+    return _get_started_run(
+        tmp_path_factory.mktemp("get_started"), raw_logs_on=False, mode="full"
+    )
+
+
+@pytest.fixture(scope="module")
+def get_started_raw(tmp_path_factory) -> dict:
+    return _get_started_run(
+        tmp_path_factory.mktemp("get_started_raw"), raw_logs_on=True, mode="raw"
+    )
+
+
+def test_get_started_scenario_runs_clean(get_started) -> None:
+    assert get_started["fatal"] is None
+    assert get_started["scenarioFatal"] is None
+    assert get_started["scriptErrors"] == []
+    assert get_started["consoleErrors"] == []
+    assert get_started["baseTree"] is False
+
+
+def test_get_started_draws_four_essentials_and_every_card(get_started) -> None:
+    fresh = get_started["fresh"]
+
+    assert [step["id"] for step in fresh["steps"]] == [
+        "provider",
+        "models",
+        "client",
+        "analytics",
+    ]
+    assert fresh["progress"] == "0 of 4 essentials done"
+    assert [step["label"] for step in fresh["steps"]] == [
+        "Add a model provider",
+        "Choose a model for each tier",
+        "Connect a coding agent",
+        "Check it worked — see your first request in Analytics",
+    ]
+    # The one expanded is the first unfinished essential.
+    assert [step["expanded"] for step in fresh["steps"]] == [True, False, False, False]
+    assert get_started["cardCount"] == get_started["mainCards"] == 9
+    seen = {card["id"]: card for card in fresh["cards"]}
+    assert set(seen) == {
+        "fallback_chains",
+        "tiers_per_agent",
+        "reasoning",
+        "web_search",
+        "images",
+        "media_tools",
+        "analytics_cost",
+        "several_keys",
+        "proxying",
+    }
+    for card in seen.values():
+        assert card["title"], card
+        assert card["line"], card
+        assert card["opens"], card
+    # The one collapsed niche list, and the one collapsed advanced section.
+    assert fresh["moreDisclosureOpen"] is False
+    assert fresh["advancedOpen"] is False
+    assert fresh["moreCount"] == get_started["moreRows"] == 22
+    # The lead is one short paragraph, and the long essay is folded away.
+    assert len(fresh["lead"].split()) < 70
+    assert fresh["about"].startswith("Server or desktop app?")
+
+
+def test_get_started_statuses_come_from_the_loaded_payload(get_started) -> None:
+    cards = {card["id"]: card for card in get_started["fresh"]["cards"]}
+
+    assert cards["fallback_chains"]["pill"] == "In use · 1 chain"
+    assert cards["fallback_chains"]["state"] == "in_use"
+    assert cards["tiers_per_agent"]["pill"] == "Custom for 1 agent"
+    assert cards["reasoning"]["pill"] == "Default"
+    assert cards["web_search"]["pill"] == "Ready · DuckDuckGo, no key"
+    assert cards["web_search"]["state"] == "ready"
+    assert cards["images"]["pill"] == "Vision adapter: llama-4-scout"
+    assert cards["media_tools"]["pill"] == "1 of 4 rails"
+    assert cards["media_tools"]["detail"] == "Tools in 2 agents"
+    assert cards["analytics_cost"]["pill"] == "No requests yet"
+    assert cards["several_keys"]["pill"] == "1 provider with 2+ keys"
+    assert cards["proxying"]["state"] == "not_checked"
+
+
+def test_get_started_essential_3_is_done_for_a_launcher_user(get_started) -> None:
+    """U2: mcc-claude sent five requests and no settings.json points here."""
+
+    steps = {step["id"]: step for step in get_started["launcher"]["steps"]}
+
+    assert steps["client"]["pill"] == "Done"
+    assert steps["client"]["state"] == "done"
+    assert (
+        steps["client"]["line"]
+        == "Connected this week: Claude Code (5) · Codex CLI (1)"
+    )
+    assert steps["analytics"]["pill"] == "Done"
+    assert "Last request" in steps["analytics"]["line"]
+    assert "answered by fake-small" in steps["analytics"]["line"]
+
+
+def test_get_started_essential_3_is_done_from_a_wsl_settings_file(get_started) -> None:
+    steps = {step["id"]: step for step in get_started["wsl"]["steps"]}
+
+    assert steps["client"]["pill"] == "Done"
+    # Nothing is connected this week, and the line does not pretend otherwise.
+    assert steps["client"]["line"] == ""
+
+
+def test_get_started_step_4_is_not_measured_when_logging_is_off(get_started) -> None:
+    steps = {step["id"]: step for step in get_started["logOff"]["steps"]}
+
+    assert steps["analytics"]["pill"] == "Not measured"
+    assert steps["analytics"]["state"] == "not_measured"
+    # Three essentials are counted, not four: the unmeasurable one is out.
+    assert get_started["logOff"]["progress"] == "1 of 3 essentials done"
+    assert any(
+        "Request logging is off" in text
+        for text in get_started["logOff"]["analyticsBody"]
+    )
+
+
+def test_get_started_renders_a_payload_with_no_steps(get_started) -> None:
+    empty = get_started["empty"]
+
+    assert empty["progressHidden"] is True
+    assert empty["steps"] == 0
+    # The cards are the page's own: they render whatever the server sent.
+    assert empty["cards"] == 9
+    assert empty["scriptErrors"] == []
+
+
+def test_get_started_filter_matches_titles_and_one_liners_only(get_started) -> None:
+    frames = {frame["query"]: frame for frame in get_started["filter"]["frames"]}
+
+    assert frames[""]["count"] == "22 of 22"
+    assert frames["cache"]["rows"] == ["prompt_cache_lifetime"]
+    assert frames["cache"]["count"] == "1 of 22"
+    assert frames["cache"]["empty"]["hidden"] is True
+    assert "Nothing matches" in frames["rotation"]["empty"]["text"]
+    # A word that appears only in a control's label, never in the row's copy,
+    # finds nothing -- the lesson of the Web Search find box (U6).
+    assert frames["rotation"]["rows"] == []
+    assert frames["zzz-nothing"]["rows"] == []
+    assert get_started["filter"]["count"] == "22 of 22"
+
+
+def test_get_started_advanced_section_is_read_only_and_shows_current_values(
+    get_started,
+) -> None:
+    advanced = get_started["advanced"]
+
+    assert advanced["open"] is True
+    groups = {group["key"]: group for group in advanced["groups"]}
+    assert set(groups) == {"limits", "raw", "testing"}
+    assert len(groups["limits"]["rows"]) == 8
+    assert len(groups["raw"]["rows"]) == 9
+    assert len(groups["testing"]["rows"]) == 11
+    deadlines = next(
+        row for row in groups["limits"]["rows"] if row["id"] == "deadlines"
+    )
+    assert [chip["key"] for chip in deadlines["values"]] == [
+        "FALLBACK_FIRST_TOKEN_TIMEOUT",
+        "FALLBACK_TOTAL_TIMEOUT",
+        "FALLBACK_STALL_TIMEOUT",
+    ]
+    assert len(deadlines["opens"]) == 1
+    # Every row names the setting's current value or its default, never a
+    # value MCC would like the reader to pick.
+    assert all(
+        chip["text"]
+        for group in groups.values()
+        for row in group["rows"]
+        for chip in row["values"]
+    )
+
+
+def test_get_started_does_not_show_a_suggested_value(get_started) -> None:
+    """The advanced rows never recommend a value (decision 4)."""
+
+    rows = [row for group in get_started["advanced"]["groups"] for row in group["rows"]]
+    for row in rows:
+        text = (
+            f"{row['title']} {' '.join(chip['text'] for chip in row['values'])}".lower()
+        )
+        for nudge in ("set it to", "recommended", "we suggest", "you should"):
+            assert nudge not in text, (row["id"], nudge)
+
+
+def test_get_started_raw_warning_only_when_a_switch_is_on(
+    get_started, get_started_raw
+) -> None:
+    assert get_started["fresh"]["rawWarning"] == {"present": False}
+
+    warning = get_started_raw["rawOnly"]["warning"]
+    assert warning["present"] is True
+    assert warning["count"] == "1"
+    assert "Raw logs are ON (1)" in warning["text"]
+    assert "prompt text" in warning["text"]
+    landed = get_started_raw["rawOnly"]["landed"]
+    assert landed["dataKey"] == "LOG_RAW_SSE_EVENTS"
+    assert landed["view"] == "limits"
+    assert landed["hidden"] is False
+    assert "onboarding-highlight" in landed["className"]
+
+
+def test_get_started_every_open_button_lands_on_its_target(get_started) -> None:
+    opens = get_started["opens"]
+
+    assert get_started["openButtonCount"] >= 22
+    assert [entry["key"] for entry in opens if not entry["found"]] == []
+    assert [entry["key"] for entry in opens if not entry["isTarget"]] == []
+    assert [entry["key"] for entry in opens if entry["inCollapsedFold"]] == []
+    assert [entry["key"] for entry in opens if entry["element"]["hidden"]] == []
+
+
+def test_get_started_not_for_me_round_trips_through_the_server(get_started) -> None:
+    hidden = get_started["hidden"]
+
+    assert "fallback_chains" in hidden["before"]
+    assert "fallback_chains" not in hidden["afterHide"]
+    assert hidden["afterShow"] == hidden["before"]
+    assert hidden["showHiddenLabelSeen"] == "Show hidden (1)"
+    # The page sent the server a skipped list, and kept nothing locally.
+    assert {"skipped": ["fallback_chains"]} in hidden["posts"]
+    assert {"skipped": []} in hidden["posts"]
+    # Nothing about the hidden list is kept in the browser: the only place it
+    # lives is the server's onboarding file (decision 5).
+    local = [key for key in get_started["localStorageKeys"] if "started" in key.lower()]
+    assert local == []
+    assert [
+        key for key in get_started["localStorageKeys"] if "skipped" in key.lower()
+    ] == []
+
+
+def test_get_started_dismiss_has_an_undo(get_started) -> None:
+    dismiss = get_started["dismiss"]
+
+    assert dismiss["dismissedFooter"]["dismiss"] == "Undo dismiss"
+    assert dismiss["dismissedFooter"]["dismissed"] == "true"
+    assert "Undo brings it back" in dismiss["dismissedFooter"]["message"]
+    assert dismiss["dismissedFooter"]["messageHidden"] is False
+    assert dismiss["undoneFooter"]["dismiss"] == "Don't open this on start"
+    assert dismiss["undoneFooter"]["dismissed"] == "false"
+    assert {"dismissed": True} in dismiss["posts"]
+    assert {"dismissed": False} in dismiss["posts"]
+
+
+def test_get_started_guide_link_opens_the_guide_and_records_the_visit(
+    get_started,
+) -> None:
+    link = get_started["guideLink"]
+
+    assert link["guideVisible"] is True
+    assert link["purpose"]
+    assert link["anchor"].startswith("guide-")
+    assert link["visitedPosted"] is True
+
+
+def _declared_opens_by_row() -> dict:
+    """The catalogue's own table: row id -> the targets it declares, in order."""
+    from tests.contracts.test_get_started_catalogue import _entries
+
+    table = {}
+    for entry in _entries():
+        keys = []
+        for target in entry["opens"]:
+            kind, value = target.get("kind"), target.get("value")
+            keys.append(f"{target['view']}:{kind}:{value}" if kind else target["view"])
+        table[entry["id"]] = keys
+    return table
+
+
+def test_get_started_every_niche_row_is_a_door(get_started) -> None:
+    """The user's 2026-10-31 feedback: every row of "More things MCC can do"
+    carries a button that takes the reader to its page AND card, says where it
+    goes, and (decision 5) a "Not for me".
+
+    The table below is read from the page's own catalogue, so a row that lost
+    its button, changed its target or has no hide control fails here.
+    """
+
+    declared = _declared_opens_by_row()
+    rows = {row["id"]: row for row in get_started["filter"]["rows"]}
+
+    assert len(rows) == 22
+    wrong = []
+    for row_id, row in rows.items():
+        if not row["opens"]:
+            wrong.append(f"{row_id}: no Open button")
+            continue
+        if row["hide"] != "Not for me":
+            wrong.append(f"{row_id}: no Not for me ({row['hide']!r})")
+        got = [button["key"] for button in row["opens"]]
+        want = declared[row_id]
+        if got != want:
+            wrong.append(f"{row_id}: targets {got} != declared {want}")
+        for button in row["opens"]:
+            label = button["label"]
+            if not label.startswith("Open "):
+                wrong.append(f"{row_id}: label {label!r} does not open")
+            elif want and " → " not in label and any(":" in key for key in want[:1]):
+                wrong.append(f"{row_id}: label {label!r} does not name the card")
+    assert wrong == []
+
+
+def test_get_started_every_advanced_row_is_a_door_too(get_started) -> None:
+    rows = [row for group in get_started["advanced"]["groups"] for row in group["rows"]]
+    declared = _declared_opens_by_row()
+
+    assert len(rows) == 28
+    assert [
+        row["id"]
+        for row in rows
+        if [button["key"] for button in row["opens"]] != declared[row["id"]]
+    ] == []
+    assert [row["id"] for row in rows if row["hide"] != "Not for me"] == []
+    assert [
+        f"{row['id']}: {button['label']!r}"
+        for row in rows
+        for button in row["opens"]
+        if not button["label"].startswith("Open ")
+    ] == []
+
+
+def test_get_started_never_writes_a_setting(get_started, get_started_raw) -> None:
+    """This page reads and links; it never calls the settings save."""
+
+    assert get_started["applyCalls"] == 0
+    assert get_started["applyWrites"] == []
+    assert get_started_raw["applyCalls"] == 0
+
+
+def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
+    get_started,
+) -> None:
+    """The base-written baseline: the same scenario on the BASE tree 12357c96.
+
+    Only Get Started is this release's subject, so its view is excluded; every
+    other view -- the Guide and Docs included -- is byte-identical to the page
+    the base tree drew for the same payload.
+    """
+
+    baseline = json.loads(GET_STARTED_BASELINE.read_text(encoding="utf-8"))
+    assert "12357c96" in baseline["written_by"]
+    base = baseline["views"]
+
+    mine = dict(get_started["viewsOnLoad"])
+    base_without = {
+        key: value for key, value in base.items() if key != GET_STARTED_VIEW
+    }
+    mine_without = {
+        key: value for key, value in mine.items() if key != GET_STARTED_VIEW
+    }
+    assert set(base_without) == set(mine_without)
+    moved = sorted(
+        view for view, digest in base_without.items() if mine_without[view] != digest
+    )
+    assert moved == []
+    # And Get Started really did change (the baseline is not vacuous).
+    assert mine[GET_STARTED_VIEW] != base[GET_STARTED_VIEW]
