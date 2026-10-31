@@ -30,8 +30,12 @@ still reads 0 for local rows that ``optimization`` already names.
 
 A no-answer row is then:
 
-* ``thought_only`` when ``thinking_chars > 0`` -- the model reasoned and the
-  turn ended before any answer;
+* ``thought_only`` when it reasoned: ``thinking_chars > 0``, or -- since
+  7.122.2 -- ``reasoning_tokens > 0`` with no visible thinking text at all,
+  which is the same fact written by a host that keeps the text and reports
+  the count. Six such rows in seven days of one real log reported 65,000
+  output tokens each with nothing to show for them; they carried no label and
+  read as ordinary empty successes.
 * ``empty`` when ``COALESCE(tokens_out, 0) = 0`` as well -- nothing at all.
 
 A no-answer row with neither -- no reasoning counted but output tokens
@@ -89,6 +93,7 @@ SUCCESS_REASON_SOURCE_COLUMNS: tuple[str, ...] = (
     "output_chars",
     "tool_call_count",
     "thinking_chars",
+    "reasoning_tokens",
     "tokens_out",
     "optimization",
 )
@@ -100,6 +105,7 @@ def classify_success(
     output_chars: int | None = None,
     tool_call_count: int | None = None,
     thinking_chars: int | None = None,
+    reasoning_tokens: int | None = None,
     tokens_out: int | None = None,
     optimization: str | None = None,
 ) -> str | None:
@@ -111,7 +117,11 @@ def classify_success(
         return None
     if optimization is not None:
         return None
-    if int(thinking_chars or 0) > 0:
+    # Visible thinking text and the host's reported reasoning-token count are
+    # two spellings of "it reasoned and said nothing else". The count is the
+    # only evidence when the text is withheld, which is the shape a 65,000
+    # output-token success with no text takes.
+    if int(thinking_chars or 0) > 0 or int(reasoning_tokens or 0) > 0:
         return THOUGHT_ONLY
     if int(tokens_out or 0) == 0:
         return EMPTY
@@ -126,6 +136,7 @@ def classify_success_row(row: Mapping[str, Any]) -> str | None:
         output_chars=row.get("output_chars"),
         tool_call_count=row.get("tool_call_count"),
         thinking_chars=row.get("thinking_chars"),
+        reasoning_tokens=row.get("reasoning_tokens"),
         tokens_out=row.get("tokens_out"),
         optimization=row.get("optimization"),
     )
@@ -150,7 +161,10 @@ def success_sub_label_case_sql(table: str = "requests") -> str:
         f"CASE WHEN COALESCE({t}.output_chars, 0) = 0"
         f" AND COALESCE({t}.tool_call_count, 0) = 0"
         f" AND {t}.optimization IS NULL THEN CASE"
-        f" WHEN COALESCE({t}.thinking_chars, 0) > 0 THEN '{THOUGHT_ONLY}'"
+        # Visible thinking text, or the host's own reasoning-token count when
+        # it kept the text back: the same fact, measured two ways (7.122.2).
+        f" WHEN COALESCE({t}.thinking_chars, 0) > 0"
+        f" OR COALESCE({t}.reasoning_tokens, 0) > 0 THEN '{THOUGHT_ONLY}'"
         f" WHEN COALESCE({t}.tokens_out, 0) = 0 THEN '{EMPTY}'"
         " END END"
     )

@@ -1857,7 +1857,8 @@
                       title="What the turn contained: the images that went in, thinking, tool calls, a reply. A media request says what it did: 1 image generated, speech · 4.2s, transcribed · 31s, video job -- or image request, speech request, transcription request, video request when it produced nothing.">Turn</th>
                     <th>Tokens</th>
                     <th>Cost</th>
-                    <th>TTFT</th>
+                    <th
+                      title="Time to the first visible byte: the answering model's own, with the time the chain lost to models that did not answer as a suffix. It is not a first token — MCC's commit holdback can release the first byte at the end of a short answer.">First byte</th>
                     <th>Duration</th>
                     <th>Details</th>
                   </tr>
@@ -5537,7 +5538,7 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <em>Auto-refresh</em> on, the table follows the interval chosen beside
                   it; a request finishing no longer reloads the whole page. The heavy
                   totals &mdash; the cards, the charts, the breakdowns, cost, latency
-                  and TTFT &mdash; are re-read at most once a minute, and each panel's
+                  and first-byte &mdash; are re-read at most once a minute, and each panel's
                   caption ends with <em>as of hh:mm:ss</em>, the time its numbers were
                   computed. Opening the page, changing a filter, paging or pressing
                   <em>Refresh</em> still reads everything at once. The in-flight count
@@ -5613,8 +5614,9 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   in the Model requests export &mdash; one provider, one model, one
                   verdict &mdash; and the two models that spent the time are not in it at
                   all. Each attempt row carries its own provider, model, outcome, key,
-                  TTFT, first-reasoning time, duration and what ended it, beside the
-                  parent request's time, harness, endpoint, models and status.
+                  time to its first visible byte, first-reasoning time, duration and
+                  what ended it, beside the parent request's time, harness, endpoint,
+                  models and status.
                 </p>
                 <p class="guide-note">
                   <strong>The filters are the request filters, and empty means never
@@ -5625,8 +5627,8 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   backfilled, attempt tokens are filled only on the winning attempt, and a
                   skipped attempt has no latency at all &mdash; only a reason. Those cells
                   are blank rather than zero. The scope is detail-only: there is no Group
-                  by, because the per-model <em>p50 TTFT</em> cards already answer that
-                  question properly.
+                  by, because the per-model <em>p50 first-byte</em> cards already answer
+                  that question properly.
                 </p>
                 <h4>Finding a request again</h4>
                 <p>
@@ -5796,7 +5798,8 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   A request that fell back waited for every model ahead of the one
                   that answered, and until 7.5.0 the whole of that wait was printed
                   against the model that rescued it. The Requests row now shows the
-                  <strong>winner&rsquo;s</strong> own first-token time, with a
+                  <strong>winner&rsquo;s</strong> own time to its first visible
+                  byte, with a
                   <code>+N s</code> suffix for the time the chain lost &mdash;
                   <code>300 ms +4.4 s</code> reads &ldquo;the model that answered took
                   300 ms; you waited 4.7 s&rdquo;. Both numbers are in the
@@ -5807,12 +5810,32 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 </p>
                 <p>
                   <strong>View</strong> breaks the same request into its attempts:
-                  each row of <em>Route attempts</em> carries its own TTFT, first
-                  reasoning time, generating time, tokens out, tok/s and what ended
-                  it. <em>Output rate</em> is measured from the winner&rsquo;s first
-                  token, so a fallback request no longer reports a rate that is too
-                  high. A model that was never asked keeps its row with dashes and
-                  its bench reason underneath.
+                  each row of <em>Route attempts</em> carries its own time to the
+                  first visible byte, first reasoning time, time after that byte,
+                  tokens out, a <em>generation</em> rate and a
+                  <em>throughput</em>, and what ended it. A model that was never
+                  asked keeps its row with dashes and its bench reason underneath.
+                </p>
+                <p class="guide-note">
+                  <strong>Generation rate and throughput are two different
+                  numbers, and 7.122.2 is where they were separated.</strong>
+                  <em>Generation rate</em> divides the tokens the provider
+                  reported &mdash; reasoning and tool arguments included &mdash;
+                  by the window in which the model produced them: the first to
+                  the last delta of any kind, both measured at the upstream
+                  stream, before MCC&rsquo;s commit holdback and its
+                  tool-argument assembly. It is the headline, and it refuses to
+                  print when the window is shorter than <strong>500 ms</strong>
+                  or the count is below <strong>8</strong> tokens: a
+                  <code>12 tokens / 0.004 s</code> line is not information.
+                  <em>Throughput</em> divides the same tokens by the whole
+                  request &mdash; routing, thinking, fallbacks and your own wait
+                  &mdash; and is the only rate a row written before 7.122.2 can
+                  support. The rate that used to be shown here divided by
+                  <code>duration &minus; ttft</code>, which mixes a count that
+                  includes thinking with a window that excluded it and, on a
+                  real log, printed <strong>429,152 tok/s</strong> for a 68 s
+                  answer.
                 </p>
                 <p>
                   <strong>Analytics &rarr; Model latency</strong> groups every route
@@ -5822,7 +5845,11 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   (<code>p50</code>), keeps the p95 in the tooltip, and states how
                   many of its attempts were actually measured &mdash; a panel may
                   never report a percentile over twelve attempts as if it described
-                  4,431. The panel answers over the window only, not the filters
+                  4,431. It carries a <em>generation rate</em> and a
+                  <em>throughput</em> per group under the same rules as the
+                  request dialog; a group rate is computed in SQL and refused
+                  unless every attempt in the group carries a measured window.
+                  The panel answers over the window only, not the filters
                   above it: a failed attempt has no request row to filter on. The
                   Models page carries the same median per model as a chip, and no
                   chip at all for a model nothing has measured.

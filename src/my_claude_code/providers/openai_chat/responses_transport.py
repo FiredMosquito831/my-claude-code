@@ -41,6 +41,7 @@ from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import EMPTY_TOOL_CATALOGUE
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.client_fingerprint import current_fingerprint
+from my_claude_code.core.generation_rate import GenerationClock
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.core.upstream_ladder import note_recovery_rung, note_response_head
 from my_claude_code.core.wire_capture import (
@@ -60,6 +61,7 @@ from my_claude_code.providers.openai_responses import (
     history_thinking_marker,
     iter_responses_sse_events,
     note_responses_event_shape,
+    note_responses_generation_delta,
     responses_tool_name_codec,
 )
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
@@ -856,12 +858,20 @@ class ResponsesTransport:
                 try:
                     yield ledger.message_start()
                     shape = start_response_shape()
+                    # The protocol's own ``*.delta`` events, not the converter's
+                    # assembled output: answer text is buffered while think
+                    # tags are parsed, so a delta released at the end was
+                    # generated much earlier (7.122.2).
+                    generation = GenerationClock()
                     async for event in iter_responses_sse_events(response.aiter_raw()):
                         note_responses_event_shape(shape, event)
+                        note_responses_generation_delta(generation, event)
                         for sse_event in converter.feed(event):
                             yield sse_event
                     for sse_event in converter.finish():
                         yield sse_event
+                    if shape is not None:
+                        shape.note_generation(generation.first_at, generation.last_at)
                     record_response_shape(shape)
                 finally:
                     await response.aclose()

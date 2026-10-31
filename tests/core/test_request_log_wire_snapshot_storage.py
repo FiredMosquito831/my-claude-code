@@ -138,6 +138,11 @@ def _reference_store_attempts(conn: sqlite3.Connection, batch: list[Any]) -> Non
             attempt.ttft_ms,
             attempt.first_reasoning_ms,
             attempt.proxy_label,
+            # 7.122.2: the generation window, written here exactly as the
+            # current writer writes it -- the point of this reference is the
+            # *wire body* encoding, not the row's width.
+            attempt.gen_first_ms,
+            attempt.gen_last_ms,
         )
         for record in batch
         for attempt in record.attempts

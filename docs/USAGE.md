@@ -4914,7 +4914,7 @@ Summary cards cover volume, success and error rate, latency percentiles, time-to
 </div>
 
 <div align="center">
-  <img src="../assets/admin-analytics-latency.png" alt="A per-model latency table with attempt counts, share, measured time-to-first-token, p50 TTFT, average first-reasoning and generating times" width="860">
+  <img src="../assets/admin-analytics-latency.png" alt="A per-model latency table with attempt counts, share, measured time to first visible byte, p50 first byte, average first-reasoning and post-first-byte times, a generation rate and a throughput" width="860">
   <p><em>Model latency: answered and failed counted separately for the same model, because a model that fails fast is not a fast model.</em></p>
 </div>
 
@@ -5003,9 +5003,9 @@ Where you see it:
 
 The labels are worked out from columns the log already stores (`output_chars`, `tool_call_count`, `thinking_chars`, `tokens_out`, `optimization`). Nothing new is recorded and nothing is migrated, so older rows get labels too. The one exception is rows logged before MCC began counting tool calls. Those rows cannot show whether the turn called a tool, so a row from then with output tokens and no text gets no label.
 
-#### The three time-to-first-token numbers, and which one to trust
+#### The three time-to-first-visible-byte numbers, and which one to trust
 
-From **7.4.0** the log stores a first-token time per *attempt*, not only per request. There are three numbers and they answer three different questions:
+From **7.4.0** the log stores a first-byte time per *attempt*, not only per request. There are three numbers and they answer three different questions:
 
 | Number | Clock starts | Answers |
 | --- | --- | --- |
@@ -5019,15 +5019,37 @@ Two more things worth knowing:
 
 - **Reasoning does not count as a first token.** A model that thinks for 40 s and then answers in 200 ms has an attempt TTFT of 200 ms and a separate **first reasoning** time of ~0 ms. One number cannot say both, and folding them together makes every reasoning model read as either instant or catastrophic.
 - **Nothing is backfilled.** Every request logged before 7.4.0 shows `—` in the two new columns and always will: the log never recorded when each attempt's own stream began, so there is nothing to recover. A dash is "not measured"; it is never zero.
+- **It is a first *visible byte*, not a first *token* (7.122.2).** MCC holds a short window of every stream so an early failure can be retried without a seam, and it assembles tool arguments before forwarding them. On an answer shorter than that window the first byte reaches the client at the *end* of the answer. The numbers did not change — only the label, which used to claim something the holdback makes false.
 
 From **7.5.0** those numbers are on the pages rather than only in the database:
 
-- **The Requests row** shows the *winner's* TTFT, with a `+N s` suffix when the chain lost time to models that did not answer — `300 ms +4.4 s` reads "the model that answered took 300 ms; you waited 4.7 s". The suffix appears only when the gap is more than 250 ms, because the winner's own clock starts a frame after the request's. Both numbers spelled out are in the cell's tooltip. A row logged before 7.4.0 shows what it always showed, and says so on hover.
-- **The request dialog** lists `TTFT (winner)`, `TTFT (incl. fallbacks)` and — only when there is one — `Lost to fallbacks`. **Output rate** is now measured on the answering attempt's own clock, so both halves of the rate come from the same model. The old form took the request's TTFT out of the request's duration, which on a fallback request removed the predecessors' stall from the denominator and reported a rate that was too high — the worse the fallback, the better it looked. (Rows logged before 7.4.0 have no attempt clock and still use the request's, with the winner's TTFT where there is one.)
-- **Route attempts** carries a line per attempt: TTFT · first reasoning · generating · tokens out · tok/s · what ended it. A model that was never asked keeps its row with dashes in every latency cell and its bench reason underneath — "the fallback was never tried" stays visible. Since 7.105.2, when a gateway refuses with only a generic phrase and an id (Command Code's `invalid request error trace_id: …`), *what ended it* reads **the gateway gave no reason (trace id …)**, the id sits on its own line with a **Copy** button for the gateway's support, and the host's text stays recorded verbatim underneath (`params.gateway_trace_id` in the attempt row; the failure kind and the fallback are unchanged).
-- **Model latency** on the Analytics page groups every route attempt by model *and outcome*, because "quick when it works and a minute when it does not" is one model and two facts. Each row carries `p50 TTFT` with the p95 in its tooltip, how many of its attempts were actually measured, and a rate that is refused unless every attempt in the group carries a measurement. The panel is not narrowed by the filters above it — an attempt belongs to a model, and a failed one has no request row to filter on — and it says so.
-- **The Models page** grows a `p50 TTFT` chip per model, over the same window as the reasoning chip beside it. A model that served no measured attempt gets no chip at all rather than a zeroed one.
-- **The Models page** also carries an `in-loop turns ended with text only` chip per model (7.115.1): the turns that followed a tool result and ended with assistant text and no tool call — the "it said it would keep reading and stopped" shape, counted from the request log and shown as the count over the in-loop turns it came out of. Only requests that carried a session id can be sequenced, the count covers succeeded turns, and it is observation only: nothing about the requests themselves changes.
+- **The Requests row** shows the *winner's* time to its first visible byte, with a `+N s` suffix when the chain lost time to models that did not answer — `300 ms +4.4 s` reads "the model that answered took 300 ms; you waited 4.7 s". The suffix appears only when the gap is more than 250 ms, because the winner's own clock starts a frame after the request's. Both numbers spelled out are in the cell's tooltip. A row logged before 7.4.0 shows what it always showed, and says so on hover.
+- **The request dialog** lists `First visible byte (winner)`, `First visible byte (incl. fallbacks)` and — only when there is one — `Lost to fallbacks`, plus the two rates described below.
+- **Route attempts** carries a line per attempt: first byte · first reasoning · after first byte · tokens out · generation · throughput · what ended it. A model that was never asked keeps its row with dashes in every latency cell and its bench reason underneath — "the fallback was never tried" stays visible. Since 7.105.2, when a gateway refuses with only a generic phrase and an id (Command Code's `invalid request error trace_id: …`), *what ended it* reads **the gateway gave no reason (trace id …)**, the id sits on its own line with a **Copy** button for the gateway's support, and the host's text stays recorded verbatim underneath (`params.gateway_trace_id` in the attempt row; the failure kind and the fallback are unchanged).
+- **Model latency** on the Analytics page groups every route attempt by model *and outcome*, because "quick when it works and a minute when it does not" is one model and two facts. Each row carries `p50 first byte` with the p95 in its tooltip, how many of its attempts were actually measured, and a **generation rate** plus a **throughput**, both computed in SQL from stored columns and refused on the same terms as the request dialog's. The panel is not narrowed by the filters above it — an attempt belongs to a model, and a failed one has no request row to filter on — and it says so.
+- **The Models page** grows a `p50 first byte` chip per model, over the same window as the reasoning chip beside it. A model that served no measured attempt gets no chip at all rather than a zeroed one.
+- **The Models page** also carries an `in-loop turns ended with text only` chip per model (7.115.1): the turns that followed a tool result and ended with assistant text and no tool call the "it said it would keep reading and stopped" shape, counted from the request log and shown as the count over the in-loop turns it came out of. Only requests that carried a session id can be sequenced, the count covers succeeded turns, and it is observation only: nothing about the requests themselves changes.
+
+#### Generation rate and throughput — the two rates, and the one that was wrong
+
+Until **7.122.2** the dashboard printed a single "Output rate", `tokens / (duration − ttft)`. Two things were wrong with it and they compounded:
+
+1. The **numerator** is the provider's output-token count, which includes reasoning and tool-argument tokens.
+2. The **denominator** started at the first byte MCC's client-facing iterator yielded — which, because of the commit holdback and tool-argument assembly, is the *end* of a short answer. On a real week's log the first byte landed in the last 10% of the request on **75.9%** of rows.
+
+Dividing the first by the second crosses two bases. It printed **20,422 tok/s** on the newest 198 rows, **429,152 tok/s** for one 68-second answer, and **8,451,217 tok/s** for a reasoning-only turn whose text the provider withheld.
+
+What is shown now:
+
+| Number | Numerator | Denominator | Shown when |
+| --- | --- | --- | --- |
+| **Generation rate** | the attempt's reported output tokens | `gen_last_ms − gen_first_ms`: the first to the last delta of **any** kind — reasoning, text, tool arguments — measured at the upstream stream, before any MCC buffer | window ≥ **500 ms** and tokens ≥ **8** |
+| **Throughput** | the same tokens | `duration_ms` — the whole request: routing, thinking, fallbacks and your own wait | whenever both exist |
+
+- **Shorter than the timing window** is what the generation rate reads when the window exists but is under 500 ms or the count is under 8. `12 tokens / 0.004 s` is not information, and a number there would be a scheduling artifact rather than a rate.
+- **No generation clock before 7.122.2** is what it reads on every older row: the log recorded no first or last delta, so there is nothing to divide. Nothing was rewritten and nothing was guessed. Those rows show **Throughput** instead, which every stored row can support.
+- **Estimated token counts** — the Chat door's `cl100k` fallback when a host reports no `completion_tokens` — are marked `~1,240 est.` and the rate is suppressed. An estimate over a measured clock is still a mixed basis.
+- Both stamps are stored on `request_attempts` as `gen_first_ms` and `gen_last_ms`, and the Analytics group rate is computed from them in SQL. The two constants live in one place (`core/generation_rate.py`); the page is told them with the data rather than keeping a copy.
 
 **Winner TTFT (ms)** and **Lost to fallbacks (ms)** are both columns in the request export. The second is empty, never zero, on any row where either input was never measured.
 
@@ -5041,13 +5063,13 @@ Every row's dialog also shows the full request and response, the resolved config
 
 **Export attempts**, beside **Export** on the Requests toolbar, opens the same window on the **Route attempts** scope. Model requests gives you one row per request, which means one provider, one model and one verdict — so on a request that fell back twice, the two models that burned the time are simply not in the file. Route attempts gives you one row per attempt instead.
 
-Each row carries the attempt's own facts — its provider and model, its outcome (`succeeded`, `failed`, `skipped`), the key it used, its own TTFT, first-reasoning time and duration, what ended it, and its failure kind or bench reason — beside the parent request's dimensions (time, harness, endpoint, requested model, resolved model, request status) so a row is still filterable and groupable after it leaves MCC. Optional groups add attempt tokens, attempt cost and source, the upstream retry ladder, the wire surface and credential index, and the stream recovery counters.
+Each row carries the attempt's own facts — its provider and model, its outcome (`succeeded`, `failed`, `skipped`), the key it used, its own time to first visible byte, first-reasoning time, duration, its recorded generation window and the two rates derived from it, what ended it, and its failure kind or bench reason — beside the parent request's dimensions (time, harness, endpoint, requested model, resolved model, request status) so a row is still filterable and groupable after it leaves MCC. Optional groups add attempt tokens, attempt cost and source, the upstream retry ladder, the wire surface and credential index, and the stream recovery counters.
 
 Three things to know before you read the numbers:
 
 - **The filters are the request filters.** Period, provider, model, key, status, harness, search text and **Local answers** all select *requests*, exactly as they do for the Model requests export and for the table you took it from; every attempt of a selected request is in the file, including the ones that failed. That is the point — an attempt without its chain is not evidence.
-- **Empty means never measured, never zero.** `TTFT (ms)` and `First reasoning (ms)` did not exist before 7.4.0 and are not backfilled; `Attempt output tokens` is filled only on the winning attempt (and on a vision *describe* hop); `Attempt cost (USD)` only where an attempt reported its own usage. A skipped attempt has no latency at all — only a reason.
-- **It is detail only.** There is no Group by for this scope: averaging latency across attempts of different models inside one request is the number the per-model `p50 TTFT` cards already answer properly.
+- **Empty means never measured, never zero.** `TTFT (ms)` and `First reasoning (ms)` did not exist before 7.4.0 and are not backfilled; the generation window arrived in 7.122.2, so `Generation window start/end (ms)` and `Generation rate (tok/s)` are empty on every older row — `Throughput (tok/s)` is the rate those rows can support, and it is filled wherever a token count and a duration exist; `Attempt output tokens` is filled only on the winning attempt (and on a vision *describe* hop); `Attempt cost (USD)` only where an attempt reported its own usage. A skipped attempt has no latency at all — only a reason.
+- **It is detail only.** There is no Group by for this scope: averaging latency across attempts of different models inside one request is the number the per-model `p50 first byte` cards already answer properly.
 
 **Raw diagnostics** is an opt-in field in the Model requests scope: one column
 per kind (`Raw API payloads`, `Raw SSE events`, `Raw API error tracebacks`,
@@ -5263,7 +5285,7 @@ The detail dialog answers the question "what did MCC actually put on the wire, a
 </div>
 
 <div align="center">
-  <img src="../assets/admin-request-attempts.png" alt="Per-attempt rows naming each model, its key, first-token and generating times, and the reason it was not tried, above a request-shape block headed no prompt text" width="860">
+  <img src="../assets/admin-request-attempts.png" alt="Per-attempt rows naming each model, its key, time to first visible byte, generation rate and throughput, and the reason it was not tried, above a request-shape block headed no prompt text" width="860">
   <p><em>The per-try rows, and the shape block beneath them. The heading says it: the request body is summarised structurally, with no prompt text in it.</em></p>
 </div>
 

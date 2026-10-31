@@ -8708,6 +8708,18 @@ audio.req-media-preview {
   font-variant-numeric: tabular-nums;
 }
 
+/* 7.122.2: the generation-rate and throughput cells. Tabular figures so the
+   decimals line up with every other number in the table, and wrapping that
+   breaks a long "not measured -- shorter than the timing window" inside its
+   own column instead of widening the table under the other panels. */
+.req-rate-cell {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  max-width: 16rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .req-wire-unmeasured,
 .req-wire-truncated {
   margin: 0;

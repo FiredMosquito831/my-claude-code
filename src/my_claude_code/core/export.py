@@ -16,6 +16,10 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, Literal, cast
 
 from my_claude_code.core.cancelled_reasons import CANCELLED_SUB_LABEL_TEXT
+from my_claude_code.core.generation_rate import (
+    measured_generation_rate,
+    throughput_rate,
+)
 from my_claude_code.core.request_log import ATTEMPT_PARAMS_KEY, PROVIDER_KEY_SQL
 from my_claude_code.core.success_reasons import SUCCESS_SUB_LABEL_TEXT
 
@@ -1161,6 +1165,11 @@ _ATTEMPT_ALWAYS_COLUMNS: tuple[str, ...] = (
     "ttft_ms",
     "first_reasoning_ms",
     "duration_ms",
+    # The generation window and the two rates built from it (7.122.2). Raw
+    # stamps as well as the numbers, so a reader can check the arithmetic
+    # rather than trust it: `gen_last_ms - gen_first_ms` is the divisor.
+    "gen_first_ms",
+    "gen_last_ms",
 )
 
 _ATTEMPT_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -1185,6 +1194,12 @@ _ATTEMPT_ALWAYS_DERIVED: tuple[str, ...] = (
     # And the success sub-label beside it, for an attempt under a success
     # that carried no answer.
     "request_success_reason",
+    # The two rates the stored window and the stored tokens support, under the
+    # same minimums the page applies (7.122.2). Empty -- never zero -- where
+    # there is no window to divide by, which is every row written before the
+    # columns existed.
+    "generation_rate",
+    "throughput",
 )
 
 _ATTEMPT_DETAIL_DERIVED: dict[str, tuple[str, ...]] = {
@@ -1225,6 +1240,10 @@ _ATTEMPT_COLUMN_ORDER: tuple[str, ...] = (
     "ttft_ms",
     "first_reasoning_ms",
     "duration_ms",
+    "gen_first_ms",
+    "gen_last_ms",
+    "generation_rate",
+    "throughput",
     "tokens_in",
     "tokens_out",
     "cost_usd",
@@ -1262,6 +1281,10 @@ _ATTEMPT_COLUMN_LABELS: dict[str, str] = {
     "ttft_ms": "TTFT (ms)",
     "first_reasoning_ms": "First reasoning (ms)",
     "duration_ms": "Duration (ms)",
+    "gen_first_ms": "Generation window start (ms)",
+    "gen_last_ms": "Generation window end (ms)",
+    "generation_rate": "Generation rate (tok/s)",
+    "throughput": "Throughput (tok/s)",
     "tokens_in": "Attempt input tokens",
     "tokens_out": "Attempt output tokens",
     "cost_usd": "Attempt cost (USD)",
@@ -1351,6 +1374,10 @@ def compute_attempt_detail_derived(
         row.get("request_success_reason")
     )
     row["key_name"] = resolve_key_name(row, key_names)
+    row["generation_rate"] = measured_generation_rate(
+        row.get("tokens_out"), row.get("gen_first_ms"), row.get("gen_last_ms")
+    )
+    row["throughput"] = throughput_rate(row.get("tokens_out"), row.get("duration_ms"))
     if "failure" in selected:
         row["bench_reason"] = _bench_reason(bench)
     if "ladder" in selected:

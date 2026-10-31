@@ -24,6 +24,7 @@ from .streaming import (
     ResponsesStreamConverter,
     iter_responses_sse_events,
     note_responses_event_shape,
+    note_responses_generation_delta,
 )
 from .tool_schema_dialect import (
     PERMISSIVE_TOOL_SCHEMA_DIALECT,
@@ -47,6 +48,7 @@ __all__ = [
     "history_thinking_marker",
     "iter_responses_sse_events",
     "note_responses_event_shape",
+    "note_responses_generation_delta",
     "regex_construct",
     "responses_tool_call_to_anthropic",
     "responses_tool_name_codec",

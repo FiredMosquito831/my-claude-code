@@ -47,6 +47,11 @@ _TABLE: tuple[tuple[dict[str, Any], str | None], ...] = (
     # The 199 of 201: reasoning, then nothing.
     ({"thinking_chars": 18_800, "tokens_out": 4_200}, THOUGHT_ONLY),
     ({"output_chars": 0, "tool_call_count": None, "thinking_chars": 1}, THOUGHT_ONLY),
+    # 7.122.2: the same fact with the reasoning text withheld and only the
+    # host's count left. Six rows in seven days of one real log read 65,000
+    # output tokens each with no text, no tool call and no thinking_chars.
+    ({"reasoning_tokens": 65_000, "tokens_out": 65_000}, THOUGHT_ONLY),
+    ({"thinking_chars": 0, "reasoning_tokens": 511, "tokens_out": 511}, THOUGHT_ONLY),
     # The 2 of 201: nothing at all.
     ({"output_chars": 0, "thinking_chars": 0, "tokens_out": 0}, EMPTY),
     ({}, EMPTY),
@@ -56,6 +61,12 @@ _TABLE: tuple[tuple[dict[str, Any], str | None], ...] = (
     ({"tool_call_count": 1, "tokens_out": 90}, None),
     ({"tool_call_count": 3, "thinking_chars": 900}, None),
     ({"output_chars": 140, "thinking_chars": 900}, None),
+    # 7.122.2: reasoning reported and an answer delivered is still an answer.
+    ({"output_chars": 140, "reasoning_tokens": 900, "tokens_out": 1_040}, None),
+    (
+        {"tool_call_count": 2, "reasoning_tokens": 900, "tokens_out": 1_040},
+        None,
+    ),
     # A row from before ``tool_call_count`` existed: no text, output tokens,
     # nothing counted as reasoning. Probably a tool call nobody counted, so
     # neither label is a true sentence about it.
@@ -86,6 +97,7 @@ def test_the_row_form_reads_the_same_columns() -> None:
         "output_chars",
         "tool_call_count",
         "thinking_chars",
+        "reasoning_tokens",
         "tokens_out",
         "optimization",
     }
@@ -108,17 +120,18 @@ def test_the_sql_and_python_classifiers_agree(tmp_path) -> None:
     conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE requests (id TEXT, status TEXT, output_chars INTEGER,"
-        " tool_call_count INTEGER, thinking_chars INTEGER, tokens_out INTEGER,"
-        " optimization TEXT)"
+        " tool_call_count INTEGER, thinking_chars INTEGER, reasoning_tokens INTEGER,"
+        " tokens_out INTEGER, optimization TEXT)"
     )
     for index, (shape, _) in enumerate(_TABLE):
         conn.execute(
-            "INSERT INTO requests VALUES (?, 'success', ?, ?, ?, ?, ?)",
+            "INSERT INTO requests VALUES (?, 'success', ?, ?, ?, ?, ?, ?)",
             (
                 f"r{index}",
                 shape.get("output_chars"),
                 shape.get("tool_call_count"),
                 shape.get("thinking_chars"),
+                shape.get("reasoning_tokens"),
                 shape.get("tokens_out"),
                 shape.get("optimization"),
             ),
