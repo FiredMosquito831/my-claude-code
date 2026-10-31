@@ -65,6 +65,7 @@ def test_enqueue_persists_record(store: RequestLogStore) -> None:
     assert row["ts_iso"].endswith("+00:00")
 
 
+@pytest.mark.request_log_close_bound
 def test_close_flushes_and_is_idempotent(store: RequestLogStore) -> None:
     store.enqueue(_record("r1"))
     store.close()
@@ -1582,6 +1583,7 @@ def test_training_does_not_repeat_on_every_restart(tmp_path) -> None:
         assert conn.execute("SELECT COUNT(*) FROM body_dictionaries").fetchone()[0] == 1
 
 
+@pytest.mark.request_log_close_bound
 def test_close_drains_a_deep_queue_instead_of_abandoning_it(tmp_path) -> None:
     """Regression: a fixed close deadline silently dropped queued records.
 

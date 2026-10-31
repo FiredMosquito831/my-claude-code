@@ -32,11 +32,19 @@ def client():
 
 
 @pytest.fixture
-def chain_store(tmp_path):
+def chain_base() -> float:
+    """The clock ``chain_store``'s rows are stamped from: ``chain`` at +10,
+    ``clean`` at +20, ``attemptless`` at +30. A time window in a test is
+    counted from this, never back from "now"."""
+    return time.time() - 100
+
+
+@pytest.fixture
+def chain_store(tmp_path, chain_base):
     """One fallback chain, one clean request, one row with no attempts at all."""
     store = get_request_log_store(tmp_path / "requests.db")
     assert store is not None
-    base = time.time() - 100
+    base = chain_base
     store.enqueue(
         RequestRecord(
             id="chain",
@@ -396,13 +404,18 @@ class TestFormats:
 
 
 class TestFiltersAndScope:
-    def test_the_time_window_is_the_parent_requests(self, client, chain_store) -> None:
+    def test_the_time_window_is_the_parent_requests(
+        self, client, chain_store, chain_base
+    ) -> None:
         everything = _export(client, format="json", scope="attempts").json()
+        # The window opens between ``chain`` (base+10) and ``clean`` (base+20).
+        # Counted back from "now" (``time.time() - 85``) it had 5 s of slack,
+        # and passed ``clean`` on a loaded Windows release run (41033531041).
         recent = _export(
             client,
             format="json",
             scope="attempts",
-            since=str(time.time() - 85),
+            since=str(chain_base + 15),
         ).json()
 
         assert len(everything) == 4

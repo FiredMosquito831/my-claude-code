@@ -556,8 +556,8 @@ def test_the_seed_ids_are_never_vetoed_by_this(monkeypatch):
 
     Five are the ids Codex CLI 0.155.1 lists, in its own order; ``gpt-5.2``
     left the seed when Codex stopped listing it. ``gpt-6.1-sol`` is the one the
-    user added on 2026-10-07 ahead of any installed Codex
-    (``SEED_IDS_NEWER_THAN_INSTALLED_CODEX`` below).
+    user added on 2026-10-07 ahead of any installed Codex; Codex CLI 0.166.0
+    lists it (``SEED_IDS_NEWER_THAN_INSTALLED_CODEX`` below).
     """
     assert CHATGPT_OAUTH_SEED_MODELS == (
         "gpt-6-astra",
@@ -717,12 +717,11 @@ def test_an_unreadable_credential_reports_an_unknown_plan(tmp_path):
 
 #: Seed ids the user put in the seed BEFORE an installed Codex lists them, and
 #: the only seed ids the drift guard below lets the installed Codex not publish.
-#: ``gpt-6.1-sol``: the user's decision of 2026-10-07 ("add sol 6.1 to the
-#: catalogue"); Codex CLI 0.155.1 does not list it, models.dev's ``openai``
-#: bucket publishes it as "GPT-6.1 Sol" (released 2026-09-29). REMOVE the entry
-#: once an installed Codex lists it -- the guard fails until you do, so the
-#: exemption cannot outlive its reason.
-SEED_IDS_NEWER_THAN_INSTALLED_CODEX: frozenset[str] = frozenset({"gpt-6.1-sol"})
+#: REMOVE an entry once an installed Codex lists it -- the guard fails until
+#: you do, so the exemption cannot outlive its reason. Empty since 2026-10-31:
+#: ``gpt-6.1-sol`` (the user's decision of 2026-10-07, "add sol 6.1 to the
+#: catalogue", ahead of Codex CLI 0.155.1) is listed by Codex CLI 0.166.0.
+SEED_IDS_NEWER_THAN_INSTALLED_CODEX: frozenset[str] = frozenset()
 
 
 def test_every_seed_id_is_still_in_the_installed_codex_catalogue():

@@ -1135,6 +1135,12 @@ def pytest_configure(config: pytest.Config) -> None:
         "(over a fake the test serves) instead of meeting them offline "
         "(tests/conftest.py _isolate_model_sweeps)",
     )
+    config.addinivalue_line(
+        "markers",
+        "request_log_close_bound: the test's subject is RequestLogStore.close()'s "
+        "own bounded wait, so close() is NOT made to wait for the writer's end "
+        "(tests/support/request_log_writes.py close_then_join)",
+    )
     _install_interceptors()
     # The token estimator's BPE file, from the repository: without it every
     # CI run downloaded it from openaipublic.blob.core.windows.net.
