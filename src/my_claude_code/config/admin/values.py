@@ -61,6 +61,18 @@ def normalize_field_value(field: ConfigFieldSpec, value: Any) -> str:
     return normalized
 
 
+def is_delete_intent(field: ConfigFieldSpec, value: Any) -> bool:
+    """Whether this value, for this field, means "remove the line".
+
+    Exactly the test the save makes before it unsets a key: an empty
+    normalised value on a field that is not a secret. A secret's blank is a
+    value (a credential with nothing in it), never a clear. One definition, so
+    the refusal (7.121.3) and the write cannot disagree about what a blank is.
+    """
+
+    return normalize_field_value(field, value) == "" and not field.secret
+
+
 # Field types whose value is a free string: an empty one is a legal value the
 # Settings model already stores as "" or maps to None, so writing ``KEY=`` for
 # them says "deliberately nothing" rather than "unparseable".

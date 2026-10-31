@@ -105,7 +105,10 @@ from my_claude_code.application.search_jobs import (
     search_jobs,
 )
 from my_claude_code.config.admin.manifest import FIELD_BY_KEY
-from my_claude_code.config.admin.persistence import validate_updates
+from my_claude_code.config.admin.persistence import (
+    refuse_unmarked_clears,
+    validate_updates,
+)
 from my_claude_code.config.admin.sources import is_locked_source
 from my_claude_code.config.admin.values import (
     PAUSE_KEY_FOR_ROUTE,
@@ -413,9 +416,19 @@ LOCAL_PROVIDER_PATHS = {
 
 
 class AdminConfigPayload(BaseModel):
-    """Partial config update submitted by the admin UI."""
+    """Partial config update submitted by the admin UI.
+
+    ``cleared`` names the settings this request means to unset -- the ones a
+    person emptied on purpose ("Use default", the "Default (…)" option, a box
+    they emptied). ``values`` keeps its exact meaning; the list only permits a
+    blank, and a save that would blank anything else is refused whole (7.121.3).
+    It is optional, and an empty list is the same as none: a page loaded before
+    7.121.3 sends no list at all, which is why it is refused rather than
+    trusted. A named key that is also sent with a value is saved as given.
+    """
 
     values: dict[str, Any] = Field(default_factory=dict)
+    cleared: list[str] = Field(default_factory=list)
 
 
 class WebSearchKeyPayload(BaseModel):
@@ -826,7 +839,11 @@ async def get_admin_config(
 @router.post("/admin/api/config/validate")
 async def validate_admin_config(payload: AdminConfigPayload, request: Request):
     require_loopback_admin(request)
-    return validate_updates(_filtered_values(payload.values))
+    updates = _filtered_values(payload.values)
+    # The preview answers the request the save would answer -- a body the save
+    # refuses must not read as "valid" here and then fail on Apply (7.121.3).
+    refuse_unmarked_clears(updates, payload.cleared)
+    return validate_updates(updates)
 
 
 @router.post("/admin/api/config/apply")
@@ -837,7 +854,12 @@ async def apply_admin_config(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    result = await services.admin.apply_admin_config(_filtered_values(payload.values))
+    updates = _filtered_values(payload.values)
+    # Before the config lock, the managed file's read, and every write: a
+    # refused request leaves the file, its .env.previous copy and every other
+    # line exactly as it found them -- the valid half of a mixed body included.
+    refuse_unmarked_clears(updates, payload.cleared)
+    result = await services.admin.apply_admin_config(updates)
     restart = result.get("restart")
     if isinstance(restart, dict) and restart.get("automatic"):
         background_tasks.add_task(services.admin.request_restart)

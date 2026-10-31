@@ -380,6 +380,52 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     await wait(600);
     out.afterEdit.footerAfterApply = await stableFooter();
 
+    /* --- 7.121.3: the deliberate clear travels WITH the request. The server
+       refuses to blank a setting the request did not name in `cleared`, so
+       "Use default" -- the one gesture the whole refusal protects -- has to
+       put the key in that list. Driven through the real button, after the
+       reload above has put LOG_LEVEL back to the fixture's unlisted "debug".
+
+       Then, WITHOUT a reload (a reload rebuilds every control and would wipe
+       the evidence), the reader changes their mind and picks a listed option:
+       the key is a value again and must not be listed as cleared. Only then
+       is the clear actually applied, so both bodies come from real clicks. */
+    out.clear = { onLoad: window.eval("clearedKeys()") };
+    const logLevel = controlFor("LOG_LEVEL");
+    const clearRow = logLevel ? logLevel.closest(".field[data-key]") : null;
+    const clearButton = clearRow ? clearRow.querySelector(".field-reset") : null;
+    out.clear.buttonFound = Boolean(clearButton);
+    if (clearButton) {
+      clearButton.click();
+      out.clear.value = controlFor("LOG_LEVEL").value;
+      out.clear.footer = await stableFooter();
+      out.clear.keys = window.eval("clearedKeys()");
+      out.clear.body = window.eval("configUpdateBody()");
+
+      const again = controlFor("LOG_LEVEL");
+      again.value = "INFO";
+      again.dispatchEvent(new window.Event("change", { bubbles: true }));
+      out.clear.afterChoosing = {
+        footer: await stableFooter(),
+        keys: window.eval("clearedKeys()"),
+        submitted: submits(),
+        body: window.eval("configUpdateBody()"),
+      };
+      out.clear.valueBody = (await clickApply()).body;
+      await wait(600);
+
+      // The clear itself, now that the page has reloaded from the saved value.
+      const reloadedRow = controlFor("LOG_LEVEL").closest(".field[data-key]");
+      const secondButton = reloadedRow ? reloadedRow.querySelector(".field-reset") : null;
+      out.clear.secondButtonFound = Boolean(secondButton);
+      if (secondButton) {
+        secondButton.click();
+        out.clear.appliedClearBody = (await clickApply()).body;
+        await wait(600);
+        out.clear.footerAfterApply = await stableFooter();
+      }
+    }
+
     /* --- The rule itself, isolated from every display fix. A control whose
        value differs from what was loaded, that nobody has touched, must not be
        a change -- otherwise the rule depends on every control being able to
@@ -409,6 +455,42 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     out.untouchedProbe.afterTouch = afterTouch === undefined ? null : afterTouch;
     built.control.remove();
     // The probe's edit counted while it was in the page; recount without it.
+    window.eval("updateDirtyState()");
+
+    /* --- 7.121.3: emptying a chain is a clear, and the mark has to be made
+       against the value the chain ends up holding. A rail gesture writes the
+       chain's hidden input itself (no change event), so `ModelChainEditor`
+       records the edit -- and if it recorded it before writing, the last row
+       leaving would be marked from the old value and Apply would send a blank
+       the page never listed as cleared, which the server now refuses. Built
+       here with the page's own editor, loaded non-empty, then emptied, then
+       removed from the document. It is never a setting. */
+    const chainField = {
+      key: "SELECT_BLANK_CHAIN_CLEAR_PROBE",
+      label: "probe chain",
+      type: "model_chain",
+      value: "a,b",
+      default: "",
+      options: [],
+    };
+    const builtChain = window.eval("buildFieldControl")(chainField);
+    const chainHost =
+      doc.querySelector('.admin-view[data-view="model_config"]') || doc.body;
+    chainHost.appendChild(builtChain.control);
+    out.chainClear = {
+      loaded: builtChain.input.value,
+      rows: builtChain.editor ? builtChain.editor.rows.length : 0,
+      submittedBefore: submits().SELECT_BLANK_CHAIN_CLEAR_PROBE === undefined,
+    };
+    if (builtChain.editor) {
+      builtChain.editor.rows.slice().forEach((row) => builtChain.editor.removeRow(row));
+      out.chainClear.emptied = {
+        value: builtChain.input.value,
+        submitted: submits().SELECT_BLANK_CHAIN_CLEAR_PROBE ?? null,
+        marked: window.eval("clearedKeys()").includes("SELECT_BLANK_CHAIN_CLEAR_PROBE"),
+      };
+    }
+    builtChain.control.remove();
     window.eval("updateDirtyState()");
 
     /* --- 7.121.2: the web-search rotation controls, value shown -> edited ->

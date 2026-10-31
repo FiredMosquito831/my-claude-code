@@ -13101,6 +13101,14 @@ function providerRotationLabel(provider) {
  */
 function noteUserEdit(input) {
   input.dataset.userEdited = "true";
+  // 7.121.3: an edit that leaves the control EMPTY is a deliberate clear, and
+  // only a deliberate clear may send the "" the server reads as "delete the
+  // line". The server now refuses a blank nobody marked, so this mark is what
+  // makes "Use default", the "Default (…)" option and a box somebody emptied
+  // still work -- and what keeps any other blank out of the wire. It is never
+  // withdrawn: `clearedKeys()` also reads the value, so typing a value into a
+  // box that had been cleared sends that value rather than a clear.
+  if (readFieldValue(input) === "") input.dataset.userCleared = "true";
 }
 
 /** Build one field's live control, wired into the dirty/apply machinery.
@@ -14591,8 +14599,13 @@ class ModelChainEditor {
     // recorded. Only a value that actually moved counts: a reorder that
     // leaves the comma-joined text alone, and the initial render (which never
     // reaches here), are not edits.
-    if (next !== this.input.value) noteUserEdit(this.input);
+    const moved = next !== this.input.value;
+    // Written before the edit is recorded, because the mark reads the value
+    // (7.121.3): emptying a chain is a clear, and marking it against the old
+    // value would call it an edit -- on Apply the server would then refuse a
+    // blank the page never listed as cleared.
     this.input.value = next;
+    if (moved) noteUserEdit(this.input);
     updateDirtyState();
     // A row's ref is what a pause names, and editing the combobox changes it.
     syncRoutePauseUi();
@@ -14914,6 +14927,42 @@ function readFieldValue(input) {
   return input.value;
 }
 
+/** The keys this page would CLEAR, for the apply request's `cleared` list.
+ *
+ * 7.121.3: the server refused to blank a setting the request did not name, so
+ * the deliberate blanks have to travel with it. Same walk and same evidence as
+ * `changedValues()` -- a control a person edited, whose value differs from
+ * what was loaded -- and only the ones whose value IS empty: a key sent with a
+ * value is saved, never cleared. The mark itself is set by `noteUserEdit`
+ * when the edit leaves the control blank, so a blank the page fabricated (the
+ * 7.121.1 display defect) is still not here: nobody edited it.
+ */
+function clearedKeys(values = changedValues()) {
+  const cleared = [];
+  document.querySelectorAll("[data-key]").forEach((input) => {
+    if (input.disabled || !input.matches("input, select, textarea")) return;
+    if (input.closest(".agent-tiers")) return;
+    if (input.dataset.userCleared !== "true") return;
+    if ((values || {})[input.dataset.key] !== "") return;
+    cleared.push(input.dataset.key);
+  });
+  return cleared;
+}
+
+/** The body both Validate and Apply post: the edits, plus what they clear.
+ *
+ * One body for both so a preview can never be refused where the save it
+ * previewed would have passed, and omitted entirely when nothing is cleared,
+ * which keeps every save that clears nothing byte-identical to 7.121.2's.
+ */
+function configUpdateBody() {
+  const values = changedValues();
+  const body = { values };
+  const cleared = clearedKeys(values);
+  if (cleared.length) body.cleared = cleared;
+  return body;
+}
+
 function changedValues() {
   const values = {};
   document.querySelectorAll("[data-key]").forEach((input) => {
@@ -14985,7 +15034,7 @@ function updateDirtyState() {
 async function validate(showResult = true) {
   const result = await api("/admin/api/config/validate", {
     method: "POST",
-    body: JSON.stringify({ values: changedValues() }),
+    body: JSON.stringify(configUpdateBody()),
   });
   if (showResult) {
     showValidationResult(result);
@@ -15004,7 +15053,7 @@ function showValidationResult(result) {
 async function apply() {
   const result = await api("/admin/api/config/apply", {
     method: "POST",
-    body: JSON.stringify({ values: changedValues() }),
+    body: JSON.stringify(configUpdateBody()),
   });
   if (!result.applied) {
     showValidationResult(result);
@@ -23870,7 +23919,13 @@ async function clearWebSearchAnalytics() {
   await loadWebSearchAnalytics();
 }
 
-byId("validateButton").addEventListener("click", () => validate(true));
+// Validate is rejected unseen the same way Apply used to be: a refusal the
+// server states in the sentence (since 7.121.3 a 409 naming a blank nobody
+// cleared, and still the 7.69.7 503) has to be shown where the reader clicked,
+// or the click reads as "nothing happened" and the reason is never seen.
+byId("validateButton").addEventListener("click", () =>
+  validate(true).catch((error) => showMessage(error.message, "error")),
+);
 // A refused save (since 7.69.7, a 503 saying the settings file was busy and
 // nothing was changed) used to reject unseen. Say it; the form keeps its edits.
 byId("applyButton").addEventListener("click", () =>

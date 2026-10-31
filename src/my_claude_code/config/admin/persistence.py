@@ -17,10 +17,12 @@ of that contract, in the order they matter:
   choice has to survive a later change of that default.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 from my_claude_code.config.paths import managed_env_path
 from my_claude_code.config.settings import Settings
@@ -43,11 +45,81 @@ from .validation import settings_from_values
 from .values import (
     MASKED_SECRET,
     blank_is_accepted,
+    is_delete_intent,
     load_value_state,
     normalize_field_value,
     normalize_for_env,
     prune_paused_refs,
 )
+
+
+class UnmarkedClearError(Exception):
+    """A save refused because it would blank settings nobody cleared (7.121.3).
+
+    ``str()`` is the sentence the dashboard shows. ``keys`` names every setting
+    the request would have removed a line for, in the order the request lists
+    them, so a refusal on a request that mixes an edit with five accidental
+    blanks names all five rather than the first.
+    """
+
+    def __init__(self, keys: Iterable[str]) -> None:
+        self.keys = tuple(keys)
+        plural = "s" if len(self.keys) > 1 else ""
+        # Accurate for every client that can get here: a page from 7.121.0 or
+        # earlier sends blanks for values it could not display, and one from
+        # 7.121.1/7.121.2 sends a deliberate "Use default" without the list.
+        # Either way a reloaded page sends what the reader meant.
+        super().__init__(
+            f"Not saved: this request would clear {len(self.keys)} setting{plural} "
+            f"without saying so: {', '.join(self.keys)}. Nothing was changed. "
+            "Reload the dashboard and make the change again (a page opened before "
+            "7.121.3 cannot say which settings you cleared)."
+        )
+
+
+def cleared_keys_in(updates: Mapping[str, Any]) -> list[str]:
+    """The keys this request would blank -- the same test the save itself uses.
+
+    ``target_values_with_updates`` reads ``""`` as "the user chose the default"
+    and removes the line; a secret's blank is a value, not a clear. A request
+    that names one of these keys in ``cleared`` meant it. One that does not may
+    not have: until 7.121.1 that was how the dashboard wiped settings it could
+    not display, so the caller refuses the whole request (7.121.3).
+
+    The check is deliberately the save's own (``is_delete_intent``), so a
+    chain of nothing but commas and a ``null`` are caught by the same rule that
+    would have written them. A key no field owns is never a clear: the route
+    drops it before the save.
+    """
+
+    return [
+        key
+        for key, value in updates.items()
+        if (field := FIELD_BY_KEY.get(key)) is not None
+        and is_delete_intent(field, value)
+    ]
+
+
+def refuse_unmarked_clears(
+    updates: Mapping[str, Any], cleared: Iterable[str] = ()
+) -> None:
+    """Refuse a request that blanks a setting it did not mark as cleared.
+
+    Called before anything is read or written, so a refusal leaves the managed
+    file, its ``.env.previous`` copy and every other line exactly as they were
+    -- including the valid half of a mixed request (the save is all-or-nothing
+    since 7.69.7, and so is its refusal). A key named in ``cleared`` that the
+    request also sets to a value is not a clear; it is saved as given.
+    """
+
+    permitted = set(cleared)
+    unmarked = [key for key in cleared_keys_in(updates) if key not in permitted]
+    if unmarked:
+        logger.warning(
+            "SETTINGS SAVE REFUSED: unmarked clear of {}; nothing was changed.",
+            ", ".join(unmarked),
+        )
+        raise UnmarkedClearError(unmarked)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,11 +226,13 @@ def target_values_with_updates(
             continue
         if field.secret and value == MASKED_SECRET:
             continue
-        normalized = normalize_field_value(field, value)
-        if normalized == "" and not field.secret:
+        # The clear is decided by one definition, shared with the refusal the
+        # two flat-map routes run first (7.121.3), so a request that refusal let
+        # through and the write that follows it always agree.
+        if is_delete_intent(field, value):
             _unset_field(field, values, repo_values, warnings)
             continue
-        values[key] = normalized
+        values[key] = normalize_field_value(field, value)
     # A route's pause list is only meaningful next to the route it belongs to,
     # and this is the first point where both halves of every rail are known.
     prune_paused_refs(
