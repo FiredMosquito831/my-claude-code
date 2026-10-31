@@ -3940,6 +3940,31 @@ def test_the_python_step_refuses_in_plain_language(
     "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
 )
 @pytest.mark.local_serial
+def test_the_python_step_refuses_when_uv_itself_is_missing(
+    python_step_rig: PythonStepRig, powershell: str
+) -> None:
+    """(c) 'uv missing entirely': still a plain-language refusal, never a pass."""
+    _running_powershell_or_skip(powershell)
+
+    result = python_step_rig.run(
+        powershell, FAKE_UV=str(python_step_rig.bin_dir / "no-such-uv.cmd")
+    )
+    output = result.stdout + result.stderr
+
+    assert "RESULT=failed" in output, output
+    assert (
+        "Python 3.14.0 could not be installed, so the install stopped here." in output
+    )
+    assert "UV_PYTHON_INSTALL_DIR" in output
+    assert "is installed;" not in output, (
+        "a missing uv must never be reported as success"
+    )
+
+
+@pytest.mark.parametrize(
+    "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
+)
+@pytest.mark.local_serial
 def test_the_python_step_keeps_a_healthy_transcript_unchanged(
     python_step_rig: PythonStepRig, powershell: str
 ) -> None:
