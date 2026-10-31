@@ -862,13 +862,212 @@ package_spec() {
     fi
 }
 
+# 7.122.1: the same table as scripts/install.ps1. Windows 11 answers a folder
+# that cannot take uv's version link with "os error 448" ("untrusted mount
+# point"); POSIX has no such error, so this is expected never to match here --
+# it exists so the two installers reach the same verdict about the same text,
+# and a test compares the tables.
+uv_python_link_signatures='os error 448|untrusted mount point|failed to create python minor version link'
+
+is_uv_python_link_failure() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | grep -Eq "$uv_python_link_signatures"
+}
+
+# Run `uv python install` and KEEP what it said, without failing: the caller
+# decides. Deliberately not run_uv_capturing -- that one fails, and this step
+# has never written its output into the transcript. A successful install must
+# leave the transcript exactly as it was, so nothing here logs.
+run_uv_python_install() {
+    print_command "$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION"
+    uv_python_status=0
+    uv_python_text=""
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+    uv_python_status_file=$(mktemp "${TMPDIR:-/tmp}/mcc-uv-status.XXXXXX") ||
+        fail "Could not create a temporary file."
+    uv_python_capture_file=$(mktemp "${TMPDIR:-/tmp}/mcc-uv.XXXXXX") ||
+        fail "Could not create a temporary file."
+    # The status travels through a file: a pipeline's $? is the LAST command's,
+    # and PIPESTATUS is bash-only while this script runs under /bin/sh.
+    { "$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION" 2>&1; printf '%s' "$?" >"$uv_python_status_file"; } |
+        tee "$uv_python_capture_file" |
+        while IFS= read -r uv_python_line; do printf '%s\n' "$uv_python_line"; done
+    uv_python_status=$(cat "$uv_python_status_file" 2>/dev/null) || uv_python_status=1
+    [ -n "$uv_python_status" ] || uv_python_status=1
+    rm -f "$uv_python_status_file"
+    uv_python_text=$(cat "$uv_python_capture_file" 2>/dev/null) || uv_python_text=""
+    rm -f "$uv_python_capture_file"
+    return 0
+}
+
+# Is a managed Python really installed, and does it really run?
+# --python-preference only-managed is deliberate: the tool environment is pinned
+# with --managed-python, so a system Python that happens to be 3.14 must not
+# make this check pass. The interpreter is then RUN, because a folder left by a
+# half-finished install is not an installed interpreter.
+managed_python_path() {
+    managed_python_candidate=$(
+        "$uv_bin" python find --python-preference only-managed "$PYTHON_VERSION" 2>/dev/null |
+            head -n 1
+    ) || managed_python_candidate=""
+    [ -n "$managed_python_candidate" ] || return 1
+    [ -f "$managed_python_candidate" ] || return 1
+    printf '%s\n' "$managed_python_candidate"
+}
+
+python_runs_the_version() {
+    python_reported=$("$1" --version 2>/dev/null) || return 1
+    case "$python_reported" in
+        "Python ${PYTHON_VERSION%.*}"*) return 0 ;;
+    esac
+    return 1
+}
+
+managed_python_usable() {
+    managed_python_candidate=$(managed_python_path) || return 1
+    [ -n "$managed_python_candidate" ] || return 1
+    python_runs_the_version "$managed_python_candidate" || return 1
+    return 0
+}
+
+same_managed_python_directory() {
+    [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+    case "$1" in */) same_first=${1%/} ;; *) same_first=$1 ;; esac
+    case "$2" in */) same_second=${2%/} ;; *) same_second=$2 ;; esac
+    [ "$same_first" = "$same_second" ]
+}
+
+# 7.122.1: the plain local folders to try when uv's own cannot take the
+# interpreter's link, in order, never one it is already using.
+managed_python_fallbacks() {
+    managed_python_current=$1
+    managed_python_seen=""
+    printf '%s\n' \
+        "${XDG_DATA_HOME:+$XDG_DATA_HOME/uv/python}" \
+        "${HOME:+$HOME/.local/share/uv/python}" \
+        "${HOME:+$HOME/uv-python}" |
+        while IFS= read -r managed_python_fallback; do
+            [ -n "$managed_python_fallback" ] || continue
+            if same_managed_python_directory "$managed_python_fallback" "$managed_python_current"; then
+                continue
+            fi
+            case "$managed_python_seen" in
+                *"|$managed_python_fallback|"*) continue ;;
+            esac
+            managed_python_seen="$managed_python_seen|$managed_python_fallback|"
+            printf '%s\n' "$managed_python_fallback"
+        done
+}
+
+# Where uv keeps its managed interpreters, as uv itself answers.
+managed_python_directory() {
+    managed_python_dir_answer=$(
+        "$uv_bin" python dir 2>/dev/null | head -n 1
+    ) || managed_python_dir_answer=""
+    if [ -n "$managed_python_dir_answer" ]; then
+        printf '%s\n' "$managed_python_dir_answer"
+        return 0
+    fi
+    if [ -n "${UV_PYTHON_INSTALL_DIR:-}" ]; then
+        printf '%s\n' "$UV_PYTHON_INSTALL_DIR"
+        return 0
+    fi
+    printf '%s\n' "${XDG_DATA_HOME:-${HOME:-/tmp}/.local/share}/uv/python"
+}
+
+# 7.122.1: why the install stops when no folder could take the interpreter.
+# POSIX has no `fsutil reparsepoint query`; a symbolic link on the way is the
+# equivalent redirect, and it is named when one is found.
+report_managed_python_failure() {
+    failure_text=$1
+    failure_directory=$2
+    printf '\n' >&2
+    printf 'Python %s could not be installed, so the install stopped here.\n' "$PYTHON_VERSION" >&2
+    if [ -n "$failure_directory" ]; then
+        printf 'uv keeps its managed interpreters in: %s\n' "$failure_directory" >&2
+        if [ -L "$failure_directory" ]; then
+            printf 'That folder is a symbolic link (to %s), which uv cannot create its version link through.\n' \
+                "$(readlink "$failure_directory" 2>/dev/null || printf 'unknown')" >&2
+        fi
+    fi
+    failure_lines=$(printf '%s\n' "$failure_text" | grep -E '^(error|Caused by)|os error [0-9]+' | head -n 4) ||
+        failure_lines=""
+    if [ -n "$failure_lines" ]; then
+        printf 'uv said:\n' >&2
+        printf '%s\n' "$failure_lines" | while IFS= read -r failure_line; do
+            printf '  %s\n' "$failure_line" >&2
+        done
+    fi
+    failure_suggested="${XDG_DATA_HOME:-${HOME:-/tmp}/.local/share}/uv/python"
+    printf 'Point uv at a plain local folder and run the install command again:\n' >&2
+    printf '  export UV_PYTHON_INSTALL_DIR="%s"\n' "$failure_suggested" >&2
+    exit 1
+}
+
 # Download PYTHON_VERSION through uv before anything needs an interpreter, so
 # a machine with no Python at all installs cleanly. --no-bin and --no-registry
 # keep this to a self-contained interpreter under UV_PYTHON_INSTALL_DIR: no
 # python/python3 shim is dropped on PATH and, on Windows, no PEP 514 registry
 # entry is written. The tool environment finds it by version, not by PATH.
+#
+# 7.122.1: a non-zero exit is not the verdict any more. The same shape as
+# scripts/install.ps1: read what uv said, retry once when it is the Windows
+# link warning, then VERIFY the interpreter with uv itself and by RUNNING it.
+# A warning about a link is not a missing interpreter; only a genuine absence
+# moves to the safe folders, and only when those fail does the install stop.
 install_managed_python() {
-    run "$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION"
+    run_uv_python_install
+    if [ "$dry_run" -eq 1 ]; then
+        return 0
+    fi
+    if [ "$uv_python_status" -eq 0 ]; then
+        return 0
+    fi
+
+    uv_python_link_warning=0
+    if is_uv_python_link_failure "$uv_python_text"; then
+        uv_python_link_warning=1
+        # The known warning: uv makes the link AFTER it unpacks, so the same
+        # command one more time usually answers "already installed".
+        run_uv_python_install
+    fi
+
+    if managed_python_usable; then
+        if [ "$uv_python_link_warning" -eq 1 ]; then
+            uv_python_message="Python $PYTHON_VERSION is installed; uv reported a link-creation warning (os error 448), which does not affect this install."
+        else
+            uv_python_message="Python $PYTHON_VERSION is installed; uv reported an error while linking it, which does not affect this install."
+        fi
+        printf '%s\n' "$uv_python_message"
+        write_install_log "$uv_python_message"
+        return 0
+    fi
+
+    # Genuinely absent. uv cannot use the folder it is configured with, so hand
+    # it a plain local folder and try once per folder. The export is
+    # process-wide, so the `uv tool install --managed-python` below -- and
+    # every uv child this script starts -- uses the folder that worked. A
+    # here-document rather than a pipe: a `while read` fed by a pipe runs in a
+    # subshell, and the export (and this return) would be lost with it.
+    uv_python_current_directory=$(managed_python_directory)
+    uv_python_fallbacks=$(managed_python_fallbacks "$uv_python_current_directory")
+    while IFS= read -r uv_python_fallback; do
+        [ -n "$uv_python_fallback" ] || continue
+        UV_PYTHON_INSTALL_DIR=$uv_python_fallback
+        export UV_PYTHON_INSTALL_DIR
+        run_uv_python_install
+        if managed_python_usable; then
+            uv_python_message="Python $PYTHON_VERSION is installed in $uv_python_fallback; uv could not use $uv_python_current_directory, so the install continues from this folder (UV_PYTHON_INSTALL_DIR)."
+            printf '%s\n' "$uv_python_message"
+            write_install_log "$uv_python_message"
+            return 0
+        fi
+    done <<EOF
+$uv_python_fallbacks
+EOF
+
+    report_managed_python_failure "$uv_python_text" "$uv_python_current_directory"
 }
 
 resolve_install_plan() {
