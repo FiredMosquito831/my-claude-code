@@ -170,6 +170,15 @@ exit 71
 def _posix_uv_command(version: str) -> str:
     return f"""#!/bin/sh
 echo "uv:$*" >> "$CALL_LOG"
+# 7.122.1: the interpreter a successful `uv python install` leaves behind, in
+# the folder UV_PYTHON_INSTALL_DIR points at (the real uv's default is the same
+# one). `uv python find` below only answers when this really exists, which is
+# exactly what the installer verifies before it trusts a non-zero exit.
+fake_python() {{
+    mkdir -p "$1/cpython-3.14.0/bin"
+    printf '%s\\n' '#!/bin/sh' 'if [ "${{1:-}}" = "--version" ]; then' '    echo "Python 3.14.0"' '    exit 0' 'fi' 'exit 0' > "$1/cpython-3.14.0/bin/python3"
+    chmod +x "$1/cpython-3.14.0/bin/python3"
+}}
 if [ "${{1:-}}" = "--version" ]; then
     if [ "$FAIL_STEP" = "uv-verify" ]; then
         exit 32
@@ -179,9 +188,48 @@ if [ "${{1:-}}" = "--version" ]; then
 fi
 if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "install" ]; then
     if [ "$FAIL_STEP" = "python-install" ]; then
+        echo "error: Failed to download Python 3.14.0" >&2
+        echo "  Caused by: network is unreachable" >&2
         exit 36
     fi
+    if [ "$FAIL_STEP" = "python-install-448" ]; then
+        fake_python "${{UV_PYTHON_INSTALL_DIR:-$FAKE_PYTHON_DIR}}"
+        echo "error: Failed to create Python minor version link directory" >&2
+        echo "  Caused by: failed to create link: untrusted mount point. (os error 448)" >&2
+        exit 2
+    fi
+    if [ "$FAIL_STEP" = "python-install-448-fallback" ]; then
+        if [ "${{UV_PYTHON_INSTALL_DIR:-}}" = "$FAKE_SAFE_PYTHON_DIR" ]; then
+            fake_python "$UV_PYTHON_INSTALL_DIR"
+            exit 0
+        fi
+        echo "error: Failed to create Python minor version link directory" >&2
+        echo "  Caused by: failed to create link: untrusted mount point. (os error 448)" >&2
+        exit 2
+    fi
+    if [ "$FAIL_STEP" = "python-install-stderr-ok" ]; then
+        fake_python "${{UV_PYTHON_INSTALL_DIR:-$FAKE_PYTHON_DIR}}"
+        echo "warning: written to stderr, and the command still succeeds" >&2
+        exit 0
+    fi
+    if [ "$FAIL_STEP" = "python-install-chatty-ok" ]; then
+        fake_python "${{UV_PYTHON_INSTALL_DIR:-$FAKE_PYTHON_DIR}}"
+        echo "chatty: installing Python"
+        echo "chatty-progress: on stderr" >&2
+        exit 0
+    fi
     mkdir -p "$FAKE_PYTHON_DIR/cpython-3.14.0"
+    exit 0
+fi
+if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "find" ]; then
+    if [ -n "${{UV_PYTHON_INSTALL_DIR:-}}" ] && [ -f "$UV_PYTHON_INSTALL_DIR/cpython-3.14.0/bin/python3" ]; then
+        printf '%s\n' "$UV_PYTHON_INSTALL_DIR/cpython-3.14.0/bin/python3"
+        exit 0
+    fi
+    exit 1
+fi
+if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "dir" ]; then
+    printf '%s\n' "${{UV_PYTHON_INSTALL_DIR:-${{FAKE_DEFAULT_PYTHON_DIR:-}}}}"
     exit 0
 fi
 if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
@@ -364,6 +412,17 @@ fi
     )
 
     env = os.environ.copy()
+    # No credentials reach the installer or the fake uv: every scenario starts
+    # from a scrubbed copy of this shell's environment (the 2026-10-31 lesson:
+    # a scratch process inherited a real API key from the agent shell).
+    for name in list(env):
+        upper = name.upper()
+        if (
+            upper.endswith(("_API_KEY", "_TOKEN", "_SECRET"))
+            or upper.startswith(("ANTHROPIC_", "OPENAI_"))
+            or upper in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
+        ):
+            env.pop(name, None)
     env.update(
         {
             "PATH": f"{bin_dir}:/usr/bin:/bin",
@@ -375,17 +434,22 @@ fi
             # `uv python install` now downloads before the tool env is built.
             "FAKE_PYTHON_DIR": str(python_dir),
             "UV_PYTHON_INSTALL_DIR": str(python_dir),
+            # 7.122.1: the first folder the installer falls back to when uv
+            # cannot use the one it is configured with.
+            "FAKE_SAFE_PYTHON_DIR": str(home / ".local" / "share" / "uv" / "python"),
             "FAIL_STEP": "",
         }
     )
     env.pop("XDG_BIN_HOME", None)
     # 7.79.1: the sudo guard and the WSL rule read these. Every scenario
-    # decides them itself rather than inheriting the machine's.
+    # decides them itself rather than inheriting the machine's. XDG_DATA_HOME
+    # too, so the 7.122.1 fallback is the $HOME one on every host.
     for name in (
         "SUDO_USER",
         "MCC_INSTALL_ALLOW_ROOT",
         "WSL_DISTRO_NAME",
         "WSL_INTEROP",
+        "XDG_DATA_HOME",
     ):
         env.pop(name, None)
     return PosixHarness(tmp_path, bin_dir, fixtures, tool_bin, log, env)
@@ -960,6 +1024,8 @@ def _batch_uv(version: str) -> str:
 echo uv:%*>>"%CALL_LOG%"
 if "%1"=="--version" goto version
 if "%1"=="python" if "%2"=="install" goto python_install
+if "%1"=="python" if "%2"=="find" goto python_find
+if "%1"=="python" if "%2"=="dir" goto python_dir
 if "%1"=="tool" if "%2"=="install" goto install
 if "%1"=="tool" if "%2"=="update-shell" goto update_shell
 if "%1"=="tool" if "%2"=="dir" if "%3"=="--bin" goto tool_bin
@@ -969,9 +1035,53 @@ exit /b 59
 if "%FAIL_STEP%"=="uv-verify" exit /b 52
 echo uv {version}
 exit /b 0
+:make_python
+if "%UV_PYTHON_INSTALL_DIR%"=="" exit /b 1
+if not exist "%UV_PYTHON_INSTALL_DIR%\cpython-3.14.0" mkdir "%UV_PYTHON_INSTALL_DIR%\cpython-3.14.0"
+copy /y "%FAKE_FIXTURES%\python-command.cmd" "%UV_PYTHON_INSTALL_DIR%\cpython-3.14.0\python.cmd" >nul
+exit /b 0
+:python_find
+if "%UV_PYTHON_INSTALL_DIR%"=="" exit /b 1
+if not exist "%UV_PYTHON_INSTALL_DIR%\cpython-3.14.0\python.cmd" exit /b 1
+echo %UV_PYTHON_INSTALL_DIR%\cpython-3.14.0\python.cmd
+exit /b 0
+:python_dir
+if not "%UV_PYTHON_INSTALL_DIR%"=="" echo %UV_PYTHON_INSTALL_DIR%& exit /b 0
+if not "%FAKE_DEFAULT_PYTHON_DIR%"=="" echo %FAKE_DEFAULT_PYTHON_DIR%& exit /b 0
+exit /b 1
 :python_install
-if "%FAIL_STEP%"=="python-install" exit /b 56
+if "%FAIL_STEP%"=="python-install" goto python_install_failed
+if "%FAIL_STEP%"=="python-install-448" goto python_install_448
+if "%FAIL_STEP%"=="python-install-448-fallback" goto python_install_448_fallback
+if "%FAIL_STEP%"=="python-install-stderr-ok" goto python_install_stderr_ok
+if "%FAIL_STEP%"=="python-install-chatty-ok" goto python_install_chatty_ok
 if not exist "%FAKE_PYTHON_DIR%\cpython-3.14.0" mkdir "%FAKE_PYTHON_DIR%\cpython-3.14.0"
+exit /b 0
+:python_install_failed
+echo error: Failed to download Python 3.14.0 1>&2
+echo   Caused by: network is unreachable 1>&2
+exit /b 56
+:python_install_448
+call :make_python
+echo error: Failed to create Python minor version link directory 1>&2
+echo   Caused by: failed to create link: untrusted mount point. (os error 448) 1>&2
+exit /b 2
+:python_install_448_fallback
+if not "%UV_PYTHON_INSTALL_DIR%"=="%FAKE_SAFE_PYTHON_DIR%" goto python_install_448_refused
+call :make_python
+exit /b 0
+:python_install_448_refused
+echo error: Failed to create Python minor version link directory 1>&2
+echo   Caused by: failed to create link: untrusted mount point. (os error 448) 1>&2
+exit /b 2
+:python_install_stderr_ok
+call :make_python
+echo warning: written to stderr, and the command still succeeds 1>&2
+exit /b 0
+:python_install_chatty_ok
+call :make_python
+echo chatty: installing Python
+echo chatty-progress: on stderr 1>&2
 exit /b 0
 :install
 if "%FAIL_STEP%"=="fcc-install" exit /b 53
@@ -1148,6 +1258,11 @@ def powershell_harness(
         _batch_client("codex"), encoding="utf-8"
     )
     (fixtures / "pi-command.cmd").write_text(_batch_client("pi"), encoding="utf-8")
+    # 7.122.1: what uv leaves behind for `uv python find` to answer with.
+    (fixtures / "python-command.cmd").write_text(
+        '@echo off\r\nif "%1"=="--version" echo Python 3.14.0\r\nexit /b 0\r\n',
+        encoding="utf-8",
+    )
     (fixtures / "uv-command.cmd").write_text(_batch_uv("0.11.28"), encoding="utf-8")
     (fixtures / "fcc-command.cmd").write_text(
         f"""@echo off
@@ -1250,6 +1365,17 @@ $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_INSTALLER))
 
     system_root = os.environ["SYSTEMROOT"]
     env = os.environ.copy()
+    # No credentials reach the installer or the fake uv, whatever this shell
+    # carries (the 2026-10-31 lesson: a scratch process inherited a real API
+    # key from the agent shell).
+    for name in list(env):
+        upper = name.upper()
+        if (
+            upper.endswith(("_API_KEY", "_TOKEN", "_SECRET"))
+            or upper.startswith(("ANTHROPIC_", "OPENAI_"))
+            or upper in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}
+        ):
+            env.pop(name, None)
     env.update(
         {
             "PATH": os.pathsep.join(
@@ -1262,6 +1388,10 @@ $installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_INSTALLER))
             "CALL_LOG": str(log),
             "FAKE_FIXTURES": str(fixtures),
             "FAKE_TOOL_BIN": str(tool_bin),
+            # 7.122.1: the first folder the installer falls back to when uv
+            # cannot use the one it is configured with.
+            "FAKE_SAFE_PYTHON_DIR": str(local_app_data / "uv" / "python"),
+            "FAKE_DEFAULT_PYTHON_DIR": str(python_root),
             # ``uv tool dir`` (no ``--bin``) is what Get-UvToolDir asks for
             # before the rename-aside path; the fake used to answer only
             # ``tool dir --bin`` and exited 59 for everything else, which is
@@ -1310,6 +1440,42 @@ def test_install_ps1_fresh_install_is_verified(
         for call in calls
         for host in ("claude.ai", "chatgpt.com", "pi.dev")
     ), calls
+
+
+@pytest.mark.local_serial
+def test_install_ps1_a_link_warning_with_a_working_python_continues(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    """(a) at the real call site: base aborts here, the fixed step continues."""
+    powershell_harness.require_mockable_file_hash()
+
+    result = powershell_harness.run(fail_step="python-install-448")
+
+    assert result.returncode == 0, result.stderr
+    assert "is installed and verified." in result.stdout
+    assert LINK_WARNING_INFO in result.stdout
+    installs = [
+        call
+        for call in powershell_harness.calls()
+        if call.startswith("uv:python install")
+    ]
+    assert len(installs) == 2, f"the install was not retried once: {installs}"
+
+
+@pytest.mark.local_serial
+def test_install_ps1_a_genuinely_missing_python_uses_the_safe_folder(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    """(b) at the real call site: absent from uv's folder, present in the safe one."""
+    powershell_harness.require_mockable_file_hash()
+
+    result = powershell_harness.run(fail_step="python-install-448-fallback")
+
+    assert result.returncode == 0, result.stderr
+    assert "is installed and verified." in result.stdout
+    assert "continues from this folder (UV_PYTHON_INSTALL_DIR)" in result.stdout
+    safe = Path(powershell_harness.env["FAKE_SAFE_PYTHON_DIR"])
+    assert (safe / "cpython-3.14.0" / "python.cmd").is_file()
 
 
 @pytest.mark.local_serial
@@ -2808,9 +2974,10 @@ def test_installers_provision_python_before_the_tool_environment() -> None:
     shell = _install_sh()
     powershell = _install_ps1()
 
-    assert (
-        'run "$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION"' in shell
-    )
+    # 7.122.1: the command itself is unchanged. It now runs through the
+    # captured attempt helper, so a non-zero exit is VERIFIED (the interpreter
+    # may be installed) instead of ending the install; `run` would exit here.
+    assert '"$uv_bin" python install --no-bin --no-registry "$PYTHON_VERSION"' in shell
     assert (
         '"python", "install", "--no-bin", "--no-registry", $PythonVersion' in powershell
     )
@@ -3365,6 +3532,551 @@ def test_installers_classify_uv_failures_from_captured_output() -> None:
     assert "disk-full" in powershell and "disk-full" in shell
     assert "Get-UvFailureCategory" in powershell
     assert "classify_uv_failure" in shell
+
+
+# -------------------------------------- 7.122.1: a recoverable uv python error
+#
+# `uv python install` can fail while the interpreter it just unpacked is
+# present and works: Windows 11 26100 answers the version link with
+# "untrusted mount point (os error 448)" and the immediate re-run says
+# "Python 3.14.0 is already installed". The installers now read what uv said,
+# retry once, VERIFY the interpreter (uv python find + running it), continue
+# with one INFO line when it works, and only then move to a safe folder --
+# refusing in plain language when none of them works.
+
+LINK_WARNING_INFO = (
+    "is installed; uv reported a link-creation warning (os error 448), "
+    "which does not affect this install."
+)
+
+
+def test_both_installers_know_the_link_warning_and_its_verdicts() -> None:
+    """Static, so it runs on every platform.
+
+    The exact strings are this fix's contract: the INFO line a recovered
+    install prints, the plain-language refusal, and the 448-shaped signatures.
+    Both editions must carry all of them, and the fallback folders are the two
+    the brief names.
+    """
+    powershell = _install_ps1()
+    shell = _install_sh()
+
+    for text, name in ((powershell, "install.ps1"), (shell, "install.sh")):
+        for signature in (
+            "os error 448",
+            "untrusted mount point",
+            "failed to create python minor version link",
+        ):
+            assert signature in text, f"{name} does not know {signature!r}"
+        assert LINK_WARNING_INFO in text, f"{name} has no recovered-Python INFO line"
+        assert "could not be installed, so the install stopped here." in text, (
+            f"{name} has no plain-language refusal"
+        )
+        assert "uv said:" in text, f"{name} quotes nothing uv said on refusal"
+        assert "UV_PYTHON_INSTALL_DIR" in text
+        # The verification is uv's own answer, managed-only on purpose.
+        assert "--python-preference" in text, (
+            f"{name} does not ask uv which python it found"
+        )
+        assert "only-managed" in text, f"{name} could accept a system python"
+
+    # The safe folders: %LOCALAPPDATA%\uv\python then %SystemDrive%\uv-python
+    # on Windows; $XDG_DATA_HOME/uv/python or ~/.local/share/uv/python then
+    # $HOME/uv-python on POSIX.
+    assert "LOCALAPPDATA" in powershell and "uv-python" in powershell
+    assert "SystemDrive" in powershell
+    assert "XDG_DATA_HOME" in shell and ".local/share/uv/python" in shell
+    assert "uv-python" in shell
+
+
+def test_the_installer_rigs_scrub_credentials_from_their_children() -> None:
+    """The 2026-10-31 lesson, applied to the rigs this PR extends."""
+    source = Path(__file__).read_text(encoding="utf-8")
+
+    marker = "# No credentials reach the installer" + " or the fake uv"
+    assert source.count(marker) == 2, (
+        "both installer rigs must scrub credentials before they start a child"
+    )
+    # The scrub lists the credential families the 2026-10-31 lesson names.
+    for family in ("_API_KEY", "_TOKEN", "_SECRET", "ANTHROPIC_", "OPENAI_"):
+        assert source.count(family) >= 2, family
+
+
+@pytest.mark.local_serial
+def test_install_sh_a_link_warning_with_a_working_python_continues(
+    posix_harness: PosixHarness,
+) -> None:
+    """(a) exit 2 with a 448-shaped message while a working 3.14 exists."""
+    result = posix_harness.run(fail_step="python-install-448")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "is installed and verified." in result.stdout
+    assert LINK_WARNING_INFO in output, output
+    installs = [c for c in posix_harness.calls() if c.startswith("uv:python install")]
+    assert len(installs) == 2, installs
+    # The verification is uv's own answer, independent of any project the
+    # installer happened to be run from, and managed-only on purpose.
+    assert any(
+        "uv:python find --no-project --python-preference only-managed 3.14.0" in c
+        for c in posix_harness.calls()
+    )
+
+
+@pytest.mark.local_serial
+def test_install_sh_a_genuinely_missing_python_uses_the_safe_folder(
+    posix_harness: PosixHarness,
+) -> None:
+    """(b) uv's own folder refuses the link and holds no interpreter."""
+    result = posix_harness.run(fail_step="python-install-448-fallback")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "is installed and verified." in result.stdout
+    assert "uv could not use" in output, output
+    assert "continues from this folder (UV_PYTHON_INSTALL_DIR)" in output, output
+    safe = Path(posix_harness.env["FAKE_SAFE_PYTHON_DIR"])
+    assert (safe / "cpython-3.14.0" / "bin" / "python3").is_file()
+
+
+@pytest.mark.local_serial
+def test_install_sh_a_genuine_python_failure_stops_in_plain_language(
+    posix_harness: PosixHarness,
+) -> None:
+    """(c) no interpreter anywhere: refuse, name uv's lines, name the variable."""
+    result = posix_harness.run(fail_step="python-install")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0
+    assert "is installed and verified." not in result.stdout
+    assert (
+        "Python 3.14.0 could not be installed, so the install stopped here." in output
+    )
+    assert "uv said:" in output
+    assert "Failed to download Python 3.14.0" in output
+    assert "export UV_PYTHON_INSTALL_DIR=" in output
+    assert "Command failed with exit code" not in output, (
+        "the refusal must not be the bare uv verdict"
+    )
+
+
+@pytest.mark.local_serial
+def test_install_sh_a_stderr_line_from_uv_does_not_abort_the_install(
+    posix_harness: PosixHarness,
+) -> None:
+    """(d) POSIX twin of the Windows stderr guard."""
+    result = posix_harness.run(fail_step="python-install-stderr-ok")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "is installed and verified." in result.stdout
+    assert "written to stderr, and the command still succeeds" in result.stdout
+
+
+@pytest.mark.local_serial
+def test_install_sh_a_healthy_python_step_leaves_the_transcript_unchanged(
+    posix_harness: PosixHarness,
+) -> None:
+    """The 7.122.1 equality property, on the step this PR touched.
+
+    The capture exists for a FAILURE's text. A successful install must keep
+    writing exactly the transcript it wrote before the capture existed, so
+    uv's own lines go to the console and not into the transcript.
+    """
+    transcript = posix_harness.root / "install.log"
+    environment = dict(posix_harness.env)
+    environment["MCC_INSTALL_LOG"] = str(transcript)
+    environment["FAIL_STEP"] = "python-install-chatty-ok"
+    result = subprocess.run(
+        ["sh", str(_repo_root() / "scripts" / "install.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "chatty: installing Python" in result.stdout, "the user no longer sees uv"
+    text = transcript.read_text(encoding="utf-8") if transcript.exists() else ""
+    assert "chatty" not in text, "a healthy install's transcript changed"
+    # `run` never wrote this step into the transcript, and neither may the
+    # captured attempt: the equality is exactly "no new transcript lines".
+    assert "uv python install" not in text, (
+        "the Python step now writes transcript lines a healthy install never wrote"
+    )
+
+
+# ------------------------------------------------- PowerShell, both editions
+#
+# These run the REAL Install-ManagedPython extracted from install.ps1, under
+# Windows PowerShell 5.1 AND PowerShell 7, with a fake uv: the Windows suite's
+# full-run cases can only run on PowerShell 7 (5.1 will not let the harness
+# shadow Get-FileHash), and the desktop app starts the installer with 5.1, so
+# the Python step needs a proof that does not depend on the checksum mock.
+
+_PYTHON_STEP_FUNCTIONS = (
+    "Format-Argument",
+    "Format-Command",
+    "Invoke-NativeCommand",
+    "Convert-OutputLine",
+    "Read-CapturedOutput",
+    "New-CapturePath",
+    "Test-UvPythonLinkFailure",
+    "Get-UvOutputLine",
+    "Invoke-QuietNativeCapture",
+    "Test-ManagedPythonUsable",
+    "Test-SameDirectory",
+    "Get-PythonInstallFallbacks",
+    "Get-UvPythonInstallDirectory",
+    "Get-ReparsePointReport",
+    "Get-ManagedPythonFailureMessage",
+    "Write-ManagedPythonRecovered",
+    "Install-ManagedPython",
+    "Resolve-UvPath",
+)
+
+
+def _python_step_runner(installer_text: str, path: Path) -> Path:
+    """The real Python step and everything it calls, as one standalone script."""
+    preamble = "".join(
+        _braced_or_assignment(installer_text, name)
+        for name in ("$UvPythonLinkSignatures", "$PythonVersion")
+    )
+    preamble += "$DryRun = $false\n"
+    preamble += "$script:UvPath = $env:FAKE_UV\n"
+    preamble += (
+        "function Write-InstallLog { param([string] $Text) "
+        "Add-Content -LiteralPath $env:TRANSCRIPT -Value $Text }\n"
+    )
+    body = "".join(
+        _extract_function_definition(installer_text, name)
+        for name in _PYTHON_STEP_FUNCTIONS
+    )
+    driver = """
+try {
+    Install-ManagedPython
+    "RESULT=ok"
+}
+catch {
+    "RESULT=failed"
+    "MESSAGE=" + $_.Exception.Message
+}
+"""
+    path.write_text(preamble + body + driver, encoding="utf-8")
+    return path
+
+
+def _scratch_installer_environment(**overrides: str) -> dict[str, str]:
+    """A child environment built from an explicit whitelist, never os.environ."""
+    values = {
+        "SystemRoot": os.environ.get("SYSTEMROOT", r"C:\Windows"),
+        "windir": os.environ.get("WINDIR", r"C:\Windows"),
+        "ComSpec": os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe"),
+        "PATHEXT": ".COM;.EXE;.BAT;.CMD",
+        "TEMP": os.environ.get("TEMP", ""),
+        "TMP": os.environ.get("TMP", ""),
+        "SystemDrive": "C:",
+    }
+    values.update(overrides)
+    return {name: value for name, value in values.items() if value}
+
+
+@dataclass
+class PythonStepRig:
+    runner: Path
+    bin_dir: Path
+    fixtures: Path
+    transcript: Path
+    calls: Path
+    env: dict[str, str]
+
+    def run(self, powershell: str, **extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(self.runner),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            env=self.env | extra,
+        )
+
+    def python_installs(self) -> list[str]:
+        if not self.calls.exists():
+            return []
+        return [
+            line
+            for line in self.calls.read_text(encoding="utf-8").splitlines()
+            if line.startswith("uv:python install")
+        ]
+
+    def transcript_text(self) -> str:
+        return (
+            self.transcript.read_text(encoding="utf-8")
+            if self.transcript.exists()
+            else ""
+        )
+
+
+@pytest.fixture
+def python_step_rig(tmp_path: Path) -> PythonStepRig:
+    if os.name != "nt":
+        pytest.skip("the PowerShell Python step runs on Windows hosts")
+
+    bin_dir = tmp_path / "bin"
+    fixtures = tmp_path / "fixtures"
+    temp_dir = tmp_path / "temp"
+    for path in (bin_dir, fixtures, temp_dir):
+        path.mkdir(parents=True)
+    uv_command = bin_dir / "uv.cmd"
+    _write_executable(uv_command, _batch_uv("0.11.28"))
+    (fixtures / "python-command.cmd").write_text(
+        '@echo off\r\nif "%1"=="--version" echo Python 3.14.0\r\nexit /b 0\r\n',
+        encoding="utf-8",
+    )
+    runner = _python_step_runner(_install_ps1(), tmp_path / "python-step.ps1")
+    calls = tmp_path / "calls.log"
+    transcript = tmp_path / "install-log.txt"
+    env = _scratch_installer_environment(
+        PATH=os.pathsep.join([str(bin_dir), r"C:\Windows\System32", r"C:\Windows"]),
+        FAKE_UV=str(uv_command),
+        FAKE_FIXTURES=str(fixtures),
+        FAKE_PYTHON_DIR=str(tmp_path / "default-python"),
+        UV_PYTHON_INSTALL_DIR=str(tmp_path / "default-python"),
+        FAKE_SAFE_PYTHON_DIR=str(tmp_path / "local-app-data" / "uv" / "python"),
+        USERPROFILE=str(tmp_path / "home"),
+        LOCALAPPDATA=str(tmp_path / "local-app-data"),
+        APPDATA=str(tmp_path / "app-data"),
+        CALL_LOG=str(calls),
+        TRANSCRIPT=str(transcript),
+        TEMP=str(temp_dir),
+        TMP=str(temp_dir),
+        FAIL_STEP="",
+    )
+    return PythonStepRig(runner, bin_dir, fixtures, transcript, calls, env)
+
+
+def _running_powershell_or_skip(powershell: str) -> None:
+    if not powershell:
+        pytest.skip("no PowerShell on this host")
+    # Windows hosts only: these cases run a .cmd and the installer's Windows
+    # shapes. The Linux runners DO carry pwsh (`_powershells` finds it), and
+    # pwsh there cannot execute a .cmd -- the CI run on b3151562 caught exactly
+    # that in test_a_native_command_writing_to_stderr_and_exiting_0_does_not_abort.
+    if os.name != "nt":
+        pytest.skip("the Windows installer scenarios run on Windows hosts")
+
+
+@pytest.mark.parametrize(
+    "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
+)
+@pytest.mark.local_serial
+def test_the_python_step_survives_a_link_warning_when_the_interpreter_works(
+    python_step_rig: PythonStepRig, powershell: str
+) -> None:
+    """(a) under both editions: base aborts, the fixed step continues."""
+    _running_powershell_or_skip(powershell)
+
+    result = python_step_rig.run(powershell, FAIL_STEP="python-install-448")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "RESULT=ok" in output, output
+    assert LINK_WARNING_INFO in output, output
+    assert len(python_step_rig.python_installs()) == 2, (
+        "the install was not retried once"
+    )
+    assert LINK_WARNING_INFO in python_step_rig.transcript_text()
+
+
+@pytest.mark.parametrize(
+    "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
+)
+@pytest.mark.local_serial
+def test_the_python_step_falls_back_to_a_safe_folder(
+    python_step_rig: PythonStepRig, powershell: str
+) -> None:
+    """(b) under both editions: absent from uv's folder, present in the safe one."""
+    _running_powershell_or_skip(powershell)
+
+    result = python_step_rig.run(powershell, FAIL_STEP="python-install-448-fallback")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "RESULT=ok" in output, output
+    assert "continues from this folder (UV_PYTHON_INSTALL_DIR)" in output, output
+    safe = Path(python_step_rig.env["FAKE_SAFE_PYTHON_DIR"])
+    assert (safe / "cpython-3.14.0" / "python.cmd").is_file()
+
+
+@pytest.mark.parametrize(
+    "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
+)
+@pytest.mark.local_serial
+def test_the_python_step_refuses_in_plain_language(
+    python_step_rig: PythonStepRig, powershell: str
+) -> None:
+    """(c) under both editions: a genuine failure still stops -- and says why."""
+    _running_powershell_or_skip(powershell)
+
+    result = python_step_rig.run(powershell, FAIL_STEP="python-install")
+    output = result.stdout + result.stderr
+
+    assert "RESULT=failed" in output, output
+    assert (
+        "Python 3.14.0 could not be installed, so the install stopped here." in output
+    )
+    assert "uv said:" in output
+    assert "Failed to download Python 3.14.0" in output
+    assert "UV_PYTHON_INSTALL_DIR" in output
+    assert "MESSAGE=" in output
+    assert "Command failed with exit code" not in output, (
+        "the refusal must not be the bare uv verdict"
+    )
+    assert len(python_step_rig.python_installs()) == 3, (
+        "both safe folders were not tried"
+    )
+
+
+@pytest.mark.parametrize(
+    "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
+)
+@pytest.mark.local_serial
+def test_the_python_step_refuses_when_uv_itself_is_missing(
+    python_step_rig: PythonStepRig, powershell: str
+) -> None:
+    """(c) 'uv missing entirely': still a plain-language refusal, never a pass."""
+    _running_powershell_or_skip(powershell)
+
+    result = python_step_rig.run(
+        powershell, FAKE_UV=str(python_step_rig.bin_dir / "no-such-uv.cmd")
+    )
+    output = result.stdout + result.stderr
+
+    assert "RESULT=failed" in output, output
+    assert (
+        "Python 3.14.0 could not be installed, so the install stopped here." in output
+    )
+    assert "UV_PYTHON_INSTALL_DIR" in output
+    assert "is installed;" not in output, (
+        "a missing uv must never be reported as success"
+    )
+
+
+@pytest.mark.parametrize(
+    "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
+)
+@pytest.mark.local_serial
+def test_the_python_step_keeps_a_healthy_transcript_unchanged(
+    python_step_rig: PythonStepRig, powershell: str
+) -> None:
+    """The equality property: capture must not change a successful transcript."""
+    _running_powershell_or_skip(powershell)
+
+    result = python_step_rig.run(powershell, FAIL_STEP="python-install-chatty-ok")
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "RESULT=ok" in output
+    assert "chatty: installing Python" in output, "the user no longer sees uv"
+    lines = python_step_rig.transcript_text().splitlines()
+    assert "chatty" not in "\n".join(lines), "a healthy install's transcript changed"
+    # Exactly what the plain branch wrote before the capture existed: the
+    # command line and its exit code, nothing else.
+    assert len(lines) == 2, lines
+    assert lines[0].endswith("python install --no-bin --no-registry 3.14.0"), lines
+    assert lines[1] == "exit 0", lines
+    assert len(python_step_rig.python_installs()) == 1
+
+
+@pytest.mark.parametrize(
+    "powershell", _powershells() or [""], ids=lambda p: Path(p).name or "none"
+)
+@pytest.mark.local_serial
+def test_a_native_command_writing_to_stderr_and_exiting_0_does_not_abort(
+    tmp_path: Path, powershell: str
+) -> None:
+    """(d) under both editions: a stderr line is not a failure.
+
+    Windows PowerShell 5.1 turns a native command's stderr into an ErrorRecord;
+    under the installer's "Stop" preference the first line would end an install
+    that was succeeding. A trailing control case keeps the test honest: a
+    command that really fails must still stop the installer.
+    """
+    _running_powershell_or_skip(powershell)
+    installer = _install_ps1()
+    noisy = tmp_path / "noisy.cmd"
+    noisy.write_text(
+        "@echo off\r\n"
+        "echo warning: this goes to stderr 1>&2\r\n"
+        "echo visible on stdout\r\n"
+        "exit /b 0\r\n",
+        encoding="utf-8",
+    )
+    failing = tmp_path / "failing.cmd"
+    failing.write_text(
+        "@echo off\r\necho something went wrong 1>&2\r\nexit /b 3\r\n",
+        encoding="utf-8",
+    )
+    runner = tmp_path / "stderr-guard.ps1"
+    runner.write_text(
+        "$DryRun = $false\n"
+        + "function Write-InstallLog { param([string] $Text) }\n"
+        + "".join(
+            _extract_function_definition(installer, name)
+            for name in ("Format-Argument", "Format-Command", "Invoke-NativeCommand")
+        )
+        + """
+try {
+    Invoke-NativeCommand -FilePath $env:NOISY -Arguments @("go")
+    "RESULT=ok"
+}
+catch {
+    "RESULT=aborted"
+}
+try {
+    Invoke-NativeCommand -FilePath $env:FAILING -Arguments @("go")
+    "SECOND=ok"
+}
+catch {
+    "SECOND=aborted"
+}
+""",
+        encoding="utf-8",
+    )
+    env = _scratch_installer_environment(
+        SystemRoot=os.environ.get("SYSTEMROOT", r"C:\Windows"),
+        PATH=os.pathsep.join([str(tmp_path), r"C:\Windows\System32", r"C:\Windows"]),
+        NOISY=str(noisy),
+        FAILING=str(failing),
+    )
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(runner),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 0, output
+    assert "RESULT=ok" in output, output
+    assert "visible on stdout" in output, "the command's output was lost"
+    assert "SECOND=aborted" in output, "a real failure no longer stops the installer"
 
 
 # ------------------------------------------------------------- D5: install.cmd

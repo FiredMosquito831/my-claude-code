@@ -311,7 +311,14 @@ function Invoke-NativeCommand {
     param(
         [string] $FilePath,
         [string[]] $Arguments = @(),
-        [string] $CaptureTo = ""
+        [string] $CaptureTo = "",
+        # 7.122.1. Tee the output to $CaptureTo for a diagnosis WITHOUT echoing
+        # it line by line into the transcript. The one caller is the Python
+        # step, whose failure text decides whether uv's link warning is
+        # recoverable; a healthy install must keep writing the same transcript
+        # it wrote before this capture existed (the command line and its exit
+        # code, nothing else).
+        [switch] $QuietCapture
     )
 
     $commandText = Format-Command -FilePath $FilePath -Arguments $Arguments
@@ -342,7 +349,22 @@ function Invoke-NativeCommand {
     # Out-Host writes to the console exactly as the passthrough did and emits
     # nothing, so the user still watches the install happen.
     if ([string]::IsNullOrWhiteSpace($CaptureTo)) {
-        & $FilePath @Arguments | Out-Host
+        # Windows PowerShell 5.1 turns a native command's stderr into an
+        # ErrorRecord, and under "Stop" the FIRST line a command writes to
+        # stderr ends the install before the command has finished. The capture
+        # branch below has carried this guard since 6.64.0; the plain branch
+        # did not, so a tool that merely PRINTS a warning on stderr could abort
+        # an install it was in the middle of succeeding at (the 4.21.3 family:
+        # uv writes its progress to stderr). Guarding it here costs nothing:
+        # "Continue" changes what a stderr line does, never what is printed.
+        $previousPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $FilePath @Arguments | Out-Host
+        }
+        finally {
+            $ErrorActionPreference = $previousPreference
+        }
     }
     else {
         # uv's diagnosis of a failure is in the text it prints, never in its
@@ -364,7 +386,11 @@ function Invoke-NativeCommand {
             # reads until the end, and useless for a transcript another process
             # is tailing WHILE the install happens.
             & $FilePath @Arguments 2>&1 |
-                ForEach-Object { $line = Convert-OutputLine $_; Write-InstallLog $line; $line } |
+                ForEach-Object {
+                    $line = Convert-OutputLine $_
+                    if (-not $QuietCapture) { Write-InstallLog $line }
+                    $line
+                } |
                 Tee-Object -FilePath $CaptureTo |
                 Out-Host
         }
@@ -401,6 +427,23 @@ $UvLockedSignatures = @(
     "os error 32",
     "access is denied",
     "being used by another process"
+)
+# 7.122.1. uv's failure when the folder it keeps managed interpreters in cannot
+# take the link that names the interpreter: Windows 11 26100 answers this as
+# "os error 448" ("untrusted mount point") when the folder -- or a parent of it
+# -- is a junction or a redirected folder. The interpreter itself is unpacked
+# BEFORE the link is made, so on that machine `uv python install` exits non-zero
+# while the interpreter it just installed is present and runs (the immediate
+# re-run answers "Python 3.14.0 is already installed"). The installer therefore
+# verifies the interpreter before it believes the exit code.
+#
+# The same table exists in scripts/install.sh and a test compares them. POSIX
+# has no error 448; the table is there so the two installers reach the same
+# verdict about the same text, and it is expected never to match there.
+$UvPythonLinkSignatures = @(
+    "os error 448",
+    "untrusted mount point",
+    "failed to create python minor version link"
 )
 
 function Get-UvFailureCategory {
@@ -943,6 +986,293 @@ function Get-PackageSpec {
     return "my-claude-code @ $PackageUrl"
 }
 
+function Test-UvPythonLinkFailure {
+    <#
+        .SYNOPSIS
+        7.122.1: is this the link-creation warning uv survives on its own?
+    #>
+    param([string] $Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $false
+    }
+    $haystack = $Text.ToLowerInvariant()
+    foreach ($signature in $UvPythonLinkSignatures) {
+        if ($haystack.Contains($signature)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-UvOutputLine {
+    <#
+        .SYNOPSIS
+        The lines in which uv said WHY it failed, and nothing else.
+
+        .DESCRIPTION
+        The installer's own message is the plain-language one; these are quoted
+        under "uv said:". A whole capture would be a stack trace, which is not
+        something a user can act on.
+    #>
+    param([string] $Text)
+
+    $lines = @()
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $lines
+    }
+    foreach ($line in ($Text -split "`r?`n")) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed) { continue }
+        if ($trimmed -match "^(error|Caused by)" -or $trimmed -match "os error \d+") {
+            if ($lines -notcontains $trimmed) {
+                $lines += $trimmed
+            }
+        }
+        if ($lines.Count -ge 4) { break }
+    }
+    return $lines
+}
+
+function Invoke-QuietNativeCapture {
+    <#
+        .SYNOPSIS
+        Run a native command for an ANSWER, not for the console.
+
+        .DESCRIPTION
+        stdout and stderr merged into one string, never thrown or written to
+        the transcript. Returns "" when the command did not exit 0 -- the
+        caller decides what that means. Windows PowerShell 5.1's "Stop"
+        preference would turn the first stderr line into a terminating error,
+        so it is guarded exactly like Invoke-NativeCommand's capture branch.
+    #>
+    param(
+        [string] $FilePath,
+        [string[]] $Arguments = @()
+    )
+
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = (& $FilePath @Arguments 2>&1 |
+            ForEach-Object { Convert-OutputLine $_ }) -join "`n"
+        $exitCode = $LASTEXITCODE
+    }
+    catch {
+        return ""
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($exitCode -ne 0) {
+        return ""
+    }
+    return $output.Trim()
+}
+
+function Test-ManagedPythonUsable {
+    <#
+        .SYNOPSIS
+        7.122.1: is a managed Python $Version really installed, and does it run?
+
+        .DESCRIPTION
+        --python-preference only-managed is deliberate: the tool environment is
+        pinned with --managed-python, so a Python 3.14 that happens to be on
+        the machine must not make this check pass. uv finds what uv will use,
+        and then the interpreter is RUN, because a folder left by a
+        half-finished install is not an installed interpreter.
+    #>
+    param([string] $Version)
+
+    $uvPath = Resolve-UvPath "the Python installation"
+    # --no-project on purpose: the verification must not depend on a project
+    # the installer happens to be run from. `uv python find` in a project
+    # discovers that project's environment (and its pyproject), so a user who
+    # runs the install inside their own repository could otherwise get a
+    # "no interpreter found" for a project reason rather than for uv's folder.
+    $found = Invoke-QuietNativeCapture -FilePath $uvPath -Arguments @(
+        "python", "find", "--no-project", "--python-preference", "only-managed", $Version
+    )
+    if ([string]::IsNullOrWhiteSpace($found)) {
+        return $false
+    }
+    $candidate = ($found -split "`r?`n")[0].Trim()
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        return $false
+    }
+    $reported = Invoke-QuietNativeCapture -FilePath $candidate -Arguments @("--version")
+    if ([string]::IsNullOrWhiteSpace($reported)) {
+        return $false
+    }
+    $majorMinor = $Version
+    $lastDot = $Version.LastIndexOf(".")
+    if ($lastDot -gt 0) {
+        $majorMinor = $Version.Substring(0, $lastDot)
+    }
+    return $reported.StartsWith("Python $majorMinor", [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Test-SameDirectory {
+    param([string] $First, [string] $Second)
+
+    if ([string]::IsNullOrWhiteSpace($First) -or [string]::IsNullOrWhiteSpace($Second)) {
+        return $false
+    }
+    try {
+        $firstPath = [IO.Path]::GetFullPath($First).TrimEnd([char[]] @("\", "/"))
+        $secondPath = [IO.Path]::GetFullPath($Second).TrimEnd([char[]] @("\", "/"))
+    }
+    catch {
+        return $false
+    }
+    return [string]::Equals($firstPath, $secondPath, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-PythonInstallFallbacks {
+    <#
+        .SYNOPSIS
+        7.122.1: the plain local folders to try when uv's own cannot take the
+        interpreter's link, in order, never one it is already using.
+    #>
+    param([string] $CurrentDirectory = "")
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $candidates += (Join-Path $env:LOCALAPPDATA "uv\python")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:SystemDrive)) {
+        $candidates += (Join-Path $env:SystemDrive "uv-python")
+    }
+    $usable = @()
+    foreach ($candidate in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if (Test-SameDirectory $candidate $CurrentDirectory) { continue }
+        if ($usable -notcontains $candidate) {
+            $usable += $candidate
+        }
+    }
+    return $usable
+}
+
+function Get-UvPythonInstallDirectory {
+    <#
+        .SYNOPSIS
+        Where uv keeps its managed interpreters, as uv itself answers.
+    #>
+    param([string] $UvPath = "")
+
+    if ([string]::IsNullOrWhiteSpace($UvPath)) {
+        $UvPath = Resolve-UvPath "the Python installation"
+    }
+    $reported = Invoke-QuietNativeCapture -FilePath $UvPath -Arguments @("python", "dir")
+    if (-not [string]::IsNullOrWhiteSpace($reported)) {
+        return ($reported -split "`r?`n")[0].Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:UV_PYTHON_INSTALL_DIR)) {
+        return $env:UV_PYTHON_INSTALL_DIR
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        return (Join-Path $env:APPDATA "uv\python")
+    }
+    return ""
+}
+
+function Get-ReparsePointReport {
+    <#
+        .SYNOPSIS
+        7.122.1: the first folder on $Path's chain that is a junction or a
+        redirected folder, with what `fsutil reparsepoint query` says about it.
+
+        .DESCRIPTION
+        The refusal has to name the redirect it found, not just say "it failed".
+        Bounded to six levels so a deep path cannot turn the report into a walk
+        of the whole drive. Returns $null when no folder on the chain is one (or
+        when fsutil is not available).
+    #>
+    param([string] $Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+    $candidate = $Path
+    for ($depth = 0; $depth -lt 6; $depth++) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { break }
+        if (Test-Path -LiteralPath $candidate -PathType Container) {
+            $output = Invoke-QuietNativeCapture -FilePath "fsutil" -Arguments @(
+                "reparsepoint", "query", $candidate
+            )
+            if (-not [string]::IsNullOrWhiteSpace($output)) {
+                return [pscustomobject]@{
+                    Path   = $candidate
+                    Output = $output
+                }
+            }
+        }
+        $parent = Split-Path -Parent $candidate
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $candidate) { break }
+        $candidate = $parent
+    }
+    return $null
+}
+
+function Get-ManagedPythonFailureMessage {
+    <#
+        .SYNOPSIS
+        7.122.1: why the install stops when no folder could take the interpreter.
+    #>
+    param([string] $Detail = "", [string] $CurrentDirectory = "")
+
+    $lines = @("Python $PythonVersion could not be installed, so the install stopped here.")
+    $directory = $CurrentDirectory
+    if ([string]::IsNullOrWhiteSpace($directory)) {
+        $directory = Get-UvPythonInstallDirectory
+    }
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        $lines += "uv keeps its managed interpreters in: $directory"
+    }
+    $report = $null
+    try { $report = Get-ReparsePointReport -Path $directory } catch { $report = $null }
+    if ($null -ne $report) {
+        $lines += "That folder cannot take uv's version link because it is a junction or a redirected folder: $($report.Path)"
+        $lines += "fsutil reparsepoint query says:"
+        foreach ($entry in ($report.Output -split "`r?`n")) {
+            $trimmed = $entry.TrimEnd()
+            if ($trimmed) { $lines += "  $trimmed" }
+        }
+    }
+    $uvLines = @(Get-UvOutputLine -Text $Detail)
+    if ($uvLines.Count -gt 0) {
+        $lines += "uv said:"
+        foreach ($uvLine in $uvLines) {
+            $lines += "  $uvLine"
+        }
+    }
+    $suggested = "${env:SystemDrive}\uv-python"
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $suggested = Join-Path $env:LOCALAPPDATA "uv\python"
+    }
+    $lines += "Point uv at a plain local folder and run the install command again:"
+    $lines += ('  $env:UV_PYTHON_INSTALL_DIR = "' + $suggested + '"')
+    return ($lines -join "`n")
+}
+
+function Write-ManagedPythonRecovered {
+    <#
+        .SYNOPSIS
+        7.122.1: the ONE line a recovered Python install says.
+    #>
+    param([switch] $LinkWarning)
+
+    $message = if ($LinkWarning) {
+        "Python $PythonVersion is installed; uv reported a link-creation warning (os error 448), which does not affect this install."
+    }
+    else {
+        "Python $PythonVersion is installed; uv reported an error while linking it, which does not affect this install."
+    }
+    Write-Host $message
+    Write-InstallLog $message
+}
+
 function Install-ManagedPython {
     # Download $PythonVersion through uv before anything needs an interpreter,
     # so a machine with no Python at all installs cleanly. --no-bin and
@@ -950,6 +1280,16 @@ function Install-ManagedPython {
     # UV_PYTHON_INSTALL_DIR: no python.exe shim is dropped into a bin directory
     # on PATH, and no PEP 514 entry is written to the Windows registry. The
     # tool environment finds it by version, not by PATH.
+    #
+    # 7.122.1: a non-zero exit is not the verdict any more. On Windows 11 26100
+    # this exact command failed with "Failed to create Python minor version
+    # link directory ... untrusted mount point. (os error 448)" while the
+    # interpreter it had just unpacked was present and ran, and the immediate
+    # re-run answered "Python 3.14.0 is already installed" and succeeded. So:
+    # read what uv said, retry once when it is that link warning, then VERIFY
+    # the interpreter with uv itself and by RUNNING it. A warning about a link
+    # is not a missing interpreter; only a genuine absence moves to the safe
+    # folders, and only when those fail does the install stop.
     $arguments = @("python", "install", "--no-bin", "--no-registry", $PythonVersion)
 
     if ($DryRun) {
@@ -958,7 +1298,75 @@ function Install-ManagedPython {
     }
 
     $uvPath = Resolve-UvPath "the Python installation"
-    Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments
+    $capture = New-CapturePath
+    $failureText = ""
+    try {
+        try {
+            # -QuietCapture: uv's output is kept here to decide this, but it is
+            # not poured into the transcript line by line. A healthy install
+            # must write the same transcript it wrote before this check.
+            Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments -CaptureTo $capture -QuietCapture
+            return
+        }
+        catch {
+            $failureText = Read-CapturedOutput $capture
+        }
+        # Tee-Object opens its file when the command first writes, so an
+        # attempt that prints nothing would otherwise leave the previous
+        # attempt's text behind for Read-CapturedOutput to read as this one's.
+        Remove-Item -LiteralPath $capture -Force -ErrorAction SilentlyContinue
+
+        $linkWarning = Test-UvPythonLinkFailure $failureText
+        if ($linkWarning) {
+            # The known warning: uv makes the link AFTER it unpacks, so the
+            # same command one more time usually answers "already installed".
+            try {
+                Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments -CaptureTo $capture -QuietCapture
+            }
+            catch {
+                $failureText = Read-CapturedOutput $capture
+            }
+            Remove-Item -LiteralPath $capture -Force -ErrorAction SilentlyContinue
+        }
+
+        if (Test-ManagedPythonUsable $PythonVersion) {
+            Write-ManagedPythonRecovered -LinkWarning:$linkWarning
+            return
+        }
+
+        # Genuinely absent. uv cannot use the folder it is configured with (a
+        # junction or a redirected folder on this machine), so hand it a plain
+        # local folder and try once per folder. UV_PYTHON_INSTALL_DIR is
+        # process-wide, so every later uv child -- including the
+        # `uv tool install --managed-python` below -- uses the folder that
+        # worked, whether the install was typed or started by the desktop app
+        # (`$env:` is not `$script:`).
+        $currentDirectory = Get-UvPythonInstallDirectory -UvPath $uvPath
+        foreach ($candidate in @(Get-PythonInstallFallbacks -CurrentDirectory $currentDirectory)) {
+            $env:UV_PYTHON_INSTALL_DIR = $candidate
+            try {
+                Invoke-NativeCommand -FilePath $uvPath -Arguments $arguments -CaptureTo $capture -QuietCapture
+            }
+            catch {
+                $failureText = Read-CapturedOutput $capture
+            }
+            Remove-Item -LiteralPath $capture -Force -ErrorAction SilentlyContinue
+            if (Test-ManagedPythonUsable $PythonVersion) {
+                $message = "Python $PythonVersion is installed in $candidate; uv could not use $currentDirectory, so the install continues from this folder (UV_PYTHON_INSTALL_DIR)."
+                Write-Host $message
+                Write-InstallLog $message
+                return
+            }
+        }
+
+        $failureMessage = Get-ManagedPythonFailureMessage -Detail $failureText -CurrentDirectory $currentDirectory
+        Write-Host $failureMessage
+        Write-InstallLog $failureMessage
+        throw "Python $PythonVersion could not be installed and no local folder would take it; set UV_PYTHON_INSTALL_DIR to a plain local folder and run the install command again."
+    }
+    finally {
+        Remove-Item -LiteralPath $capture -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Resolve-UvPath {
