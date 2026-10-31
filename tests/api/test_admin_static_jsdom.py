@@ -13215,8 +13215,16 @@ def test_jsdom_no_unlisted_value_is_ever_submitted_untouched(select_blank) -> No
             continue
         for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, TAVILY_ROTATION):
             assert key not in body["values"], key
+            # 7.121.3: nor named as cleared -- a mark the page fabricated
+            # would be read by the server as a deliberate clear.
+            assert key not in body.get("cleared", []), key
     for key in (*UNLISTED_SAVED, SAVED_NUMBER_KEY, TAVILY_ROTATION):
         assert select_blank["fields"][key].get("submits") is None, key
+
+    # The one body that carries a blank (the deliberate "Use default" in the
+    # 7.121.3 tests) carries only the key a person cleared, in both fields.
+    clear_body = select_blank["clear"]["body"]
+    assert set(clear_body["values"]) == set(clear_body["cleared"]) == {"LOG_LEVEL"}
 
 
 def test_jsdom_a_control_nobody_touched_is_never_posted(select_blank) -> None:
@@ -13558,6 +13566,86 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
     # 7.121.1's behaviour is untouched: clean on load, nothing posted untouched.
     assert select_blank["footerOnLoad"] == base["footerOnLoad"] == "No changes"
     assert select_blank["applyOnLoad"] == base["applyOnLoad"]
+
+
+# ==================================================================== 7.121.3
+# The clear travels with the request. The server refuses to blank a setting the
+# request did not name in `cleared` (tests/api/test_admin_config_unmarked_clear.py
+# proves that side), so the one gesture the refusal exists to protect -- "Use
+# default" -- has to put the key in that list, and a save that clears nothing
+# must not grow the field at all.
+
+
+def test_jsdom_a_page_that_cleared_nothing_sends_no_cleared_list(select_blank) -> None:
+    """The wire is unchanged for every save that clears nothing.
+
+    Both bodies measured before the clear (no edit at all -- never sent -- and
+    one typed edit) carry `values` and nothing else, so an Apply that clears
+    nothing is byte-identical to 7.121.2's.
+    """
+
+    assert select_blank["clear"]["onLoad"] == []
+    assert select_blank["applyAfterEdit"]["body"] == {
+        "values": {"DDGS_REGION": "uk-en"}
+    }
+
+
+def test_jsdom_use_default_sends_the_key_it_clears(select_blank) -> None:
+    """ "Use default" is a deliberate clear, so the request says which key it is.
+
+    Without this the server would refuse the page's own clear -- and with the
+    mark withdrawn on the next edit, the list names only what is actually
+    being cleared, so a key sent with a value is never in it.
+    """
+
+    clear = select_blank["clear"]
+
+    assert clear["buttonFound"] is True
+    assert clear["value"] == ""
+    assert clear["footer"] == "1 unsaved change"
+    assert clear["keys"] == ["LOG_LEVEL"]
+    assert clear["body"] == {
+        "values": {"LOG_LEVEL": ""},
+        "cleared": ["LOG_LEVEL"],
+    }
+
+    # Changing your mind before saving: the key carries a value, so it is not
+    # listed as cleared -- the list names what is being cleared NOW, not
+    # everything a control ever emptied.
+    assert clear["afterChoosing"]["keys"] == []
+    assert clear["afterChoosing"]["submitted"] == {"LOG_LEVEL": "INFO"}
+    assert clear["afterChoosing"]["body"] == {"values": {"LOG_LEVEL": "INFO"}}
+    assert clear["afterChoosing"]["footer"] == "1 unsaved change"
+    assert clear["valueBody"] == {"values": {"LOG_LEVEL": "INFO"}}
+
+    # And the clear, applied through the real button.
+    assert clear["secondButtonFound"] is True
+    assert clear["appliedClearBody"] == {
+        "values": {"LOG_LEVEL": ""},
+        "cleared": ["LOG_LEVEL"],
+    }
+    assert clear["footerAfterApply"] == "No changes"
+
+
+def test_jsdom_emptying_a_chain_is_a_clear_the_request_names(select_blank) -> None:
+    """The rail writes the chain's value itself, so its mark has to be made
+    against the value the chain ends up holding.
+
+    A chain's last row leaving is a real gesture -- it is how a rail is
+    emptied -- and it is written by ``ModelChainEditor`` with no change event.
+    If the edit were recorded before the value moved, the blank would reach the
+    server unlisted and the save would be refused; recorded after, it is a
+    clear like any other. Built with the page's own ``buildFieldControl``.
+    """
+
+    chain = select_blank["chainClear"]
+
+    assert chain["loaded"] == "a,b"
+    assert chain["rows"] == 2
+    assert chain["submittedBefore"] is True
+    assert chain["emptied"]["value"] == ""
+    assert chain["emptied"]["submitted"] == ""
+    assert chain["emptied"]["marked"] is True
 
 
 def _scratch_managed_env(tmp_path, monkeypatch) -> Path:

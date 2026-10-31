@@ -14,6 +14,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.config.admin.env_io import SettingsFileBusyError
+from my_claude_code.config.admin.persistence import UnmarkedClearError
 from my_claude_code.config.proxy_chains import ProxyChainsUnreadableError
 from my_claude_code.core.anthropic import anthropic_error_payload
 from my_claude_code.core.diagnostics import (
@@ -228,6 +229,22 @@ def create_app(services: ApiServices) -> FastAPI:
 
         return await starlette_http_exception_handler(
             request, StarletteHTTPException(status_code=503, detail=str(exc))
+        )
+
+    @app.exception_handler(UnmarkedClearError)
+    async def unmarked_clear_handler(request: Request, exc: UnmarkedClearError):
+        """A save refused because it would blank settings nobody cleared (7.121.3).
+
+        **409 Conflict**, not 503: the request is well formed and the file is
+        fine -- it contradicts the state it was built from, and retrying it
+        unchanged will fail the same way. The sentence names every setting it
+        would have removed a line for and says to reload the dashboard, because
+        the client that sends an unmarked blank is a page opened before 7.121.3,
+        and only a reload makes it stop.
+        """
+
+        return await starlette_http_exception_handler(
+            request, StarletteHTTPException(status_code=409, detail=str(exc))
         )
 
     @app.exception_handler(ProxyChainsUnreadableError)
