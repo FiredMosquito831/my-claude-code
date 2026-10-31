@@ -1198,7 +1198,15 @@ def test_clear_log_clears_the_index(tmp_path: Path) -> None:
     assert counts == [0, 0, 0, 0]
     store.enqueue(_record(2, 1001.0, input_text="after the clear"))
     store.close()
-    assert len(_indexed_keys(store)) == 1
+    keys = _indexed_keys(store)
+    # A PRODUCT race, not a flake (W-TESTS-2, 2026-10-31; Windows release run
+    # 41083296763): the writer read record 1's blob from the log before
+    # clear() and added it to the emptied index after it (forced through the
+    # prompt chunk step, which reproduces that run's two addresses).
+    assert len(keys) == 1, (
+        "a body clear() erased is in the search index again: "
+        f"{sorted(keys - _log_blobs(store))}"
+    )
     assert index_rows(store, "after", local="all") == scan_rows(
         store, "after", local="all"
     )

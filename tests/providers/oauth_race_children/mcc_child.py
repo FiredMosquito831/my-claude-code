@@ -3,13 +3,17 @@
 Started by ``tests/providers/test_oauth_refresh_race_process.py``, with
 ``HOME``, ``MCC_CONFIG_DIR``, ``CLAUDE_CONFIG_DIR`` and ``CODEX_HOME`` all
 inside the test's ``tmp_path``. MCC's real code runs unmodified except for
-three seams every child sets before the race starts:
+four seams every child sets before the race starts:
 
 * the token URLs point at the fake endpoint on 127.0.0.1 (its port is read
   from ``--port-file``);
 * the lock waiting budget is shrunk (``--stale`` and friends) so a race costs
   seconds, not the real 60 s / 5 x 1-2 s;
-* the POST function is wrapped to *count* calls -- it still posts.
+* the POST function is wrapped to *count* calls -- it still posts;
+* a held lock's heartbeat and release are wrapped to *measure* how old the
+  lock got (``max_heartbeat_gap``) -- they still beat and release. Above
+  ``--stale`` this process was descheduled long enough for its lock to be
+  stale by the protocol, so another racer was allowed to break it.
 
 Modes (``--mode``):
 
@@ -77,6 +81,7 @@ def main() -> int:
         "statuses": [],
         "posts_before_go": 0,
         "decisions": [],
+        "max_heartbeat_gap": 0.0,
     }
 
     def fingerprint(token: str | None) -> str:
@@ -89,6 +94,22 @@ def main() -> int:
                 return False
             time.sleep(0.005)
         return True
+
+    def read_port(path: Path, seconds: float) -> int | None:
+        """The endpoint's port, once its file exists AND opens.
+
+        The endpoint writes it with ``os.replace``; on Windows a file renamed a
+        moment ago can refuse an open (``PermissionError``) while the rename's
+        handle closes or a scanner holds it -- under load, 2026-10-31.
+        """
+        deadline = time.monotonic() + seconds
+        while True:
+            try:
+                return int(path.read_text(encoding="utf-8"))
+            except FileNotFoundError, PermissionError:
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(0.005)
 
     def patch(owner: object, name: str, value: object) -> None:
         """``monkeypatch.setattr`` for a child: the seam must already exist."""
@@ -198,10 +219,39 @@ def main() -> int:
         )
         patch(oauth_file_lock, "REFRESH_LOCK_TIMING", timing)
 
-        port_file = Path(args.port_file)
-        if not wait_for(port_file, 60.0):
+        # -- how old a held lock got: measured, never changed ----------------
+        # Before each heartbeat (and before the release of a lock that beat):
+        # the time since this process last touched it. Only heartbeated locks
+        # count -- the storage-write lock never beats -- and a lock somebody
+        # else took (``compromised``) is no longer measured.
+        beating: set[int] = set()
+        real_touch = oauth_file_lock.HeldLock.touch
+        real_release = oauth_file_lock.HeldLock.release
+
+        def measure(held: Any) -> None:
+            if held._last_touch and not held.compromised:
+                age = time.time() - held._last_touch
+                result["max_heartbeat_gap"] = round(
+                    max(result["max_heartbeat_gap"], age), 3
+                )
+
+        def touch(held: Any) -> None:
+            measure(held)
+            beating.add(id(held))
+            real_touch(held)
+
+        def release(held: Any) -> None:
+            if id(held) in beating:
+                measure(held)
+            real_release(held)
+
+        patch(oauth_file_lock.HeldLock, "touch", touch)
+        patch(oauth_file_lock.HeldLock, "release", release)
+
+        port = read_port(Path(args.port_file), 60.0)
+        if port is None:
             raise RuntimeError("the fake token endpoint never reported its port")
-        base = f"http://127.0.0.1:{int(port_file.read_text(encoding='utf-8'))}"
+        base = f"http://127.0.0.1:{port}"
         run = (
             claude_mode(base, timing)
             if args.mode == "claude"

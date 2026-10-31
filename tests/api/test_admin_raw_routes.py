@@ -14,7 +14,9 @@ import csv
 import io
 import json
 import os
+import re
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -459,6 +461,34 @@ def test_the_raw_group_txt_is_streamed_with_the_buffered_widths(client) -> None:
     assert txt.content.split(b"\n", 2)[2] == expected.split(b"\n", 2)[2]
 
 
+#: The workbook's own creation time in ``docProps/core.xml`` (whole seconds).
+_CORE_STAMP = re.compile(rb"(<dcterms:(?:created|modified)\b[^>]*>)[^<]*(</dcterms:)")
+
+
+def _workbook_parts(data: bytes) -> list[tuple[str, int, bytes]]:
+    """Every part of an XLSX, in archive order, without the render's own clock.
+
+    Each zip member carries the time it was written (2 s steps) and
+    ``docProps/core.xml`` the moment the workbook was made: two renders of the
+    same rows differ in those and nothing else, so the bytes of two renders a
+    second apart differ (Windows release run 41155123641, a 2 s boundary).
+    """
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        parts = [
+            (info.filename, info.compress_type, archive.read(info))
+            for info in archive.infolist()
+        ]
+    return [
+        (
+            name,
+            kind,
+            _CORE_STAMP.sub(rb"\1\2", body) if name == "docProps/core.xml" else body,
+        )
+        for name, kind, body in parts
+    ]
+
+
 def test_the_default_exports_render_through_the_unchanged_path(client) -> None:
     """With the group off, each format is the renderer's own bytes, as before.
 
@@ -466,7 +496,8 @@ def test_the_default_exports_render_through_the_unchanged_path(client) -> None:
     did; these assertions rebuild every format from the JSON rows through the
     same renderers with no ``widths`` -- the pre-7.121.0 signature -- and the
     bytes must be identical (TXT from its table down, since its title carries
-    the export's own timestamp).
+    the export's own timestamp; XLSX part for part, since its archive carries
+    the moment it was written).
     """
 
     params = {"scope": "requests"}
@@ -492,7 +523,9 @@ def test_the_default_exports_render_through_the_unchanged_path(client) -> None:
     xlsx_bytes = client.get(
         "/admin/api/export", params={**params, "format": "xlsx"}
     ).content
-    assert xlsx_bytes == b"".join(export_engine.render_xlsx(rows, columns, headers))
+    assert _workbook_parts(xlsx_bytes) == _workbook_parts(
+        b"".join(export_engine.render_xlsx(rows, columns, headers))
+    )
 
 
 def test_a_default_export_never_reads_the_raw_logs(client, monkeypatch) -> None:

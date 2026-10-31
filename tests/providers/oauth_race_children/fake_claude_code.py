@@ -24,6 +24,9 @@ broken only when its mtime is older than ``stale``.
    after the write.
 
 Prints one JSON line. Tokens appear only as ``sha256[:16]`` fingerprints.
+``max_heartbeat_gap`` is the oldest its locks got while they were its own
+(``Heartbeat.max_gap``): above an observer's ``stale`` this process was
+descheduled long enough for its lock to be stale by the protocol.
 """
 
 import sys
@@ -80,6 +83,7 @@ def main() -> int:
         "compromised": False,
         "heartbeats": 0,
         "held_seconds": 0.0,
+        "max_heartbeat_gap": 0.0,
     }
 
     def fingerprint(token: str) -> str:
@@ -93,11 +97,27 @@ def main() -> int:
             time.sleep(0.005)
         return True
 
-    if not wait_for(port_file, 60.0):
+    def read_port(path: Path, seconds: float) -> int | None:
+        """The endpoint's port, once its file exists AND opens.
+
+        The endpoint writes it with ``os.replace``; on Windows a file renamed a
+        moment ago can refuse an open (``PermissionError``) while the rename's
+        handle closes or a scanner holds it -- under load, 2026-10-31.
+        """
+        deadline = time.monotonic() + seconds
+        while True:
+            try:
+                return int(path.read_text(encoding="utf-8"))
+            except FileNotFoundError, PermissionError:
+                if time.monotonic() >= deadline:
+                    return None
+                time.sleep(0.005)
+
+    port = read_port(port_file, 60.0)
+    if port is None:
         result["outcome"] = "no_endpoint"
         print(json.dumps(result))
         return 1
-    port = int(port_file.read_text(encoding="utf-8"))
     token_url = f"http://127.0.0.1:{port}/v1/oauth/token"
 
     def read_document() -> dict[str, Any]:
@@ -160,13 +180,24 @@ def main() -> int:
             path.rmdir()
 
     class Heartbeat:
-        """Touch the held lock directories; notice anybody else touching them."""
+        """Touch the held lock directories; notice anybody else touching them.
+
+        ``max_gap`` is the oldest a lock still ours got between two of our
+        touches, or between our last touch and its release: the age a
+        stale check elsewhere could have read from its mtime. It stays below
+        ``interval`` plus scheduling jitter unless this process was
+        descheduled; past the observer's ``stale`` the lock WAS stale by the
+        protocol for that moment. A lock somebody else took is no longer
+        measured: its age after that says nothing about how live it was.
+        """
 
         def __init__(self, paths: list[Path], interval: float) -> None:
             self.paths = paths
             self.interval = interval
             self.compromised = False
             self.beats = 0
+            self.max_gap = 0.0
+            self._lost: set[Path] = set()
             self._stop = threading.Event()
             self._last = {path: path.stat().st_mtime_ns for path in paths}
             self._thread = threading.Thread(target=self._run, name="cc-heartbeat")
@@ -175,22 +206,37 @@ def main() -> int:
         def start(self) -> None:
             self._thread.start()
 
+        def _measure(self, path: Path) -> None:
+            if path not in self._lost:
+                age = time.time() - self._last[path] / 1e9
+                self.max_gap = max(self.max_gap, age)
+
+        def released(self, path: Path) -> None:
+            """Right before ``path`` is removed: its last stretch counts too."""
+            self._measure(path)
+
         def _run(self) -> None:
             while not self._stop.wait(self.interval):
                 for path in self.paths:
+                    if path in self._lost:
+                        continue
+                    self._measure(path)
                     try:
                         current = path.stat().st_mtime_ns
                     except OSError:
                         self.compromised = True
+                        self._lost.add(path)
                         continue
                     if current != self._last[path]:
                         self.compromised = True
+                        self._lost.add(path)
                         continue
                     try:
                         os.utime(path, None)
                         self._last[path] = path.stat().st_mtime_ns
                     except OSError:
                         self.compromised = True
+                        self._lost.add(path)
                 self.beats += 1
 
         def stop(self) -> None:
@@ -296,9 +342,12 @@ def main() -> int:
             result["heartbeats"] = heartbeat.beats
             with contextlib.suppress(OSError):
                 owner_record.unlink()
+            heartbeat.released(legacy_lock)
             release(legacy_lock)
+            heartbeat.released(refresh_lock)
             release(refresh_lock)
             result["held_seconds"] = round(time.monotonic() - started, 3)
+            result["max_heartbeat_gap"] = round(heartbeat.max_gap, 3)
 
     (sync / f"ready-{args.name}").write_text("1", encoding="utf-8")
     if not wait_for(sync / "go", 60.0):

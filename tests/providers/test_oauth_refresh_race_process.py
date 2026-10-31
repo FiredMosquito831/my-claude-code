@@ -35,6 +35,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -607,6 +608,54 @@ def _assert_mcc_ok(result: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Races whose locks stayed live
+# ---------------------------------------------------------------------------
+
+#: One race's world, every participant's result line, and the endpoint's POSTs.
+type RaceOutcome = tuple[_World, dict[str, dict[str, Any]], list[dict[str, Any]]]
+
+#: Races a test may run before it gives up on this machine keeping every held
+#: lock younger than the stale window the racers run with.
+LIVE_LOCK_RACES = 3
+
+
+def _race_with_live_locks(
+    race_once: Callable[[Path], RaceOutcome], root: Path, stale: float
+) -> RaceOutcome:
+    """``race_once`` in a fresh world until no racer's lock went stale.
+
+    Every racer reports the oldest a lock it held got between two of its own
+    heartbeats, or before its release (``max_heartbeat_gap``; a lock somebody
+    else took is no longer measured). The stale windows here are shrunk from a
+    minute to seconds, and on a loaded runner the OS can deschedule a racer for
+    longer (Windows release runs 41044158343 and 41052058880): its lock was
+    then stale by the protocol, another racer breaking it was allowed, and the
+    race proves nothing either way. Such a race is run again, at most
+    ``LIVE_LOCK_RACES`` times; the test asserts on the first race in which
+    every lock stayed live, so a racer that breaks a LIVE lock -- or a lock
+    that fails to keep two refreshes apart -- still fails on the first race.
+    """
+
+    stalls: list[dict[str, float]] = []
+    while True:
+        world, results, posts = race_once(root / f"race-{len(stalls)}")
+        gaps = {
+            name: float(result.get("max_heartbeat_gap", 0.0))
+            for name, result in results.items()
+        }
+        if max(gaps.values(), default=0.0) <= stale:
+            return world, results, posts
+        stalls.append(gaps)
+        if len(stalls) == LIVE_LOCK_RACES:
+            pytest.fail(
+                f"In all {LIVE_LOCK_RACES} races a racer's heartbeat stalled past "
+                f"the {stale} s stale window (oldest lock age per racer: {stalls}):"
+                " this machine never kept a live lock live, so the race was not"
+                " tested."
+            )
+
+
+# ---------------------------------------------------------------------------
 # The tests
 # ---------------------------------------------------------------------------
 
@@ -620,25 +669,32 @@ def test_two_mcc_processes_and_claude_code_spend_each_refresh_token_once(
     Code itself all find the same expired access token and all go for the
     refresh at once. Whoever wins, the refresh token is presented exactly
     once, nobody gets ``invalid_grant``, and all three end on the winner's
-    token -- which is what Claude Code's file holds afterwards.
+    token -- which is what Claude Code's file holds afterwards. A race in which
+    a racer's lock went stale is run again (``_race_with_live_locks``).
     """
 
     _assert_children_install_the_block()
-    world = _World(tmp_path)
-    world.write_claude_code_login()
-    with _Race(world) as race:
-        race.start_endpoint(
-            mode="claude",
-            valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
-            delay_seconds=CONTESTED_POST_SECONDS,
-        )
-        race.mcc("mcc-a")
-        race.mcc("mcc-b")
-        race.claude_code("claude-code")
-        race.go()
-        results = race.finish()
-        posts = race.stop_endpoint()
 
+    def race_once(root: Path) -> RaceOutcome:
+        world = _World(root)
+        world.write_claude_code_login()
+        with _Race(world) as race:
+            race.start_endpoint(
+                mode="claude",
+                valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
+                delay_seconds=CONTESTED_POST_SECONDS,
+            )
+            race.mcc("mcc-a")
+            race.mcc("mcc-b")
+            race.claude_code("claude-code")
+            race.go()
+            results = race.finish()
+            posts = race.stop_endpoint()
+        return world, results, posts
+
+    world, results, posts = _race_with_live_locks(
+        race_once, tmp_path, FAST_LOCKS["stale"]
+    )
     spend = _one_spend(posts, presented=CLAUDE_REFRESH_0)
     assert sum(result["posts"] for result in results.values()) == 1
     winners = [name for name, result in results.items() if result["posts"] == 1]
@@ -676,25 +732,32 @@ def test_the_loser_adopts_the_winners_token_with_zero_posts(tmp_path: Path) -> N
     Two MCC servers holding the same imported (SHARED) account race for the
     expired token. The endpoint holds the winner's answer for 1.5 s, so
     the loser genuinely waits on Claude Code's lock; under it, it finds the
-    winner's token already in the file and adopts it without a POST.
+    winner's token already in the file and adopts it without a POST. A race in
+    which a racer's lock went stale is run again (``_race_with_live_locks``).
     """
 
     _assert_children_install_the_block()
-    world = _World(tmp_path)
-    world.write_claude_code_login()
-    world.write_anthropic_store(origin="claude-code")
-    with _Race(world) as race:
-        race.start_endpoint(
-            mode="claude",
-            valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
-            delay_seconds=CONTESTED_POST_SECONDS,
-        )
-        race.mcc("mcc-a")
-        race.mcc("mcc-b")
-        race.go()
-        results = race.finish()
-        posts = race.stop_endpoint()
 
+    def race_once(root: Path) -> RaceOutcome:
+        world = _World(root)
+        world.write_claude_code_login()
+        world.write_anthropic_store(origin="claude-code")
+        with _Race(world) as race:
+            race.start_endpoint(
+                mode="claude",
+                valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
+                delay_seconds=CONTESTED_POST_SECONDS,
+            )
+            race.mcc("mcc-a")
+            race.mcc("mcc-b")
+            race.go()
+            results = race.finish()
+            posts = race.stop_endpoint()
+        return world, results, posts
+
+    world, results, posts = _race_with_live_locks(
+        race_once, tmp_path, FAST_LOCKS["stale"]
+    )
     spend = _one_spend(posts, presented=CLAUDE_REFRESH_0)
     for result in results.values():
         _assert_mcc_ok(result)
@@ -733,29 +796,44 @@ def test_claude_code_holding_the_lock_makes_mcc_wait_then_adopt(
     ``invalid_grant``. Instead it waits, re-reads under the lock, and adopts
     Claude Code's token with zero POSTs; Claude Code's heartbeat never sees
     its lock touched.
+
+    A race is evidence only while the lock really stayed live: on a loaded
+    runner the OS descheduled Claude Code for longer than MCC's 1 s window
+    (Windows release runs 41044158343 and 41052058880: MCC then broke the lock
+    and POSTed the spent token, or touched it) -- its lock was stale by the
+    protocol, and breaking it is what ``proper-lockfile`` itself does. Such a
+    race is run again (``_race_with_live_locks``); one in which the lock stayed
+    live must pass every assertion below, so an MCC that breaks a live lock
+    still fails on the first race.
     """
 
     _assert_children_install_the_block()
-    world = _World(tmp_path)
-    world.write_claude_code_login()
-    world.write_anthropic_store(origin="claude-code")
     impatient = {**FAST_LOCKS, "stale": 1.0}
-    with _Race(world) as race:
-        race.start_endpoint(
-            mode="claude",
-            valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
-            delay_seconds=2.5,
-        )
-        race.claude_code("claude-code", heartbeat=0.2)
-        race.mcc(
-            "mcc",
-            wait_for=world.sync / "holding-claude-code",
-            locks=impatient,
-        )
-        race.go()
-        results = race.finish()
-        posts = race.stop_endpoint()
 
+    def race_once(root: Path) -> RaceOutcome:
+        world = _World(root)
+        world.write_claude_code_login()
+        world.write_anthropic_store(origin="claude-code")
+        with _Race(world) as race:
+            race.start_endpoint(
+                mode="claude",
+                valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
+                delay_seconds=2.5,
+            )
+            race.claude_code("claude-code", heartbeat=0.2)
+            race.mcc(
+                "mcc",
+                wait_for=world.sync / "holding-claude-code",
+                locks=impatient,
+            )
+            race.go()
+            results = race.finish()
+            posts = race.stop_endpoint()
+        return world, results, posts
+
+    world, results, posts = _race_with_live_locks(
+        race_once, tmp_path, impatient["stale"]
+    )
     spend = _one_spend(posts, presented=CLAUDE_REFRESH_0)
     assert spend["client"] == "fake-claude-code"
 
@@ -787,24 +865,33 @@ def test_two_mcc_processes_refresh_a_native_account_once(tmp_path: Path) -> None
     Two MCC servers share MCC's own store holding an account MCC signed in
     itself. The lock beside the store (``anthropic_oauth.json.refresh.lock``)
     makes one of them POST; the other waits, re-reads the store under the
-    lock and adopts. Claude Code's files and locks are never involved.
+    lock and adopts. Claude Code's files and locks are never involved. A race
+    in which the winner's lock went stale -- the winner descheduled past the
+    2 s window, once under a local full-suite load (2026-10-31) -- is run
+    again (``_race_with_live_locks``).
     """
 
     _assert_children_install_the_block()
-    world = _World(tmp_path)
-    world.write_anthropic_store(origin="mcc")
-    with _Race(world) as race:
-        race.start_endpoint(
-            mode="claude",
-            valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
-            delay_seconds=CONTESTED_POST_SECONDS,
-        )
-        race.mcc("mcc-a")
-        race.mcc("mcc-b")
-        race.go()
-        results = race.finish()
-        posts = race.stop_endpoint()
 
+    def race_once(root: Path) -> RaceOutcome:
+        world = _World(root)
+        world.write_anthropic_store(origin="mcc")
+        with _Race(world) as race:
+            race.start_endpoint(
+                mode="claude",
+                valid={CLAUDE_REFRESH_0: ACCOUNT_UUID},
+                delay_seconds=CONTESTED_POST_SECONDS,
+            )
+            race.mcc("mcc-a")
+            race.mcc("mcc-b")
+            race.go()
+            results = race.finish()
+            posts = race.stop_endpoint()
+        return world, results, posts
+
+    world, results, posts = _race_with_live_locks(
+        race_once, tmp_path, FAST_LOCKS["stale"]
+    )
     spend = _one_spend(posts, presented=CLAUDE_REFRESH_0)
     for result in results.values():
         _assert_mcc_ok(result)

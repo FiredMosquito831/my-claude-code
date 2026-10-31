@@ -336,12 +336,36 @@ def _isolate_server_log(monkeypatch, tmp_path):
     monkeypatch.setenv("LOG_FILE", str(tmp_path / "server.log"))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _real_request_log_close():
+    """For the whole run, a request log ``close()`` returns once its writer has ended.
+
+    Every ``close()`` -- a test's own, ``reset_request_log_stores()``'s, the
+    app's at shutdown, a module-scoped fixture's -- would otherwise return
+    after its bound with rows still queued, and the read that follows finds
+    none (W-TESTS-2, 2026-10-31; tests/support/request_log_writes.py). Yields
+    the real ``close()`` for the tests whose subject is its own bound.
+    """
+    from my_claude_code.core.request_log import RequestLogStore
+    from tests.support.request_log_writes import close_then_join
+
+    real_close = RequestLogStore.close
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(RequestLogStore, "close", close_then_join(real_close))
+        yield real_close
+
+
 @pytest.fixture(autouse=True)
-def _isolate_request_log(monkeypatch, tmp_path):
+def _isolate_request_log(monkeypatch, tmp_path, request, _real_request_log_close):
     """Keep request-log writes out of the real ~/.fcc directory during tests."""
     from my_claude_code.core import request_log
+    from tests.support.request_log_writes import CLOSE_BOUND_MARKER
 
     request_log.set_request_log_path(tmp_path / "requests.db")
+    if request.node.get_closest_marker(CLOSE_BOUND_MARKER) is not None:
+        monkeypatch.setattr(
+            request_log.RequestLogStore, "close", _real_request_log_close
+        )
     # The historical cost backfill runs only when a pricer is registered, and
     # the registration is process-wide. A test that registers one must not
     # leave the next test's store quietly rewriting its rows -- the house rule
