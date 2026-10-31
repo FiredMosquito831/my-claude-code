@@ -5171,11 +5171,22 @@ audio.req-media-preview {
   gap: 12px;
 }
 
-/* The 3 required steps are a causal chain; the rest are independent extras.
-   This divider is the only thing that says so -- everything else about a
-   step's own card is unchanged whichever group it's in. */
-.get-started-group-heading {
+/* 7.122.0: the essentials are the causal chain; the optional steps are cards
+   below it. This divider says where the list starts and how far along it is,
+   and the same shape heads every other section of the page. */
+.get-started-section-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
   margin: 4px 2px 0;
+}
+
+.get-started-section-heading:first-child {
+  margin-top: 0;
+}
+
+.get-started-section-heading-label {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
@@ -5183,8 +5194,9 @@ audio.req-media-preview {
   text-transform: uppercase;
 }
 
-.get-started-group-heading:first-child {
-  margin-top: 0;
+.get-started-section-heading-note {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .get-started-step {
@@ -5201,6 +5213,10 @@ audio.req-media-preview {
 .get-started-step-header {
   display: flex;
   align-items: center;
+  /* 7.122.0: the extra line (provider names, routes ready, who is connected)
+     is a full-width row under the title, so the header has to wrap -- without
+     this the line shares one nowrap row and squeezes the title to a sliver. */
+  flex-wrap: wrap;
   gap: 12px;
   padding: 14px 16px;
   cursor: pointer;
@@ -5212,8 +5228,8 @@ audio.req-media-preview {
 }
 
 .get-started-step-header strong {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 12ch;
   color: var(--text-strong);
   font-size: 14px;
 }
@@ -5305,6 +5321,392 @@ audio.req-media-preview {
 
   .get-started-step-chevron {
     transition: none;
+  }
+}
+
+/* ------------------------------------------- Get Started: the map (7.122.0)
+   One lead sentence, then four essentials, nine status cards, one collapsed
+   filterable list and one collapsed read-only section. Statuses are read, not
+   earned: only the essentials have a bar, and no card is ever red or amber. */
+
+.get-started-lead {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.get-started-about {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.get-started-about summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.get-started-about summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.get-started-about p {
+  margin: 10px 0 0;
+}
+
+/* One short line under an essential's name: the provider names, the routes
+   ready, who is connected, the last request. */
+.get-started-step-line {
+  flex: 1 1 100%;
+  order: 5;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.get-started-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The features */
+
+.get-started-features,
+.get-started-more,
+.get-started-advanced {
+  margin: 0 0 18px;
+}
+
+.get-started-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+
+.get-started-section-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.get-started-section-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.get-started-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.get-started-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.get-started-card-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+/* A card's chip carries a real value ("Vision adapter: llama-4-scout-…"), so
+   it wraps instead of pushing the card past the viewport at 390 px. */
+.get-started-card .status-pill,
+.get-started-step-header .status-pill {
+  align-self: flex-start;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.get-started-card-detail,
+.get-started-card-line {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.get-started-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.get-started-open,
+.get-started-hide {
+  font-size: 12px;
+}
+
+.get-started-hide {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.get-started-hide:hover {
+  color: var(--text);
+}
+
+.get-started-hide:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A step that moved into a card keeps its instructions, folded. */
+
+.get-started-card-steps {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  font-size: 12px;
+}
+
+.get-started-card-steps summary {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.get-started-card-steps-label {
+  margin: 6px 0 4px;
+  color: var(--muted);
+}
+
+/* The niche list */
+
+.get-started-disclosure {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.get-started-advanced .get-started-disclosure {
+  margin-bottom: 10px;
+}
+
+.get-started-disclosure-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.get-started-disclosure-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.get-started-disclosure-head strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.get-started-disclosure-chevron {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.get-started-disclosure-body {
+  padding: 0 14px 12px;
+}
+
+.get-started-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.get-started-filter input {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.get-started-filter-count {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.get-started-more-list,
+.get-started-advanced-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.get-started-more-row,
+.get-started-advanced-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.get-started-more-main,
+.get-started-advanced-main {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.get-started-more-main strong,
+.get-started-advanced-main strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.get-started-more-area {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.get-started-more-line,
+.get-started-advanced-line {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.get-started-more-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.get-started-more-empty {
+  margin: 8px 0 0;
+}
+
+/* The advanced section's current value: what the setting holds now, read from
+   the payload. Never a suggested value -- this page recommends nothing. */
+.get-started-value {
+  align-self: flex-start;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-strong);
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+/* The one live warning: raw logging writes prompts to disk while it is on. */
+.get-started-warning {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.get-started-warning .link-button {
+  margin-left: 6px;
+}
+
+/* A button that reads as a link, for a choice inside a sentence. */
+.link-button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--accent-dark);
+}
+
+.link-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The foot: the Dismiss sentence with its Undo, Show hidden, and Dismiss. */
+.get-started-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.get-started-footer-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  flex: 1 1 260px;
+}
+
+.get-started-footer-message {
+  flex: 1 1 260px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Below 720 px the cards are one column and the essentials come first
+   (spec section 5.13). The sidebar itself is the UX PR's (U20). */
+@media (max-width: 720px) {
+  .get-started-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .get-started-more-row,
+  .get-started-advanced-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .get-started-footer {
+    justify-content: stretch;
   }
 }
 

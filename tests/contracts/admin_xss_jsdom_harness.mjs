@@ -72,6 +72,88 @@ const CUSTOM_PROVIDER = {
   proxy: null,
 };
 
+/* 7.122.0: Get Started renders server strings -- every step's label,
+   description and instructions, every agent's display name and command, the
+   newest request's model and agent, and the hidden-card ids. Until 7.122.0
+   the onboarding answer was served EMPTY here, so none of them were probed.
+   The page is forced onto Get Started (`dismissed: false`, `complete:
+   false`), every string is markup-shaped, and `skipped` carries both a real
+   card id and a hostile one. */
+const HOSTILE_ONBOARDING = {
+  dismissed: false,
+  complete: false,
+  required_total: 4,
+  required_done: 0,
+  skipped: ["reasoning", MALICIOUS.displayName],
+  request_log: {
+    enabled: true,
+    total: 3,
+    last: {
+      id: "<img src=x onerror=alert(9)>req",
+      ts_epoch: 1761900000,
+      status: MALICIOUS.label,
+      provider: MALICIOUS.displayName,
+      resolved_model: MALICIOUS.description,
+      requested_model: MALICIOUS.label,
+      harness: MALICIOUS.displayName,
+      optimization: null,
+    },
+  },
+  steps: [
+    {
+      id: "provider",
+      label: MALICIOUS.label,
+      description: MALICIOUS.description,
+      view: "providers",
+      optional: false,
+      done: false,
+      instructions: [MALICIOUS.description, MALICIOUS.label],
+      target: "#providersSections",
+      guide_anchors: [],
+      agents: [],
+      measurable: true,
+    },
+    {
+      id: "client",
+      label: MALICIOUS.displayName,
+      description: MALICIOUS.description,
+      view: "claude",
+      optional: false,
+      done: true,
+      instructions: [MALICIOUS.description],
+      target: "#claudeSettingsPanel",
+      guide_anchors: [],
+      agents: [
+        {
+          id: "evil",
+          display_name: MALICIOUS.displayName,
+          kind: "cli",
+          installed: true,
+          state: "",
+          command: "<img src=x onerror=alert(4)>mcc-evil",
+          configurable: false,
+          requests_7d: 2,
+          connected: true,
+        },
+      ],
+      measurable: true,
+    },
+    {
+      id: "analytics",
+      label: MALICIOUS.label,
+      description: MALICIOUS.description,
+      view: "requests",
+      optional: false,
+      done: true,
+      instructions: [MALICIOUS.description],
+      target: "#reqStatsCards",
+      guide_anchors: [],
+      agents: [],
+      measurable: true,
+    },
+  ],
+};
+
 const ROUTES = {
   "/admin/api/config": configPayload,
   // A harness display name and catalogue path are server-side strings, but
@@ -105,7 +187,7 @@ const ROUTES = {
       },
     ],
   },
-  "/admin/api/onboarding": { dismissed: true, complete: true, steps: [] },
+  "/admin/api/onboarding": HOSTILE_ONBOARDING,
   "/admin/api/providers/local-status": { providers: [] },
   "/admin/api/config/validate": { valid: true, errors: [] },
   "/admin/api/version": { current: "5.47.1" },
@@ -197,6 +279,41 @@ await new Promise((resolve) => setTimeout(resolve, 900));
 
 const doc = window.document;
 
+/* 7.122.0: Get Started draws an essential's body only while it is expanded,
+   and the agent list lives in "Connect a coding agent"'s body. Open each
+   essential in turn -- through the page's own header click, which re-renders
+   the list -- and read each row's body while it is open, so every hostile
+   string the page can render is in the document at the moment it is read. */
+const getStartedRowProbes = [];
+{
+  const count = doc.querySelectorAll("#getStartedSteps .get-started-step").length;
+  for (let index = 0; index < count; index += 1) {
+    const header = doc.querySelectorAll("#getStartedSteps .get-started-step-header")[index];
+    if (!header) continue;
+    header.click();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const row = doc.querySelectorAll("#getStartedSteps .get-started-step")[index];
+    if (!row) continue;
+    getStartedRowProbes.push({
+      label: row.querySelector("strong")?.textContent ?? null,
+      line: row.querySelector(".get-started-step-line")?.textContent ?? null,
+      pill: row.querySelector(".status-pill")?.textContent ?? null,
+      instructions: Array.from(row.querySelectorAll(".get-started-step-instructions li")).map(
+        (item) => item.textContent,
+      ),
+      agentNames: Array.from(row.querySelectorAll(".get-started-agent strong")).map(
+        (item) => item.textContent,
+      ),
+      agentCommands: Array.from(row.querySelectorAll(".get-started-agent-detail code")).map(
+        (item) => item.textContent,
+      ),
+      elementTags: Array.from(row.querySelectorAll(".get-started-step-body *")).map(
+        (el) => el.tagName,
+      ),
+    });
+  }
+}
+
 const heading = doc.querySelector("#limitsSections .settings-section .section-heading");
 const card = doc.querySelector('[data-custom-provider="evil"]');
 const providerTitle = card?.querySelector(".provider-title");
@@ -241,6 +358,23 @@ console.log(
           ? Array.from(agentCard.querySelectorAll("*")).map((el) => el.tagName)
           : null,
         rtkLabel: rtkToggle?.parentElement?.textContent?.trim() ?? null,
+      },
+      // 7.122.0: every server string Get Started renders, with the element
+      // tags it produced -- a markup-shaped string parsed into elements shows
+      // up here as IMG/SCRIPT/B/I.
+      getStarted: {
+        visible: !doc.querySelector("#view-get_started").hidden,
+        rows: getStartedRowProbes,
+        cardCount: doc.querySelectorAll("#getStartedFeatures .get-started-card").length,
+        cardIds: Array.from(
+          doc.querySelectorAll("#getStartedFeatures .get-started-card"),
+        ).map((card) => card.dataset.getStartedCard),
+        moreRows: doc.querySelectorAll("#getStartedMore .get-started-more-row").length,
+        panelTags: Array.from(
+          doc.querySelectorAll(
+            "#getStartedPanel .get-started-step *, #getStartedFeatures *, #getStartedMore *",
+          ),
+        ).map((el) => el.tagName),
       },
     },
     null,

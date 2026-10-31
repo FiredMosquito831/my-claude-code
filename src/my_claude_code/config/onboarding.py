@@ -1,15 +1,17 @@
 """Get-Started onboarding checklist state, derived from real configuration.
 
 A step is "done" because a credential, model, or platform is actually
-configured, not because a user ticked a checkbox. The only thing this module
-persists to disk is whether the checklist has been dismissed and which
-"guide" steps have been visited; every other step is recomputed live.
+configured, not because a user ticked a checkbox. The only things this module
+persists to disk are whether the checklist has been dismissed, which "guide"
+steps have been visited and (7.122.0) which optional cards the user hid with
+"Not for me"; every step is recomputed live.
 """
 
 import json
 import os
+import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from .admin.values import load_value_state
@@ -19,6 +21,7 @@ from .desktop_apps import DESKTOP_APPS, DesktopAppState, DesktopAppStatus
 from .harnesses import harness_specs
 from .mcp_media import parse_mcp_media_apps
 from .model_refs import parse_provider_type
+from .owner_only import write_owner_only_bytes
 from .paths import onboarding_state_path
 from .provider_catalog import PROVIDER_CATALOG
 from .provider_registry import get_provider_registry
@@ -86,6 +89,11 @@ class OnboardingStep:
     guide_anchors: tuple[str, ...] = ()
     # The detected agents this step lists, for the one step that lists any.
     agents: tuple[OnboardingAgent, ...] = field(default_factory=tuple)
+    # 7.122.0: whether MCC can tell if this step is done at all. False only for
+    # "Check it worked" while the request log is off -- MCC then sees no
+    # request, so the step is shown as "not measured" and is left out of the
+    # essentials count instead of staying "to do" forever.
+    measurable: bool = True
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,81 @@ class OnboardingState:
     required_total: int
     required_done: int
     complete: bool
+    # 7.122.0: the optional cards the user hid with "Not for me", as the
+    # dashboard's own catalogue ids. Kept here, in MCC's config folder, so the
+    # desktop app and every browser show the same page.
+    skipped: tuple[str, ...] = ()
+
+
+#: The shape of an id the dashboard may hide. The ids are the dashboard's own
+#: catalogue ids, so the server checks their form rather than their meaning:
+#: a short lowercase word, never markup and never a path.
+SKIPPED_ID_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
+#: More than the dashboard has cards; a cap so a stray client cannot grow the
+#: file without bound.
+MAX_SKIPPED = 128
+
+
+@dataclass(frozen=True)
+class PersistedOnboarding:
+    """What ``onboarding.json`` holds: the only state the checklist keeps."""
+
+    dismissed: bool = False
+    visited: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+
+
+def is_skippable_id(value: object) -> bool:
+    """Whether ``value`` has the form of a card id the dashboard may hide."""
+
+    return isinstance(value, str) and SKIPPED_ID_PATTERN.fullmatch(value) is not None
+
+
+def normalize_skipped(items: Iterable[object]) -> list[str]:
+    """The hidden list as stored: well-formed ids only, once each, sorted, capped.
+
+    Sorted so the file and the payload never depend on the order clicks came
+    in; anything that is not a well-formed id is dropped rather than kept, so
+    a hand-edited or damaged file can only ever hide less, never break the page.
+    """
+
+    return sorted({item for item in items if is_skippable_id(item)})[:MAX_SKIPPED]
+
+
+def read_persisted() -> PersistedOnboarding:
+    """Load everything ``onboarding.json`` holds; never raises.
+
+    A missing or malformed file is a fresh, undismissed checklist with nothing
+    visited and nothing hidden. A file written before 7.122.0 has no
+    ``skipped`` key and reads as "nothing hidden".
+    """
+
+    path = onboarding_state_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return PersistedOnboarding()
+
+    try:
+        data = json.loads(raw)
+    except ValueError, TypeError:
+        return PersistedOnboarding()
+
+    if not isinstance(data, dict):
+        return PersistedOnboarding()
+
+    dismissed = bool(data.get("dismissed", False))
+    visited_raw = data.get("visited", [])
+    visited = (
+        tuple(item for item in visited_raw if isinstance(item, str))
+        if isinstance(visited_raw, list)
+        else ()
+    )
+    skipped_raw = data.get("skipped", [])
+    skipped = (
+        tuple(normalize_skipped(skipped_raw)) if isinstance(skipped_raw, list) else ()
+    )
+    return PersistedOnboarding(dismissed=dismissed, visited=visited, skipped=skipped)
 
 
 def load_persisted() -> tuple[bool, list[str]]:
@@ -104,39 +187,33 @@ def load_persisted() -> tuple[bool, list[str]]:
     treated as a fresh, undismissed checklist with nothing visited yet.
     """
 
-    path = onboarding_state_path()
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        return (False, [])
-
-    try:
-        data = json.loads(raw)
-    except ValueError, TypeError:
-        return (False, [])
-
-    if not isinstance(data, dict):
-        return (False, [])
-
-    dismissed = bool(data.get("dismissed", False))
-    visited_raw = data.get("visited", [])
-    if not isinstance(visited_raw, list):
-        return (dismissed, [])
-    visited = [item for item in visited_raw if isinstance(item, str)]
-    return (dismissed, visited)
+    persisted = read_persisted()
+    return (persisted.dismissed, list(persisted.visited))
 
 
-def save_persisted(*, dismissed: bool, visited: list[str]) -> None:
-    """Persist onboarding state atomically. Raises :class:`OnboardingError` on failure."""
+def save_persisted(
+    *, dismissed: bool, visited: list[str], skipped: list[str] | None = None
+) -> None:
+    """Persist onboarding state atomically. Raises :class:`OnboardingError` on failure.
+
+    ``skipped`` is the whole hidden list when given; ``None`` keeps the list the
+    file already holds, so a save that is only about ``dismissed`` or
+    ``visited`` can never un-hide a card. Written owner-only (7.122.0): the same
+    staged write ``proxy_chains.json`` uses, restricted before a byte lands.
+    """
 
     path = onboarding_state_path()
-    payload = json.dumps({"dismissed": dismissed, "visited": visited})
+    kept = list(read_persisted().skipped) if skipped is None else skipped
+    payload = json.dumps(
+        {
+            "dismissed": dismissed,
+            "visited": visited,
+            "skipped": normalize_skipped(kept),
+        }
+    )
 
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(f"{path.suffix}.tmp")
-        tmp_path.write_text(payload, encoding="utf-8")
-        os.replace(tmp_path, path)
+        write_owner_only_bytes(path, payload.encode("utf-8"))
     except OSError as exc:
         raise OnboardingError(f"Failed to save onboarding state: {exc}") from exc
 
@@ -300,68 +377,103 @@ def build_state(
     claude_settings_configured: bool,
     has_requests: bool,
     agents: tuple[OnboardingAgent, ...] = (),
+    request_log_enabled: bool = True,
 ) -> OnboardingState:
-    """Build the current onboarding checklist state from live configuration."""
+    """Build the current onboarding checklist state from live configuration.
 
-    dismissed, visited = load_persisted()
+    ``claude_settings_configured`` is whether ANY Claude Code settings file
+    this machine has (the native one, ``CLAUDE_CONFIG_DIR``'s, a WSL
+    distribution's) points at this server; ``has_requests`` whether the request
+    log holds at least one request; ``request_log_enabled`` whether MCC is
+    recording requests at all, which decides whether "Check it worked" can be
+    measured.
+    """
+
+    persisted = read_persisted()
+    dismissed, visited = persisted.dismissed, list(persisted.visited)
+
+    # 7.122.0 (the user's decision 2): an agent is connected when ANY agent
+    # reaches MCC -- a launcher such as mcc-claude, Claude Code inside WSL,
+    # Codex, a desktop app -- or when Claude Code's settings point here. Until
+    # then this step read only the native settings.json, so everyone who used
+    # a launcher, WSL or another agent could never finish it, and the
+    # dashboard reopened this page on every load. A request in the log counts
+    # however old it is: an agent that worked last month was connected, and an
+    # idle week must not bring the page back.
+    client_done = (
+        claude_settings_configured
+        or has_requests
+        or any(agent.connected for agent in agents)
+    )
 
     steps = [
         OnboardingStep(
             id="provider",
-            label="Connect a model provider",
+            label="Add a model provider",
             description=(
-                "Add a free API key from a supported provider so MCC has a "
-                "model to route to. Every coding agent you point at this "
+                "Give MCC at least one place to send requests: a provider key, "
+                "a subscription sign-in, a local server, or any "
+                "OpenAI-compatible URL. Every coding agent you point at this "
                 "server shares it, Claude Code included."
             ),
             view="providers",
             optional=False,
             done=_provider_credential_configured(),
             instructions=(
-                "Open the Providers page from the left nav.",
-                "Pick a provider with a free tier — Cerebras, Groq, and "
-                "NVIDIA NIM all have one.",
-                "Type its name into 'Search providers' to jump straight to its card.",
-                "Press Configure, then paste the API key into 'Add key' and press it.",
-                "Press Refresh models to confirm the key works.",
-                "For an endpoint that is not in the list, use 'Add custom "
-                "provider' instead and give it a base URL and a key.",
+                "Open Providers and type a name into 'Search providers' — "
+                "Groq, Cerebras and NVIDIA NIM have free tiers.",
+                "Press Configure on its card, paste the key into 'Add key' and "
+                "press it; the key is saved at once.",
+                "Press Refresh models: a model count means the key works.",
+                "For anything that is not in the list — a local server or any "
+                "OpenAI-compatible URL — use 'Add custom provider' and give it "
+                "a base URL and a key.",
             ),
             target="#providersSections",
         ),
         OnboardingStep(
             id="models",
-            label="Set your fallback model",
+            label="Choose a model for each tier",
             description=(
-                "Pick which provider/model handles requests by default. "
-                "Per-tier overrides are optional and can be set later: the "
-                "Claude aliases (Opus, Sonnet, Haiku, Fable, Mythos) for "
-                "Claude Code, and mcc/cyber, best, good, medium, cheap and "
-                "vision for every other coding agent."
+                "Claude Code asks for Opus, Sonnet, Haiku, Fable and Mythos; "
+                "other agents ask for mcc/best, mcc/good, mcc/medium, "
+                "mcc/cheap, mcc/cyber and mcc/vision. Each tier goes where you "
+                "point it, and the Default model answers anything you have not "
+                "mapped."
             ),
             view="model_config",
             optional=False,
             done=_fallback_model_configured(),
             instructions=(
-                "Open the Model Config page from the left nav.",
-                "Set Default Model to a model from the provider you just configured.",
-                "Click Apply at the bottom of the page to save it.",
+                "Open Model Config: each tier is a rail, its model first and "
+                "then the models tried after it.",
+                "Set the Default model to one from a provider you added; a "
+                "tier left empty follows the Default.",
+                "Press Apply at the bottom of the page to save.",
             ),
             target='[data-key="MODEL"]',
         ),
         OnboardingStep(
             id="client",
-            label="Point Claude Code at MCC",
+            label="Connect a coding agent",
             description=(
-                "Apply MCC's proxy settings to your Claude Code settings.json "
-                "so the CLI sends requests through MCC."
+                "Point at least one agent at this server. This is done as soon "
+                "as any agent has sent MCC a request, or Claude Code's settings "
+                "or a desktop app's file point here."
             ),
             view="claude",
             optional=False,
-            done=claude_settings_configured,
+            done=client_done,
             instructions=(
-                "Open the Configure Claude Code page from the left nav.",
-                "Click Configure to write MCC's URL and token into settings.json.",
+                "Run an agent through its launcher in a terminal — mcc-claude, "
+                "mcc-codex, mcc-opencode, mcc-gemini… — it points that run at "
+                "MCC and changes nothing of yours.",
+                "Or write Claude Code's settings once: open Configure Claude "
+                "Code and press Configure; it lists every settings file it "
+                "found, WSL's included.",
+                "Or press Configure on a desktop app's card under Coding agents: "
+                "it shows the change to that app's own file first, and Undo "
+                "puts it back.",
             ),
             target="#claudeSettingsPanel",
         ),
@@ -435,19 +547,25 @@ def build_state(
         OnboardingStep(
             id="websearch",
             label="Enable web search (optional)",
+            # 7.122.0: web search answers with no key at all (DuckDuckGo is
+            # the keyless default), and keys are added from Manage keys, saved
+            # at once -- the old text asked for a key first and described a
+            # field and an Apply that no longer exist. `done` still means "a
+            # key for a keyed service is set", exactly as before.
             description=(
-                "Add a web search provider key so Claude can look things up "
-                "live instead of relying on training data alone."
+                "Claude Code's web search and web fetch are answered here. They "
+                "work with no key — DuckDuckGo is the keyless default — and a "
+                "key adds another service to choose from."
             ),
             view="web_search",
             optional=True,
             done=_websearch_credential_configured(),
             instructions=(
-                "Open the Web Search page from the left nav.",
-                "Set Web Search Provider to one with a free tier, such as "
-                "Brave or Tavily.",
-                "Paste its API key into the field that appears below.",
-                "Click Apply at the bottom of the page to save it.",
+                "Open Web Search: the card at the top says which service "
+                "answers right now.",
+                "For a keyed service, press Manage keys on its card and paste "
+                "the key into 'Add key'; it is saved at once.",
+                "To try several services in order, put them on the Search chain card.",
             ),
             target='[data-key="WEB_SEARCH_PROVIDER"]',
         ),
@@ -470,23 +588,29 @@ def build_state(
             target='[data-key="MESSAGING_PLATFORM"]',
         ),
         OnboardingStep(
+            # 7.122.0 (decision 2): the fourth essential. Measured only while
+            # the request log is on -- with it off MCC sees no request, so the
+            # step says so and is left out of the count.
             id="analytics",
-            label="Send your first request (optional)",
+            label="Check it worked — see your first request in Analytics",
             description=(
-                "Run a Claude Code command through MCC and watch it show up "
-                "in the requests log."
+                "Ask your agent anything. The request appears in Analytics with "
+                "the model that answered, the agent that asked, its tokens and "
+                "its cost."
             ),
             view="requests",
-            optional=True,
+            optional=False,
             done=has_requests,
             instructions=(
-                "Finish the Point Claude Code at MCC step above so a real "
-                "request has somewhere to go.",
-                "Run any Claude Code command in your terminal.",
-                "Open the Analytics page from the left nav to see it land "
-                "in the requests log.",
+                "Send any prompt from the agent you connected in the step above.",
+                "Open Analytics: the request is at the top of the list, with "
+                "the route it took.",
+                "A bare 'say OK' may be answered by MCC itself and is then "
+                "hidden while Local answers is on Hide — use a real prompt, or "
+                "set that filter to Show.",
             ),
             target="#reqStatsCards",
+            measurable=request_log_enabled,
         ),
         OnboardingStep(
             id="guide",
@@ -501,8 +625,11 @@ def build_state(
         ),
     ]
 
-    required_total = sum(1 for step in steps if not step.optional)
-    required_done = sum(1 for step in steps if not step.optional and step.done)
+    # A step MCC cannot measure is neither done nor to do, so it is out of the
+    # count: the essentials are complete when every measurable one is.
+    counted = [step for step in steps if not step.optional and step.measurable]
+    required_total = len(counted)
+    required_done = sum(1 for step in counted if step.done)
 
     return OnboardingState(
         dismissed=dismissed,
@@ -510,4 +637,5 @@ def build_state(
         required_total=required_total,
         required_done=required_done,
         complete=required_done == required_total,
+        skipped=persisted.skipped,
     )

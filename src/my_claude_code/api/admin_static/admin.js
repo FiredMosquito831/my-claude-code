@@ -85,7 +85,10 @@ const state = {
   // GET /admin/api/harness-tiers: the five tiers, what each resolves to
   // globally, and which of them each coding agent overrides.
   harnessTiers: null,
-  activeView: "providers",
+  // 7.122.0 (U11): the markup now opens on Get Started, so the state agrees
+  // with it before load() has answered -- the first paint is the page the
+  // server will most likely ask for, not the Providers grid.
+  activeView: "get_started",
   webSearchStatsPeriod: "daily",
   webSearchAnalyticsStats: null,
   webSearchAnalyticsStatsKey: "",
@@ -146,6 +149,15 @@ const state = {
   // for the user. Auto-advance is a convenience; it must never overrule
   // someone who deliberately opened a step to re-read it.
   onboardingExpandedByUser: false,
+  // 7.122.0: which disclosures on Get Started the reader opened, by key
+  // ("more", "limits", "raw", "testing"). View state, like the steps above:
+  // the page is re-rendered after every visit and every save, and a section
+  // that closed itself on the next render would be unusable.
+  getStartedOpen: {},
+  // 7.122.0: the filter over the niche list, and the sentence a Dismiss leaves
+  // behind with its Undo. Both view state, never persisted.
+  getStartedQuery: "",
+  getStartedMessage: "",
   userNavigated: false,
   // True while load() is running. Navigation during the initial render must
   // not persist half-restored state (e.g. empty analytics filters) over the
@@ -757,6 +769,11 @@ async function loadDashboardState() {
   // The in-flight panel polls on its own interval, table auto-refresh or not.
   updateInflightTimer();
   pollInflight();
+  // 7.122.0: Get Started's status chips read the harness tiers, desktop apps
+  // and Claude settings the calls above have just loaded. It was drawn once,
+  // before any of them had answered (the onboarding answer comes first in
+  // load()), so it repaints here rather than waiting for the next visit.
+  if (state.activeView === "get_started") renderOnboarding();
 }
 
 /** The settings map for a freshly fetched config payload.
@@ -9449,11 +9466,13 @@ function renderProxyStoreBanner() {
   banner.append(title, detail);
 }
 
-// The first incomplete required step is "next" — the one worth walking
-// through in full. Everything else collapses to a single line so the
-// checklist reads as "here is your next action" instead of a wall of text.
+// The first incomplete essential that can be measured is "next" — the one
+// worth walking through in full. A step MCC cannot measure (7.122.0: "Check
+// it worked" with the request log off) is never the next action.
 function primaryOnboardingStepId(steps) {
-  const nextRequired = steps.find((step) => !step.optional && !step.done);
+  const nextRequired = steps.find(
+    (step) => !step.optional && step.measurable !== false && !step.done,
+  );
   return nextRequired ? nextRequired.id : null;
 }
 
@@ -9463,14 +9482,25 @@ function primaryOnboardingStepId(steps) {
 // the user just closed.
 const ONBOARDING_NOTHING_EXPANDED = "__onboarding_nothing_expanded__";
 
-// A label between the two groups of steps, not a step itself -- listed as
-// presentation so a screen reader announces it as a divider rather than an
-// interactive list item with nothing to activate.
-function onboardingGroupHeading(text) {
+// A heading between the page's sections, not a step itself -- presentation,
+// so a screen reader announces it as a divider rather than an interactive
+// list item with nothing to activate. 7.122.0: the list this used to head
+// ("Essential" / "Optional") is now four essentials; the optional steps live
+// in the cards below, each one inside the surface it is about.
+function getStartedSectionHeading(text, note) {
   const heading = document.createElement("li");
-  heading.className = "get-started-group-heading";
+  heading.className = "get-started-section-heading";
   heading.setAttribute("role", "presentation");
-  heading.textContent = text;
+  const label = document.createElement("span");
+  label.className = "get-started-section-heading-label";
+  label.textContent = text;
+  heading.appendChild(label);
+  if (note) {
+    const aside = document.createElement("span");
+    aside.className = "get-started-section-heading-note";
+    aside.textContent = note;
+    heading.appendChild(aside);
+  }
   return heading;
 }
 
@@ -9480,194 +9510,356 @@ function renderOnboarding() {
   const list = byId("getStartedSteps");
   if (!progress || !list || !onboarding) return;
 
+  renderOnboardingProgress(onboarding, progress);
+  renderOnboardingEssentials(onboarding, list);
+  renderGetStartedFeatureGrid();
+  renderGetStartedMore();
+  renderGetStartedAdvanced();
+  renderGetStartedFooter(onboarding);
+}
+
+// The server answered nothing to render (a page older than the route, or a
+// payload with no steps at all): the static markup stands and the bar stays
+// out of the way rather than claiming "0 of 0".
+function renderOnboardingProgress(onboarding, progress) {
+  progress.textContent = "";
+  const total = Number(onboarding.required_total) || 0;
+  progress.hidden = total === 0;
+  if (total === 0) return;
+
   // A number alone is easy to skim past; a filled bar reads as progress at a
   // glance and is the one place this view spends visual weight.
-  progress.innerHTML = "";
-  const progressLabel = document.createElement("span");
-  progressLabel.className = "get-started-progress-label";
-  progressLabel.textContent = `${onboarding.required_done} of ${onboarding.required_total} essential steps done`;
-  progress.appendChild(progressLabel);
+  const done = Number(onboarding.required_done) || 0;
+  const label = document.createElement("span");
+  label.className = "get-started-progress-label";
+  label.textContent = `${describeEssentialCount(done, total)} done`;
+  progress.appendChild(label);
 
-  const progressBar = document.createElement("div");
-  progressBar.className = "get-started-progress-bar";
-  progressBar.setAttribute("role", "progressbar");
-  progressBar.setAttribute("aria-valuemin", "0");
-  progressBar.setAttribute("aria-valuemax", String(onboarding.required_total));
-  progressBar.setAttribute("aria-valuenow", String(onboarding.required_done));
-  progressBar.setAttribute(
-    "aria-label",
-    `${onboarding.required_done} of ${onboarding.required_total} essential steps done`,
+  const bar = document.createElement("div");
+  bar.className = "get-started-progress-bar";
+  bar.setAttribute("role", "progressbar");
+  bar.setAttribute("aria-valuemin", "0");
+  bar.setAttribute("aria-valuemax", String(total));
+  bar.setAttribute("aria-valuenow", String(done));
+  bar.setAttribute("aria-label", `${describeEssentialCount(done, total)} done`);
+  const fill = document.createElement("div");
+  fill.className = "get-started-progress-fill";
+  fill.style.width = `${total > 0 ? (done / total) * 100 : 0}%`;
+  bar.appendChild(fill);
+  progress.appendChild(bar);
+}
+
+function describeEssentialCount(done, total) {
+  return `${done} of ${total} ${total === 1 ? "essential" : "essentials"}`;
+}
+
+/** The essentials: the payload's required steps, in the server's order.
+ *
+ * 7.122.0 (decision 1-2): four steps, one expanded. `connect_agents` is not a
+ * row of its own any more -- its agent list, its instructions and its Guide
+ * links are rendered inside "Connect a coding agent", which is the same
+ * question asked once (U2/U8). Every other optional step is rendered inside
+ * the card it is about (`renderGetStartedFeatureGrid`).
+ *
+ * A payload with a step id this page does not know is still rendered, after
+ * the essentials, so a newer server can never lose its step on an older page.
+ */
+function renderOnboardingEssentials(onboarding, list) {
+  const steps = Array.isArray(onboarding.steps) ? onboarding.steps : [];
+  const essentials = steps.filter((step) => !step.optional);
+  const unknown = steps.filter(
+    (step) => step.optional && !GET_STARTED_STEP_HOMES[step.id],
   );
-  const progressFill = document.createElement("div");
-  progressFill.className = "get-started-progress-fill";
-  const pct =
-    onboarding.required_total > 0
-      ? (onboarding.required_done / onboarding.required_total) * 100
-      : 0;
-  progressFill.style.width = `${pct}%`;
-  progressBar.appendChild(progressFill);
-  progress.appendChild(progressBar);
 
-  // Expanded/collapsed is view state, not persisted. `null` means nothing has
-  // been chosen yet, so auto-select the next action. When a step the app chose
-  // becomes done, advance to the new next action, or finishing a step would
-  // leave it expanded while the real next one sits collapsed out of sight.
-  //
-  // Auto-advance applies only to steps the app picked. Opening a completed
-  // step to re-read what you did is a legitimate thing to want, and advancing
-  // out of it would make already-finished steps impossible to view at all.
-  // A user who collapsed everything (ONBOARDING_NOTHING_EXPANDED) is likewise
-  // left alone: that id never matches a step.
-  if (state.onboardingExpandedStepId === null) {
-    state.onboardingExpandedStepId = primaryOnboardingStepId(onboarding.steps);
-    state.onboardingExpandedByUser = false;
-  } else if (!state.onboardingExpandedByUser) {
-    const expandedStep = onboarding.steps.find(
-      (step) => step.id === state.onboardingExpandedStepId,
+  refreshExpandedOnboardingStep(steps);
+
+  list.textContent = "";
+  if (essentials.length) {
+    list.appendChild(
+      getStartedSectionHeading(
+        "Essentials",
+        essentials.length
+          ? `${onboarding.required_done} of ${onboarding.required_total} done`
+          : "",
+      ),
     );
-    if (expandedStep && expandedStep.done) {
-      state.onboardingExpandedStepId = primaryOnboardingStepId(onboarding.steps);
-    }
   }
+  essentials.forEach((step) => list.appendChild(onboardingStepRow(step)));
+  if (unknown.length) {
+    list.appendChild(getStartedSectionHeading("Other steps"));
+    unknown.forEach((step) => list.appendChild(onboardingStepRow(step)));
+  }
+}
 
-  // The 3 required steps are a real causal chain -- a client can't be pointed
-  // anywhere until a model is set, which needs a provider first -- while the
-  // rest are independent extras with no order between them. Rendering all 7
-  // as one undifferentiated list buries that shape behind a per-card
-  // "Optional" pill you have to read every time. Grouping is derived from
-  // `step.optional`, which the step already carries, so nothing new is
-  // stored and the boundary just falls out of the array's existing order.
-  list.innerHTML = "";
-  let optionalHeadingShown = false;
-  onboarding.steps.forEach((step, index) => {
-    if (index === 0 && !step.optional) {
-      list.appendChild(onboardingGroupHeading("Essential"));
+// Expanded/collapsed is view state, not persisted. `null` means nothing has
+// been chosen yet, so auto-select the next action. When a step the app chose
+// becomes done, advance to the new next action, or finishing a step would
+// leave it expanded while the real next one sits collapsed out of sight.
+//
+// Auto-advance applies only to steps the app picked. Opening a completed
+// step to re-read what you did is a legitimate thing to want, and advancing
+// out of it would make already-finished steps impossible to view at all.
+// A user who collapsed everything (ONBOARDING_NOTHING_EXPANDED) is likewise
+// left alone: that id never matches a step.
+function refreshExpandedOnboardingStep(steps) {
+  if (state.onboardingExpandedStepId === null) {
+    state.onboardingExpandedStepId = primaryOnboardingStepId(steps);
+    state.onboardingExpandedByUser = false;
+    return;
+  }
+  if (state.onboardingExpandedByUser) return;
+  const expanded = steps.find((step) => step.id === state.onboardingExpandedStepId);
+  if (expanded && expanded.done) {
+    state.onboardingExpandedStepId = primaryOnboardingStepId(steps);
+  }
+}
+
+function onboardingStepRow(step) {
+  const expanded = step.id === state.onboardingExpandedStepId;
+
+  const item = document.createElement("li");
+  item.className = `get-started-step${expanded ? " expanded" : " collapsed"}${step.done ? " done" : ""}`;
+  item.dataset.step = step.id;
+
+  const header = document.createElement("div");
+  header.className = "get-started-step-header";
+  header.setAttribute("role", "button");
+  header.setAttribute("aria-expanded", expanded ? "true" : "false");
+  header.tabIndex = 0;
+  const toggle = () => {
+    state.onboardingExpandedByUser = !expanded;
+    state.onboardingExpandedStepId = expanded
+      ? ONBOARDING_NOTHING_EXPANDED
+      : step.id;
+    renderOnboarding();
+  };
+  header.addEventListener("click", toggle);
+  header.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggle();
     }
-    if (step.optional && !optionalHeadingShown) {
-      list.appendChild(onboardingGroupHeading("Optional"));
-      optionalHeadingShown = true;
-    }
-
-    const expanded = step.id === state.onboardingExpandedStepId;
-
-    const item = document.createElement("li");
-    item.className = `get-started-step${expanded ? " expanded" : " collapsed"}${step.done ? " done" : ""}`;
-
-    const header = document.createElement("div");
-    header.className = "get-started-step-header";
-    header.setAttribute("role", "button");
-    header.setAttribute("aria-expanded", expanded ? "true" : "false");
-    header.tabIndex = 0;
-    const toggle = () => {
-      state.onboardingExpandedByUser = !expanded;
-      state.onboardingExpandedStepId = expanded
-        ? ONBOARDING_NOTHING_EXPANDED
-        : step.id;
-      renderOnboarding();
-    };
-    header.addEventListener("click", toggle);
-    header.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        toggle();
-      }
-    });
-
-    const marker = document.createElement("span");
-    const state_ = step.done ? "ok" : step.optional ? "neutral" : "warn";
-    marker.className = `status-pill ${state_}`;
-    marker.textContent = step.done ? "Done" : step.optional ? "Optional" : "To do";
-    header.appendChild(marker);
-
-    const label = document.createElement("strong");
-    label.textContent = step.label;
-    header.appendChild(label);
-
-    // A collapsed step reads two ways: closed because it's done, or closed
-    // because it hasn't been opened yet. The pill already says which, but a
-    // scanning eye shouldn't have to read text to tell them apart -- a
-    // finished step gets a check where an unopened one gets the chevron that
-    // invites a click.
-    const chevron = document.createElement("span");
-    const doneAndCollapsed = step.done && !expanded;
-    chevron.className = `get-started-step-chevron${doneAndCollapsed ? " is-done" : ""}`;
-    chevron.setAttribute("aria-hidden", "true");
-    chevron.textContent = doneAndCollapsed ? "✓" : "›";
-    header.appendChild(chevron);
-
-    item.appendChild(header);
-
-    if (expanded) {
-      const body = document.createElement("div");
-      body.className = "get-started-step-body";
-
-      const description = document.createElement("p");
-      description.textContent = step.description;
-      body.appendChild(description);
-
-      if ((step.guide_anchors || []).length) {
-        const guides = document.createElement("p");
-        guides.className = "get-started-step-guides";
-        step.guide_anchors.forEach((anchor) => {
-          const purpose = Object.keys(GUIDE_ANCHORS).find(
-            (key) => GUIDE_ANCHORS[key] === anchor,
-          );
-          if (purpose) guides.append(guideLink(purpose, guideLinkLabel(purpose)));
-        });
-        if (guides.children.length) body.appendChild(guides);
-      }
-
-      if ((step.agents || []).length) {
-        body.appendChild(onboardingAgentList(step.agents));
-      }
-
-      if (step.instructions && step.instructions.length) {
-        const instructionList = document.createElement("ol");
-        instructionList.className = "get-started-step-instructions";
-        step.instructions.forEach((instruction) => {
-          const instructionItem = document.createElement("li");
-          instructionItem.textContent = instruction;
-          instructionList.appendChild(instructionItem);
-        });
-        body.appendChild(instructionList);
-      }
-
-      const targetView = VIEW_GROUPS.find((view) => view.id === step.view);
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "secondary-button";
-      button.textContent = targetView
-        ? `Go to ${targetView.label}`
-        : `Open ${step.view}`;
-      button.addEventListener("click", () => {
-        // Mark every step visited, not just the Guide. Steps whose doneness
-        // cannot be derived from configuration -- reading the Guide, opening
-        // the Coding agents page -- are done because you went there, and the
-        // server is the only thing that knows which ones those are. Sending
-        // the id unconditionally keeps that decision in one place instead of
-        // growing a second list of special cases here.
-        updateOnboarding({ visited: [step.id] }).catch((error) =>
-          showMessage(error.message, "error"),
-        );
-        state.userNavigated = true;
-        setActiveView(step.view, { scroll: true });
-        if (step.target) {
-          highlightOnboardingTarget(step.target);
-        }
-      });
-      body.appendChild(button);
-
-      item.appendChild(body);
-    }
-
-    list.appendChild(item);
   });
 
-  const dismissButton = byId("getStartedDismissButton");
-  dismissButton.textContent = onboarding.dismissed
-    ? "Checklist dismissed"
-    : "Dismiss checklist";
-  dismissButton.disabled = onboarding.dismissed;
+  // Done, to do, waiting, or not measured (7.122.0, section 5.7): a step
+  // whose answer MCC cannot read says so instead of claiming to be undone.
+  const status = onboardingStepStatus(step);
+  const marker = document.createElement("span");
+  marker.className = `status-pill ${status.className}`;
+  marker.textContent = status.pill;
+  marker.dataset.getStartedStepState = status.state;
+  header.appendChild(marker);
+
+  const label = document.createElement("strong");
+  label.textContent = step.label;
+  header.appendChild(label);
+
+  const extra = onboardingStepExtraLine(step);
+  if (extra) {
+    const line = document.createElement("span");
+    line.className = "get-started-step-line";
+    line.textContent = extra;
+    header.appendChild(line);
+  }
+
+  // A collapsed step reads two ways: closed because it's done, or closed
+  // because it hasn't been opened yet. The pill already says which, but a
+  // scanning eye shouldn't have to read text to tell them apart -- a
+  // finished step gets a check where an unopened one gets the chevron that
+  // invites a click.
+  const chevron = document.createElement("span");
+  const doneAndCollapsed = step.done && !expanded;
+  chevron.className = `get-started-step-chevron${doneAndCollapsed ? " is-done" : ""}`;
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.textContent = doneAndCollapsed ? "✓" : "›";
+  header.appendChild(chevron);
+
+  item.appendChild(header);
+
+  if (expanded) item.appendChild(onboardingStepBody(step));
+  return item;
+}
+
+/** One step's pill: Done / To do / Waiting / Not measured (section 5.7). */
+function onboardingStepStatus(step) {
+  if (step.measurable === false) {
+    return { state: "not_measured", pill: "Not measured", className: "neutral" };
+  }
+  if (step.done) return { state: "done", pill: "Done", className: "ok" };
+  const blocker = onboardingWaitingOn(step);
+  if (blocker) return { state: "waiting", pill: "Waiting", className: "neutral" };
+  return { state: "todo", pill: "To do", className: "warn" };
+}
+
+/** The earlier incomplete essential a step is waiting for, or null.
+ *
+ * "Waiting" is not a new server fact: the essentials are a causal chain, and
+ * a step behind another undone one says which (section 5.7).
+ */
+function onboardingWaitingOn(step) {
+  if (step.id !== "analytics") return null;
+  const client = state.onboarding?.steps?.find((item) => item.id === "client");
+  if (!client || client.done || client.measurable === false) return null;
+  return client;
+}
+
+/** One short line under an essential's name, from data the page already has. */
+function onboardingStepExtraLine(step) {
+  const snap = getStartedSnapshot();
+  switch (step.id) {
+    case "provider":
+      return gsProviderSummary(snap);
+    case "models":
+      return gsRouteReadiness(snap).text;
+    case "client": {
+      const connected = gsConnectedAgents(snap);
+      if (!connected.length) return "";
+      return `Connected this week: ${connected
+        .slice(0, 3)
+        .map((agent) => `${agent.display_name} (${agent.requests_7d})`)
+        .join(" · ")}`;
+    }
+    case "analytics": {
+      if (step.measurable === false) return "Request logging is off";
+      const last = snap.requestLog.last;
+      if (!last) return "No request yet";
+      return `Last request ${formatAge(secondsSince(last.ts_epoch))} — answered by ${
+        gsLastRequestModel(snap) || "a model"
+      }`;
+    }
+    default:
+      return "";
+  }
+}
+
+function secondsSince(epochSeconds) {
+  const at = Number(epochSeconds);
+  if (!Number.isFinite(at) || at <= 0) return null;
+  return Math.max(0, Date.now() / 1000 - at);
+}
+
+function onboardingStepBody(step) {
+  const body = document.createElement("div");
+  body.className = "get-started-step-body";
+
+  const description = document.createElement("p");
+  description.textContent = step.description;
+  body.appendChild(description);
+
+  const guides = document.createElement("p");
+  guides.className = "get-started-step-guides";
+  (step.guide_anchors || []).forEach((anchor) => {
+    const purpose = Object.keys(GUIDE_ANCHORS).find(
+      (key) => GUIDE_ANCHORS[key] === anchor,
+    );
+    if (purpose) guides.append(getStartedGuideLink(purpose));
+  });
+  if (guides.children.length) body.appendChild(guides);
+
+  // Inside "Connect a coding agent": the agent list, its count line fixed
+  // (U8), and the connected/installed split. The server attaches the agents
+  // to `connect_agents`; a payload that attaches them to this step instead is
+  // rendered just the same.
+  if (step.id === "client") {
+    const own = Array.isArray(step.agents) ? step.agents : [];
+    const agents = own.length
+      ? own
+      : getStartedSnapshot().steps.connect_agents?.agents || [];
+    if (agents.length) body.appendChild(onboardingAgentList(agents));
+  }
+  if (step.id === "analytics" && step.measurable === false) {
+    body.appendChild(onboardingOpenSettingLine());
+  }
+
+  const instructions = Array.isArray(step.instructions) ? step.instructions : [];
+  if (instructions.length) {
+    const list = document.createElement("ol");
+    list.className = "get-started-step-instructions";
+    instructions.forEach((instruction) => {
+      const item = document.createElement("li");
+      item.textContent = instruction;
+      list.appendChild(item);
+    });
+    body.appendChild(list);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "get-started-step-actions";
+  // "Check it worked" opens the request it names; every other step opens the
+  // page (and, when it has one, the exact card) it is about.
+  const last = getStartedSnapshot().requestLog.last;
+  if (step.id === "analytics" && step.done && last) {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary-button";
+    open.textContent = "Open that request";
+    open.addEventListener("click", () => {
+      goTo({ view: step.view || "requests", id: step.target ? step.target.slice(1) : null });
+      openRequestDetail(last.id).catch((error) =>
+        showMessage(error.message, "error"),
+      );
+    });
+    actions.appendChild(open);
+  }
+  actions.appendChild(onboardingGoButton(step));
+  body.appendChild(actions);
+  return body;
+}
+
+/** The "Go to <page>" button: the page, its card, and the visit marked. */
+function onboardingGoButton(step) {
+  const targetView = VIEW_GROUPS.find((view) => view.id === step.view);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button";
+  button.textContent = targetView ? `Go to ${targetView.label}` : `Open ${step.view}`;
+  button.addEventListener("click", () => {
+    // Mark every step visited, not just the Guide. Steps whose doneness
+    // cannot be derived from configuration are done because you went there,
+    // and the server is the only thing that knows which ones those are.
+    markOnboardingVisited([step.id]);
+    const open = getStartedOpenForStep(step);
+    if (open) goTo(open);
+    else {
+      state.userNavigated = true;
+      setActiveView(step.view, { scroll: true });
+    }
+  });
+  return button;
+}
+
+/** How an essential's "Go to" lands on the exact control it is about. */
+function getStartedOpenForStep(step) {
+  switch (step.id) {
+    case "client":
+      return { view: step.view || "claude", id: step.target ? step.target.slice(1) : null };
+    case "analytics":
+      return { view: step.view || "requests", id: step.target ? step.target.slice(1) : null };
+    case "provider":
+      // The Providers section's own top is its search box (the first thing
+      // its renderer draws), so this lands on the control U7 named without
+      // depending on an id the page does not declare.
+      return { view: step.view || "providers", section: "providers" };
+    case "models":
+      return { view: step.view || "model_config", key: "MODEL" };
+    default:
+      return null;
+  }
+}
+
+/** The line a "Not measured" step offers instead of a dead end: its switch. */
+function onboardingOpenSettingLine() {
+  const wrap = document.createElement("p");
+  wrap.className = "get-started-step-guides";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "link-button";
+  button.textContent = "Request logging is off — open the setting";
+  button.addEventListener("click", () =>
+    goTo({ view: "requests", key: "REQUEST_LOG_ENABLED" }),
+  );
+  wrap.appendChild(button);
+  return wrap;
 }
 
 /* ------------------------------------------------------------ guide links
@@ -9682,6 +9874,10 @@ function renderOnboarding() {
    afterwards, in a rAF, for the same reason the onboarding targets do: the
    element has no box until its section stops being hidden. */
 
+// 7.122.0: Get Started links into the section that explains each feature it
+// names, so the seven entries below are joined by one per feature. Existing
+// entries are unchanged -- every call site and every pinned test still names
+// them by the same purpose.
 const GUIDE_ANCHORS = {
   cli: "guide-cli",
   desktop_apps: "guide-desktop-apps",
@@ -9690,6 +9886,37 @@ const GUIDE_ANCHORS = {
   images: "guide-images",
   cost: "guide-cost",
   media_mcp: "guide-media-mcp",
+  models: "guide-models",
+  reasoning: "guide-reasoning",
+  websearch: "guide-websearch",
+  media: "guide-media",
+  analytics: "guide-analytics",
+  rotation: "guide-rotation",
+  vpn_tor: "guide-vpn-tor",
+  proxy_chains: "guide-proxy-chains",
+  prompt_cache_lifetime: "guide-prompt-cache-lifetime",
+  model_fields: "guide-model-fields",
+  everything_known: "guide-everything-known",
+  inferhub: "guide-inferhub",
+  install_agents: "guide-install-agents",
+  other_agents: "guide-other",
+  openai_clients: "guide-openai-clients",
+  gemini_clients: "guide-gemini-clients",
+  claude_models: "guide-claude-models",
+  keys: "guide-keys",
+  proxy_tor: "guide-proxy-tor",
+  proxy_runners: "guide-proxy-runners",
+  proxy_speed: "guide-proxy-speed",
+  search_index: "guide-search-index",
+  media_request_fields: "guide-media-request-fields",
+  optimizer: "guide-optimizer",
+  deploy: "guide-deploy",
+  desktop_rescue: "guide-desktop-rescue",
+  updates: "guide-updates",
+  security: "guide-security",
+  limits: "guide-limits",
+  credits: "guide-credits",
+  raw_diagnostics: "guide-raw-diagnostics",
 };
 
 // The surfaces that exist in the static markup. Everything else is appended by
@@ -9761,35 +9988,43 @@ function guideLinkLabel(purpose) {
   return GUIDE_LINK_LABELS[purpose] || "Guide";
 }
 
-/** The agents detected on this machine, as the Get Started step lists them.
+/** The agents detected on this machine, as "Connect a coding agent" lists them.
  *
- * The step used to be "done" because the user had *visited* the Coding agents
- * page, which is a fact about navigation. This is the same detection the page
- * itself runs -- one implementation, so the two cannot disagree about whether
- * Codex is installed -- and it writes nothing: every row is a status, a
- * command to copy, or a link to the card that has the button. */
+ * The same detection the Coding agents page runs -- one implementation, so the
+ * two cannot disagree about whether Codex is installed -- and it writes
+ * nothing: every row is a status, a command to copy, or a link to the card
+ * that has the button.
+ *
+ * 7.122.0 (U8): the lead line counts CONNECTED agents and INSTALLED agents
+ * separately, says "1 request", and no longer points "below" a list that is
+ * already above it.
+ */
 function onboardingAgentList(agents) {
   const wrapper = document.createElement("div");
   wrapper.className = "get-started-agents";
 
+  const connected = agents.filter((agent) => agent.connected);
   const installed = agents.filter((agent) => agent.installed);
   const lead = document.createElement("p");
   lead.className = "field-description";
+  const connectedText = connected.length
+    ? `${connected.length} ${connected.length === 1 ? "agent has" : "agents have"} reached MCC this week`
+    : "No agent has reached MCC yet";
   lead.textContent = installed.length
-    ? `${installed.length} of ${agents.length} agents MCC knows about are on this machine.`
-    : "None of the agents MCC knows about were detected on this machine.";
+    ? `${connectedText} · ${installed.length} of ${agents.length} agents MCC knows about are installed here.`
+    : `${connectedText} · install one from the Coding agents page, then come back.`;
   wrapper.appendChild(lead);
 
   const list = document.createElement("ul");
   list.className = "get-started-agent-list";
-  // Installed first, then connected first among those: the rows worth acting
-  // on are the ones at the top.
+  // Connected first, then installed: the rows worth acting on are at the top,
+  // and a connected agent is the answer this step is asking about.
   const ordered = agents
     .slice()
     .sort(
       (a, b) =>
-        Number(b.installed) - Number(a.installed) ||
         Number(b.connected) - Number(a.connected) ||
+        Number(b.installed) - Number(a.installed) ||
         a.display_name.localeCompare(b.display_name),
     );
   ordered.forEach((agent) => {
@@ -9826,7 +10061,8 @@ function onboardingAgentList(agents) {
     if (agent.requests_7d > 0) {
       const traffic = document.createElement("span");
       traffic.className = "get-started-agent-traffic";
-      traffic.textContent = `${formatAnalyticsNumber(agent.requests_7d)} requests (7d)`;
+      const count = formatAnalyticsNumber(agent.requests_7d);
+      traffic.textContent = `${count} ${agent.requests_7d === 1 ? "request" : "requests"} (7d)`;
       item.appendChild(traffic);
     }
 
@@ -9838,40 +10074,1887 @@ function onboardingAgentList(agents) {
       jump.textContent = "Configure";
       // Never a write from here: the checklist takes you to the card that
       // owns the button, and the button is still a deliberate click.
-      jump.addEventListener("click", () => {
-        state.userNavigated = true;
-        setActiveView("coding_agents", { scroll: true });
-        highlightOnboardingTarget(`[data-desktop-app="${agent.id}"]`);
-      });
+      jump.addEventListener("click", () =>
+        goTo({ view: "coding_agents", selector: `[data-desktop-app="${agent.id}"]` }),
+      );
       item.appendChild(jump);
     }
 
     list.appendChild(item);
   });
 
-  if (!list.children.length) {
-    const none = document.createElement("p");
-    none.className = "field-description";
-    none.textContent =
-      "Install one of the agents on the Coding agents page, then come back.";
-    wrapper.appendChild(none);
-  } else {
-    wrapper.appendChild(list);
-  }
+  if (list.children.length) wrapper.appendChild(list);
   return wrapper;
 }
 
-// The target may be a field that only exists once its (previously hidden)
-// view section is in the layout; a rAF lets setActiveView's DOM change settle
-// before we measure it for scrollIntoView.
-function highlightOnboardingTarget(selector) {
-  requestAnimationFrame(() => {
-    const target = document.querySelector(selector);
-    if (!target) return;
-    target.scrollIntoView({ behavior: "smooth", block: "center" });
-    target.classList.add("onboarding-highlight");
-    window.setTimeout(() => target.classList.remove("onboarding-highlight"), 2000);
+/* ------------------------------------------------------- deep links (7.122.0)
+
+   One helper for every "Open" on this page, so a link can only be written to
+   a target the catalogue declares and every one of them lands the same way:
+   switch the view, let it render, scroll the target to the top of the page,
+   and pulse it. The page's own buttons used to scroll a container's centre,
+   which landed mid-grid inside 5,467 px of Providers (U7).
+
+   `{view, key}` opens a settings field (`#field-<KEY>`), `{view, section}` a
+   settings card (`#section-<id>`), `{view, id}` a card or heading declared in
+   index.html, `{view, selector}` any element this page built, `{view, doc}` a
+   bundled document. `center` is for a field inside a card (the reader needs
+   the card around it); everything else lands at the top. */
+function goTo(target) {
+  if (!target || !target.view) return;
+  const settle = (fn) => {
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(fn);
+    else window.setTimeout(fn, 0);
+  };
+  state.userNavigated = true;
+  setActiveView(target.view, { scroll: false });
+
+  settle(() => {
+    // A card the reader asked for is opened, not merely scrolled to.
+    if (target.key) expandAdvancedAround(target.key);
+    if (target.providerQuery !== undefined) fillProvidersSearch(target.providerQuery);
+    if (target.agentQuery !== undefined) fillCodingAgentsSearch(target.agentQuery);
+    if (target.webSearchQuery !== undefined) {
+      fillWebSearchSearch(target.webSearchQuery);
+    }
+    if (target.doc) {
+      selectDocument(target.doc).catch((error) =>
+        showMessage(error.message, "error"),
+      );
+    }
+    const element = goToElement(target);
+    if (!element) return;
+    const reduced =
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    element.scrollIntoView({
+      behavior: reduced ? "auto" : "smooth",
+      block: target.center || target.key ? "center" : "start",
+    });
+    element.classList.add("onboarding-highlight");
+    window.setTimeout(() => element.classList.remove("onboarding-highlight"), 2000);
+    if (!element.hasAttribute("tabindex") && typeof element.focus === "function") {
+      element.setAttribute("tabindex", "-1");
+      element.focus({ preventScroll: true });
+    }
   });
+}
+
+/** A setting key as a selector fragment. The keys are [A-Z0-9_], so this is a
+ *  guard against a hand-written key rather than a real escaping layer. */
+function goToSelectorPart(key) {
+  const escape = window.CSS && typeof window.CSS.escape === "function"
+    ? window.CSS.escape
+    : (value) => String(value).replace(/[^A-Za-z0-9_-]/g, "\\$&");
+  return escape(String(key || ""));
+}
+
+/** The element a `goTo` target names, or null when this page has none. */
+function goToElement(target) {
+  if (target.selector) return document.querySelector(target.selector);
+  if (target.key) {
+    const byKey = document.querySelector(`#field-${goToSelectorPart(target.key)}`);
+    if (byKey) return byKey.closest(".field") || byKey;
+  }
+  if (target.section) {
+    const section = byId(`section-${target.section}`);
+    if (section) return section;
+  }
+  if (target.id) return byId(target.id);
+  // A query lands on the find box it filled, not at the top of a 5,000 px page.
+  if (target.providerQuery !== undefined) {
+    return document.querySelector("#providersSections .pv-toolbar");
+  }
+  if (target.agentQuery !== undefined) {
+    return byId("codingAgentsFilterBar");
+  }
+  if (target.webSearchQuery !== undefined) {
+    return byId("webSearchProviderSearch");
+  }
+  const view = document.querySelector(`.admin-view[data-view="${target.view}"]`);
+  return view || null;
+}
+
+/** Open the "advanced" fold a field is inside, so a link to it is not a link
+ *  to nothing: an advanced field under a collapsed card is not on screen. */
+function expandAdvancedAround(key) {
+  const input = document.querySelector(`#field-${goToSelectorPart(key)}`);
+  const holder = input ? input.closest(".collapse-advanced") : null;
+  if (!holder) return;
+  holder.classList.remove("collapse-advanced");
+  const toggle = holder.querySelector(":scope > .advanced-toggle");
+  if (toggle) {
+    toggle.textContent = "Collapse advanced";
+    toggle.setAttribute("aria-expanded", "true");
+  }
+}
+
+/** Put a query into the Providers search box and run its filter. */
+function fillProvidersSearch(query) {
+  const box = document.querySelector(
+    "#providersSections .pv-toolbar .pv-search input",
+  );
+  if (!box) return;
+  box.value = query || "";
+  box.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
+/** Put a query into the Web Search find box and run its filter. */
+function fillWebSearchSearch(query) {
+  const box = byId("webSearchProviderSearch");
+  if (!box) return;
+  box.value = query || "";
+  box.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
+/** Put a query into the Coding agents find box and run its filter. */
+function fillCodingAgentsSearch(query) {
+  const box = byId("codingAgentsFilter");
+  if (!box) return;
+  box.value = query || "";
+  box.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
+/** Mark steps visited without blocking the navigation the click is doing. */
+function markOnboardingVisited(ids) {
+  updateOnboarding({ visited: ids }).catch((error) =>
+    showMessage(error.message, "error"),
+  );
+}
+
+/** A Guide link that also counts as taking the tour (U21).
+ *
+ * Every Guide link on this page opens the same Guide section as anywhere else;
+ * the difference is that following one from Get Started records the visit, so
+ * the pinned `guide` step is done by what the reader did rather than only by a
+ * button that no longer exists. */
+function getStartedGuideLink(purpose) {
+  const link = guideLink(purpose, getStartedGuideLabels[purpose] || "Guide");
+  link.addEventListener("click", () => markOnboardingVisited(["guide"]));
+  return link;
+}
+
+const getStartedGuideLabels = {
+  models: "Guide: models and fallbacks",
+  agent_tiers: "Guide: tiers per agent",
+  reasoning: "Guide: reasoning",
+  websearch: "Guide: web search",
+  images: "Guide: vision",
+  media: "Guide: media rails",
+  media_mcp: "Guide: media server",
+  analytics: "Guide: analytics",
+  cost: "Guide: cost",
+  rotation: "Guide: key rotation",
+  vpn_tor: "Guide: VPN and Tor",
+  proxy_chains: "Guide: proxy chains",
+  prompt_cache_lifetime: "Guide: prompt cache lifetime",
+  model_fields: "Guide: model fields",
+  everything_known: "Guide: everything known",
+  learned: "Guide: learned facts",
+  inferhub: "Guide: InferHub",
+  install_agents: "Guide: install an agent",
+  other_agents: "Guide: other agents",
+  cli: "Guide: CLI agents",
+  openai_clients: "Guide: OpenAI-shaped clients",
+  gemini_clients: "Guide: Gemini-shaped clients",
+  claude_models: "Guide: Claude subscriptions",
+  keys: "Guide: keys and providers",
+  proxy_tor: "Guide: your own Tor",
+  proxy_runners: "Guide: proxy runners",
+  proxy_speed: "Guide: faster exits",
+  search_index: "Guide: search index",
+  media_request_fields: "Guide: media request fields",
+  optimizer: "Guide: Token Optimizer",
+  deploy: "Guide: deployment",
+  desktop_rescue: "Guide: desktop rescue",
+  updates: "Guide: updates",
+  security: "Guide: lock it down",
+  limits: "Guide: limits",
+  credits: "Guide: credits",
+  raw_diagnostics: "Guide: raw diagnostics",
+  desktop_apps: "Guide: desktop apps",
+};
+
+/* ------------------------------------------------ Get Started: the catalogue
+
+   7.122.0 (spec section 5.4-5.6): every feature the page names is one row of
+   ONE declared table. A contract test parses this table and fails when a row
+   names a view that is not in VIEW_GROUPS, a setting key whose control the
+   control map puts on another page, a section or id the page does not draw, a
+   Docs slug the server does not bundle, a Guide purpose that is not in
+   GUIDE_ANCHORS, or two rows with one id. Nothing here writes a setting.
+
+   `status` names a function in GET_STARTED_STATUS, or is null for a row that
+   carries no status (the advanced rows show the setting's current value
+   instead -- never a suggested one). */
+
+const GET_STARTED_FEATURES = [
+  {
+    id: "fallback_chains",
+    group: "main",
+    title: "Fallback chains",
+    line: "If a model fails, the next one answers — and Pause skips one without deleting it.",
+    status: "fallbackChains",
+    opens: [
+      { view: "model_config", key: "MODEL_FALLBACKS", label: "Fallback chains" },
+    ],
+    guide: ["models"],
+  },
+  {
+    id: "tiers_per_agent",
+    group: "main",
+    title: "Tiers per agent",
+    line: "Codex or OpenCode can use different models than Claude Code.",
+    status: "tiersPerAgent",
+    opens: [
+      { view: "coding_agents", id: "codingAgentsHeading", label: "Tiers" },
+    ],
+    guide: ["agent_tiers"],
+  },
+  {
+    id: "reasoning",
+    group: "main",
+    title: "Reasoning",
+    line: "One effort setting, translated for every provider.",
+    status: "reasoning",
+    opens: [
+      { view: "model_config", section: "reasoning", label: "Reasoning" },
+    ],
+    guide: ["reasoning"],
+  },
+  {
+    id: "web_search",
+    group: "main",
+    title: "Web search & fetch",
+    line: "Claude Code's web search and web fetch, answered here.",
+    status: "webSearch",
+    opens: [
+      { view: "web_search", id: "webSearchGrid", label: "Providers" },
+    ],
+    guide: ["websearch"],
+  },
+  {
+    id: "images",
+    group: "main",
+    title: "Images (vision)",
+    line: "A model that cannot see gets the picture routed to a model that can, or described for it.",
+    status: "images",
+    opens: [
+      { view: "model_config", key: "MODEL_VISION", label: "Vision adapter" },
+    ],
+    guide: ["images"],
+  },
+  {
+    id: "media_tools",
+    group: "main",
+    title: "Media & agent tools",
+    line: "Images, speech, transcripts and video — and the tools that let an agent make them.",
+    status: "mediaTools",
+    opens: [
+      { view: "model_config", key: "MODEL_IMAGE", label: "Media rails" },
+      { view: "coding_agents", id: "mcpMediaServerCard", label: "MCP media server" },
+    ],
+    guide: ["media", "media_mcp"],
+  },
+  {
+    id: "analytics_cost",
+    group: "main",
+    title: "Analytics & cost",
+    line: "Every request, the route it took, its tokens and its price.",
+    status: "analyticsCost",
+    opens: [
+      { view: "requests", id: "reqStatsCards", label: "Summary" },
+    ],
+    guide: ["analytics", "cost"],
+  },
+  {
+    id: "several_keys",
+    group: "main",
+    title: "Several keys per provider",
+    line: "Rotation and per-key health, for a provider you gave more than one key.",
+    status: "severalKeys",
+    opens: [
+      { view: "providers", id: "providersSections", label: "Key pools" },
+    ],
+    guide: ["rotation"],
+  },
+  {
+    id: "proxying",
+    group: "main",
+    title: "Proxying",
+    line: "Send a provider's traffic through a proxy, a VPN or Tor.",
+    status: "proxying",
+    opens: [
+      { view: "proxying", id: "proxyingHonesty", label: "Sources & chains" },
+    ],
+    guide: ["vpn_tor", "proxy_chains"],
+  },
+  {
+    id: "prompt_cache_lifetime",
+    group: "more",
+    area: "Routing",
+    title: "Prompt-cache lifetime",
+    line: "How long Anthropic keeps your prompt cache — 5 minutes or 1 hour — per tier, provider or model.",
+    status: null,
+    opens: [
+      { view: "model_config", key: "PROMPT_CACHE_TTL", label: "Prompt cache lifetime" },
+    ],
+    guide: ["prompt_cache_lifetime"],
+  },
+  {
+    id: "models_page",
+    group: "more",
+    area: "Routing",
+    title: "The Models page",
+    line: "Every model, what each source says about it, and your override of one field.",
+    status: null,
+    opens: [
+      { view: "models", id: "modelsTree", label: "The model table" },
+    ],
+    guide: ["model_fields", "everything_known"],
+  },
+  {
+    id: "learned_facts",
+    group: "more",
+    area: "Routing",
+    title: "Learned facts",
+    line: "What MCC learned from refusals, with the evidence — and Forget, for one at a time.",
+    status: null,
+    opens: [
+      { view: "models", id: "modelsFacets", label: "Learned facet" },
+    ],
+    guide: ["learned"],
+  },
+  {
+    id: "inferhub",
+    group: "more",
+    area: "Routing",
+    title: "InferHub price ceilings",
+    line: "Buy tokens on a marketplace under a price you set.",
+    status: null,
+    opens: [
+      { view: "marketplaces", label: "Price ceilings" },
+    ],
+    guide: ["inferhub"],
+  },
+  {
+    id: "install_agent",
+    group: "more",
+    area: "Agents",
+    title: "Install an agent",
+    line: "From its card: the plan is shown first, and nothing runs sudo.",
+    status: null,
+    opens: [
+      { view: "coding_agents", agentQuery: "install", label: "Install buttons" },
+    ],
+    guide: ["install_agents"],
+  },
+  {
+    id: "other_agents",
+    group: "more",
+    area: "Agents",
+    title: "OpenClaw, Hermes, dsh",
+    line: "Newer agents served from your own config files; dsh's card says why not yet.",
+    status: null,
+    opens: [
+      { view: "coding_agents", agentQuery: "openclaw", label: "OpenClaw, Hermes, dsh" },
+    ],
+    guide: ["other_agents"],
+  },
+  {
+    id: "claude_settings_editor",
+    group: "more",
+    area: "Agents",
+    title: "Claude Code settings editor",
+    line: "Every settings.json key, with what it does.",
+    status: null,
+    opens: [
+      { view: "claude", id: "claudeConfigEditor", label: "All Claude Code settings" },
+    ],
+    guide: ["cli"],
+  },
+  {
+    id: "api_clients",
+    group: "more",
+    area: "Agents",
+    title: "Any OpenAI- or Gemini-shaped client",
+    line: "curl, SDKs, editors: point the base URL at this server.",
+    status: null,
+    opens: [
+      { view: "docs", doc: "clients", label: "Clients" },
+    ],
+    guide: ["openai_clients", "gemini_clients"],
+  },
+  {
+    id: "messaging_bridge",
+    group: "more",
+    area: "Agents",
+    title: "Messaging bridge",
+    line: "Claude Code from Telegram or Discord, voice notes included.",
+    status: null,
+    opens: [
+      { view: "messaging", id: "messagingSections", label: "Messaging settings" },
+      { view: "docs", doc: "messaging", label: "Messaging" },
+    ],
+    guide: [],
+  },
+  {
+    id: "subscriptions",
+    group: "more",
+    area: "Providers & network",
+    title: "Subscriptions and sign-ins",
+    line: "Claude subscription (Anthropic does not permit it — read the warning), ChatGPT, and Kimi coding plans.",
+    status: null,
+    opens: [
+      { view: "providers", providerQuery: "oauth", label: "Sign-in providers" },
+      { view: "docs", doc: "oauth-providers", label: "OAuth providers" },
+    ],
+    guide: ["claude_models"],
+  },
+  {
+    id: "custom_providers",
+    group: "more",
+    area: "Providers & network",
+    title: "Custom providers",
+    line: "Any OpenAI-compatible endpoint: a base URL and a key.",
+    status: null,
+    opens: [
+      { view: "providers", id: "addCustomProviderButton", label: "Add custom provider" },
+    ],
+    guide: ["keys"],
+  },
+  {
+    id: "proxy_sources",
+    group: "more",
+    area: "Providers & network",
+    title: "VPN accounts, your own Tor, WireGuard files",
+    line: "Turn them into proxy exits.",
+    status: null,
+    opens: [
+      { view: "proxying", id: "proxyingSourcesTitle", label: "Sources" },
+    ],
+    guide: ["vpn_tor", "proxy_tor", "proxy_runners"],
+  },
+  {
+    id: "proxy_speed",
+    group: "more",
+    area: "Providers & network",
+    title: "Faster proxy exits",
+    line: "Keep idle proxy connections open, and prefer exits that worked lately.",
+    status: null,
+    opens: [
+      { view: "limits", key: "PROXY_KEEPALIVE_SECONDS", label: "Keep-alive" },
+    ],
+    guide: ["proxy_speed"],
+  },
+  {
+    id: "context7",
+    group: "more",
+    area: "Providers & network",
+    title: "Context7 library docs",
+    line: "Documentation as a service in your search chain.",
+    status: null,
+    opens: [
+      { view: "web_search", webSearchQuery: "context7", label: "Context7 card" },
+    ],
+    guide: ["websearch"],
+  },
+  {
+    id: "search_log",
+    group: "more",
+    area: "Observability",
+    title: "Search the request log",
+    line: "Any word in past prompts and replies — build the index once.",
+    status: null,
+    opens: [
+      { view: "requests", id: "reqFilterSearch", label: "Search box" },
+    ],
+    guide: ["search_index"],
+  },
+  {
+    id: "exports",
+    group: "more",
+    area: "Observability",
+    title: "Exports",
+    line: "Requests, attempts, or one request with its raw log.",
+    status: null,
+    opens: [
+      { view: "requests", id: "reqExportButton", label: "Export" },
+    ],
+    guide: ["analytics"],
+  },
+  {
+    id: "inflight",
+    group: "more",
+    area: "Observability",
+    title: "In flight & stuck requests",
+    line: "What runs right now, and a watchdog for stalls.",
+    status: null,
+    opens: [
+      { view: "requests", id: "reqInflightPanel", label: "In flight" },
+    ],
+    guide: ["analytics"],
+  },
+  {
+    id: "media_fields",
+    group: "more",
+    area: "Observability",
+    title: "Media request fields",
+    line: "Which fields each media model takes, and who said so.",
+    status: null,
+    opens: [
+      { view: "models", id: "mediaModelsHeading", label: "Media models" },
+    ],
+    guide: ["media_request_fields"],
+  },
+  {
+    id: "optimizer_rtk",
+    group: "more",
+    area: "Platform",
+    title: "Token Optimizer & RTK",
+    line: "What never reached a provider; optional trimming; the RTK shell wrapper.",
+    status: null,
+    opens: [
+      { view: "optimizer", id: "optimizerSections", label: "What it saved" },
+    ],
+    guide: ["optimizer", "deploy"],
+  },
+  {
+    id: "desktop_app",
+    group: "more",
+    area: "Platform",
+    title: "Desktop app & start at login",
+    line: "A window and a tray that start the server and reconnect after an update.",
+    status: null,
+    opens: [
+      { view: "providers", id: "desktopServerMode", label: "Deployment" },
+    ],
+    guide: ["deploy", "desktop_rescue"],
+  },
+  {
+    id: "updates",
+    group: "more",
+    area: "Platform",
+    title: "Updates & rollback",
+    line: "One click; a failed update puts the previous version back.",
+    status: null,
+    opens: [
+      { view: "providers", id: "versionPanel", label: "Version" },
+    ],
+    guide: ["updates"],
+  },
+  {
+    id: "lock_down",
+    group: "more",
+    area: "Platform",
+    title: "Lock it down",
+    line: "The proxy token, and who can reach this server.",
+    status: null,
+    opens: [
+      { view: "providers", key: "ANTHROPIC_AUTH_TOKEN", label: "Runtime token" },
+    ],
+    guide: ["security"],
+  },
+  {
+    id: "budgets",
+    group: "advanced",
+    area: "limits",
+    title: "Output & thinking budgets",
+    line: "How long one answer may be, and how thinking and the answer share it; a model's published limit always wins.",
+    status: null,
+    values: ["MAX_OUTPUT_TOKENS_CEILING"],
+    opens: [
+      { view: "limits", section: "budgets", label: "Budgets" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "deadlines",
+    group: "advanced",
+    area: "limits",
+    title: "Deadlines",
+    line: "How long one model may hold a request before the chain moves on. 0 means no limit, and the calculator shows what each model on your routes gets.",
+    status: null,
+    values: ["FALLBACK_FIRST_TOKEN_TIMEOUT", "FALLBACK_TOTAL_TIMEOUT", "FALLBACK_STALL_TIMEOUT"],
+    opens: [
+      { view: "limits", section: "deadlines", label: "Deadlines" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "stream_keepalive",
+    group: "advanced",
+    area: "limits",
+    title: "Stream keepalive",
+    line: "What MCC writes to an idle stream so a client's own timer does not give up; it changes no deadline.",
+    status: null,
+    values: ["STREAM_KEEPALIVE_MODE"],
+    opens: [
+      { view: "limits", section: "stream_keepalive", label: "Stream keepalive" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "benching",
+    group: "advanced",
+    area: "limits",
+    title: "Chain benching",
+    line: "Whether a model that keeps failing is skipped for a while.",
+    status: null,
+    values: ["FALLBACK_BENCH_ENABLED"],
+    opens: [
+      { view: "limits", section: "benching", label: "Chain benching" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "retries",
+    group: "advanced",
+    area: "limits",
+    title: "Retries & throughput",
+    line: "How hard one model is retried, and how fast requests leave, before the chain is used.",
+    status: null,
+    values: ["PROVIDER_RETRY_ATTEMPTS"],
+    opens: [
+      { view: "limits", section: "provider_retries", label: "Retries & throughput" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "credential_health",
+    group: "advanced",
+    area: "limits",
+    title: "Credential health",
+    line: "What a key's failures cost it and how long it sits out; also the proxy checker, feeds and keep-alive.",
+    status: null,
+    values: ["RATE_LIMIT_COOLDOWN_MODE", "PROXY_KEEPALIVE_SECONDS"],
+    opens: [
+      { view: "limits", section: "credential_health", label: "Credential health" },
+    ],
+    guide: ["credits", "rotation"],
+  },
+  {
+    id: "responsiveness",
+    group: "advanced",
+    area: "limits",
+    title: "Server responsiveness",
+    line: "How the server says it is busy, and the stuck-request watchdog.",
+    status: null,
+    values: ["REQUEST_WATCHDOG_ENABLED"],
+    opens: [
+      { view: "limits", section: "loop_health", label: "Server responsiveness" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "diagnostics_card",
+    group: "advanced",
+    area: "limits",
+    title: "Diagnostics",
+    line: "Log level and the raw-log switches.",
+    status: null,
+    values: ["LOG_LEVEL"],
+    opens: [
+      { view: "limits", section: "diagnostics", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "raw_api_payloads",
+    group: "advanced",
+    area: "raw",
+    title: "Log Raw API Payloads",
+    line: "Full request and response bodies of every API call, in clear text.",
+    status: null,
+    values: ["LOG_RAW_API_PAYLOADS"],
+    opens: [
+      { view: "limits", key: "LOG_RAW_API_PAYLOADS", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "raw_sse_events",
+    group: "advanced",
+    area: "raw",
+    title: "Log Raw SSE Events",
+    line: "Every raw stream event, tagged with the request id.",
+    status: null,
+    values: ["LOG_RAW_SSE_EVENTS"],
+    opens: [
+      { view: "limits", key: "LOG_RAW_SSE_EVENTS", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "raw_error_tracebacks",
+    group: "advanced",
+    area: "raw",
+    title: "Log API Error Tracebacks",
+    line: "Python tracebacks with API errors — and fuller error detail returned to the caller.",
+    status: null,
+    values: ["LOG_API_ERROR_TRACEBACKS"],
+    opens: [
+      { view: "limits", key: "LOG_API_ERROR_TRACEBACKS", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "raw_messaging_content",
+    group: "advanced",
+    area: "raw",
+    title: "Log Raw Messaging Content",
+    line: "The text of every Telegram or Discord message through the bridge.",
+    status: null,
+    values: ["LOG_RAW_MESSAGING_CONTENT"],
+    opens: [
+      { view: "limits", key: "LOG_RAW_MESSAGING_CONTENT", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "raw_cli_diagnostics",
+    group: "advanced",
+    area: "raw",
+    title: "Log Raw CLI Diagnostics",
+    line: "A managed Claude Code CLI's stderr, beside the server log.",
+    status: null,
+    values: ["LOG_RAW_CLI_DIAGNOSTICS"],
+    opens: [
+      { view: "limits", key: "LOG_RAW_CLI_DIAGNOSTICS", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "raw_messaging_error_details",
+    group: "advanced",
+    area: "raw",
+    title: "Log Messaging Error Details",
+    line: "The platform's full error payload.",
+    status: null,
+    values: ["LOG_MESSAGING_ERROR_DETAILS"],
+    opens: [
+      { view: "limits", key: "LOG_MESSAGING_ERROR_DETAILS", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "log_retention",
+    group: "advanced",
+    area: "raw",
+    title: "Server log retention",
+    line: "How many rotated server logs are kept; the current one is never counted.",
+    status: null,
+    values: ["SERVER_LOG_RETAIN_FILES"],
+    opens: [
+      { view: "limits", key: "SERVER_LOG_RETAIN_FILES", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "debug_platform_edits",
+    group: "advanced",
+    area: "raw",
+    title: "Debug Platform Edits",
+    line: "Every message edit the messaging bridge performs, with the reason it fired.",
+    status: null,
+    values: ["DEBUG_PLATFORM_EDITS"],
+    opens: [
+      { view: "limits", key: "DEBUG_PLATFORM_EDITS", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "debug_subagent_stack",
+    group: "advanced",
+    area: "raw",
+    title: "Debug Subagent Stack",
+    line: "How MCC tracks a nested subagent's calls and which frame a reply belongs to.",
+    status: null,
+    values: ["DEBUG_SUBAGENT_STACK"],
+    opens: [
+      { view: "limits", key: "DEBUG_SUBAGENT_STACK", label: "Diagnostics" },
+    ],
+    guide: ["raw_diagnostics"],
+  },
+  {
+    id: "aid_refresh_models",
+    group: "advanced",
+    area: "testing",
+    title: "Refresh models",
+    line: "On each provider card: the only proof a key works, because it lists the models.",
+    status: null,
+    opens: [
+      { view: "providers", id: "providersSections", label: "Provider cards" },
+    ],
+    guide: ["keys"],
+  },
+  {
+    id: "aid_test_connection",
+    group: "advanced",
+    area: "testing",
+    title: "Test connection",
+    line: "On a local provider's card: LM Studio, llama.cpp and Ollama answer or they do not.",
+    status: null,
+    opens: [
+      { view: "providers", providerQuery: "ollama", label: "Local providers" },
+    ],
+    guide: ["keys"],
+  },
+  {
+    id: "aid_test_provider",
+    group: "advanced",
+    area: "testing",
+    title: "Test provider",
+    line: "On each Web Search card: spends one real search on that service.",
+    status: null,
+    opens: [
+      { view: "web_search", id: "webSearchGrid", label: "Provider cards" },
+    ],
+    guide: ["websearch"],
+  },
+  {
+    id: "aid_custom_probe",
+    group: "advanced",
+    area: "testing",
+    title: "Custom-provider probe",
+    line: "On Add custom provider: learns the dialect and records what came back.",
+    status: null,
+    opens: [
+      { view: "providers", id: "addCustomProviderButton", label: "Add custom provider" },
+    ],
+    guide: ["keys"],
+  },
+  {
+    id: "aid_validate",
+    group: "advanced",
+    area: "testing",
+    title: "Validate",
+    line: "In the footer: checks the pending settings without saving them.",
+    status: null,
+    opens: [
+      { view: "providers", id: "validateButton", label: "The footer" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "aid_deadline_calculator",
+    group: "advanced",
+    area: "testing",
+    title: "Deadline calculator",
+    line: "On Limits → Deadlines: what each model on your routes actually gets.",
+    status: null,
+    opens: [
+      { view: "limits", section: "deadlines", label: "Deadlines" },
+    ],
+    guide: ["limits"],
+  },
+  {
+    id: "aid_everything_known",
+    group: "advanced",
+    area: "testing",
+    title: "Everything known",
+    line: "On Models: read what every source says about a model before you override it.",
+    status: null,
+    values: ["MODEL_PROBE_NEW_MODELS"],
+    opens: [
+      { view: "models", id: "modelsTree", label: "The model table" },
+      { view: "model_config", key: "MODEL_PROBE_NEW_MODELS", label: "New-model probing" },
+    ],
+    guide: ["everything_known"],
+  },
+  {
+    id: "aid_check_tor",
+    group: "advanced",
+    area: "testing",
+    title: "Check Tor · Where does Direct come out? · Forget exit memory",
+    line: "On Proxying: whether the exit answers, and what an unmasked exit looks like.",
+    status: null,
+    opens: [
+      { view: "proxying", id: "proxyingExitIdentity", label: "Exit identity" },
+    ],
+    guide: ["vpn_tor"],
+  },
+  {
+    id: "aid_inflight",
+    group: "advanced",
+    area: "testing",
+    title: "In flight",
+    line: "On Analytics: what is running right now, and for how long.",
+    status: null,
+    opens: [
+      { view: "requests", id: "reqInflightPanel", label: "In flight" },
+    ],
+    guide: ["analytics"],
+  },
+  {
+    id: "aid_exports",
+    group: "advanced",
+    area: "testing",
+    title: "Export · Export attempts · Export this request…",
+    line: "On Analytics: attach the log to a bug report instead of describing it.",
+    status: null,
+    opens: [
+      { view: "requests", id: "reqExportButton", label: "Export" },
+    ],
+    guide: ["analytics"],
+  },
+  {
+    id: "aid_gotchas",
+    group: "advanced",
+    area: "testing",
+    title: "Two gotchas worth knowing",
+    line: "MCC answers a bare 'say OK' reachability probe itself, and Analytics hides local answers while Local answers is Hide — test with a real prompt.",
+    status: null,
+    values: ["ENABLE_PROBE_AUTO_RESPONSE"],
+    opens: [
+      { view: "optimizer", id: "optimizerSections", label: "Local rules" },
+      { view: "requests", id: "reqFilterLocal", label: "Local answers filter" },
+    ],
+    guide: ["analytics"],
+  },
+];
+
+/** Where each payload step is rendered now that it is not a row of its own.
+ *
+ * 7.122.0: `connect_agents` is the agent list inside "Connect a coding agent",
+ * `media_tools` / `websearch` are the instructions of their cards, `messaging`
+ * is its row in the niche list, and `guide` is every Guide link on the page
+ * (following one records the visit). Every id stays in the payload.
+ */
+const GET_STARTED_STEP_HOMES = {
+  connect_agents: "client",
+  media_tools: "media_tools",
+  websearch: "web_search",
+  messaging: "messaging_bridge",
+  guide: "guide-links",
+};
+
+/** Every fact a status or a chip reads, gathered once per render.
+ *
+ * All of it is already in the page: the config payload `load()` fetches, the
+ * harness tiers `loadHarnesses` fetches at start, and the onboarding answer.
+ * Nothing here asks the server for anything (spec section 5.8). */
+function getStartedSnapshot() {
+  const onboarding = state.onboarding || {};
+  const steps = {};
+  (onboarding.steps || []).forEach((step) => {
+    steps[step.id] = step;
+  });
+  return {
+    fields: state.fields,
+    providerStatus: (state.config && state.config.provider_status) || [],
+    routeStatus: (state.config && state.config.route_status) || {},
+    manualOnly: new Set(
+      state.config && Array.isArray(state.config.websearch_manual_only)
+        ? state.config.websearch_manual_only
+        : [],
+    ),
+    harnessTiers: state.harnessTiers,
+    steps,
+    skipped: Array.isArray(onboarding.skipped) ? onboarding.skipped : [],
+    requestLog: onboarding.request_log || { enabled: false, total: 0, last: null },
+  };
+}
+
+function gsFieldOf(snap, key) {
+  return snap.fields && snap.fields.get ? snap.fields.get(key) : null;
+}
+
+function gsValue(snap, key) {
+  const field = gsFieldOf(snap, key);
+  return field ? String(field.value ?? "") : "";
+}
+
+function gsDefaultOf(snap, key) {
+  const field = gsFieldOf(snap, key);
+  return field ? String(field.default ?? "") : "";
+}
+
+function gsIsOn(snap, key) {
+  const text = gsValue(snap, key).trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(text);
+}
+
+/** A comma list as the values it holds (the chain settings' shape). */
+function gsChainIds(value) {
+  return String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+/** An option's own label, so a chip says "Wait as long as the provider asked"
+ *  rather than "provider". */
+function gsOptionLabel(snap, key, value) {
+  const field = gsFieldOf(snap, key);
+  const options = (field && field.options) || [];
+  const match = options.find((option) => option.value === value);
+  return match ? match.label : value;
+}
+
+/** A model ref's short form (`p1/fake-small` -> `fake-small`).
+ *
+ * Shortened only when it really looks like a ref: a value carrying spaces or
+ * markup characters is shown whole, so the line never silently keeps a
+ * fragment of something that was not a ref at all.
+ */
+function gsShortModel(ref) {
+  const text = String(ref || "").trim();
+  if (!text.includes("/") || /[\s<>"']/.test(text)) return text;
+  return text.slice(text.lastIndexOf("/") + 1);
+}
+
+/** The model that answered the newest request, in short form, or "". */
+function gsLastRequestModel(snap) {
+  const last = snap.requestLog && snap.requestLog.last;
+  if (!last) return "";
+  return gsShortModel(last.resolved_model || last.requested_model || "");
+}
+
+/** Agents that sent MCC a request this week -- what "Connected this week" says.
+ *  A desktop app whose file is configured but which never called is connected
+ *  (step 3 counts it) and is not "connected this week", which is about traffic. */
+function gsConnectedAgents(snap) {
+  return ((snap.steps.connect_agents && snap.steps.connect_agents.agents) || [])
+    .filter((agent) => agent.connected && Number(agent.requests_7d) > 0)
+    .sort((a, b) => Number(b.requests_7d) - Number(a.requests_7d));
+}
+
+/** Providers that can serve, by name; plus Zen's free rails when they are what
+ *  answers four tiers (spec section 5.3, step 1). */
+function gsProviderSummary(snap) {
+  const configured = snap.providerStatus.filter(
+    (provider) => provider.status === "configured" || provider.status === "free_ready",
+  );
+  if (!configured.length) return "";
+  const names = configured.map((provider) => provider.display_name);
+  const text = names.length > 3
+    ? `${names.slice(0, 3).join(" · ")} +${names.length - 3}`
+    : names.join(" · ");
+  const zen = snap.providerStatus.find(
+    (provider) =>
+      provider.provider_id === "opencode" && provider.status === "free_ready",
+  );
+  const zenRails = ["MODEL_MYTHOS", "MODEL_FABLE", "MODEL_OPUS", "MODEL_SONNET"].every(
+    (key) => gsValue(snap, key).startsWith("opencode/"),
+  );
+  return zen && zenRails ? `${text} · Zen free models ready` : text;
+}
+
+/** How many of the six chat routes point at a provider that can serve. */
+function gsRouteReadiness(snap) {
+  const problems = snap.routeStatus.providers || {};
+  const fallbackRef = gsValue(snap, "MODEL").trim();
+  const routes = ROUTE_TIERS.map((tier) => {
+    const ref = gsValue(snap, tier.modelKey).trim() || fallbackRef;
+    const providerId = routeRefProvider(ref);
+    return {
+      label: tier.label,
+      ref,
+      problem: providerId ? problems[providerId] || null : null,
+    };
+  });
+  const notReady = routes.filter((route) => route.problem);
+  const ready = routes.length - notReady.length;
+  const because = notReady.slice(0, 2).map((route) => {
+    const action = route.problem.action === "sign_in" ? "sign in" : "no key";
+    return `${route.label}: ${action}`;
+  });
+  return {
+    ready,
+    total: routes.length,
+    notReady,
+    text:
+      `${ready} of ${routes.length} routes ready` +
+      (because.length ? ` — ${because.join(", ")}` : ""),
+  };
+}
+
+function gsStatusPill(state) {
+  switch (state) {
+    case "in_use":
+      return "ok";
+    case "ready":
+      return "ok";
+    default:
+      return "neutral";
+  }
+}
+
+const GS_FALLBACK_KEYS = [
+  "MODEL_FALLBACKS",
+  "MODEL_MYTHOS_FALLBACKS",
+  "MODEL_FABLE_FALLBACKS",
+  "MODEL_OPUS_FALLBACKS",
+  "MODEL_SONNET_FALLBACKS",
+  "MODEL_HAIKU_FALLBACKS",
+  "MODEL_VISION_FALLBACKS",
+  "MODEL_IMAGE_FALLBACKS",
+  "MODEL_TTS_FALLBACKS",
+  "MODEL_ASR_FALLBACKS",
+  "MODEL_VIDEO_FALLBACKS",
+];
+
+const GS_REASONING_KEYS = [
+  "REASONING_POLICY",
+  "REASONING_MYTHOS",
+  "REASONING_FABLE",
+  "REASONING_OPUS",
+  "REASONING_SONNET",
+  "REASONING_HAIKU",
+];
+
+/* Status functions: a snapshot in, one chip out. Pure -- no request, no read
+   of the DOM -- so the page can be re-rendered at any time and two renders of
+   the same data always agree. */
+const GET_STARTED_STATUS = {
+  fallbackChains(snap) {
+    const chains = GS_FALLBACK_KEYS.filter(
+      (key) => gsChainIds(gsValue(snap, key)).length,
+    );
+    if (!chains.length) return { state: "not_set_up", text: "Not set up" };
+    return {
+      state: "in_use",
+      text: `In use · ${chains.length} ${chains.length === 1 ? "chain" : "chains"}`,
+    };
+  },
+  tiersPerAgent(snap) {
+    const tiers = snap.harnessTiers;
+    if (!tiers || !tiers.harnesses) {
+      return { state: "not_checked", text: "Not checked here" };
+    }
+    const custom = Object.values(tiers.harnesses).filter((perTier) =>
+      Object.values(perTier || {}).some((entry) => entry && entry.override),
+    );
+    if (!custom.length) {
+      return { state: "ready", text: "Following the global tiers" };
+    }
+    return {
+      state: "in_use",
+      text: `Custom for ${custom.length} ${custom.length === 1 ? "agent" : "agents"}`,
+    };
+  },
+  reasoning(snap) {
+    const pinned = GS_REASONING_KEYS.filter(
+      (key) =>
+        gsValue(snap, key).trim() !== "" &&
+        gsValue(snap, key).trim() !== gsDefaultOf(snap, key).trim(),
+    );
+    if (!pinned.length) return { state: "ready", text: "Default" };
+    return {
+      state: "in_use",
+      text: `Set for ${pinned.length} ${pinned.length === 1 ? "tier" : "tiers"}`,
+    };
+  },
+  webSearch(snap) {
+    if (gsValue(snap, "ENABLE_WEB_SERVER_TOOLS").trim() !== "" && !gsIsOn(snap, "ENABLE_WEB_SERVER_TOOLS")) {
+      return { state: "not_set_up", text: "Off" };
+    }
+    const chain = gsChainIds(gsValue(snap, "WEB_SEARCH_CHAIN"));
+    if (chain.length) {
+      const labels = chain.slice(0, 2).map((id) => gsWebSearchLabel(snap, id));
+      const more = chain.length > 2 ? ` +${chain.length - 2}` : "";
+      return { state: "in_use", text: `Chain: ${labels.join(" → ")}${more}` };
+    }
+    const active = gsValue(snap, "WEB_SEARCH_PROVIDER").trim() || "auto";
+    if (active === "disabled") return { state: "not_set_up", text: "Disabled" };
+    if (active === "off") {
+      return { state: "ready", text: "Ready · legacy DuckDuckGo, no key" };
+    }
+    if (active !== "auto") {
+      const label = gsOptionLabel(snap, "WEB_SEARCH_PROVIDER", active);
+      return gsWebSearchServiceReady(snap, active)
+        ? { state: "ready", text: `Ready · ${label}` }
+        : { state: "not_set_up", text: `${label}: no key yet` };
+    }
+    const configured = gsWebSearchServices(snap).find(
+      (service) =>
+        service.id !== "ddgs" && service.configured && !snap.manualOnly.has(service.id),
+    );
+    if (configured) return { state: "ready", text: `Ready · ${configured.label}` };
+    return { state: "ready", text: "Ready · DuckDuckGo, no key" };
+  },
+  images(snap) {
+    const vision = gsValue(snap, "MODEL_VISION").trim();
+    if (!vision || vision.toLowerCase() === "none") {
+      return {
+        state: "not_set_up",
+        text: "No vision adapter",
+        detail: "A model that cannot read an image is asked to anyway, which is where it fails.",
+      };
+    }
+    const mode = gsValue(snap, "VISION_ADAPTER_MODE").trim() || gsDefaultOf(snap, "VISION_ADAPTER_MODE");
+    return {
+      state: "in_use",
+      text: `Vision adapter: ${gsShortModel(vision)}`,
+      detail: `Mode: ${gsOptionLabel(snap, "VISION_ADAPTER_MODE", mode)}`,
+    };
+  },
+  mediaTools(snap) {
+    const rails = ["MODEL_IMAGE", "MODEL_TTS", "MODEL_ASR", "MODEL_VIDEO"].filter(
+      (key) => gsValue(snap, key).trim() !== "",
+    );
+    const agents = gsChainIds(gsValue(snap, "MCP_MEDIA_APPS")).length;
+    return {
+      state: rails.length ? "in_use" : "not_set_up",
+      text: `${rails.length} of 4 rails`,
+      detail: agents
+        ? `Tools in ${agents} ${agents === 1 ? "agent" : "agents"}`
+        : "No agent has the media server yet",
+    };
+  },
+  analyticsCost(snap) {
+    const log = snap.requestLog || {};
+    if (log.enabled === false) return { state: "not_set_up", text: "Request log off" };
+    const total = Number(log.total) || 0;
+    if (!total) return { state: "not_set_up", text: "No requests yet" };
+    return {
+      state: "in_use",
+      text: `${formatAnalyticsNumber(total)} ${total === 1 ? "request" : "requests"} logged`,
+      detail: gsIsOn(snap, "COST_ESTIMATION_ENABLED") || gsValue(snap, "COST_ESTIMATION_ENABLED") === ""
+        ? "Cost estimates on"
+        : "Cost estimates off",
+    };
+  },
+  severalKeys(snap) {
+    const pooled = snap.providerStatus.filter(
+      (provider) => Number(provider.key_count) >= 2,
+    );
+    if (!pooled.length) return { state: "not_set_up", text: "One key each" };
+    return {
+      state: "in_use",
+      text: `${pooled.length} ${pooled.length === 1 ? "provider" : "providers"} with 2+ keys`,
+    };
+  },
+  proxying() {
+    // The Proxying page is not loaded until it is opened, and this page asks
+    // for nothing of its own (spec section 5.4).
+    return { state: "not_checked", text: "Open Proxying to see" };
+  },
+};
+
+/** The Web Search services the payload names, with whether each can serve.
+ *
+ * The same rule the Web Search page itself applies (`webSearchProviders`): a
+ * keyed service needs its key, SearXNG needs its base URL, and a service with
+ * no credential at all (DuckDuckGo) is always available.
+ */
+function gsWebSearchServices(snap) {
+  const field = gsFieldOf(snap, "WEB_SEARCH_PROVIDER");
+  if (!field) return [];
+  const credentials = Array.from((snap.fields || new Map()).values()).filter(
+    (candidate) => candidate.section === "websearch" && candidate.secret,
+  );
+  return (field.options || [])
+    .filter((option) => !["auto", "off", "disabled"].includes(option.value))
+    .map((option) => {
+      const credential = credentials.find(
+        (candidate) => candidate.label === `${option.label} API Key`,
+      );
+      const baseUrl =
+        option.value === "searxng" ? gsFieldOf(snap, "SEARXNG_BASE_URL") : null;
+      return {
+        id: option.value,
+        label: option.label,
+        configured: credential
+          ? Boolean(credential.configured)
+          : baseUrl
+            ? Boolean(baseUrl.configured)
+            : true,
+      };
+    });
+}
+
+function gsWebSearchServiceReady(snap, id) {
+  if (id === "ddgs" || id === "legacy") return true;
+  const service = gsWebSearchServices(snap).find((candidate) => candidate.id === id);
+  return service ? service.configured : true;
+}
+
+function gsWebSearchLabel(snap, id) {
+  if (id === "ddgs") return "DuckDuckGo";
+  if (id === "legacy") return "Legacy DuckDuckGo";
+  const service = gsWebSearchServices(snap).find((candidate) => candidate.id === id);
+  return service ? service.label : id;
+}
+
+/* ------------------------------------------------- Get Started: rendering */
+
+function getStartedFeatureGroup(group) {
+  return GET_STARTED_FEATURES.filter((entry) => entry.group === group);
+}
+
+function getStartedIsHidden(entry) {
+  return (getStartedSnapshot().skipped || []).includes(entry.id);
+}
+
+function getStartedVisible(group) {
+  return getStartedFeatureGroup(group).filter((entry) => !getStartedIsHidden(entry));
+}
+
+function getStartedHiddenCount() {
+  return (getStartedSnapshot().skipped || []).length;
+}
+
+/** "Your main features": one card per feature, status chips, no progress bar. */
+function renderGetStartedFeatureGrid() {
+  const host = byId("getStartedFeatures");
+  if (!host) return;
+  const snap = getStartedSnapshot();
+  host.textContent = "";
+
+  const heading = document.createElement("div");
+  heading.className = "get-started-section-head";
+  const title = document.createElement("h3");
+  title.className = "get-started-section-title";
+  title.textContent = "Your main features";
+  const note = document.createElement("span");
+  note.className = "get-started-section-note";
+  note.textContent = "optional · nothing to tick";
+  heading.append(title, note);
+  host.appendChild(heading);
+
+  const grid = document.createElement("div");
+  grid.className = "get-started-card-grid";
+  getStartedVisible("main").forEach((entry) => {
+    grid.appendChild(renderGetStartedFeatureCard(entry, snap));
+  });
+  host.appendChild(grid);
+  if (!grid.children.length) {
+    const none = document.createElement("p");
+    none.className = "field-description";
+    none.textContent = "Every card here is hidden — Show hidden brings them back.";
+    host.appendChild(none);
+  }
+}
+
+function renderGetStartedFeatureCard(entry, snap) {
+  const card = document.createElement("article");
+  card.className = "get-started-card";
+  card.dataset.getStartedCard = entry.id;
+
+  const title = document.createElement("h4");
+  title.className = "get-started-card-title";
+  title.textContent = entry.title;
+  card.appendChild(title);
+
+  const status = entry.status && GET_STARTED_STATUS[entry.status]
+    ? GET_STARTED_STATUS[entry.status](snap)
+    : null;
+  if (status) {
+    const pill = document.createElement("span");
+    pill.className = `status-pill ${gsStatusPill(status.state)}`;
+    pill.textContent = status.text;
+    pill.dataset.getStartedState = status.state;
+    card.appendChild(pill);
+    if (status.detail) {
+      const detail = document.createElement("p");
+      detail.className = "get-started-card-detail";
+      detail.textContent = status.detail;
+      card.appendChild(detail);
+    }
+  }
+
+  const line = document.createElement("p");
+  line.className = "get-started-card-line";
+  line.textContent = entry.line;
+  card.appendChild(line);
+
+  // A step that used to be a row of its own keeps its instructions here, in
+  // the card it is about, so nothing it taught was removed with its row.
+  const step = getStartedStepForCard(snap, entry.id);
+  if (step && Array.isArray(step.instructions) && step.instructions.length) {
+    card.appendChild(getStartedStepNotes(step));
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "get-started-card-actions";
+  (entry.opens || []).forEach((target) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button get-started-open";
+    button.dataset.getStartedOpen = openTargetKey(target);
+    button.textContent = getStartedOpenLabel(target);
+    button.addEventListener("click", () => openGetStartedTarget(target));
+    actions.appendChild(button);
+  });
+  (entry.guide || []).forEach((purpose) => {
+    actions.appendChild(getStartedGuideLink(purpose));
+  });
+  card.appendChild(actions);
+
+  card.appendChild(getStartedHideButton(entry));
+  return card;
+}
+
+/** A step's instructions and Guide links, folded, for a card that inherited it. */
+function getStartedStepNotes(step) {
+  const details = document.createElement("details");
+  details.className = "get-started-card-steps";
+  details.dataset.getStartedStep = step.id;
+  const summary = document.createElement("summary");
+  summary.textContent = "How to do it";
+  details.appendChild(summary);
+  const label = document.createElement("p");
+  label.className = "get-started-card-steps-label";
+  label.textContent = step.label;
+  details.appendChild(label);
+  const list = document.createElement("ol");
+  list.className = "get-started-step-instructions";
+  (step.instructions || []).forEach((instruction) => {
+    const item = document.createElement("li");
+    item.textContent = instruction;
+    list.appendChild(item);
+  });
+  details.appendChild(list);
+  const guides = document.createElement("p");
+  guides.className = "get-started-step-guides";
+  (step.guide_anchors || []).forEach((anchor) => {
+    const purpose = Object.keys(GUIDE_ANCHORS).find(
+      (key) => GUIDE_ANCHORS[key] === anchor,
+    );
+    if (purpose) guides.appendChild(getStartedGuideLink(purpose));
+  });
+  if (guides.children.length) details.appendChild(guides);
+  return details;
+}
+
+function getStartedViewLabel(viewId) {
+  const view = VIEW_GROUPS.find((candidate) => candidate.id === viewId);
+  return view ? view.label : viewId;
+}
+
+/** A door's words: "Open Model Config → Prompt cache lifetime".
+ *
+ * 7.122.0 (the user's 2026-10-31 feedback): every row names where its button
+ * goes, so the list reads as doors rather than decoration. `label` on a target
+ * is the HINT -- the card, section or control it lands on -- and the page
+ * comes from VIEW_GROUPS, so the two can never disagree. */
+function getStartedOpenLabel(target) {
+  const where = getStartedViewLabel(target.view);
+  const hint = String(target.label || "").trim();
+  if (!hint || hint === "Open" || hint === where) return `Open ${where}`;
+  const named = hint.startsWith(`${where} → `) ? hint : `${where} → ${hint}`;
+  return `Open ${named}`;
+}
+
+/** The payload step that now lives inside one card or row, or null. */
+function getStartedStepForCard(snap, cardId) {
+  const stepId = Object.keys(GET_STARTED_STEP_HOMES).find(
+    (id) => GET_STARTED_STEP_HOMES[id] === cardId,
+  );
+  return stepId ? snap.steps[stepId] || null : null;
+}
+
+/** A stable, contract-checkable name for one open target. */
+function openTargetKey(target) {
+  const kind = ["key", "section", "id", "doc", "providerQuery", "agentQuery", "webSearchQuery"].find(
+    (name) => target[name] !== undefined,
+  );
+  return kind ? `${target.view}:${kind}:${target[kind]}` : target.view;
+}
+
+/** Follow one declared open target, resolving the two that depend on state. */
+function openGetStartedTarget(target) {
+  if (!target) return;
+  // InferHub's page exists only while a marketplace provider has a key; the
+  // sidebar hides it otherwise, so the row goes to Providers instead.
+  if (target.view === MARKETPLACE_VIEW_ID && !marketplaceKeyedViews().length) {
+    goTo({ view: "providers", providerQuery: "inferhub" });
+    return;
+  }
+  goTo(target);
+}
+
+/** "Not for me": hide an optional card, remembered in MCC's config folder. */
+function getStartedHideButton(entry) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "get-started-hide";
+  button.dataset.getStartedHide = entry.id;
+  button.title = "Hide this card; Show hidden puts it back";
+  button.textContent = "Not for me";
+  button.addEventListener("click", () => hideGetStartedCard(entry.id));
+  return button;
+}
+
+function hideGetStartedCard(id) {
+  const current = getStartedSnapshot().skipped || [];
+  if (current.includes(id)) return;
+  updateOnboarding({ skipped: [...current, id] }).catch((error) =>
+    showMessage(error.message, "error"),
+  );
+}
+
+function showHiddenGetStartedCards() {
+  updateOnboarding({ skipped: [] }).catch((error) =>
+    showMessage(error.message, "error"),
+  );
+}
+
+/** "More things MCC can do": one collapsed, filterable list. */
+function renderGetStartedMore() {
+  const host = byId("getStartedMore");
+  if (!host) return;
+  const snap = getStartedSnapshot();
+  const rows = getStartedVisible("more");
+  host.textContent = "";
+  const panel = getStartedDisclosure({
+    key: "more",
+    title: `More things MCC can do (${getStartedFeatureGroup("more").length})`,
+    note: "each row opens its page, on the card it names",
+  });
+  host.appendChild(panel.element);
+
+  const filterLabel = document.createElement("label");
+  filterLabel.className = "get-started-filter";
+  const filterText = document.createElement("span");
+  filterText.textContent = "Find a feature";
+  filterLabel.appendChild(filterText);
+  const input = document.createElement("input");
+  input.type = "search";
+  input.id = "getStartedFilter";
+  input.autocomplete = "off";
+  input.placeholder = "title or what it does…";
+  input.value = state.getStartedQuery || "";
+  filterLabel.appendChild(input);
+  const count = document.createElement("span");
+  count.className = "get-started-filter-count";
+  count.id = "getStartedFilterCount";
+  filterLabel.appendChild(count);
+  panel.body.appendChild(filterLabel);
+
+  const list = document.createElement("ul");
+  list.className = "get-started-more-list";
+  panel.body.appendChild(list);
+
+  const empty = document.createElement("p");
+  empty.className = "field-description get-started-more-empty";
+  empty.id = "getStartedFilterEmpty";
+  empty.hidden = true;
+  panel.body.appendChild(empty);
+
+  const paint = () => {
+    const query = (state.getStartedQuery || "").trim().toLowerCase();
+    list.textContent = "";
+    let shown = 0;
+    rows.forEach((entry) => {
+      // Titles and one-liners only -- never the whole card text (the lesson
+      // of the Web Search find box, U6).
+      const haystack = `${entry.title} ${entry.line}`.toLowerCase();
+      if (query && !haystack.includes(query)) return;
+      shown += 1;
+      list.appendChild(renderGetStartedMoreRow(entry, snap));
+    });
+    count.textContent = `${shown} of ${rows.length}`;
+    empty.hidden = shown !== 0;
+    empty.textContent = shown ? "" : `Nothing matches “${state.getStartedQuery.trim()}”.`;
+  };
+  input.addEventListener("input", () => {
+    state.getStartedQuery = input.value;
+    paint();
+  });
+  paint();
+}
+
+function renderGetStartedMoreRow(entry, snap) {
+  const item = document.createElement("li");
+  item.className = "get-started-more-row";
+  item.dataset.getStartedFeature = entry.id;
+
+  const main = document.createElement("div");
+  main.className = "get-started-more-main";
+  const area = document.createElement("span");
+  area.className = "get-started-more-area";
+  area.textContent = entry.area || "";
+  const title = document.createElement("strong");
+  title.textContent = entry.title;
+  const line = document.createElement("p");
+  line.className = "get-started-more-line";
+  line.textContent = entry.line;
+  main.append(area, title, line);
+
+  // The messaging step's own done state, shown on the row that took its place.
+  const step = getStartedStepForCard(snap, entry.id);
+  if (step) {
+    const state_ = document.createElement("span");
+    state_.className = `status-pill ${step.done ? "ok" : "neutral"}`;
+    state_.textContent = step.done ? "Set up" : "Not set up";
+    main.appendChild(state_);
+  }
+  item.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "get-started-more-actions";
+  (entry.opens || []).forEach((target) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button get-started-open";
+    button.dataset.getStartedOpen = openTargetKey(target);
+    button.textContent = getStartedOpenLabel(target);
+    button.addEventListener("click", () => openGetStartedTarget(target));
+    actions.appendChild(button);
+  });
+  (entry.guide || []).forEach((purpose) => {
+    actions.appendChild(getStartedGuideLink(purpose));
+  });
+  actions.appendChild(getStartedHideButton(entry));
+  item.appendChild(actions);
+  return item;
+}
+
+/** One disclosure: a button + a body, open state kept for this page's life. */
+function getStartedDisclosure({ key, title, note, className }) {
+  const wrapper = document.createElement("div");
+  wrapper.className = `get-started-disclosure${className ? ` ${className}` : ""}`;
+  wrapper.dataset.getStartedDisclosure = key;
+  const open = Boolean(state.getStartedOpen[key]);
+
+  const head = document.createElement("div");
+  head.className = "get-started-disclosure-head";
+  head.setAttribute("role", "button");
+  head.tabIndex = 0;
+  head.setAttribute("aria-expanded", open ? "true" : "false");
+  const chevron = document.createElement("span");
+  chevron.className = "get-started-disclosure-chevron";
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.textContent = open ? "▾" : "▸";
+  const label = document.createElement("strong");
+  label.textContent = title;
+  head.append(chevron, label);
+  if (note) {
+    const aside = document.createElement("span");
+    aside.className = "get-started-section-note";
+    aside.textContent = note;
+    head.appendChild(aside);
+  }
+  const body = document.createElement("div");
+  body.className = "get-started-disclosure-body";
+  body.hidden = !open;
+
+  const setOpen = (next) => {
+    state.getStartedOpen[key] = next;
+    body.hidden = !next;
+    head.setAttribute("aria-expanded", next ? "true" : "false");
+    chevron.textContent = next ? "▾" : "▸";
+  };
+  const toggle = () => setOpen(!state.getStartedOpen[key]);
+  head.addEventListener("click", toggle);
+  head.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      toggle();
+    }
+  });
+
+  wrapper.append(head, body);
+  return { element: wrapper, head, body, setOpen };
+}
+
+/** The raw-log switches, and how many are on right now (spec section 5.6). */
+const GS_RAW_LOG_KEYS = [
+  "LOG_RAW_API_PAYLOADS",
+  "LOG_RAW_SSE_EVENTS",
+  "LOG_API_ERROR_TRACEBACKS",
+  "LOG_RAW_MESSAGING_CONTENT",
+  "LOG_RAW_CLI_DIAGNOSTICS",
+  "LOG_MESSAGING_ERROR_DETAILS",
+];
+
+function gsRawLogsOn(snap) {
+  return GS_RAW_LOG_KEYS.filter((key) => gsIsOn(snap, key));
+}
+
+/** "Optional: tune limits, debug with raw logs, test a setup" — collapsed. */
+function renderGetStartedAdvanced() {
+  const host = byId("getStartedAdvanced");
+  if (!host) return;
+  const snap = getStartedSnapshot();
+  host.textContent = "";
+
+  const panel = getStartedDisclosure({
+    key: "advanced",
+    title: "Optional: tune limits, debug with raw logs, test a setup",
+    note: "collapsed",
+    className: "get-started-advanced",
+  });
+  host.appendChild(panel.element);
+
+  // The one live warning on this page: raw logging writes prompts to disk
+  // while it is on. Shown only when a switch is really on, and the link goes
+  // to the switch that is on so turning it off is one click. It sits beside
+  // the collapsed header (a sibling, never inside it: a button inside an
+  // element that is itself a button is a trap for a keyboard).
+  const rawOn = gsRawLogsOn(snap);
+  if (rawOn.length) {
+    const warning = document.createElement("p");
+    warning.className = "get-started-warning";
+    warning.id = "getStartedRawWarning";
+    warning.dataset.getStartedRawOn = String(rawOn.length);
+    const mark = document.createElement("span");
+    mark.setAttribute("aria-hidden", "true");
+    mark.textContent = "⚠ ";
+    warning.appendChild(mark);
+    warning.append(
+      document.createTextNode(
+        `Raw logs are ON (${rawOn.length}) — they hold prompt text, answers and anything pasted, unmasked. `,
+      ),
+    );
+    const off = document.createElement("button");
+    off.type = "button";
+    off.className = "link-button";
+    off.textContent = "Switch them off";
+    off.addEventListener("click", (event) => {
+      event.stopPropagation();
+      goTo({ view: "limits", key: rawOn[0] });
+    });
+    warning.appendChild(off);
+    panel.element.insertBefore(warning, panel.body);
+  }
+
+  const groups = [
+    {
+      key: "limits",
+      title: "Limits & Resilience",
+      note: "what each card decides, and its value now",
+    },
+    {
+      key: "raw",
+      title: "Raw logs, for debugging",
+      note: "what each switch writes, and its value now",
+    },
+    {
+      key: "testing",
+      title: "Test a setup",
+      note: "the checks on other pages",
+    },
+  ];
+  groups.forEach((group) => {
+    const rows = getStartedVisible("advanced").filter(
+      (entry) => entry.area === group.key,
+    );
+    if (!rows.length) return;
+    const sub = getStartedDisclosure({
+      key: group.key,
+      title: group.title,
+      note: group.note,
+      className: "get-started-advanced-group",
+    });
+    const list = document.createElement("ul");
+    list.className = "get-started-advanced-list";
+    rows.forEach((entry) => list.appendChild(renderGetStartedAdvancedRow(entry, snap)));
+    sub.body.appendChild(list);
+    panel.body.appendChild(sub.element);
+  });
+}
+
+function renderGetStartedAdvancedRow(entry, snap) {
+  const item = document.createElement("li");
+  item.className = "get-started-advanced-row";
+  item.dataset.getStartedFeature = entry.id;
+
+  const main = document.createElement("div");
+  main.className = "get-started-advanced-main";
+  const title = document.createElement("strong");
+  title.textContent = entry.title;
+  const line = document.createElement("p");
+  line.className = "get-started-advanced-line";
+  line.textContent = entry.line;
+  main.append(title, line);
+
+  // The current value, read from the payload -- never a value MCC suggests.
+  (entry.values || []).forEach((key) => {
+    const chip = document.createElement("span");
+    chip.className = "get-started-value";
+    chip.dataset.getStartedValue = key;
+    const field = gsFieldOf(snap, key);
+    const current = field ? String(field.value ?? "") : "";
+    const fallback = field ? String(field.default ?? "") : "";
+    let text = current;
+    if (current === "") {
+      text = fallback === "" ? "not set" : `Default (${gsValueText(snap, key, fallback)})`;
+    } else {
+      text = gsValueText(snap, key, current);
+    }
+    chip.textContent = `${key}: ${text}`;
+    if (fallback !== "") chip.title = `default: ${gsValueText(snap, key, fallback)}`;
+    main.appendChild(chip);
+  });
+  item.appendChild(main);
+
+  const actions = document.createElement("div");
+  actions.className = "get-started-more-actions";
+  (entry.opens || []).forEach((target) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button get-started-open";
+    button.dataset.getStartedOpen = openTargetKey(target);
+    button.textContent = getStartedOpenLabel(target);
+    button.addEventListener("click", () => openGetStartedTarget(target));
+    actions.appendChild(button);
+  });
+  (entry.guide || []).forEach((purpose) => {
+    actions.appendChild(getStartedGuideLink(purpose));
+  });
+  // Optional like every other row (decision 5): "Not for me" hides it, and
+  // "Show hidden" brings it back -- through the server's list, never locally.
+  actions.appendChild(getStartedHideButton(entry));
+  item.appendChild(actions);
+  return item;
+}
+
+/** A field value as a reader should see it: an option's label, On/Off, text. */
+function gsValueText(snap, key, value) {
+  const field = gsFieldOf(snap, key);
+  if (!field) return value;
+  // Read through a local so this reads the same shape `renderField` does
+  // without adding a second site for the control builder's own branch.
+  const type = String(field.type || "");
+  if (type === "boolean") {
+    return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase())
+      ? "On"
+      : "Off";
+  }
+  if (Array.isArray(field.options) && field.options.length) {
+    return gsOptionLabel(snap, key, value);
+  }
+  return String(value);
+}
+
+/** The page's foot: what a Dismiss did (with Undo), Show hidden, Dismiss.
+ *
+ * The status half is rebuilt; the Dismiss button is the one declared in the
+ * markup and is only repainted, because this page re-renders after every visit
+ * and every save and the button must survive all of them. */
+function renderGetStartedFooter(onboarding) {
+  const status = byId("getStartedFooterStatus");
+  if (!status) return;
+  status.textContent = "";
+  const hidden = getStartedHiddenCount();
+
+  const message = document.createElement("p");
+  message.className = "get-started-footer-message";
+  message.id = "getStartedMessage";
+  message.setAttribute("role", "status");
+  message.setAttribute("aria-live", "polite");
+  message.hidden = !state.getStartedMessage;
+  message.textContent = state.getStartedMessage || "";
+  status.appendChild(message);
+
+  if (hidden > 0) {
+    const show = document.createElement("button");
+    show.type = "button";
+    show.className = "secondary-button";
+    show.id = "getStartedShowHidden";
+    show.textContent = `Show hidden (${hidden})`;
+    show.addEventListener("click", () => showHiddenGetStartedCards());
+    status.appendChild(show);
+  }
+
+  const dismiss = byId("getStartedDismissButton");
+  if (!dismiss) return;
+  dismiss.textContent = onboarding.dismissed ? "Undo dismiss" : "Don't open this on start";
+  dismiss.dataset.getStartedDismissed = onboarding.dismissed ? "true" : "false";
 }
 
 /* ------------------------------------------------------- model routing ---
@@ -23995,10 +26078,18 @@ byId("exportPeriod").addEventListener("change", () => {
   byId("exportCustomRange").hidden = byId("exportPeriod").value !== "custom";
 });
 
+// 7.122.0 (decision 5): Dismiss has an undo. The button becomes "Undo dismiss"
+// once the page is dismissed, and the sentence beside it says what changed --
+// a one-way "Checklist dismissed" dead button was the old behaviour.
 byId("getStartedDismissButton").addEventListener("click", () => {
-  updateOnboarding({ dismissed: true }).catch((error) =>
-    showMessage(error.message, "error"),
-  );
+  const dismissed = Boolean(state.onboarding && state.onboarding.dismissed);
+  state.getStartedMessage = dismissed
+    ? ""
+    : "Get Started will not open by itself on the next start. Undo brings it back.";
+  updateOnboarding({ dismissed: !dismissed }).catch((error) => {
+    state.getStartedMessage = "";
+    showMessage(error.message, "error");
+  });
 });
 
 load().catch((error) => {

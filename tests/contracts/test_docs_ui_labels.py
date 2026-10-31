@@ -34,6 +34,10 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     "Validate",
     "Apply",
     "Manage keys",
+    # 7.122.0: Get Started's step 1 names the button that adds an endpoint the
+    # list does not carry, and the media step names the per-agent button.
+    "Add custom provider",
+    "Add MCP server",
     # Model Config: the guide and the README tell you to press these.
     "Add fallback",
     "Vision adapter",
