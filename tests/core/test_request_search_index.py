@@ -13,6 +13,8 @@ import hashlib
 import json
 import random
 import sqlite3
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -1209,6 +1211,138 @@ def test_clear_log_clears_the_index(tmp_path: Path) -> None:
     )
     assert index_rows(store, "after", local="all") == scan_rows(
         store, "after", local="all"
+    )
+
+
+# The three index writes, each forced the way W-TESTS-2 forced two of them
+# (2026-10-31): a step reads a body from the log, ``clear()`` runs, and the
+# step would then put that body's text into the index the clear emptied.
+# 7.122.4 orders the two (``RequestLogStore._search_clear_lock`` +
+# ``_index_write_allowed``), so the write is dropped instead.
+
+
+def test_a_clear_inside_the_chunk_step_leaves_its_prompt_out_of_the_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_convert_chunks_step``: the blob is read, then the index is written."""
+
+    path = tmp_path / "requests.db"
+    store = RequestLogStore(path, max_rows=0)
+    read = threading.Event()
+    released = threading.Event()
+    real_known = rs.SearchIndex.known
+
+    def known(self: rs.SearchIndex, conn: sqlite3.Connection, shas: Any) -> set[bytes]:
+        wanted = list(shas)
+        if (
+            sys._getframe(1).f_code.co_name == "_convert_chunks_step"
+            and wanted
+            and not read.is_set()
+        ):
+            read.set()
+            released.wait(30)
+        return real_known(self, conn, wanted)
+
+    monkeypatch.setattr(rs.SearchIndex, "known", known)
+    store.enqueue(_record(1, 1000.0, input_text="secret words here"))
+    assert read.wait(30), "the chunk step never read a blob to index"
+    store.clear()
+    released.set()
+    store.close()
+    assert _indexed_keys(store) == set(), (
+        "the prompt chunk step put a body clear() erased back into the index: "
+        f"{sorted(_indexed_keys(store))}"
+    )
+
+
+def test_a_clear_while_a_batch_is_indexed_keeps_its_bodies_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_search_index_written``: the batch committed, then its bodies are indexed."""
+
+    path = tmp_path / "requests.db"
+    store = RequestLogStore(path, max_rows=0)
+    read = threading.Event()
+    released = threading.Event()
+    real_units = RequestLogStore._search_blob_units
+
+    def units(
+        self: RequestLogStore,
+        sconn: sqlite3.Connection,
+        items: Any,
+        *,
+        canonical: bool,
+    ) -> Any:
+        if (
+            sys._getframe(1).f_code.co_name == "_search_index_written"
+            and not read.is_set()
+        ):
+            read.set()
+            released.wait(30)
+        return real_units(self, sconn, items, canonical=canonical)
+
+    monkeypatch.setattr(RequestLogStore, "_search_blob_units", units)
+    store.enqueue(_record(1, 1000.0, input_text="secret words here"))
+    assert read.wait(30), "the writer never indexed a batch"
+    store.clear()
+    released.set()
+    store.close()
+    assert _indexed_keys(store) == set(), (
+        "a batch clear() erased was indexed after it: "
+        f"{sorted(_indexed_keys(store) - _log_blobs(store))}"
+    )
+
+
+def test_a_clear_while_rows_are_indexed_keeps_their_bodies_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_search_index_rows`` (the catch-up): rows read, bodies read, then indexed."""
+
+    path = tmp_path / "requests.db"
+    _write(path, [_record(1, 1000.0, input_text="indexed at write time")])
+    # An older version knows nothing of the index file: the next start catches
+    # its body up through ``_search_index_rows``.
+    _write(
+        path,
+        [_record(2, 1001.0, input_text="written by an older version")],
+        search_index=False,
+    )
+    read = threading.Event()
+    released = threading.Event()
+    real_units = RequestLogStore._search_blob_units
+
+    def units(
+        self: RequestLogStore,
+        sconn: sqlite3.Connection,
+        items: Any,
+        *,
+        canonical: bool,
+    ) -> Any:
+        caller = sys._getframe(1).f_code.co_name
+        if caller in ("flush", "_search_index_rows") and items and not read.is_set():
+            read.set()
+            released.wait(30)
+        return real_units(self, sconn, items, canonical=canonical)
+
+    # Before the store starts: its writer thread catches the row up on its own.
+    monkeypatch.setattr(RequestLogStore, "_search_blob_units", units)
+    store = RequestLogStore(path, max_rows=0)
+    assert read.wait(30), "the catch-up never read a blob to index"
+    # ``clear()`` on its own thread: on this version it waits for the step's
+    # write (that is the ordering), so it cannot be called from the thread that
+    # releases the hold.
+    clearer = threading.Thread(target=store.clear, name="clear")
+    clearer.start()
+    # Long enough for a clear of a two-record log when nothing orders it; on
+    # this version it is still waiting, which is the point.
+    clearer.join(2)
+    released.set()
+    clearer.join(60)
+    assert not clearer.is_alive(), "clear() never returned"
+    store.close()
+    assert _indexed_keys(store) == set(), (
+        "the catch-up put a body clear() erased back into the index: "
+        f"{sorted(_indexed_keys(store))}"
     )
 
 

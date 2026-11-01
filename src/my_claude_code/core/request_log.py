@@ -3457,6 +3457,13 @@ class RequestLogStore:
         self._search_active = 0
         # New bodies indexed as they were written: blobs, seconds.
         self._search_written = [0, 0.0]
+        # Orders every index write against ``clear`` (7.122.4). A step that
+        # reads bodies before a Clear log must not put them into the index
+        # after it; see ``_index_write_allowed`` and ``clear``. Held by the
+        # writer from its generation check through the write's commit, and by
+        # ``clear`` across the index's own erase and the bump that follows it.
+        # Always taken before ``_search_lock``, never while holding it.
+        self._search_clear_lock = threading.Lock()
         # The prompt chunk store (7.93.0; see ``_CHUNKED_DICT_ID``). Every
         # thread reads chunked prompts through this, whether or not this
         # Python could keep the search index itself: reading chunks back needs
@@ -5449,6 +5456,7 @@ class RequestLogStore:
             if self._search_active:
                 return False
         self._search_check_cleared(conn)
+        epoch = search.generation
         started = time.perf_counter()
         read_end = started + _HISTORY_STEP_SECONDS * _CHUNKS_READ_SHARE
         state = self._load_history_state(conn)
@@ -5513,17 +5521,24 @@ class RequestLogStore:
         try:
             known = search.known(sconn, [item[5] for item in items])
             fresh = [item[6] for item in items if item[5] not in known]
-            # Always one durable commit of the index file before the log
-            # names a chunk: it puts on disk every chunk this step will name,
-            # including ones indexed a moment ago with ``synchronous=NORMAL``.
-            sconn.execute("PRAGMA synchronous=FULL")
-            try:
-                with sconn:
-                    if fresh:
-                        search.add(sconn, fresh)
-                    search.meta_set(sconn, "chunk_store_through", str(through))
-            finally:
-                sconn.execute("PRAGMA synchronous=NORMAL")
+            with self._search_clear_lock:
+                if not self._index_write_allowed(epoch):
+                    # A Clear log landed while this step read: the rows it
+                    # read are erased, so none of their text may go back into
+                    # the index. Nothing was written; the next step starts over
+                    # on the cleared log (``_search_check_cleared``).
+                    return False
+                # Always one durable commit of the index file before the log
+                # names a chunk: it puts on disk every chunk this step will name,
+                # including ones indexed a moment ago with ``synchronous=NORMAL``.
+                sconn.execute("PRAGMA synchronous=FULL")
+                try:
+                    with sconn:
+                        if fresh:
+                            search.add(sconn, fresh)
+                        search.meta_set(sconn, "chunk_store_through", str(through))
+                finally:
+                    sconn.execute("PRAGMA synchronous=NORMAL")
         except Exception as exc:  # the index failing leaves every row as it is
             with contextlib.suppress(sqlite3.Error):
                 sconn.rollback()
@@ -12166,6 +12181,23 @@ class RequestLogStore:
         self._chunks_tail_seen = 0
         self._search_adopt(conn, sconn)
 
+    def _index_write_allowed(self, epoch: int) -> bool:
+        """Whether an index write that read its bodies at ``epoch`` may still land.
+
+        ``epoch`` is ``self._search.generation`` as it was before the step read
+        the bodies it would index. Call it with ``_search_clear_lock`` held, and
+        keep the lock until the write has committed: ``clear`` bumps the
+        generation and erases the index under that same lock, so the two are
+        ordered -- either this write commits before that erase (and goes with
+        everything else the clear erases) or this check sees the bumped
+        generation and the write is dropped. Without it, a step that read a
+        body before a Clear log could put its text back into the emptied index
+        after the clear had erased it (7.122.4).
+        """
+
+        search = self._search
+        return search is not None and search.generation == epoch
+
     def _clear_search_index(self, *, keep_chunks: bool = False) -> None:
         """Erase the index's text with the log's (``clear``); any thread.
 
@@ -12236,14 +12268,21 @@ class RequestLogStore:
         indexed = 0
         try:
             self._search_check_cleared(conn)
+            epoch = search.generation
             blobs = self._search_blob_units(
                 sconn,
                 [(sha, packed) for sha, (packed, _kind) in sorted(stored.items())],
                 canonical=False,
             )
             if blobs:
-                with sconn:
-                    indexed, _chunks = search.add(sconn, blobs)
+                with self._search_clear_lock:
+                    if not self._index_write_allowed(epoch):
+                        # A Clear log landed after this batch read its bodies:
+                        # they are erased, and their text stays out of the
+                        # index the clear has already emptied (7.122.4).
+                        return
+                    with sconn:
+                        indexed, _chunks = search.add(sconn, blobs)
         except Exception as exc:  # the index never costs the writer a row
             with contextlib.suppress(sqlite3.Error):
                 sconn.rollback()
@@ -12300,12 +12339,18 @@ class RequestLogStore:
         sconn: sqlite3.Connection,
         rows: Sequence[tuple[int, str]],
         step_end: float,
+        epoch: int,
     ) -> tuple[int, int, int]:
         """Index the blobs ``rows`` (log rowid, sha) name, in their order, until ``step_end``.
 
-        Inside the caller's transaction on the index file. Returns how many
-        rows were dealt with (held, indexed or unreadable), the rowid of the
-        last of them, and how many blobs were indexed.
+        Inside the caller's transaction on the index file, and with
+        ``_search_clear_lock`` held from before ``rows`` was read, so
+        ``epoch`` is the index's generation those rows were read under (see
+        ``_index_write_allowed``). Returns how many rows were dealt with (held,
+        indexed or unreadable), the rowid of the last of them, and how many
+        blobs were indexed. A Clear log that landed after those rows were read
+        stops the walk at the last batch it did write (7.122.4), so the caller
+        never advances past a row that was not indexed.
         """
 
         search = self._search
@@ -12317,12 +12362,18 @@ class RequestLogStore:
         )
         dealt = 0
         last = 0
+        settled = 0
+        settled_last = 0
         indexed = 0
         pending: list[int] = []
 
-        def flush() -> int:
+        def flush() -> int | None:
+            """Index the pending blobs; None when a Clear log no longer allows it."""
+
             if not pending:
                 return 0
+            if not self._index_write_allowed(epoch):
+                return None
             marks = ", ".join("?" * len(pending))
             fetched = [
                 (str(sha), self._raw_payload(payload, dict_id))
@@ -12343,15 +12394,24 @@ class RequestLogStore:
             dealt += 1
             last = key
             if len(pending) >= _SEARCH_DECODE_BATCH:
-                indexed += flush()
+                added = flush()
+                if added is None:
+                    # A Clear log erased what these rows name: report the walk
+                    # only as far as it was written, so nothing it did not
+                    # index counts as dealt with (7.122.4).
+                    return settled, settled_last, indexed
+                settled, settled_last = dealt, last
+                indexed += added
                 # Between two batches: hand the interpreter to any other
                 # thread (the event loop above all), and end the step early
                 # for a request queued or a search started meanwhile.
                 time.sleep(0)
                 if time.monotonic() >= step_end or not self._search_may_go(step_end):
                     break
-        indexed += flush()
-        return dealt, last, indexed
+        added = flush()
+        if added is None:
+            return settled, settled_last, indexed
+        return dealt, last, indexed + added
 
     def _search_catchup(
         self, conn: sqlite3.Connection, sconn: sqlite3.Connection, deadline: float
@@ -12363,6 +12423,7 @@ class RequestLogStore:
             return True
         through = search.catchup_through(sconn) or 0
         while self._search_may_go(deadline):
+            epoch = search.generation
             rows = [
                 (int(row[0]), str(row[1]))
                 for row in conn.execute(
@@ -12375,13 +12436,18 @@ class RequestLogStore:
                 self._search_catchup_due = False
                 return True
             step_end = min(deadline, time.monotonic() + _SEARCH_STEP_SECONDS)
-            with sconn:
-                dealt, last, _indexed = self._search_index_rows(
-                    conn, sconn, rows, step_end
-                )
-                if dealt:
-                    through = last
-                    search.set_catchup_through(sconn, through)
+            with self._search_clear_lock:
+                if not self._index_write_allowed(epoch):
+                    # A Clear log landed while the rows were read: they name
+                    # bodies it erased, so nothing of theirs is indexed.
+                    return False
+                with sconn:
+                    dealt, last, _indexed = self._search_index_rows(
+                        conn, sconn, rows, step_end, epoch
+                    )
+                    if dealt:
+                        through = last
+                        search.set_catchup_through(sconn, through)
         return False
 
     def _search_sweep(
@@ -12484,6 +12550,7 @@ class RequestLogStore:
                 # Waits for the reader; the next idle tick looks again.
                 return
             cursor = int(state["cursor"])
+            epoch = search.generation
             rows = [
                 (int(row[0]), str(row[1]))
                 for row in conn.execute(
@@ -12493,25 +12560,30 @@ class RequestLogStore:
                 )
             ]
             step_end = min(deadline, time.monotonic() + _SEARCH_STEP_SECONDS)
-            with sconn:
-                if rows:
-                    dealt, last, indexed = self._search_index_rows(
-                        conn, sconn, rows, step_end
-                    )
-                    progress = {
-                        "cursor": last if dealt else cursor,
-                        "done": int(state.get("done") or 0) + dealt,
-                        "indexed": int(state.get("indexed") or 0) + indexed,
-                        "session_done": int(state.get("session_done") or 0) + dealt,
-                    }
-                else:
-                    progress = {
-                        "cursor": 0,
-                        "state": "done",
-                        "finished_at": time.time(),
-                    }
-                state = self._merge_search_build(state, progress)
-                search.set_build_state(sconn, state)
+            with self._search_clear_lock:
+                if not self._index_write_allowed(epoch):
+                    # A Clear log landed while the rows were read: they name
+                    # bodies it erased, so nothing of theirs is indexed.
+                    return
+                with sconn:
+                    if rows:
+                        dealt, last, indexed = self._search_index_rows(
+                            conn, sconn, rows, step_end, epoch
+                        )
+                        progress = {
+                            "cursor": last if dealt else cursor,
+                            "done": int(state.get("done") or 0) + dealt,
+                            "indexed": int(state.get("indexed") or 0) + indexed,
+                            "session_done": int(state.get("session_done") or 0) + dealt,
+                        }
+                    else:
+                        progress = {
+                            "cursor": 0,
+                            "state": "done",
+                            "finished_at": time.time(),
+                        }
+                    state = self._merge_search_build(state, progress)
+                    search.set_build_state(sconn, state)
             if state.get("state") == "done":
                 # The build is the index's one long write: hand its WAL back.
                 with contextlib.suppress(sqlite3.Error):
@@ -13937,8 +14009,18 @@ class RequestLogStore:
             removed = cursor.rowcount
         # After the erase has committed: rowids start again from 1, so rows a
         # search matched before it must never stand for rows written after.
-        self._clear_generation += 1
-        self._clear_search_index()
+        # The bump and the index's own erase are one step under
+        # ``_search_clear_lock`` (7.122.4): a step that read bodies before this
+        # clear and would index them after it either gets its write in before
+        # this erase (and goes with everything else erased here) or finds the
+        # generation moved and drops what it read -- so "Clear log" cannot
+        # leave erased text inside the index. Every index row goes with it,
+        # which is also the answer to rows an older version orphaned: nothing
+        # whose log row is gone survives this second erase, and the sweep
+        # (``_search_sweep``) remains the one for a prune.
+        with self._search_clear_lock:
+            self._clear_generation += 1
+            self._clear_search_index()
         if stored_media:
             delete_media_files(media_root(self._db_path), stored_media)
         return removed
