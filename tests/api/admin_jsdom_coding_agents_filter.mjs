@@ -76,7 +76,16 @@ export function prepareCodingAgentsFilterScenario({ window, ROUTES }) {
     const view = doc.querySelector('#view-coding_agents');
     if (!view) return null;
     const children = Array.from(view.children)
-      .filter((el) => el.id !== "codingAgentsFilterBar")
+      // 8.1.0: the per-page section navigator is a second child this view
+      // gained, for the same reason the filter bar is excluded — it is a
+      // later release's addition, and this comparison is about the cards the
+      // filter was added to. Its own footprint is counted by `viewChildCount`
+      // and proved by the design-system scenario.
+      .filter(
+        (el) =>
+          el.id !== "codingAgentsFilterBar" &&
+          !el.classList.contains("section-navigator"),
+      )
       // The static sections keep the line endings of the checkout that served
       // index.html; the baseline is committed once and read on Linux CI, so
       // it speaks one (LF) or every comparison would be a platform report.
@@ -180,11 +189,19 @@ export function prepareCodingAgentsFilterScenario({ window, ROUTES }) {
     out.dom = await stableCapture();
 
     // Where the box sits in the tab order: the first control on the page.
+    // 8.1.0: the per-page section navigator is a later release's addition and
+    // sits above the box by design; this check is about the box being first
+    // among the page's own content, so the strip is left out.
     const focusables = Array.from(
       doc.querySelector('#view-coding_agents').querySelectorAll(
         'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
       ),
-    ).filter((el) => !el.disabled && !el.hidden);
+    ).filter(
+      (el) =>
+        !el.disabled &&
+        !el.hidden &&
+        !el.closest(".section-navigator"),
+    );
     out.firstFocusableId = focusables.length ? focusables[0].id || focusables[0].className : null;
 
     /* ------------------------------------------------------------ a query */

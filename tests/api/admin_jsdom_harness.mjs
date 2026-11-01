@@ -18,7 +18,13 @@
  * failure of the page. So the second run refuses instead of producing
  * nonsense. Set MCC_JSDOM_ALLOW_CONCURRENT=1 if you genuinely want both.
  */
-import { readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM, VirtualConsole } from "jsdom";
@@ -85,6 +91,19 @@ process.on("exit", () => {
 
 const html = readFileSync(join(dir, "index.html"), "utf8");
 const script = readFileSync(join(dir, "admin.js"), "utf8");
+/* 8.1.0: the design registry is its own file, loaded before admin.js by
+   index.html, so the loader finds `ADMIN_DESIGNS` already declared. jsdom
+   runs scripts it is handed rather than fetching <script src>, so the harness
+   hands it over first. The two are concatenated into ONE eval rather than
+   evaluated separately: two classic <script> tags share one global scope, so
+   a top-level `const` in the first is visible to the second — and an
+   indirect `eval` does not reproduce that (its `let`/`const` declarations go
+   into an eval-private environment). A tree without the file (the BASE tree)
+   contributes nothing, which keeps the base-written DOM baseline comparable. */
+const designsScript = existsSync(join(dir, "designs.js"))
+  ? readFileSync(join(dir, "designs.js"), "utf8")
+  : "";
+const scriptSource = designsScript ? `${designsScript}\n${script}` : script;
 
 /* ------------------------------------------------------------------ payload
    Shaped like the real API, including the awkward cases: a provider that
@@ -4761,7 +4780,7 @@ window.fetch = async (url, options = {}) => {
 let scenario = null;
 if (process.env.MCC_JSDOM_SCENARIO === "pause_polls") {
   const { preparePausePollScenario } = await import("./admin_jsdom_pause_polls.mjs");
-  scenario = preparePausePollScenario({ window, html, script, ROUTES });
+  scenario = preparePausePollScenario({ window, html, script: scriptSource, ROUTES });
 }
 /* MCC_JSDOM_SCENARIO=search_page (7.91.2): the Requests page's half of the
    search stopgap -- a saved search restored but not run, the progress line,
@@ -4897,6 +4916,18 @@ if (process.env.MCC_JSDOM_SCENARIO === "get_started") {
   );
   scenario = prepareGetStartedScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=design_system (8.1.0): the design-system foundation --
+   the per-page section navigator on every page that has one, its buttons and
+   their landing targets, the folded topbar rails, the theme family x mode
+   resolution and the legacy migration, the Appearance card's storage layers,
+   and every view's DOM with the two new features taken out (the base-written
+   equality baseline; admin_jsdom_design_system.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "design_system") {
+  const { prepareDesignSystemScenario } = await import(
+    "./admin_jsdom_design_system.mjs"
+  );
+  scenario = prepareDesignSystemScenario({ window, ROUTES });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
@@ -4905,7 +4936,7 @@ window.addEventListener("unhandledrejection", (event) =>
 );
 
 try {
-  window.eval(script);
+  window.eval(scriptSource);
 } catch (error) {
   console.log(
     JSON.stringify({ fatal: `eval threw: ${error && error.stack}` }, null, 2),

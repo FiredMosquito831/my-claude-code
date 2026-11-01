@@ -674,6 +674,25 @@ def _bundled_image_names() -> frozenset[str]:
     return frozenset(p.name for p in directory.iterdir() if p.suffix == ".png")
 
 
+@lru_cache(maxsize=1)
+def _bundled_design_names() -> frozenset[str]:
+    """Every design stylesheet and shell module that actually shipped.
+
+    8.1.0. Read from the directory rather than from the registry, because a
+    registry row shipping without its file is a build error either way and a
+    directory listing cannot drift from what is on disk.
+    """
+
+    directory = Path(__file__).parent / "admin_static" / "designs"
+    if not directory.is_dir():
+        return frozenset()
+    return frozenset(
+        path.name
+        for path in directory.iterdir()
+        if path.is_file() and path.suffix in {".css", ".js"}
+    )
+
+
 def _asset_response(filename: str) -> FileResponse:
     path = STATIC_DIR / filename
     if not path.is_file():
@@ -690,9 +709,37 @@ async def admin_page(request: Request):
 @router.get("/admin/assets/{filename}", include_in_schema=False)
 async def admin_asset(filename: str, request: Request):
     require_loopback_admin(request)
-    if filename not in {"admin.css", "admin.js"}:
+    # 8.1.0: the shared token layer (themes.css, foundation.css) and the
+    # design registry (designs.js) ship beside the three originals. A design's
+    # own stylesheet is served from the same directory by
+    # `admin_design_asset`, which resolves it against the registry's declared
+    # rows rather than joining the request path onto a filesystem path.
+    if filename not in {
+        "admin.css",
+        "admin.js",
+        "themes.css",
+        "foundation.css",
+        "designs.js",
+    }:
         raise HTTPException(status_code=404, detail="Admin asset not found")
     return _asset_response(filename)
+
+
+@router.get("/admin/designs/{filename}", include_in_schema=False)
+async def admin_design_asset(filename: str, request: Request):
+    """Serve one design's own stylesheet or shell module.
+
+    Names are matched against the files actually shipped under
+    ``admin_static/designs``, never joined onto a path, so a crafted filename
+    cannot escape the directory. A design with no ``css``/``shell`` of its own
+    (``today``) has no file here, which is exactly what makes its render
+    byte-identical to the base tree's.
+    """
+
+    require_loopback_admin(request)
+    if filename not in _bundled_design_names():
+        raise HTTPException(status_code=404, detail="Design asset not found")
+    return _asset_response(f"designs/{filename}")
 
 
 @router.get("/admin/img/{filename}", include_in_schema=False)

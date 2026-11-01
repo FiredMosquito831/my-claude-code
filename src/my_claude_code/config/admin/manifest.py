@@ -4,6 +4,10 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from my_claude_code.config.constants import (
+    ADMIN_DENSITY_DEFAULT,
+    ADMIN_DESIGN_DEFAULT,
+    ADMIN_MODE_DEFAULT,
+    ADMIN_THEME_DEFAULT,
     PROMPT_CACHE_TTL_CLIENT,
     PROMPT_CACHE_TTL_INHERIT,
     PROMPT_CACHE_TTL_MAX_MINUTES,
@@ -281,6 +285,18 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "transcripts and video itself. The buttons on each agent card above "
         "write this list; nothing else reads it, and an empty list adds the "
         "server nowhere.",
+    ),
+    ConfigSectionSpec(
+        "appearance",
+        "Dashboard appearance",
+        "What this dashboard looks like: the design, the colour theme and its "
+        "light or dark mode, and how tightly the settings pages are packed. "
+        "These are the MACHINE defaults — what a browser opens on before "
+        "anybody has chosen for themselves. The dashboard also remembers a "
+        "per-browser choice, and that one always wins: a reader who has "
+        "picked their own theme keeps it whatever this says. Nothing here "
+        "touches a request, a provider or a model; the page reads these and "
+        "nothing else does.",
     ),
 )
 
@@ -1161,6 +1177,104 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         # provider client: an apply republishes the agents' config layers
         # without rebuilding a single provider.
         affects_providers=False,
+    ),
+    # ---- Dashboard appearance (8.1.0) ------------------------------------
+    # The four machine defaults behind the Appearance card. Each is a plain
+    # vocabulary value with no numeric bound to publish, so there is no
+    # `minimum`/`maximum` here: the bound is the option list, and the server
+    # refuses anything outside it at start and on apply.
+    ConfigFieldSpec(
+        "ADMIN_DESIGN",
+        "Dashboard design",
+        "appearance",
+        "select",
+        settings_attr="admin_design",
+        default=ADMIN_DESIGN_DEFAULT,
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec(
+                "today",
+                "Today — the current dashboard, every setting on its page",
+            ),
+        ),
+        description=(
+            "Which dashboard design a browser opens on before anybody has "
+            "chosen one. Today is the dashboard as it already is: one page at "
+            "a time, a grouped sidebar, every setting on the page that owns "
+            "it. Later releases add designs as more choices here, so the "
+            "value always names one exactly. A reader who picks a design in "
+            "the Appearance card keeps it whatever this says."
+        ),
+    ),
+    ConfigFieldSpec(
+        "ADMIN_THEME",
+        "Dashboard theme",
+        "appearance",
+        "select",
+        settings_attr="admin_theme",
+        default=ADMIN_THEME_DEFAULT,
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec("today", "Today"),
+            ConfigOptionSpec("midnight", "Midnight"),
+            ConfigOptionSpec("paper", "Paper"),
+            ConfigOptionSpec("hc", "High Contrast"),
+            ConfigOptionSpec("velvet", "Velvet"),
+            ConfigOptionSpec("navy", "Navy"),
+            ConfigOptionSpec("own", "The design's own palette"),
+        ),
+        description=(
+            "The colour family the dashboard draws in. Every family has both "
+            "a light and a dark form, so this names the colours only and "
+            "ADMIN_MODE decides which half of them a browser opens on. Velvet "
+            "is the default because it is the one the owner asked for; Today "
+            "reproduces the colours the dashboard shipped with. The design's "
+            "own palette is a choice only once a design that declares one is "
+            "installed, so with Today installed it falls back to Today's "
+            "colours."
+        ),
+    ),
+    ConfigFieldSpec(
+        "ADMIN_MODE",
+        "Dashboard light or dark",
+        "appearance",
+        "select",
+        settings_attr="admin_mode",
+        default=ADMIN_MODE_DEFAULT,
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec("dark", "Dark"),
+            ConfigOptionSpec("light", "Light"),
+        ),
+        description=(
+            "Which half of the chosen theme a browser opens on. Dark is the "
+            "default. Switching it never changes the theme and changing the "
+            "theme never changes it: the two are separate choices, because "
+            "every family is drawn twice. Nothing about a request, a model or "
+            "a provider is affected; this is the dashboard's own surface."
+        ),
+    ),
+    ConfigFieldSpec(
+        "ADMIN_DENSITY",
+        "Dashboard density",
+        "appearance",
+        "select",
+        settings_attr="admin_density",
+        default=ADMIN_DENSITY_DEFAULT,
+        affects_providers=False,
+        options=(
+            ConfigOptionSpec("design", "Whatever the design declares"),
+            ConfigOptionSpec("compact", "Compact"),
+            ConfigOptionSpec("comfortable", "Comfortable"),
+        ),
+        description=(
+            "How tightly the settings pages are packed. 'Whatever the design "
+            "declares' lets the installed design choose, which is what a "
+            "design's own author intended; Compact and Comfortable override "
+            "that in every design. Density is spacing and type size only: it "
+            "changes how many controls share a row on a wide screen, and no "
+            "setting is hidden by it at any density."
+        ),
     ),
     ConfigFieldSpec(
         "FALLBACK_SKIP_KINDS",

@@ -23,6 +23,13 @@ const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex")
 export function uxNormalise(html) {
   const swap = (text, from, to) => text.split(from).join(to);
   let dom = html;
+  // 8.1.0: the per-page section navigator is a later release's addition to
+  // every page with four or more named sections. It is removed on BOTH sides
+  // of every cross-release comparison -- the base tree never had one, so
+  // leaving it in would move twelve of fifteen views and say nothing about
+  // the page under it. What it looks like, where it sits and every button
+  // landing are proved by tests/api/test_admin_design_system_jsdom.py.
+  dom = dom.replace(/<nav class="section-navigator"[\s\S]*?<\/nav>/g, "");
   // U12: the provenance chip is normalised out on both sides. Its words and
   // its place both moved (it left the label for the meta row so "default
   // value" could not wrap a long label); the ux_pass scenario proves what it

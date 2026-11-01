@@ -107,6 +107,12 @@ export function prepareUxPassScenario({ window, ROUTES }) {
     };
 
     // ── U16: the Providers rail ──────────────────────────────────────────
+    // 8.1.0 moved this rail into the per-page section navigator. The rail's
+    // own anchors are dropped where the navigator already names the same
+    // target, so what this records is: the rail is still in the document and
+    // inside the strip, and the page's destinations are all still there —
+    // now carried by the navigator's buttons, which is what
+    // `providersNavigatorTargets` reads.
     const providersJump = el("providersJumpBar");
     out.providersJump = providersJump
       ? {
@@ -116,13 +122,30 @@ export function prepareUxPassScenario({ window, ROUTES }) {
           ),
         }
       : null;
+    const providersNav = view("providers")
+      ? view("providers").querySelector(":scope > .section-navigator")
+      : null;
+    out.providersNavigatorTargets = providersNav
+      ? Array.from(providersNav.querySelectorAll("button[data-section-target]")).map((b) =>
+          Boolean(doc.querySelector(b.dataset.sectionTarget)),
+        )
+      : [];
 
     // ── U15: the Proxying rail, and the chains before the sources ────────
     const proxyingView = view("proxying");
     const proxyingJump = el("proxyingJumpBar");
+    const proxyingNav = proxyingView
+      ? proxyingView.querySelector(":scope > .section-navigator")
+      : null;
     out.proxying = {
       jump: proxyingJump
         ? Array.from(proxyingJump.querySelectorAll("a")).map((a) => a.getAttribute("href"))
+        : null,
+      // U15's decision, read from the row that now carries it.
+      navigator: proxyingNav
+        ? Array.from(proxyingNav.querySelectorAll("button[data-section-target]")).map(
+            (b) => b.dataset.sectionTarget,
+          )
         : null,
       chainsBeforeSources: proxyingView
         ? orderOf("proxying", el("proxyingList")) < orderOf("proxying", el("proxyingSourcesSection"))

@@ -75,6 +75,16 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     :func:`tests.api.admin_jsdom_ux_views.uxNormalise`), so the three
     display-only changes this pass makes to every settings control cannot hide
     a real change on the pages they touch.
+
+    Since 8.1.0 a page with four or more named sections also carries the
+    per-page section navigator. It is normalised OUT on both sides
+    (``uxNormalise``), because the base tree predates it: leaving it in would
+    move twelve of fifteen views and say nothing about the page underneath.
+    8.1.0 proves the strip against its own base-written baseline in
+    ``tests/api/test_admin_design_system_jsdom.py``.
+
+    Get Started is declared separately: 8.1.0 puts the Appearance card there,
+    which is that release's own addition and is proved in the same file.
     """
 
     baseline = json.loads(UX_BASELINE.read_text(encoding="utf-8"))
@@ -87,7 +97,7 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     }
     assert set(base) == set(mine)
     moved = sorted(name for name, digest in base.items() if mine[name] != digest)
-    assert moved == sorted(UX_CHANGED_VIEWS)
+    assert moved == sorted(UX_CHANGED_VIEWS | {"get_started"})
 
 
 def test_ux_pass_the_unmoved_views_are_not_vacuous(ux_views) -> None:
@@ -152,21 +162,35 @@ def test_a_success_message_is_cleared_by_navigating(ux_pass) -> None:
 
 
 # ── U16 / U15: the rails ─────────────────────────────────────────────────────
+#
+# 8.1.0 folded these two rails into the per-page section navigator: the
+# `<nav>`s are re-parented into the strip, and a rail link whose target the
+# navigator already names is dropped so the row never says the same thing
+# twice. That is why the rail itself now reports ZERO links — the destinations
+# are all still reachable, one row, one name each. The navigator's own suite
+# (`test_admin_design_system_jsdom.py`) is where every destination, every
+# landing and the hash are proved; these two tests keep pinning what they
+# always did, against the row that now carries it.
 
 
-def test_the_providers_rail_points_at_real_headings(ux_pass) -> None:
+def test_the_providers_sections_are_all_reachable_from_one_row(ux_pass) -> None:
     rail = ux_pass["providersJump"]
     assert rail is not None
-    assert len(rail["links"]) == 6
-    assert all(rail["targets"])
+    # The rail's own anchors are all covered by the navigator's buttons now.
+    assert rail["links"] == []
+    # And the page's six destinations still resolve.
+    targets = ux_pass["providersNavigatorTargets"]
+    assert len(targets) == 6
+    assert all(targets)
 
 
 def test_the_proxying_page_puts_chains_before_sources(ux_pass) -> None:
     proxying = ux_pass["proxying"]
-    assert proxying["jump"] == [
+    # The navigator's own order carries U15's decision: chains first.
+    assert proxying["navigator"] == [
         "#proxyingList",
-        "#proxyingSourcesTitle",
-        "#proxyingFeedsTitle",
+        "#proxyingSourcesSection",
+        "#proxyingFeedSection",
     ]
     assert proxying["chainsBeforeSources"] is True
     assert proxying["chainsBeforeFeeds"] is True

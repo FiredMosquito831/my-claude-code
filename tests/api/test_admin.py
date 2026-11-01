@@ -2343,11 +2343,26 @@ def test_admin_static_velvet_theme_defines_every_semantic_token():
 
 
 def test_admin_static_theme_switcher_includes_velvet():
-    """The theme switcher offers a Velvet option with the matching value."""
+    """Velvet is still selectable, in the place a reader now selects it.
+
+    8.1.0 replaced the four-button switch's ROLE with the Appearance card's
+    family-by-mode menu, but the switch itself stays in the markup: it is the
+    control a page whose script failed still has, and `applyTheme()` still
+    drives it. What changed is where a choice is read from — the legacy key is
+    migrated, and the family vocabulary is declared once in the registry.
+
+    This test used to pin `applyTheme`'s old inline fallback
+    (`name !== "paper" && …`), which is exactly the string the migration
+    replaced with `LEGACY_THEME_MAP`. Pinning the map is the stronger claim:
+    it names the pair each legacy value becomes.
+    """
     html = Path("src/my_claude_code/api/admin_static/index.html").read_text(
         encoding="utf-8"
     )
     script = Path("src/my_claude_code/api/admin_static/admin.js").read_text(
+        encoding="utf-8"
+    )
+    designs = Path("src/my_claude_code/api/admin_static/designs.js").read_text(
         encoding="utf-8"
     )
 
@@ -2355,9 +2370,13 @@ def test_admin_static_theme_switcher_includes_velvet():
         '<button type="button" class="theme-option" data-theme-value="velvet" '
         'aria-checked="false">Velvet</button>' in html
     )
-    # applyTheme() must accept "velvet" instead of treating it as an unknown
-    # theme that falls back to midnight.
-    assert 'name !== "paper" && name !== "high-contrast" && name !== "velvet"' in script
+    # Every legacy value maps to a family that exists, and Velvet maps to
+    # Velvet in dark — the default, and the one this test is named for.
+    assert 'velvet: { theme: "velvet", mode: "dark" },' in script
+    for legacy in ("midnight", "paper", "high-contrast", "velvet"):
+        assert f"{legacy}:" in script or f'"{legacy}":' in script, legacy
+    # The family vocabulary has one home, and Velvet is in it.
+    assert '{ id: "velvet", name: "Velvet" }' in designs
 
 
 def test_credential_add_accepts_a_pasted_pool_and_skips_duplicates(

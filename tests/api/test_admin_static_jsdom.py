@@ -415,7 +415,11 @@ def test_registering_the_docs_view_did_not_break_the_other_views(rendered) -> No
     """
 
     expected = {
-        "get_started": 1,
+        # 8.1.0: Get Started claims the Appearance card's one settings
+        # section (the appearance machine defaults), which is what moved this
+        # from 1 to 2. The four controls are proven by the settings contracts
+        # and by test_admin_design_system_jsdom.py.
+        "get_started": 2,
         # 6 since 7.34.0: the fixture now supplies the OpenCode Zen card, so
         # the `providers` settings section renders beside the static four.
         "providers": 6,
@@ -12374,7 +12378,11 @@ def test_jsdom_coding_agents_filter_empty_query_is_the_base_trees_page_exactly(
     assert baseline["dom"]["viewChildCount"] == 4
     assert baseline["dom"]["filterBar"] is None
     dom = coding_agents_filter["dom"]
-    assert dom["viewChildCount"] == 5
+    # 8.1.0: +1 for the per-page section navigator, which every page with
+    # four or more named sections now carries. The cards below it are
+    # compared one by one with the navigator taken out (captureDom), so this
+    # is the only place its presence counts.
+    assert dom["viewChildCount"] == 6
     assert dom["filterBar"].count("<input") == 1
     assert 'id="codingAgentsFilter"' in dom["filterBar"]
     # 7.122.3 (U17): the only other difference from 7.113.2 is the retired
@@ -12691,7 +12699,9 @@ def test_jsdom_not_yet_card_is_the_only_thing_this_release_added(
     baseline = json.loads(NOT_YET_BASELINE.read_text(encoding="utf-8"))
     assert "BASE tree 16bc7b23" in baseline["written_by"]
     assert baseline["dom"]["viewChildCount"] == 5
-    assert not_yet_card["dom"]["viewChildCount"] == 5
+    # 8.1.0: +1 for the per-page section navigator, excluded from the
+    # children comparison below by name.
+    assert not_yet_card["dom"]["viewChildCount"] == 6
     # 7.122.3 (U17): the retired command rows are the only other difference,
     # normalised out on both sides with a count on each.
     assert _count_retired_command_rows(baseline["dom"]["children"]) > 0
@@ -13528,8 +13538,15 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
     # are compared, with the display-only changes normalised out, against this
     # pass's own base-written baseline in test_admin_ux_pass_jsdom.py. Every
     # other view is still byte-identical here.
+    # 8.1.0: a page with four or more named sections carries the per-page
+    # section navigator now (SECTION_NAVIGATOR_VIEWS), which moves those views
+    # on purpose; 8.1.0 has its own base-written baseline.
     excluded = (
-        RELABELLED_VIEWS | UX_CHANGED_VIEWS | UX_SETTINGS_ONLY_VIEWS | {"get_started"}
+        RELABELLED_VIEWS
+        | UX_CHANGED_VIEWS
+        | UX_SETTINGS_ONLY_VIEWS
+        | SECTION_NAVIGATOR_VIEWS
+        | {"get_started"}
     )
     assert {
         key: value
@@ -13806,8 +13823,15 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
     # are compared, with the display-only changes normalised out, against this
     # pass's own base-written baseline in test_admin_ux_pass_jsdom.py. Every
     # other view is still byte-identical here.
+    # 8.1.0: a page with four or more named sections carries the per-page
+    # section navigator now (SECTION_NAVIGATOR_VIEWS), which moves those views
+    # on purpose; 8.1.0 has its own base-written baseline.
     excluded = (
-        RELABELLED_VIEWS | UX_CHANGED_VIEWS | UX_SETTINGS_ONLY_VIEWS | {"get_started"}
+        RELABELLED_VIEWS
+        | UX_CHANGED_VIEWS
+        | UX_SETTINGS_ONLY_VIEWS
+        | SECTION_NAVIGATOR_VIEWS
+        | {"get_started"}
     )
     assert {
         key: value
@@ -14653,6 +14677,15 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
     compared, with those display-only changes normalised out, against this
     pass's own base-written baseline in ``test_admin_ux_pass_jsdom.py``. This
     test asserts nothing else moved.
+
+    Since 8.1.0 every page with four or more named sections carries the
+    per-page section navigator, which changes those views' bytes on purpose.
+    8.1.0's own base-written baseline is
+    ``tests/fixtures/design_system_dom_8_1_0.json``, taken with the two new
+    visible features disabled and again with them enabled — see
+    ``tests/api/test_admin_design_system_jsdom.py``. They are excluded here so
+    this test keeps meaning "the 7.122.0 release moved nothing it did not
+    declare".
     """
 
     baseline = json.loads(GET_STARTED_BASELINE.read_text(encoding="utf-8"))
@@ -14664,6 +14697,7 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
         RELABELLED_VIEWS
         | UX_CHANGED_VIEWS
         | UX_SETTINGS_ONLY_VIEWS
+        | SECTION_NAVIGATOR_VIEWS
         | {GET_STARTED_VIEW}
     )
     base_without = {key: value for key, value in base.items() if key not in excluded}
@@ -14699,3 +14733,21 @@ UX_CHANGED_VIEWS = frozenset(
 #: compares them against this pass's own base-written baseline with those
 #: changes normalised out, which is the stronger check for them.
 UX_SETTINGS_ONLY_VIEWS = frozenset({"limits", "messaging", "model_config"})
+
+#: Views 8.1.0 adds the per-page section navigator to, and therefore the views
+#: whose bytes it moves on purpose. Read from the shipped table itself, so a
+#: page gaining or losing its strip is this set changing rather than a
+#: baseline difference somebody has to interpret. The staging rule is
+#: three named sections (``initSectionNavigator``).
+_SECTION_NAVIGATOR_BLOCK = re.search(
+    r"const SECTION_NAVIGATOR = \{(.*?)\n\};",
+    (
+        Path(__file__).resolve().parents[2]
+        / "src/my_claude_code/api/admin_static/admin.js"
+    ).read_text(encoding="utf-8"),
+    re.DOTALL,
+)
+assert _SECTION_NAVIGATOR_BLOCK, "admin.js no longer declares SECTION_NAVIGATOR"
+SECTION_NAVIGATOR_VIEWS = frozenset(
+    re.findall(r"^  ([a-z_]+): \[\n", _SECTION_NAVIGATOR_BLOCK.group(1), re.MULTILINE)
+)

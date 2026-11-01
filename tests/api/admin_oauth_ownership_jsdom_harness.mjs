@@ -12,7 +12,7 @@
  * Env:   OAUTH_SOURCES_JSON=<the /admin/api/anthropic-oauth/sources payload>
  * Prints one JSON object on stdout.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { JSDOM, VirtualConsole } from "jsdom";
 
@@ -62,7 +62,13 @@ window.addEventListener("unhandledrejection", (event) =>
 );
 
 try {
-  window.eval(readFileSync(join(dir, "admin.js"), "utf8"));
+  /* 8.1.0: index.html loads designs.js before admin.js and one eval keeps the
+     two in the single global scope two classic <script> tags share. */
+  const designsPath = join(dir, "designs.js");
+  const designsSource = existsSync(designsPath)
+    ? readFileSync(designsPath, "utf8") + "\n"
+    : "";
+  window.eval(designsSource + readFileSync(join(dir, "admin.js"), "utf8"));
 } catch (error) {
   console.log(JSON.stringify({ fatal: `eval threw: ${error && error.stack}` }));
   process.exit(0);
