@@ -40,6 +40,11 @@ def settings_model_visibility(settings: Settings) -> ModelVisibility:
 class ModelResponse(BaseModel):
     object: Literal["model"] = "model"
     created: int = 0
+    # The value the two byte-identity contracts pin:
+    # tests/contracts/test_metadata_ladder_equality.py (a ladder invariant
+    # test) and tests/contracts/test_mcp_media_off_is_byte_identical.py both
+    # record this field verbatim. Renaming it is an API-response change of its
+    # own, not part of the command-family retirement (8.0.0).
     owned_by: str = "free-claude-code"
     created_at: str
     display_name: str

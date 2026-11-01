@@ -6,7 +6,7 @@ model's jinja chat template with strict role-alternation rules and a fragile
 ``[TOOL_CALLS]`` parser — observed leaking control tokens into tool names
 (``[TOOL_CALLS]Read``) and dumping whole tool calls into text
 (``Read[ARGS]{...}``), which ends agent runs silently. The OpenAI
-``/v1/chat/completions`` path is LM Studio's mature parsing route, and fcc's
+``/v1/chat/completions`` path is LM Studio's mature parsing route, and MCC's
 OpenAI provider layers its own tool-call assembly, think-tag parsing, and
 heuristic recovery on top.
 """

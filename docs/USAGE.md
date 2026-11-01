@@ -369,7 +369,7 @@ mcc-server --version
 
 1. Installs `uv` (the Python tool runner) if missing or too old.
 2. Looks up the **latest** release, downloads its wheel, and **verifies the SHA-256 that GitHub publishes for that asset**. A mismatch aborts rather than running unverified code.
-3. Installs the package and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex` and `mcc-pi` on your `PATH` (the legacy `fcc-*` spellings were retired in 7.0.0 and now only say what replaced them).
+3. Installs the package and puts `mcc-server`, `mcc-claude`, `mcc-claude-old`, `mcc-codex` and `mcc-pi` on your `PATH`.
 
 **It does not install Claude Code, Codex, or Pi.** Those are separate third-party tools and the proxy doesn't need any of them to run. The installer installs MCC and its prerequisites, nothing else; agents are installed only by the dashboard button you press — the **Install** button on the **Coding agents** page ([Install an agent from the dashboard](#install-an-agent-from-the-dashboard)) — or by you, with the vendor's own line. The `mcc-*` launchers simply point an agent you already have at the proxy, and never install one.
 
@@ -589,7 +589,6 @@ and opens nothing:
 | `mcc-apps`, `mcc-rtk`, `mcc-mcp` | their own usage | not an option: usage and an error exit |
 | `mcc-desktop` | its usage, exit 2; nothing starts | the same |
 | `mcc-claude`, `mcc-codex` and the other agent commands | **handed to the agent**, so you see the agent's own help (Claude Code's for `mcc-claude`), not MCC's | the agent's version |
-| the retired `fcc-*` names | the `mcc-*` name that replaced it, exit 1 | the same |
 
 The agent commands pass `--help` on deliberately: everything after `mcc-claude`
 is an argument for Claude Code. `mcc-claude`, `mcc-claude-old` and `mcc-codex`
@@ -966,9 +965,6 @@ There are no keys, tokens or secrets in the document — it is safe to paste int
 report. `reconnect_timeout_seconds` and `health_failure_threshold` are the two numbers a
 window must use rather than invent: together they are what stops a routine self-update
 restart being drawn as a dead server.
-
-The retired `fcc-desktop` name accepts none of these flags: it prints the
-rename line and exits 1.
 
 <a id="the-desktop-app-fetched-verified-installed"></a>
 
@@ -1694,9 +1690,6 @@ If you want the previous `mcc-claude` behavior — gateway model discovery
 enabled, the auto-compact window set, telemetry/autoupdate disabled, and
 inherited `ANTHROPIC_*` variables cleared — run `mcc-claude-old` instead.
 
-The legacy `fcc-claude`, `fcc-claude-old`, `fcc-codex` and `fcc-pi` names were
-retired in 7.0.0: each prints the `mcc-*` name that replaced it and exits 1.
-
 Official references: [Claude Code LLM gateway docs](https://code.claude.com/docs/en/llm-gateway-connect) · [settings.json reference](https://code.claude.com/docs/en/settings)
 
 ---
@@ -2137,8 +2130,6 @@ Both have launchers that configure the environment for you:
 mcc-codex      # Codex CLI against the local MCC Responses provider
 mcc-pi         # Pi
 ```
-
-(The legacy `fcc-codex` and `fcc-pi` names were retired in 7.0.0.)
 
 Neither rewrites your own configuration. Codex is configured with ephemeral
 `-c` assignments on the command line, and Pi is registered by a bundled
@@ -5254,7 +5245,7 @@ A prompt is almost all of a request's bytes, and turn N+1 of a conversation repe
 
 Compression only ever applies to **newly written** requests, so a database carried across the upgrade keeps paying the old price for its whole history. On a real 1.7 GB log that meant every one of its 50,000 rows.
 
-`mcc-compact-log` rewrites them in place (the retired `fcc-compact-log` name only says what replaced it):
+`mcc-compact-log` rewrites them in place:
 
 ```bash
 # stop the server first, or the final vacuum cannot reclaim the space
@@ -6833,7 +6824,7 @@ Gotchas:
 Close and reopen your terminal. The installer extends `PATH`; an existing shell won't see it. This is the single most common install issue.
 
 **Windows: installing while MCC is running.**
-Supported, and it is the normal path. The installer renames the old tool environment *and* every `mcc-*` / `fcc-*` launcher aside (the retired names still have shims to move), then lets uv write a complete new set. Running sessions — the server, the tray, an open `mcc-claude` window — keep the old version until they are restarted; anything started afterwards uses the new one. Nothing needs to be closed.
+Supported, and it is the normal path. The installer renames the old tool environment *and* every `mcc-*` launcher aside, then lets uv write a complete new set. Running sessions — the server, the tray, an open `mcc-claude` window — keep the old version until they are restarted; anything started afterwards uses the new one. Nothing needs to be closed.
 
 If Windows refuses to move a launcher aside (an antivirus scan, the search indexer, or the shell can hold an `.exe` for a moment), the installer does not give up: it re-runs uv with `UV_TOOL_BIN_DIR` pointed at a staging directory, so uv writes every shim and a complete receipt somewhere nothing is holding, then places the shims one at a time. A shim that still cannot be replaced keeps the file it had and is listed by name as *"these keep working and will refresh on the next install"* — that is not a failure. A uv launcher is a version-agnostic stub that runs the interpreter inside the tool directory, and that directory now holds the new install, so the old stub already runs the new code.
 

@@ -26,7 +26,7 @@ _CLOUDFLARE_CHALLENGE_HEADER = "cf-mitigated"
 _CLOUDFLARE_CHALLENGE_VALUE = "challenge"
 
 #: MCC's product User-Agent, sent by ``web_fetch`` (7.120.0, USER DECISIONS
-#: Q12). It replaces the stale ``free-claude-code/<ver>`` name; no browser is
+#: Q12). It replaces the stale name an earlier release sent; no browser is
 #: impersonated -- a browser-class UA lives only in the DuckDuckGo hop's
 #: declared profile (``config/duckduckgo_profiles.py``).
 _WEB_FETCH_USER_AGENT = f"my-claude-code/{package_version()}"

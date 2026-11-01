@@ -22,10 +22,6 @@ $MigratedPointerFilename = ".fcc-migrated.txt"
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
 $AllCommands = @(
-    "fcc-server", "fcc-claude", "fcc-claude-old", "fcc-codex", "fcc-pi",
-    "fcc-init", "fcc-chatgpt-oauth-login", "fcc-compact-log",
-    "free-claude-code",
-    "fcc-anthropic-oauth-login", "fcc-rtk", "fcc-help", "fcc-desktop",
     "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
     "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
     "mcc-qwen", "mcc-crush",
@@ -34,10 +30,9 @@ $AllCommands = @(
     "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
     "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
     "mcc-apps", "mcc-mcp",
-    "mcc-desktop", "my-claude-code",
-    "fcc-migrate"
+    "mcc-desktop", "my-claude-code"
 )
-# GUI scripts (mcc-desktop / fcc-desktop) run as pythonw.exe out of the uv
+# GUI scripts (mcc-desktop) run as pythonw.exe out of the uv
 # tool environment rather than under a shim named after the command, so the
 # process guard must also look at interpreter image names.
 $GuardProcessImages = @("pythonw")

@@ -8,6 +8,7 @@ literals from scattering across the installer, self-updater, launchers, and
 compatibility wheel.
 """
 
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +56,11 @@ NATIVE_COMMANDS = (
 )
 
 ALL_COMMANDS = LEGACY_COMMANDS + NATIVE_COMMANDS
+
+#: Suffixes a console-script shim carries on disk. uv writes ``.exe`` shims on
+#: Windows and extension-less ones elsewhere; ``.cmd``/``.bat`` are what a
+#: hand-written wrapper is called, and ``.py`` is ``python -m``-style entry.
+_SCRIPT_EXTENSIONS = frozenset({".exe", ".cmd", ".bat", ".py"})
 
 # Every console-script name maps to exactly one owner key.
 _COMMAND_OWNER: dict[str, str] = dict.fromkeys(
@@ -129,15 +135,28 @@ def owner_for_distribution(distribution: str) -> ToolOwner | None:
 def owner_for_invocation(invocation: str | None = None) -> ToolOwner:
     """Resolve the tool owner from how this process was launched.
 
-    A ``mcc-*`` / ``my-claude-code`` invocation resolves to the native owner;
-    anything else (a legacy ``fcc-*`` name, ``free-claude-code``, a direct
-    ``python -m`` run, or a test runner) falls back to the legacy owner so the
-    existing version contract stays intact.
+    A ``mcc-*`` / ``my-claude-code`` invocation resolves to the native owner.
+    The name is taken from ``sys.argv[0]``, which on Windows is the console
+    script's shim -- ``...\\Scripts\\mcc-migrate.exe`` -- so the script
+    extension is stripped before the lookup. Until 8.0.0 it was not, every
+    ``mcc-*.exe`` missed the table and fell through to the legacy owner, and
+    ``mcc-migrate --version`` therefore answered with the retired distribution
+    name on Windows and with the native one on POSIX.
+
+    Anything unrecognised (a direct ``python -m`` run, a test runner) reports
+    the native owner: since 8.0.0 the legacy command family does not exist, so
+    there is no invocation left that could belong to it.
     """
 
     name = invocation if invocation is not None else (sys.argv[0] if sys.argv else "")
-    owner = owner_for_command(Path(name).name)
-    return owner if owner is not None else LEGACY_OWNER
+    leaf = Path(name).name
+    # ``os.path.splitext`` rather than ``with_suffix``: the latter raises on a
+    # name that is only an extension, and a Windows shim is ``.exe``/``.cmd``.
+    stem, extension = os.path.splitext(leaf)
+    if extension.lower() in _SCRIPT_EXTENSIONS:
+        leaf = stem
+    owner = owner_for_command(leaf)
+    return owner if owner is not None else NATIVE_OWNER
 
 
 def running_owner() -> ToolOwner:

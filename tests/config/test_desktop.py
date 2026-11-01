@@ -809,11 +809,12 @@ def test_desktop_gui_scripts_are_registered() -> None:
 
     gui_scripts = manifest["project"]["gui-scripts"]
     assert gui_scripts["mcc-desktop"] == "my_claude_code.cli.desktop_entrypoint:launch"
-    # fcc-desktop moved to [project.scripts] in 7.0.0 as a console tombstone:
-    # a gui-script has no console on Windows, so its one line would be unseen.
-    assert "fcc-desktop" not in gui_scripts
+    # The legacy tray launcher is gone with the family in 8.0.0: no console
+    # or gui spelling of it remains, and nothing may target the deleted
+    # tombstone module.
     scripts = manifest["project"]["scripts"]
-    assert scripts["fcc-desktop"] == "my_claude_code.cli.legacy_stubs:main"
+    assert "fcc-desktop" not in gui_scripts
+    assert "fcc-desktop" not in scripts
 
 
 def test_desktop_entrypoint_is_callable() -> None:

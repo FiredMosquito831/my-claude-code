@@ -336,9 +336,9 @@ function Invoke-NativeCommand {
     #
     # PowerShell returns everything a function writes to the output stream, so
     # while these branches passed the command's output down the pipeline,
-    # `$InstalledVersion = Install-FreeClaudeCode` was the version string
+    # `$InstalledVersion = Install-MyClaudeCode` was the version string
     # PREFIXED BY EVERY LINE UV PRINTED -- an array -- and the next statement,
-    # `Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion`,
+    # `Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion`,
     # refused it with "Cannot convert value to type System.String". That is
     # every fresh Windows install through install.cmd / install.ps1 failing at
     # the verification step, and it has been failing since 6.64.0: the
@@ -1389,7 +1389,7 @@ function Get-InstallPlan {
         every install path runs. Called once per episode.
 
         .DESCRIPTION
-        Split out of Install-FreeClaudeCode in 6.82.0 because there are now two
+        Split out of Install-MyClaudeCode in 6.82.0 because there are now two
         paths that need it -- the staged swap and the in-place repair -- and a
         second resolve would be a second download of the same wheel.
     #>
@@ -1425,7 +1425,7 @@ function Get-InstallPlan {
     }
 }
 
-function Install-FreeClaudeCode {
+function Install-MyClaudeCode {
     <#
         .SYNOPSIS
         The in-place install ladder. From 6.82.0 this is the REPAIR path: the
@@ -2150,9 +2150,9 @@ function Test-StagedEnvironment {
         code: a wheel that resolves, installs and then cannot import itself is
         a real failure mode, and it used to be discovered by the user.
 
-        `mcc-server --version` and nothing else. The legacy `fcc-server` was
-        accepted as a fallback until 7.0.0; it is now a tombstone that prints a
-        rename line and exits 1, so falling back to it would turn a healthy
+        `mcc-server --version` and nothing else. The pre-7.0.0 legacy launcher
+        was accepted as a fallback until 7.0.0 and has not existed since;
+        falling back to a name that is no longer installed would turn a healthy
         install into a failed verification.
 
         This runs BEFORE the stop rather than after it (the helper's order),
@@ -5802,7 +5802,7 @@ function New-DesktopShortcut {
     }
 }
 
-function Configure-AndConfirmFreeClaudeCode {
+function Configure-AndConfirmMyClaudeCode {
     param([Parameter(Mandatory = $true)] [string] $ExpectedVersion)
 
     if ($DryRun) {
@@ -5929,9 +5929,6 @@ function Write-MccCommandReference {
         }
     }
     Write-Host ""
-    Write-Host "The legacy fcc-* commands were retired in 7.0.0: each one now prints the"
-    Write-Host "mcc-* name that replaced it and exits 1. They go away entirely in 8.0.0."
-    Write-Host ""
     Write-Host "If mcc-server is not found, open a new terminal: this install may have added"
     Write-Host "a directory to PATH that shells started earlier cannot see."
     Write-Host ""
@@ -6056,10 +6053,6 @@ function Get-LauncherCommands {
     # and left the install half-removed. A contract test now compares this list
     # against pyproject so it cannot drift again.
     return @(
-        "fcc-server", "fcc-claude", "fcc-claude-old", "fcc-codex", "fcc-pi",
-        "fcc-init", "fcc-chatgpt-oauth-login", "fcc-compact-log",
-        "free-claude-code",
-        "fcc-anthropic-oauth-login", "fcc-rtk", "fcc-help", "fcc-desktop",
         "mcc-server", "mcc-claude", "mcc-claude-old", "mcc-codex", "mcc-pi",
         "mcc-opencode", "mcc-opencode2", "mcc-kilo", "mcc-commandcode", "mcc-kimi",
         "mcc-qwen", "mcc-crush",
@@ -6069,7 +6062,6 @@ function Get-LauncherCommands {
         "mcc-init", "mcc-chatgpt-oauth-login", "mcc-compact-log",
         "mcc-anthropic-oauth-login", "mcc-rtk", "mcc-help", "mcc-migrate",
         "mcc-apps", "mcc-desktop", "my-claude-code",
-        "fcc-migrate",
         # 7.99.0: the media MCP server an app keeps running for its session,
         # Claude Desktop all day, so it is a launcher that can hold a shim.
         "mcc-mcp"
@@ -6701,9 +6693,9 @@ if ($null -ne $Staged) {
             try {
                 # The same plan, and so the same already-verified wheel: the
                 # temp directory holding it is swept below rather than by
-                # Install-FreeClaudeCode's own `finally`, which would leave a
+                # Install-MyClaudeCode's own `finally`, which would leave a
                 # second resolve with nothing to install from.
-                $InstalledVersion = Install-FreeClaudeCode -Plan $Plan
+                $InstalledVersion = Install-MyClaudeCode -Plan $Plan
             }
             catch {
                 $finishFailure = $_.Exception.Message
@@ -6773,7 +6765,7 @@ if ($null -ne $Staged) {
 if (-not $InstalledVersion) {
     Write-InstallProgress -Stage 'installing' -Message 'Installing the new version.'
     try {
-        $InstalledVersion = Install-FreeClaudeCode -Plan $Plan
+        $InstalledVersion = Install-MyClaudeCode -Plan $Plan
     }
     catch {
         $script:InstallProgressRestarted = $false
@@ -6798,7 +6790,7 @@ if ($script:RenamedWhileRunning) {
     # same vocabulary the deferred helper uses, so a window watching this file
     # shows the same sequence whichever installer is running.
     Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
-    Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
+    Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion
 
     if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
     Enable-RtkForAgents
@@ -6841,7 +6833,7 @@ elseif ($DryRun) {
 else {
     Write-Step "Configuring PATH and verifying My Claude Code"
     Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
-    Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
+    Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion
 
     if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
     Enable-RtkForAgents

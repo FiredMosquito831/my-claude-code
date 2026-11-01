@@ -70,7 +70,7 @@ def test_pi_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
     if not uv_bin:
         pytest.skip("missing_env: uv not found")
     provider_model = ProviderMatrixDriver(smoke_config).first_model()
-    auth_token = "fcc-pi-smoke-token"
+    auth_token = "mcc-pi-smoke-token"
 
     with SmokeServerDriver(
         smoke_config,
@@ -98,7 +98,7 @@ def test_pi_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
                 "--project",
                 str(smoke_config.root),
                 "--no-sync",
-                "fcc-pi",
+                "mcc-pi",
                 "--no-session",
                 "--no-approve",
                 "--print",
@@ -159,7 +159,7 @@ def test_claude_cli_provider_error_e2e(
     claude_bin = shutil.which(smoke_config.claude_bin)
     if not claude_bin:
         pytest.skip(f"missing_env: Claude CLI not found: {smoke_config.claude_bin}")
-    broken_model = "lmstudio/fcc-smoke-failing-model"
+    broken_model = "lmstudio/mcc-smoke-failing-model"
 
     with (
         _deliberately_failing_openai_provider() as (
@@ -201,7 +201,7 @@ def test_claude_cli_provider_error_e2e(
     assert "empty or malformed" not in lower
     assert "proxy or gateway intercepting" not in lower
     assert "api error" in lower or "selected model" in lower
-    assert "fcc smoke provider rejected the request deliberately" in lower
+    assert "MCC smoke provider rejected the request deliberately" in lower
     assert failed_downstream_requests == 1, server_log
     assert provider_requests == ["/v1/chat/completions"]
 
@@ -219,7 +219,7 @@ def _deliberately_failing_openai_provider() -> Iterator[tuple[str, list[str]]]:
                         "object": "list",
                         "data": [
                             {
-                                "id": "fcc-smoke-failing-model",
+                                "id": "mcc-smoke-failing-model",
                                 "object": "model",
                             }
                         ],
@@ -240,8 +240,8 @@ def _deliberately_failing_openai_provider() -> Iterator[tuple[str, list[str]]]:
                 {
                     "error": {
                         "type": "invalid_request_error",
-                        "code": "fcc_smoke_failure",
-                        "message": "FCC smoke provider rejected the request deliberately.",
+                        "code": "mcc_smoke_failure",
+                        "message": "MCC smoke provider rejected the request deliberately.",
                     }
                 },
             )

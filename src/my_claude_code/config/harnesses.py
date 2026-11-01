@@ -456,7 +456,7 @@ class HarnessCommandLine:
     command: str
     help_text: str
     #: ``primary`` is the headline command, ``flag`` a documented argument
-    #: form, ``legacy`` the retired ``fcc-`` name, ``rtk`` a token-optimizer toggle.
+    #: form, ``rtk`` a token-optimizer toggle.
     kind: str = "primary"
 
 
@@ -468,12 +468,6 @@ class HarnessCommand:
     suffix: str
     #: ``module:function`` target, exactly as ``pyproject.toml`` spells it.
     target: str
-    #: Whether a retired ``fcc-<suffix>`` name exists. Only the harnesses that
-    #: shipped before this registry have one: no install in the world carries
-    #: an ``fcc-`` name for a harness added later, so inventing one would
-    #: publish a tombstone nobody ever needed. Since 7.0.0 the name is
-    #: registered only so that typing it prints what replaced it.
-    legacy_alias: bool = True
     #: Whether this is the harness's headline command in generated help.
     primary: bool = True
     #: Trailing text for the generated ``mcc-help`` line.
@@ -488,12 +482,6 @@ class HarnessCommand:
         """Return the native ``mcc-`` command name."""
 
         return f"mcc-{self.suffix}"
-
-    @property
-    def legacy_command(self) -> str | None:
-        """Return the retired ``fcc-`` name, when this command has one."""
-
-        return f"fcc-{self.suffix}" if self.legacy_alias else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1069,7 +1057,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="opencode",
                 target="my_claude_code.cli.launchers.opencode:launch",
-                legacy_alias=False,
                 help_text="Launch OpenCode through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1114,7 +1101,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="opencode2",
                 target="my_claude_code.cli.launchers.opencode:launch_v2",
-                legacy_alias=False,
                 help_text="Launch the OpenCode 2 preview through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1156,7 +1142,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="kilo",
                 target="my_claude_code.cli.launchers.opencode:launch_kilo",
-                legacy_alias=False,
                 help_text="Launch Kilo CLI through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1201,7 +1186,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="commandcode",
                 target="my_claude_code.cli.launchers.commandcode:launch",
-                legacy_alias=False,
                 help_text="Launch Command Code through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1295,7 +1279,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="openclaw",
                 target="my_claude_code.cli.launchers.openclaw:launch",
-                legacy_alias=False,
                 help_text="Launch OpenClaw through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1412,7 +1395,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="hermes",
                 target="my_claude_code.cli.launchers.hermes:launch",
-                legacy_alias=False,
                 help_text="Launch Hermes Agent through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1557,7 +1539,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="kimi",
                 target="my_claude_code.cli.launchers.kimi:launch",
-                legacy_alias=False,
                 help_text="Launch Kimi Code through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1629,7 +1610,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="qwen",
                 target="my_claude_code.cli.launchers.qwen:launch",
-                legacy_alias=False,
                 help_text="Launch Qwen Code through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1701,7 +1681,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="crush",
                 target="my_claude_code.cli.launchers.crush:launch",
-                legacy_alias=False,
                 help_text="Launch Crush through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1775,7 +1754,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="cline",
                 target="my_claude_code.cli.launchers.cline:launch",
-                legacy_alias=False,
                 help_text="Launch Cline through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1868,7 +1846,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="goose",
                 target="my_claude_code.cli.launchers.goose:launch",
-                legacy_alias=False,
                 help_text="Launch Goose through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -1946,7 +1923,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="aider",
                 target="my_claude_code.cli.launchers.aider:launch",
-                legacy_alias=False,
                 help_text="Launch Aider through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -2024,7 +2000,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="droid",
                 target="my_claude_code.cli.launchers.droid:launch",
-                legacy_alias=False,
                 help_text="Launch Droid through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -2098,7 +2073,6 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessCommand(
                 suffix="gemini",
                 target="my_claude_code.cli.launchers.gemini:launch",
-                legacy_alias=False,
                 help_text="Launch Gemini CLI through the proxy",
                 invocations=(
                     HarnessInvocation(
@@ -2318,7 +2292,7 @@ def harness_command_lines(spec: HarnessSpec) -> tuple[HarnessCommandLine, ...]:
     installer summary all render this, so an argument form documented in one
     place cannot go missing from the other two. The order is the order a
     reader wants it -- the bare command, then its documented arguments, then
-    the legacy alias, then the token-optimizer toggles.
+    the token-optimizer toggles.
     """
 
     lines: list[HarnessCommandLine] = []
@@ -2338,15 +2312,6 @@ def harness_command_lines(spec: HarnessSpec) -> tuple[HarnessCommandLine, ...]:
             )
             for invocation in command.invocations
         )
-    lines.extend(
-        HarnessCommandLine(
-            command=legacy,
-            help_text=f"Legacy alias for {command.command}",
-            kind="legacy",
-        )
-        for command in spec.commands
-        if (legacy := command.legacy_command) is not None
-    )
     if spec.rtk_agent:
         lines.append(
             HarnessCommandLine(

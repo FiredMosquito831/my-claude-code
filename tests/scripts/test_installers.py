@@ -40,7 +40,7 @@ _POWERSHELL_HELPER_NAMES = frozenset(
     {
         "Resolve-Release",
         "Get-VerifiedReleaseWheel",
-        "Install-FreeClaudeCode",
+        "Install-MyClaudeCode",
         "Ensure-Uv",
         "Confirm-Uv",
         "Install-ManagedPython",
@@ -57,7 +57,7 @@ _POWERSHELL_HELPER_NAMES = frozenset(
         "Invoke-RenameThenReinstall",
         "Invoke-StagedInstall",
         "Update-UvReceiptEntrypoint",
-        "Configure-AndConfirmFreeClaudeCode",
+        "Configure-AndConfirmMyClaudeCode",
         "Get-LauncherIntroducedIn",
     }
 )
@@ -2132,7 +2132,7 @@ def test_install_ps1_never_reports_verified_with_missing_commands(
     shim reports the NEW version. A user was told "installed and verified"
     while seven of their commands did not exist at all.
     """
-    # Configure-AndConfirmFreeClaudeCode runs the uv it pinned during Ensure-Uv
+    # Configure-AndConfirmMyClaudeCode runs the uv it pinned during Ensure-Uv
     # rather than re-searching PATH, and since 6.64.0 it also reads the bin
     # directory and diagnoses a shadowing program, so the whole family comes
     # with it and the module-level pin has to exist under Set-StrictMode.
@@ -2279,9 +2279,15 @@ def test_installers_allow_install_while_running_and_lead_with_mcc() -> None:
     assert "Get-RunningLaunchers" in powershell
     assert "staged" in powershell
     assert "is still running" not in powershell
-    for name in ("fcc-server", "fcc-claude", "fcc-codex", "mcc-server", "mcc-claude"):
+    for name in ("mcc-server", "mcc-claude", "mcc-codex"):
         assert name in powershell
-    assert "Install-FreeClaudeCode" in powershell
+    # 8.0.0 removed the retired family: the installer neither launches-verifies
+    # a retired name nor lists one as a launcher. The two family *patterns*
+    # above (the shim sweep and the process classification) still name the old
+    # prefix on purpose -- they are how an older install's shims are cleaned up.
+    for retired in ("fcc-server", "fcc-claude", "fcc-codex", "free-claude-code"):
+        assert f'"{retired}"' not in powershell, retired
+    assert "Install-MyClaudeCode" in powershell
     # The command reference is shared so both the direct and deferred (app
     # running) paths show the same mcc message as the WSL/Linux installer.
     assert "Write-MccCommandReference" in powershell
@@ -2405,7 +2411,7 @@ def test_installer_never_fails_on_a_locked_file_without_trying_the_fallback() ->
     path may report it to the user before the staged install has been tried.
     """
     powershell = _install_ps1()
-    install = _extract_function_definition(powershell, "Install-FreeClaudeCode")
+    install = _extract_function_definition(powershell, "Install-MyClaudeCode")
 
     # The plain path (nothing detected as running) also retries around locks:
     # process detection is a name match and a name match can miss.
@@ -2438,6 +2444,10 @@ def test_shim_rename_reports_a_lock_it_cannot_break(
     bin_dir.mkdir()
     for name in ("mcc-server.exe", "mcc-desktop.exe", "mcc-brandnew.exe"):
         (bin_dir / name).write_bytes(b"shim")
+    # 8.0.0 no longer installs the retired family, but a 7.x tool bin still has
+    # its shims and the sweep must move them aside -- otherwise uv aborts on a
+    # file it cannot replace, and the stale shim survives the update.
+    (bin_dir / "fcc-server.exe").write_bytes(b"shim")
     # Not ours: it must be left alone.
     (bin_dir / "unrelated.exe").write_bytes(b"other")
 
@@ -2485,6 +2495,8 @@ def test_shim_rename_reports_a_lock_it_cannot_break(
     assert "mcc-brandnew.exe" in reported
     assert reported["mcc-brandnew.exe"] == "True"
     assert reported["mcc-server.exe"] == "True"
+    # A retired 7.x name is moved aside by the same family pattern.
+    assert reported["fcc-server.exe"] == "True"
     # Python's open() does not share delete, so this rename must be refused --
     # and reported as refused rather than silently dropped.
     assert reported["mcc-desktop.exe"] == "False"
@@ -3181,7 +3193,7 @@ def _launcher_commands() -> list[str]:
 def _verification_runner(
     tmp_path: Path, func_file: Path, tool_bin: Path, expected_version: str = "6.30.1"
 ) -> Path:
-    """A harness around Configure-AndConfirmFreeClaudeCode.
+    """A harness around Configure-AndConfirmMyClaudeCode.
 
     ``FAKE_SHADOW`` is a path returned by the stubbed Get-ApplicationCommand
     for the name ``my-claude-code`` -- the leftover npm shim, the thing that
@@ -3213,7 +3225,7 @@ function Invoke-NativeCapture {{
 function Add-PathEntry {{ param([string] $PathEntry) }}
 $DryRun = $false
 . "{func_file.as_posix()}"
-Configure-AndConfirmFreeClaudeCode -ExpectedVersion "{expected_version}"
+Configure-AndConfirmMyClaudeCode -ExpectedVersion "{expected_version}"
 Write-Host "My Claude Code {expected_version} is installed and verified."
 """,
         encoding="utf-8",
@@ -3235,7 +3247,7 @@ def _verification_functions(tmp_path: Path) -> Path:
         + _extract_function_definition(installer_text, "Get-LauncherIntroducedIn")
         + _extract_function_definition(installer_text, "Test-VersionAtLeast")
         + _extract_function_definition(
-            installer_text, "Configure-AndConfirmFreeClaudeCode"
+            installer_text, "Configure-AndConfirmMyClaudeCode"
         ),
         encoding="utf-8",
     )
@@ -3434,7 +3446,7 @@ def test_a_locked_shim_still_takes_the_rename_and_staged_ladder(
     """Invariant 3: a real lock still gets the whole ladder.
 
     Which rung it starts on depends on the machine -- if any launcher is
-    running, Install-FreeClaudeCode enters Invoke-RenameThenReinstall directly
+    running, Install-MyClaudeCode enters Invoke-RenameThenReinstall directly
     rather than through the direct-install catch -- so the assertion is that
     the ladder ran, not which sentence announced it. What must never happen is
     the disk-full stop, because "os error 32" is precisely what the ladder is

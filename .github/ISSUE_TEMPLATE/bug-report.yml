@@ -19,9 +19,9 @@ body:
       label: CLI
       description: If the problem occurred while using a coding CLI, select it.
       options:
-        - Claude Code (fcc-claude)
-        - Codex (fcc-codex)
-        - Pi (fcc-pi)
+        - Claude Code (mcc-claude)
+        - Codex (mcc-codex)
+        - Pi (mcc-pi)
 
   - type: input
     id: selected-models

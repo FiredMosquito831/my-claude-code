@@ -11,8 +11,8 @@
 | Package | `free_claude_code` â†’ `my_claude_code` (rename done in v5.0.0) |
 | Product name | Free Claude Code â†’ **My Claude Code** (MCC) |
 | PyPI / wheel name | `my-claude-code` |
-| Server command | `mcc-server` (primary); `fcc-server` retired in 7.0.0 (tombstone) |
-| Launchers | `mcc-claude`/`mcc-codex`/`mcc-pi`/`mcc-claude-old` (primary); `fcc-*` retired in 7.0.0 |
+| Server command | `mcc-server` (primary); the pre-7.0.0 legacy command family was removed in 8.0.0 |
+| Launchers | `mcc-claude`/`mcc-codex`/`mcc-pi`/`mcc-claude-old` (primary) |
 | **GitHub repo slug** | **CHANGED on 2026-09-05** â€” `my-claude-code`. The repository is `FiredMosquito831/my-claude-code`, standalone: not a fork, and no longer named after the upstream |
 | **Release repo** | **UNCHANGED** â€” `FiredMosquito831/my-claude-code` (`RELEASE_REPO`) |
 | **FCC_* env vars** | **RETIRED in 7.0.0** — `FCC_ENV_FILE`, `FCC_OPEN_BROWSER`, `FCC_SMOKE_*`, `FCC_CODEX_API_KEY`, `FCC_PI_*` all became `MCC_*`; a managed `.env` is rewritten once on the first 7.x start, with a `.env.bak-<stamp>` |
@@ -54,11 +54,11 @@ Cutover steps (run at release time, NOT now):
 
 > Do **not** rename the repo or migrate issues/PRs. `:8082` is a published
 > contract; renaming the repo would force a breaking change for every existing
-> install. (The `FCC_*` env vars and the `fcc-*` aliases were published
-> contracts too, and 7.0.0 retired them deliberately, as a MAJOR, with a
-> one-time `.env` rewrite and one-line tombstones. The `freecc` proxy token
-> was retired in 6.65.0 - a shared password in a public repository is not a
-> contract worth keeping.)
+> install. (The `FCC_*` env vars were published contracts too, and 7.0.0
+> retired them deliberately, as a MAJOR, with a one-time `.env` rewrite. The
+> legacy command family went the same way, and 8.0.0 removed the names. The
+> `freecc` proxy token was retired in 6.65.0 - a shared password in a public
+> repository is not a contract worth keeping.)
 
 ## 3. Building both wheels (release helper note)
 
@@ -71,8 +71,7 @@ packages = ["src/my_claude_code"]
 
 - `src/my_claude_code` â€” the canonical implementation.
 - `src/free_claude_code` was the compatibility shim that re-exported
-  `my_claude_code`. Removed in 7.0.0: nothing in the product imported it, and
-  the `fcc-*` entry points now resolve to `cli.legacy_stubs` instead.
+  `my_claude_code`. Removed in 7.0.0: nothing in the product imported it.
 
 Build sequence (release time):
 
@@ -368,7 +367,7 @@ when that vendor changes its UI, not when MCC does.
 - [ ] Both remotes mirrored, tags pushed
 - [ ] Wheel contains `my_claude_code/` and NOT `free_claude_code/` (removed in 7.0.0)
 - [ ] Dashboard screenshots refreshed from a scratch `mcc-server` (§4), written to **both** image directories, and scanned for `sk-`
-- [ ] README quickstart uses `mcc-server`; `fcc-server` documented as retired
+- [ ] README quickstart uses `mcc-server`
 - [ ] After publishing: the **Desktop shell release** workflow (`shell-release.yml`) ran automatically on `release: published`. Check all four legs are green and that the six assets appear on the release within about 15 minutes (§7)
 - [ ] Windows installer smoked by hand from the published file: digest checked, `/VERYSILENT` install, launched from the Start Menu, uninstalled from Apps & Features, and `mcc-server` still working afterwards (§7)
 
