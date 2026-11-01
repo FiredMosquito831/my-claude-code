@@ -699,3 +699,44 @@ def test_the_appearance_card_is_static_markup_the_page_never_rebuilds() -> None:
     # The card's own element is declared once and never built by admin.js.
     assert 'createElement("section")' in ADMIN_JS  # renderSections builds those
     assert 'id = "appearanceCard"' not in ADMIN_JS
+
+
+def test_a_designs_stylesheet_is_fetched_from_the_route_that_serves_it() -> None:
+    """`css` is relative to admin_static/, and the page must ask the right URL.
+
+    8.1.0 shipped this wrong: `loadDesignStylesheet` composed
+    `/admin/assets/${design.css}`, which is the route for the five FIXED asset
+    names and answers 404 for anything under `designs/`. Nothing caught it,
+    because 8.1.0's only registry row has `css: null` and 8.1.0 is the release
+    that decided not to ship a design — so the defect would have surfaced as a
+    design whose stylesheet silently never loaded, in the next PR.
+
+    Pinned from both ends: the URL the page builds, and the route that answers
+    it. A rename on either side fails here rather than in a browser.
+    """
+
+    loader = re.search(
+        r"function loadDesignStylesheet\(design\) \{(.*?)\n\}",
+        ADMIN_JS,
+        re.DOTALL,
+    )
+    assert loader, "loadDesignStylesheet() is gone"
+    body = loader.group(1)
+    # The comments in that function NAME the old prefix to explain why it was
+    # wrong; what is tested here is the code, so they are removed first.
+    code = re.sub(r"//[^\n]*", "", body)
+    assert "`/admin/${design.css}`" in code, (
+        "the loader does not build /admin/<css>; `css` is relative to "
+        "admin_static/, so any other prefix is a 404"
+    )
+    assert "/admin/assets/" not in code, (
+        "the loader still points at /admin/assets/, which serves only the "
+        "five fixed asset names"
+    )
+    # And the route the URL names is declared, under the same prefix.
+    routes = (REPO_ROOT / "src/my_claude_code/api/admin_routes.py").read_text(
+        encoding="utf-8"
+    )
+    assert '@router.get("/admin/designs/{filename}"' in routes
+    # The registry's own rows spell `css` the same way: relative, under designs/.
+    assert 'css: "designs/' in DESIGNS_JS or "css: null" in DESIGNS_JS
