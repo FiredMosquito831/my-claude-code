@@ -901,6 +901,14 @@ function setActiveView(viewId, { scroll = false } = {}) {
   refreshActionBarVisibility();
   // 8.1.0: the active page's own section navigator is the only one on screen.
   // It replaced the three topbar rails, which now live inside it.
+  //
+  // The mark is scheduled on the NEXT FRAME rather than set here, and that is
+  // not a nicety: `setActiveView` hides the old page and shows the new one in
+  // the same tick, and a `getBoundingClientRect()` read before the browser has
+  // laid the newly-visible page out returns the rects of a `display: none`
+  // subtree — every one of them 0, which makes the LAST section look like the
+  // current one. Waiting a frame is what makes the first mark on a freshly
+  // opened page correct instead of "Diagnostics" on every page.
   if (typeof state.refreshSectionNavigator === "function") {
     state.refreshSectionNavigator();
   }
@@ -42452,13 +42460,32 @@ function showSectionNavigatorForActiveView() {
 }
 
 /** The scrollspy: as each section crosses the top of the content, its button
- *  takes the accent pill. One rAF per frame, one listener for every page, and
- *  nothing at all when the active page has no strip.
+ *  takes the accent pill.
  *
- *  The threshold is 120 px rather than 0 so a section whose heading has just
- *  passed under the sticky strip still counts as "the one you are reading";
- *  the last section that crossed wins, which is what makes the mark move down
- *  the row monotonically as the page is read.
+ *  Every section that has passed the threshold is considered and the LAST one
+ *  wins, which is what makes the mark move down the row monotonically as the
+ *  page is read.
+ *
+ *  TWO DETAILS THAT ARE NOT OPTIONAL:
+ *
+ *  1. **The mark is recomputed unconditionally.** A guard like "already
+ *     marked, nothing to do" is what made the first version freeze: the
+ *     button it compared against was the one it was about to mark, not the
+ *     one that should be marked, so a wrong state could never be corrected.
+ *     `markSectionCurrent` is idempotent; there is nothing to save by
+ *     skipping it.
+ *
+ *  2. **No second hop after the frame.** A first version deferred the work
+ *     with `requestAnimationFrame(() => setTimeout(update, 0))`, on the
+ *     theory that a `requestAnimationFrame` callback in the same frame as the
+ *     scroll could read the pre-scroll rects. Measured, that theory was wrong
+ *     in both halves: the rects are already the post-scroll ones inside the
+ *     rAF callback, and the extra timeout deferred the mark by up to half a
+ *     second on a throttled tab — so the pill lagged a section behind every
+ *     time the reader scrolled quickly. One rAF, one update.
+ *
+ *  One listener for every page — the spy reads the ACTIVE page's strip at the
+ *  top of each update, so switching pages needs no rebinding.
  */
 function initSectionNavigatorSpy() {
   let frame = 0;
@@ -42479,7 +42506,6 @@ function initSectionNavigatorSpy() {
     });
     if (!current) current = buttons[0] || null;
     if (!current) return;
-    if (current.getAttribute("aria-current") === "true") return;
     markSectionCurrent(nav, current);
   };
   const onScroll = () => {
@@ -42490,6 +42516,10 @@ function initSectionNavigatorSpy() {
   state.refreshSectionNavigator = () => {
     showSectionNavigatorForActiveView();
     update();
+    // ...and once more after layout, because the first call is the one that
+    // made the new page visible and its rects may still be the hidden ones.
+    // A single extra frame is all it takes; nothing polls.
+    window.requestAnimationFrame(update);
   };
 }
 
