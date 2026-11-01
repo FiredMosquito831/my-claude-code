@@ -162,21 +162,35 @@ def test_a_success_message_is_cleared_by_navigating(ux_pass) -> None:
 
 
 # ── U16 / U15: the rails ─────────────────────────────────────────────────────
+#
+# 8.1.0 folded these two rails into the per-page section navigator: the
+# `<nav>`s are re-parented into the strip, and a rail link whose target the
+# navigator already names is dropped so the row never says the same thing
+# twice. That is why the rail itself now reports ZERO links — the destinations
+# are all still reachable, one row, one name each. The navigator's own suite
+# (`test_admin_design_system_jsdom.py`) is where every destination, every
+# landing and the hash are proved; these two tests keep pinning what they
+# always did, against the row that now carries it.
 
 
-def test_the_providers_rail_points_at_real_headings(ux_pass) -> None:
+def test_the_providers_sections_are_all_reachable_from_one_row(ux_pass) -> None:
     rail = ux_pass["providersJump"]
     assert rail is not None
-    assert len(rail["links"]) == 6
-    assert all(rail["targets"])
+    # The rail's own anchors are all covered by the navigator's buttons now.
+    assert rail["links"] == []
+    # And the page's six destinations still resolve.
+    targets = ux_pass["providersNavigatorTargets"]
+    assert len(targets) == 6
+    assert all(targets)
 
 
 def test_the_proxying_page_puts_chains_before_sources(ux_pass) -> None:
     proxying = ux_pass["proxying"]
-    assert proxying["jump"] == [
+    # The navigator's own order carries U15's decision: chains first.
+    assert proxying["navigator"] == [
         "#proxyingList",
-        "#proxyingSourcesTitle",
-        "#proxyingFeedsTitle",
+        "#proxyingSourcesSection",
+        "#proxyingFeedSection",
     ]
     assert proxying["chainsBeforeSources"] is True
     assert proxying["chainsBeforeFeeds"] is True
