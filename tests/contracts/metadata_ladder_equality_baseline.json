@@ -25862,7 +25862,7 @@
     "id": "anthropic/nvidia_nim/test-model",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25873,7 +25873,7 @@
     "id": "claude-3-freecc-no-thinking/nvidia_nim/test-model",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25884,7 +25884,7 @@
     "id": "anthropic/nvidia_nim/01-ai/yi-large",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25895,7 +25895,7 @@
     "id": "claude-3-freecc-no-thinking/nvidia_nim/01-ai/yi-large",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25906,7 +25906,7 @@
     "id": "anthropic/nvidia_nim/moonshotai/kimi-k3",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25917,7 +25917,7 @@
     "id": "claude-3-freecc-no-thinking/nvidia_nim/moonshotai/kimi-k3",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25928,7 +25928,7 @@
     "id": "anthropic/open_router/stepfun/step-5-preview",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25939,7 +25939,7 @@
     "id": "claude-3-freecc-no-thinking/open_router/stepfun/step-5-preview",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25950,7 +25950,7 @@
     "id": "anthropic/opencode_go/minimax-m3",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25961,7 +25961,7 @@
     "id": "claude-3-freecc-no-thinking/opencode_go/minimax-m3",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25972,7 +25972,7 @@
     "id": "anthropic/vercel/alibaba/qwen-3-14b",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25983,7 +25983,7 @@
     "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen-3-14b",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -25994,7 +25994,7 @@
     "id": "anthropic/vercel/alibaba/qwen3-embedding-0.6b",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26005,7 +26005,7 @@
     "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen3-embedding-0.6b",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26016,7 +26016,7 @@
     "id": "anthropic/novita/ming-image-0.1-design",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26027,7 +26027,7 @@
     "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26038,7 +26038,7 @@
     "id": "anthropic/novita/ming-image-0.1-design-layer",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26049,7 +26049,7 @@
     "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26060,7 +26060,7 @@
     "id": "anthropic/novita/zai-org/glm-5.3-flash",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26071,7 +26071,7 @@
     "id": "claude-3-freecc-no-thinking/novita/zai-org/glm-5.3-flash",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26082,7 +26082,7 @@
     "id": "anthropic/nous_portal/anthropic/claude-sonnet-5",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26093,7 +26093,7 @@
     "id": "claude-3-freecc-no-thinking/nous_portal/anthropic/claude-sonnet-5",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26104,7 +26104,7 @@
     "id": "anthropic/nous_portal/tencent/hy3",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26115,7 +26115,7 @@
     "id": "claude-3-freecc-no-thinking/nous_portal/tencent/hy3",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26126,7 +26126,7 @@
     "id": "anthropic/kilo/kilo-auto/efficient",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26137,7 +26137,7 @@
     "id": "claude-3-freecc-no-thinking/kilo/kilo-auto/efficient",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26148,7 +26148,7 @@
     "id": "anthropic/commandcode/claude-sonnet-5-5",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26159,7 +26159,7 @@
     "id": "claude-3-freecc-no-thinking/commandcode/claude-sonnet-5-5",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26170,7 +26170,7 @@
     "id": "anthropic/commandcode/deepseek/deepseek-v4-flash-fast",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26181,7 +26181,7 @@
     "id": "claude-3-freecc-no-thinking/commandcode/deepseek/deepseek-v4-flash-fast",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26192,7 +26192,7 @@
     "id": "anthropic/commandcode/gpt-6-astra",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26203,7 +26203,7 @@
     "id": "claude-3-freecc-no-thinking/commandcode/gpt-6-astra",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26214,7 +26214,7 @@
     "id": "anthropic/cline/cline-pass/deepseek-v4.1-flash",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26225,7 +26225,7 @@
     "id": "claude-3-freecc-no-thinking/cline/cline-pass/deepseek-v4.1-flash",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26236,7 +26236,7 @@
     "id": "anthropic/hypercharm/deepseek-v4.1-flash",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26247,7 +26247,7 @@
     "id": "claude-3-freecc-no-thinking/hypercharm/deepseek-v4.1-flash",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26258,7 +26258,7 @@
     "id": "claude-mythos-5.1",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26269,7 +26269,7 @@
     "id": "claude-mythos-5",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26280,7 +26280,7 @@
     "id": "claude-fable-5",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26291,7 +26291,7 @@
     "id": "claude-opus-4-20250514",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26302,7 +26302,7 @@
     "id": "claude-sonnet-4-20250514",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26313,7 +26313,7 @@
     "id": "claude-haiku-4-20250514",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26324,7 +26324,7 @@
     "id": "claude-3-opus-20240229",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26335,7 +26335,7 @@
     "id": "claude-3-5-sonnet-20241022",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26346,7 +26346,7 @@
     "id": "claude-3-haiku-20240307",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26357,7 +26357,7 @@
     "id": "claude-3-5-haiku-20241022",
     "is_family_default": null,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26368,7 +26368,7 @@
     "id": "mcc/cyber",
     "is_family_default": true,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26379,7 +26379,7 @@
     "id": "anthropic/mcc/cyber",
     "is_family_default": false,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26390,7 +26390,7 @@
     "id": "mcc/best",
     "is_family_default": true,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26401,7 +26401,7 @@
     "id": "anthropic/mcc/best",
     "is_family_default": false,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26412,7 +26412,7 @@
     "id": "mcc/good",
     "is_family_default": true,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26423,7 +26423,7 @@
     "id": "anthropic/mcc/good",
     "is_family_default": false,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26434,7 +26434,7 @@
     "id": "mcc/medium",
     "is_family_default": true,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26445,7 +26445,7 @@
     "id": "anthropic/mcc/medium",
     "is_family_default": false,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26456,7 +26456,7 @@
     "id": "mcc/cheap",
     "is_family_default": true,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26467,7 +26467,7 @@
     "id": "anthropic/mcc/cheap",
     "is_family_default": false,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26478,7 +26478,7 @@
     "id": "mcc/vision",
     "is_family_default": false,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    },
    {
@@ -26489,7 +26489,7 @@
     "id": "anthropic/mcc/vision",
     "is_family_default": false,
     "object": "model",
-    "owned_by": "free-claude-code",
+    "owned_by": "my-claude-code",
     "type": "model"
    }
   ],

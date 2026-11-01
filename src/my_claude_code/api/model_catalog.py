@@ -20,6 +20,7 @@ from my_claude_code.core.tier_refs import (
     TIER_ORDER,
     tier_ref,
 )
+from my_claude_code.core.version import NATIVE_DISTRIBUTION
 
 DISCOVERED_MODEL_CREATED_AT = "1970-01-01T00:00:00Z"
 
@@ -40,12 +41,16 @@ def settings_model_visibility(settings: Settings) -> ModelVisibility:
 class ModelResponse(BaseModel):
     object: Literal["model"] = "model"
     created: int = 0
-    # The value the two byte-identity contracts pin:
-    # tests/contracts/test_metadata_ladder_equality.py (a ladder invariant
-    # test) and tests/contracts/test_mcp_media_off_is_byte_identical.py both
-    # record this field verbatim. Renaming it is an API-response change of its
-    # own, not part of the command-family retirement (8.0.0).
-    owned_by: str = "free-claude-code"
+    # MCC's own package name, from the one constant that also names the
+    # distribution: the product is My Claude Code and nothing it emits names the
+    # retired tool owner. Until 8.0.2 this carried that owner's name -- the last
+    # user-visible occurrence after 8.0.0 removed the command family -- because
+    # two byte-identity contracts pin the field: the metadata-ladder equality
+    # snapshot and the MCP-media-off baseline. 8.0.2 recaptured both (only these
+    # cells moved, see tests/contracts/), so the field is now the brand's own
+    # name and the grep gate in tests/contracts/test_no_legacy_fcc_surface.py
+    # has no allow-list entry for this module.
+    owned_by: str = NATIVE_DISTRIBUTION
     created_at: str
     display_name: str
     id: str
