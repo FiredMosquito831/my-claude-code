@@ -1051,7 +1051,6 @@ class ChatGPTOAuthProvider(BaseProvider):
                                 request, accepted_name_limit
                             ),
                         )
-                        yield ledger.message_start()
                         shape = start_response_shape()
                         # Where the model generated, from the protocol's own
                         # ``*.delta`` events -- before the converter buffers
@@ -1060,21 +1059,41 @@ class ChatGPTOAuthProvider(BaseProvider):
                         # converter because the token total it will be
                         # divided into includes reasoning.
                         generation = GenerationClock()
-                        async for event in iter_chatgpt_oauth_sse_events(
-                            response.aiter_raw()
-                        ):
-                            note_responses_event_shape(shape, event)
-                            note_responses_generation_delta(generation, event)
-                            for sse_event in converter.feed(event):
+                        try:
+                            # ``message_start`` is held until the first frame
+                            # this stream will actually send. It used to be
+                            # written before the first upstream event was
+                            # read, which committed every attempt to the
+                            # client the instant it started -- so a turn the
+                            # host ended with nothing at all could never fall
+                            # through to the next model, and reached the
+                            # reader as an empty success. The bytes and their
+                            # order are unchanged; only an attempt that
+                            # produces nothing now sends nothing, exactly as
+                            # the Chat door's own holdback already does.
+                            async for event in iter_chatgpt_oauth_sse_events(
+                                response.aiter_raw()
+                            ):
+                                note_responses_event_shape(shape, event)
+                                note_responses_generation_delta(generation, event)
+                                for sse_event in converter.feed(event):
+                                    if not ledger.message_started:
+                                        yield ledger.message_start()
+                                    yield sse_event
+                            if not ledger.message_started:
+                                yield ledger.message_start()
+                            for sse_event in converter.finish():
                                 yield sse_event
-
-                        for sse_event in converter.finish():
-                            yield sse_event
-                        if shape is not None:
-                            shape.note_generation(
-                                generation.first_at, generation.last_at
-                            )
-                        record_response_shape(shape)
+                        finally:
+                            # Recorded whatever ended the stream, including
+                            # the failure this version raises for a turn the
+                            # host refused: the shape is the evidence that
+                            # names such a turn afterwards.
+                            if shape is not None:
+                                shape.note_generation(
+                                    generation.first_at, generation.last_at
+                                )
+                            record_response_shape(shape)
                     finally:
                         await response.aclose()
 

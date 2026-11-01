@@ -100,7 +100,10 @@ def test_no_file_is_created_while_every_raw_setting_is_off(tmp_path, capsys) -> 
     path = _arm(tmp_path)
     ledger = AnthropicStreamLedger("msg_1", "m", 1, log_raw_events=False)
     converter = ResponsesStreamConverter(ledger, log_raw_events=False)
-    list(converter.feed({"type": "response.incomplete"}))
+    # A completed turn: since 8.0.1 a terminal ``response.incomplete`` that
+    # produced nothing is a classified failure, and what this test needs is
+    # only that a frame goes through the converter with the sink off.
+    list(converter.feed({"type": "response.completed"}))
     ledger.message_start()
     parse_managed_claude_stdout_line(
         "not json", ManagedClaudeParseState(log_raw_cli_diagnostics=False)
@@ -131,20 +134,26 @@ def test_responses_frames_land_in_the_raw_file_with_the_request_id(
         AnthropicStreamLedger("msg_1", "m"), log_raw_events=True
     )
     # The frame that could not be captured live: a Codex stream that stopped
-    # early says why only on this event.
+    # early says why only on this event. A truncated answer, not the empty
+    # turn 8.0.1 raises for -- the line has to land either way.
+    answer = {"type": "response.output_text.delta", "delta": "half an answ"}
     event = {
         "type": "response.incomplete",
         "incomplete_details": {"reason": "max_output_tokens"},
     }
 
     with logger.contextualize(request_id="req_responses"):
+        list(converter.feed(answer))
         list(converter.feed(event))
 
     lines = _lines(path)
     assert lines == [
         "RAW_SSE req_responses SSE_EVENT: responses_event "
-        + json.dumps(event, default=str)
+        + json.dumps(answer, default=str),
+        "RAW_SSE req_responses SSE_EVENT: responses_event "
+        + json.dumps(event, default=str),
     ]
+    assert "max_output_tokens" in lines[-1]
     assert capsys.readouterr().out == ""
 
 

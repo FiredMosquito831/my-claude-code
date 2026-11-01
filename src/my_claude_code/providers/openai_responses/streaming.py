@@ -27,6 +27,7 @@ from my_claude_code.core.reported_cost import (
     reported_reasoning_tokens,
 )
 from my_claude_code.core.wire_capture import ResponseShape
+from my_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 
 
 def _finish_reason_from_status(status: Any) -> str:
@@ -67,6 +68,74 @@ _REASONING_DELTA_EVENTS = frozenset(
     }
 )
 
+#: Every frame with which a Responses stream can end, and the status each one
+#: announces. ``response.done`` is the protocol's alias for "the stream is
+#: over" and carries the real status inside ``response``, so it is resolved
+#: from the payload rather than from the event name.
+_TERMINAL_EVENT_TYPES = frozenset(
+    {
+        "response.completed",
+        "response.done",
+        "response.incomplete",
+        "response.failed",
+    }
+)
+
+#: The Anthropic stop reason a truncated-by-the-host turn reports. Not
+#: ``end_turn``: the model did not finish saying what it meant to say, and
+#: Claude Code treats ``max_tokens`` as "the answer is cut, ask again".
+_INCOMPLETE_STOP_REASON = "max_tokens"
+
+
+def _terminal_status(event_type: str, response: Mapping[str, Any]) -> str:
+    """Name the terminal kind one terminal frame announces.
+
+    The event name is authoritative for ``response.incomplete`` and
+    ``response.failed``; ``response.completed`` and the ``response.done``
+    alias are resolved from the payload's own ``status``, because a host that
+    ends a turn with ``response.done`` still says *why* there.
+    """
+    if event_type == "response.incomplete":
+        return "incomplete"
+    if event_type == "response.failed":
+        return "failed"
+    status = response.get("status")
+    if isinstance(status, str):
+        lowered = status.lower()
+        if lowered == "incomplete":
+            return "incomplete"
+        if lowered == "failed":
+            return "failed"
+    return "completed"
+
+
+def _usage_reports_no_output(usage: Any) -> bool:
+    """Whether a usage block says the host generated no output tokens.
+
+    The recorded failing shape reported every counter as zero, and a missing
+    block counts as zero for the same reason: silence about generated tokens is
+    not evidence that any were generated. The input count is deliberately not
+    consulted -- prompt tokens say what was *asked*, not what came back, and a
+    turn that charged the prompt while generating nothing has still produced
+    nothing. (A reported zero and an absent key are different facts everywhere
+    else, which is why the values are only ever *read* through
+    :meth:`_read_usage`; here the question is only whether any output existed.)
+    """
+    if not isinstance(usage, Mapping):
+        return True
+    return (_usage_int(usage, "output_tokens") or 0) == 0
+
+
+def _incomplete_reason(response: Mapping[str, Any]) -> str:
+    """The host's own words for an unfinished turn, for the failure message."""
+    details = response.get("incomplete_details")
+    if isinstance(details, Mapping):
+        reason = details.get("reason")
+        if isinstance(reason, str) and reason:
+            return reason
+    return "no reason reported"
+
+
 #: Frames that repeat a whole reasoning part after its deltas. They are the
 #: only source of the text when a part arrives in one piece, and a duplicate of
 #: it otherwise, which is why every emission is keyed (see
@@ -100,9 +169,11 @@ def _reasoning_done_text(event: Mapping[str, Any]) -> str:
 class ResponsesStreamConverter:
     """Own state for one OpenAI Responses API stream.
 
-    Usage is read off the terminal ``response.completed`` frame and normalised
-    into Anthropic's shape by :meth:`_read_usage`, which carries the field
-    names, the invariant and the evidence.
+    Usage is read off whichever terminal frame ends the stream --
+    ``response.completed``, ``response.incomplete`` or ``response.failed`` --
+    and normalised into Anthropic's shape by :meth:`_read_usage`, which carries
+    the field names, the invariant and the evidence. Every terminal kind is
+    translated rather than ignored (8.0.1); :meth:`feed` says what each means.
     """
 
     def __init__(
@@ -151,6 +222,15 @@ class ResponsesStreamConverter:
         #: means "not measured" -- never a zero standing in for silence.
         self._usage_fields: dict[str, int] = {}
         self._finished = False
+        #: Whether the stream has carried any model output at all -- answer
+        #: text, reasoning, or a tool call, on a delta frame or as an item.
+        #: A terminal frame that arrives with this still ``False`` is a turn
+        #: the host generated nothing for, which is not the same fact as a
+        #: turn whose answer was cut short.
+        self._output_seen = False
+        #: The stop reason a terminal frame chose, when it overrides the
+        #: ledger's own (only ``incomplete`` does: ``max_tokens``).
+        self._stop_reason: str | None = None
 
     def _log_event(self, event: dict[str, Any]) -> None:
         """Write one raw upstream frame where an operator can actually read it.
@@ -176,6 +256,17 @@ class ResponsesStreamConverter:
         event_type = event.get("type")
         if not isinstance(event_type, str):
             return
+
+        if event_type.endswith(".delta"):
+            # The protocol's own spelling of "this frame is a token-bearing
+            # delta": answer text, reasoning summary or text, function-call
+            # arguments and a refusal all end this way. Read here, before the
+            # per-kind branches, so a delta this converter does not translate
+            # still counts as output when a terminal frame asks whether the
+            # turn produced anything (8.0.1).
+            delta = event.get("delta")
+            if isinstance(delta, str) and delta:
+                self._output_seen = True
 
         if event_type == "response.output_text.delta":
             delta = event.get("delta")
@@ -207,6 +298,10 @@ class ResponsesStreamConverter:
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
             item_type = item.get("type")
+            if item_type in {"reasoning", "function_call"}:
+                # An item the host opened is output the host produced, even
+                # when its text is withheld (``encrypted_content``).
+                self._output_seen = True
             if item_type == "reasoning":
                 # Deliberately opens nothing. A reasoning item whose only
                 # payload is ``encrypted_content`` carries no text anybody may
@@ -249,6 +344,8 @@ class ResponsesStreamConverter:
         if event_type == "response.output_item.done":
             item = event.get("item") or {}
             item_type = item.get("type")
+            if item_type in {"reasoning", "function_call"}:
+                self._output_seen = True
             if item_type == "reasoning":
                 yield from self._flush_reasoning_item(item)
                 return
@@ -271,17 +368,59 @@ class ResponsesStreamConverter:
                     yield self._ledger.stop_tool_block(tool["index"])
             return
 
-        if event_type in {"response.completed", "response.done"}:
-            response = event.get("response") or event
-            if self._finished:
-                return
-            self._finished = True
-            yield from self._flush_answer_text()
-            yield from self._ledger.close_content_blocks()
-            usage = response.get("usage") if isinstance(response, dict) else None
-            if isinstance(usage, Mapping):
-                self._read_usage(usage)
+        if event_type in _TERMINAL_EVENT_TYPES:
+            yield from self._terminal(event_type, event)
             return
+
+    def _terminal(self, event_type: str, event: Mapping[str, Any]) -> Iterator[str]:
+        """Translate the one frame that ends a Responses stream.
+
+        The protocol ends a stream in one of three ways, and until 8.0.1 only
+        the first was translated:
+
+        * ``completed`` -- a finished turn, on the path it always took;
+        * ``incomplete`` -- the host stopped the turn itself. With partial
+          output that is a truncated answer and ends the message with
+          ``max_tokens``. With no output at all and no output tokens reported
+          it is the shape the Codex backend produced for a 513-tool request:
+          four SSE frames, ``incomplete_details.reason: max_output_tokens``,
+          no output items and zero usage. Reporting that as an empty success
+          is what made 34 dead turns look answered, so it is raised as a
+          classified provider failure instead and the route moves on;
+        * ``failed`` -- the host failed the turn outright. Always a failure,
+          whatever it managed to stream before it.
+
+        Usage is read on every terminal kind that carries a block, with the
+        same fields and the same zero-vs-NULL rules as ``completed``: the
+        tokens a host reports are a fact about the turn, not a property of a
+        successful one.
+        """
+        # ``or event`` exactly as the completed-only branch read it: a frame
+        # whose ``response`` is empty still describes itself at the top level.
+        response = event.get("response") or event
+        if not isinstance(response, Mapping):
+            response = event
+        if self._finished:
+            return
+        self._finished = True
+        usage = response.get("usage")
+        yield from self._flush_answer_text()
+        yield from self._ledger.close_content_blocks()
+        if isinstance(usage, Mapping):
+            self._read_usage(usage)
+        status = _terminal_status(event_type, response)
+        if status == "failed":
+            raise TruncatedProviderStreamError(
+                "Responses stream ended failed upstream."
+            )
+        if status == "incomplete":
+            if not self._output_seen and _usage_reports_no_output(usage):
+                raise TruncatedProviderStreamError(
+                    "Responses stream ended incomplete with no output"
+                    " (incomplete_details.reason:"
+                    f" {_incomplete_reason(response)})."
+                )
+            self._stop_reason = _INCOMPLETE_STOP_REASON
 
     def _reasoning_part_key(
         self, event_type: str, event: Mapping[str, Any]
@@ -453,7 +592,14 @@ class ResponsesStreamConverter:
         yield from self._ledger.close_content_blocks()
         # A turn that carried a tool call ends for the call, as the Chat door
         # and Anthropic itself say; any other turn still ends ``end_turn``.
-        reason = stop_reason or self._ledger.final_stop_reason("end_turn")
+        # A turn the host itself cut short ends ``max_tokens``, whatever the
+        # ledger believes: an incomplete tool call must not be reported as a
+        # call the client may run.
+        reason = (
+            stop_reason
+            or self._stop_reason
+            or self._ledger.final_stop_reason("end_turn")
+        )
         yield self._ledger.message_delta(
             reason,
             self._usage.get("output_tokens", 0),
@@ -561,6 +707,13 @@ def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:
             tokens = reported_reasoning_tokens(usage)
             if tokens is not None:
                 shape.note_reasoning_tokens(tokens)
+            # The host's own word for *why* it stopped (8.0.1). Until then
+            # only ``status`` was kept, so the one measurement that would name
+            # the Codex backend's real reason (`max_output_tokens`) survived
+            # four reproductions and arrived nowhere.
+            details = response.get("incomplete_details")
+            if isinstance(details, Mapping):
+                shape.note_incomplete_reason(details.get("reason"))
             status = response.get("status")
             shape.note_finish(status if isinstance(status, str) else kind)
         else:
