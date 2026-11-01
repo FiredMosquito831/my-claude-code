@@ -65,6 +65,7 @@ jobs:
             run: >-
               uv run pytest -v --tb=short
               --ignore=tests/api/test_admin_static_jsdom.py
+              --ignore=tests/api/test_admin_ux_pass_jsdom.py
               --ignore=tests/contracts/test_admin_static_xss.py
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -151,6 +152,7 @@ jobs:
         # after it.
         run: >-
           uv run pytest tests/api/test_admin_static_jsdom.py
+          tests/api/test_admin_ux_pass_jsdom.py
           tests/contracts/test_admin_static_xss.py -n 0 -v --tb=short
           -o faulthandler_timeout=660
 

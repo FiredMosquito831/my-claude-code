@@ -4830,6 +4830,22 @@ if (process.env.MCC_JSDOM_SCENARIO === "in_loop_chip") {
   );
   scenario = prepareInLoopChipScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=ux_views (7.122.3): every view's DOM digests, for the
+   base-tree equality of the UX pass -- the same scenario runs on the base
+   tree and here (admin_jsdom_ux_views.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "ux_views") {
+  const { prepareUxViewsScenario } = await import("./admin_jsdom_ux_views.mjs");
+  scenario = prepareUxViewsScenario({ window, ROUTES });
+}
+/* MCC_JSDOM_SCENARIO=ux_pass (7.122.3): the dashboard UX pass -- the
+   Analytics canvas's order and its four charts, the LINKFIX rotation links,
+   the curated Web Search find box, the "default value" chip, the footer on
+   views with no settings, the view titles, and every wording fix in §4
+   (admin_jsdom_ux_pass.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "ux_pass") {
+  const { prepareUxPassScenario } = await import("./admin_jsdom_ux_pass.mjs");
+  scenario = prepareUxPassScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=not_yet_card (7.118.1): the Coding agents page's "not
    yet" card -- the registry's own payload under the additive `not_yet` key,
    the card's dated text and its absent controls, the find box still reaching
@@ -9671,10 +9687,13 @@ const deferredRace = {};
       doc.querySelectorAll("#reqHarnessBreakdown tbody tr"),
     ).map((tr) => tr.textContent.trim()),
     keyRows: doc.querySelectorAll("#reqKeyBreakdown tbody tr").length,
+    // 7.122.3: the cost tile is one of the band's cards but has its own
+    // lifecycle (its panel is computed apart from the stats rollup), so the
+    // "every card says counting…" invariant is measured over the rest.
     countingCards: Array.from(
-      doc.querySelectorAll("#reqStatsCards .requests-card strong"),
+      doc.querySelectorAll("#reqStatsCards .requests-card:not(.cost-tile) strong"),
     ).filter((el) => el.textContent.startsWith("counting")).length,
-    cards: doc.querySelectorAll("#reqStatsCards .requests-card").length,
+    cards: doc.querySelectorAll("#reqStatsCards .requests-card:not(.cost-tile)").length,
     pager: doc.getElementById("reqPageInfo").textContent,
     tableRows: doc.querySelectorAll("#reqTableBody tr").length,
   });

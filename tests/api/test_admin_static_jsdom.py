@@ -329,7 +329,9 @@ def test_an_unset_select_loads_clean_and_shows_its_default(rendered) -> None:
     assert control["value"] == ""
     assert control["original"] == ""
     assert control["optionValues"][0] == ""
-    assert control["firstOptionLabel"].startswith("Default (true)")
+    # 7.122.3 (U27): a select whose options are exactly false/true reads
+    # Off/On, like every other switch on the page. The value is unchanged.
+    assert control["firstOptionLabel"].startswith("Default (On)")
     # The whole point: a form nobody touched has nothing to save.
     assert rendered["fields"]["dirtyOnLoad"] == "No changes"
 
@@ -337,7 +339,8 @@ def test_an_unset_select_loads_clean_and_shows_its_default(rendered) -> None:
 def test_every_field_says_what_its_default_is(rendered) -> None:
     defaults = rendered["fields"]["fieldDefaults"]
 
-    assert defaults["FALLBACK_BENCH_ENABLED"] == "default: true"
+    # 7.122.3 (U27/U30): the default is named in the words the control uses.
+    assert defaults["FALLBACK_BENCH_ENABLED"] == "default: On"
     assert defaults["LOG_LEVEL"] == "default: INFO"
 
 
@@ -2701,16 +2704,21 @@ def test_coding_agents_card_lists_every_command_with_a_copy_button(
         "mcc-claude",
         "mcc-claude --discover-models",
         "mcc-claude-old",
-        "fcc-claude",
         "mcc-rtk enable claude",
     ]
     assert [line["kind"] for line in claude["commandLines"]] == [
         "primary",
         "flag",
         "flag",
-        "legacy",
         "rtk",
     ]
+    # 7.122.3 (U17): the retired alias the registry still lists is not drawn.
+    # The card answers "what can I type" with commands that work.
+    assert all(
+        not line["command"].lower().startswith("fcc-")
+        for card in rendered["codingAgents"]["cards"]
+        for line in card["commandLines"]
+    )
     assert all(line["hasCopy"] for line in claude["commandLines"])
     assert all(line["help"] for line in claude["commandLines"])
 
@@ -11881,6 +11889,53 @@ def _without_corrected_help(dom: str) -> str:
     return dom
 
 
+# 7.122.3 (U6): the Web Search find box matches a curated haystack instead of
+# the card's rendered text, and the haystack travels as two data attributes on
+# the card. They are this release's only change to the grid's markup, and the
+# test below removes exactly them from both sides after asserting they are
+# there -- the same "the exclusion can never quietly match nothing" rule the
+# corrected help texts follow.
+WS_HAYSTACK_ATTRS = re.compile(r' data-ws-(?:search|configured)="[^"]*"')
+
+
+# 7.122.3 (U17): a card's retired command row, as rendered by 7.113.2.
+RETIRED_COMMAND_ROW = re.compile(
+    r'<li class="agent-command-row" data-kind="legacy">.*?</li>', re.DOTALL
+)
+
+
+def _without_retired_commands(dom):
+    """Strip the retired command rows from one HTML string or a list of them.
+
+    Both captures in this module store a view's children as a list of strings.
+    """
+
+    if isinstance(dom, list):
+        return [_without_retired_commands(entry) for entry in dom]
+    return RETIRED_COMMAND_ROW.sub("", dom)
+
+
+def _count_retired_command_rows(dom) -> int:
+    parts = dom if isinstance(dom, list) else [dom]
+    return sum(len(RETIRED_COMMAND_ROW.findall(part)) for part in parts)
+
+
+def _without_ux_pass_nodes(dom: str) -> str:
+    """The grid with this pass's settings-wide display changes undone.
+
+    Mirrors ``uxNormalise`` in ``tests/api/admin_jsdom_ux_views.mjs``: the
+    provenance chip is removed (U12 moved it and reworded it), and the words a
+    select uses for its default are normalised (U27/U30). What either says is
+    proved by the ux_pass scenario; this comparison is about everything else.
+    """
+
+    dom = WS_HAYSTACK_ATTRS.sub("", _without_corrected_help(dom))
+    dom = re.sub(r'<span class="field-source">[^<]*</span>', "", dom)
+    dom = re.sub(r'<option value="">Default \([^<]*\)</option>', "", dom)
+    dom = re.sub(r'class="field-default">default: [^<]*<', "", dom)
+    return dom
+
+
 WS_CHOICES = [
     "ddgs",
     "ollama",
@@ -11938,8 +11993,14 @@ def test_jsdom_with_no_chain_the_web_search_page_is_the_base_trees(
             pattern.pattern
         )
     for name, base_dom in baseline["unset"]["dom"].items():
-        assert _without_corrected_help(unset["dom"][name]) == (
-            _without_corrected_help(base_dom)
+        if name == "grid":
+            # 7.122.3 (U6): two attributes per rendered card, and nothing else.
+            cards = unset["dom"][name].count("data-websearch-provider=")
+            assert cards == 14, cards
+            assert len(WS_HAYSTACK_ATTRS.findall(unset["dom"][name])) == cards * 2
+            assert WS_HAYSTACK_ATTRS.findall(base_dom) == []
+        assert _without_ux_pass_nodes(unset["dom"][name]) == (
+            _without_ux_pass_nodes(base_dom)
         ), name
     assert unset["dirty"] == baseline["unset"]["dirty"] == "No changes"
     assert unset["recent"] == baseline["unset"]["recent"]
@@ -12316,7 +12377,14 @@ def test_jsdom_coding_agents_filter_empty_query_is_the_base_trees_page_exactly(
     assert dom["viewChildCount"] == 5
     assert dom["filterBar"].count("<input") == 1
     assert 'id="codingAgentsFilter"' in dom["filterBar"]
-    assert dom["children"] == baseline["dom"]["children"]
+    # 7.122.3 (U17): the only other difference from 7.113.2 is the retired
+    # command rows, which this release stops drawing. The exclusion is stated
+    # as a count on both sides, so it can never quietly match nothing.
+    base_without_legacy = _without_retired_commands(baseline["dom"]["children"])
+    mine_without_legacy = _without_retired_commands(dom["children"])
+    assert _count_retired_command_rows(baseline["dom"]["children"]) > 0
+    assert _count_retired_command_rows(dom["children"]) == 0
+    assert mine_without_legacy == base_without_legacy
 
 
 def test_jsdom_coding_agents_filter_keeps_exactly_the_cards_that_render_it(
@@ -12349,7 +12417,7 @@ def test_jsdom_coding_agents_filter_keeps_exactly_the_cards_that_render_it(
     }
 
 
-def test_jsdom_coding_agents_filter_matches_a_name_a_command_and_a_legacy_alias(
+def test_jsdom_coding_agents_filter_matches_a_name_a_command_and_no_retired_alias(
     coding_agents_filter,
 ) -> None:
     # Kilo's own summary calls it "a fork of OpenCode", so Kilo is an honest
@@ -12362,11 +12430,11 @@ def test_jsdom_coding_agents_filter_matches_a_name_a_command_and_a_legacy_alias(
     assert coding_agents_filter["claude"]["desktop"] == ["claude_desktop", "roo_code"]
     # Typed in capitals and still a match: the comparison is case-insensitive.
     assert coding_agents_filter["claude"]["value"] == "CLAUDE"
-    # fcc-claude is the legacy alias the Claude Code card renders as a
-    # command line, which is the point of matching rendered text.
-    assert coding_agents_filter["legacyAlias"]["cli"] == ["claude"]
+    # 7.122.3 (U17): the retired alias is not rendered, so it matches nothing.
+    # This was the one card it used to match; U17 removes the mention itself.
+    assert coding_agents_filter["legacyAlias"]["cli"] == []
     assert coding_agents_filter["legacyAlias"]["desktop"] == []
-    assert coding_agents_filter["legacyAlias"]["shown"] == 1
+    assert coding_agents_filter["legacyAlias"]["shown"] == 0
 
 
 def test_jsdom_coding_agents_filter_nothing_matches_and_no_control_leaves(
@@ -12624,7 +12692,13 @@ def test_jsdom_not_yet_card_is_the_only_thing_this_release_added(
     assert "BASE tree 16bc7b23" in baseline["written_by"]
     assert baseline["dom"]["viewChildCount"] == 5
     assert not_yet_card["dom"]["viewChildCount"] == 5
-    assert not_yet_card["dom"]["children"] == baseline["dom"]["children"]
+    # 7.122.3 (U17): the retired command rows are the only other difference,
+    # normalised out on both sides with a count on each.
+    assert _count_retired_command_rows(baseline["dom"]["children"]) > 0
+    assert _count_retired_command_rows(not_yet_card["dom"]["children"]) == 0
+    assert _without_retired_commands(not_yet_card["dom"]["children"]) == (
+        _without_retired_commands(baseline["dom"]["children"])
+    )
     assert [
         {"id": card["id"], "title": card["title"]} for card in not_yet_card["cards"]
     ] == baseline["cards"]
@@ -13206,6 +13280,11 @@ TAVILY_ROTATION = "TAVILY_API_KEY_ROTATION"
 #: control for. Their 7.121.0 control is None (there was none).
 WEBSEARCH_ROTATIONS = websearch_rotation_keys()
 
+#: 7.122.3 (U27): the one field declared as a `select` whose options are
+#: exactly false/true. It now reads Off/On like every other switch; its value
+#: is untouched, so only the option text moves.
+BOOLEAN_SELECT_KEY = "FALLBACK_BENCH_ENABLED"
+
 #: Fields whose control is not a form control because the page edits them some
 #: other way: the rail pause buttons write their own endpoint, and the three
 #: oauth_login fields are buttons that start a login. Each group is asserted
@@ -13444,22 +13523,29 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
     # with the other fourteen views; every OTHER view is still byte-identical.
     # The Get Started page has its own base-written baseline now
     # (get_started_dom_7_122_0.json, test_jsdom_get_started_*).
+    # 7.122.3: this pass restructures some views and changes the words every
+    # settings control wears (UX_CHANGED_VIEWS / UX_SETTINGS_ONLY_VIEWS); those
+    # are compared, with the display-only changes normalised out, against this
+    # pass's own base-written baseline in test_admin_ux_pass_jsdom.py. Every
+    # other view is still byte-identical here.
+    excluded = (
+        RELABELLED_VIEWS | UX_CHANGED_VIEWS | UX_SETTINGS_ONLY_VIEWS | {"get_started"}
+    )
     assert {
         key: value
         for key, value in select_blank["views"].items()
-        if key not in RELABELLED_VIEWS and key != "get_started"
-    } == {
-        key: value
-        for key, value in base["views"].items()
-        if key not in RELABELLED_VIEWS and key != "get_started"
-    }
+        if key not in excluded
+    } == {key: value for key, value in base["views"].items() if key not in excluded}
 
     moved = sorted(
         key
         for key, html in base["controls"].items()
         if select_blank["controls"].get(key) != html
     )
-    assert moved == sorted([SAVED_NUMBER_KEY, *WEBSEARCH_ROTATIONS])
+    # 7.122.3 (U27): a select whose options are exactly false/true now wears
+    # the On/Off labels every other switch uses. Its value is untouched; the
+    # option text is the whole of the change.
+    assert moved == sorted([SAVED_NUMBER_KEY, *WEBSEARCH_ROTATIONS, BOOLEAN_SELECT_KEY])
     for key in WEBSEARCH_ROTATIONS:
         assert base["controls"][key] is None, key
         assert select_blank["controls"][key].startswith("<select"), key
@@ -13715,15 +13801,19 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
     # 7.122.0 (see the 7.121.0 test above): Get Started is redrawn by its own
     # release; every other view is unchanged. 7.122.2 rewords the help in the
     # Guide and on the Requests page, which are checked directly below.
+    # 7.122.3: this pass restructures some views and changes the words every
+    # settings control wears (UX_CHANGED_VIEWS / UX_SETTINGS_ONLY_VIEWS); those
+    # are compared, with the display-only changes normalised out, against this
+    # pass's own base-written baseline in test_admin_ux_pass_jsdom.py. Every
+    # other view is still byte-identical here.
+    excluded = (
+        RELABELLED_VIEWS | UX_CHANGED_VIEWS | UX_SETTINGS_ONLY_VIEWS | {"get_started"}
+    )
     assert {
         key: value
         for key, value in select_blank["views"].items()
-        if key not in RELABELLED_VIEWS and key != "get_started"
-    } == {
-        key: value
-        for key, value in base["views"].items()
-        if key not in RELABELLED_VIEWS and key != "get_started"
-    }
+        if key not in excluded
+    } == {key: value for key, value in base["views"].items() if key not in excluded}
     assert record["views"] == []
 
     mine = {key: _sha256(html) for key, html in select_blank["controls"].items()}
@@ -13732,10 +13822,15 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
         for key, digest in base["controls_sha256"].items()
         if mine.get(key) != digest
     )
-    assert moved == list(WEBSEARCH_ROTATIONS) == record["controls"]
+    # 7.122.3 (U27): the one select stored as false/true wears On/Off now; its
+    # value and every other control's markup are untouched.
+    assert moved == sorted([*WEBSEARCH_ROTATIONS, BOOLEAN_SELECT_KEY])
+    assert record["controls"] == list(WEBSEARCH_ROTATIONS)
     for key in WEBSEARCH_ROTATIONS:
         assert base["controls_sha256"][key] is None, key
-    assert len(base["controls_sha256"]) - len(moved) == 534
+    # 7.122.3 (U27) moved one more control's markup (its option labels), so
+    # 533 of the 547 keep their exact bytes; the fourteen movers are named.
+    assert len(base["controls_sha256"]) - len(moved) == 533
 
     moved_fields = sorted(
         key
@@ -14551,6 +14646,13 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
     tree drew for the same payload. 7.122.2 rewords the help in the Guide and
     on the Requests page (see :data:`RELABELLED_VIEWS`), so those two are
     excluded here as well and checked directly.
+
+    Since 7.122.3 the pass restructures views by design (:data:`UX_CHANGED_VIEWS`)
+    and changes the words every settings control wears
+    (:data:`UX_SETTINGS_ONLY_VIEWS`). Both are excluded here; the second set is
+    compared, with those display-only changes normalised out, against this
+    pass's own base-written baseline in ``test_admin_ux_pass_jsdom.py``. This
+    test asserts nothing else moved.
     """
 
     baseline = json.loads(GET_STARTED_BASELINE.read_text(encoding="utf-8"))
@@ -14558,16 +14660,14 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
     base = baseline["views"]
 
     mine = dict(get_started["viewsOnLoad"])
-    base_without = {
-        key: value
-        for key, value in base.items()
-        if key != GET_STARTED_VIEW and key not in RELABELLED_VIEWS
-    }
-    mine_without = {
-        key: value
-        for key, value in mine.items()
-        if key != GET_STARTED_VIEW and key not in RELABELLED_VIEWS
-    }
+    excluded = (
+        RELABELLED_VIEWS
+        | UX_CHANGED_VIEWS
+        | UX_SETTINGS_ONLY_VIEWS
+        | {GET_STARTED_VIEW}
+    )
+    base_without = {key: value for key, value in base.items() if key not in excluded}
+    mine_without = {key: value for key, value in mine.items() if key not in excluded}
     assert set(base_without) == set(mine_without)
     moved = sorted(
         view for view, digest in base_without.items() if mine_without[view] != digest
@@ -14575,3 +14675,27 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
     assert moved == []
     # And Get Started really did change (the baseline is not vacuous).
     assert mine[GET_STARTED_VIEW] != base[GET_STARTED_VIEW]
+
+
+#: Every view this pass changes on purpose, and why. The test above proves
+#: nothing outside this set drifted; each entry is checked by its own test in
+#: the ux_pass scenario below.
+UX_CHANGED_VIEWS = frozenset(
+    {
+        "requests",  # the Analytics canvas: order, cost tile, charts
+        "providers",  # U16's rail and the heading ids it points at
+        "proxying",  # U15's rail, chains above sources, setting links
+        "coding_agents",  # U17: retired command rows are not drawn
+        "models",  # U23: four buttons get the class the stylesheet carries
+        "optimizer",  # U26's sentence and the RTK cross-link
+        "web_search",  # U6's count line and curated haystack
+        "claude",  # U4's token wording
+        "guide",  # U4, the retired-command paragraph, the migration note
+    }
+)
+
+#: Views the settings-wide display changes reach, which the Get Started
+#: baseline above can only compare raw. ``test_ux_pass_leaves_every_other_view``
+#: compares them against this pass's own base-written baseline with those
+#: changes normalised out, which is the stronger check for them.
+UX_SETTINGS_ONLY_VIEWS = frozenset({"limits", "messaging", "model_config"})

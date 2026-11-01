@@ -58,6 +58,11 @@ _MARKUP_ID = re.compile(r"""\bid=["']([^"']+)["']""")
 # unless you can point at the `createElement` + `id = "..."` (or
 # `.id = ...`) call.
 KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
+    # Created by paintRequestCostTile() in admin.js -- the cost tile at the
+    # head of the Analytics summary band (7.122.3, ADDENDUM 2). It is inserted
+    # into #reqStatsCards, which renderStatCards empties on every paint, so it
+    # cannot be declared in index.html alongside the tiles it sits with.
+    "reqCostTile",
     # Created by renderNav() in admin.js -- the in-flight count beside
     # Analytics (7.45.0). The sidebar's links are built by renderNav, so the
     # badge is created with them rather than declared in index.html.

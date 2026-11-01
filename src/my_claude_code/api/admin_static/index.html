@@ -9,7 +9,7 @@
   </head>
   <body>
     <div class="app-shell">
-      <aside class="sidebar">
+      <aside class="sidebar" id="appSidebar">
         <div class="brand">
           <div class="brand-mark">
             <img src="/admin/img/app-icon-96.png" alt="My Claude Code" width="96" height="96" />
@@ -32,6 +32,19 @@
 
       <main class="main">
         <header class="topbar">
+          <!-- 7.122.3 (U20): below 720 px the sidebar is off-canvas and this is
+               the only way back to it, so a page starts on its own first screen
+               instead of 2,068 px down the navigation. -->
+          <button
+            id="sidebarToggle"
+            class="sidebar-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="appSidebar"
+          >
+            <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+            Menu
+          </button>
           <div>
             <!-- 7.122.0 (U11): the static default is the page the server opens
                  for a new install, so the first paint is never the Providers
@@ -127,6 +140,20 @@
           </section>
 
           <section id="view-providers" class="admin-view" data-view="providers" hidden>
+            <!-- 7.122.3 (U16): the page opens with Version, Deployment, Other
+                 servers, RTK and Custom providers before the provider grid.
+                 Nothing moves -- the docs and the control map still say where
+                 each card is -- but the rail makes the grid, which is what the
+                 page is for, one click away. -->
+            <nav id="providersJumpBar" class="jump-bar" aria-label="Providers sections">
+              <span class="jump-bar-label">On this page</span>
+              <a href="#providersSections">Model providers</a>
+              <a href="#customProvidersHeading">Custom providers</a>
+              <a href="#rtkHeading">Token optimizer (RTK)</a>
+              <a href="#versionPanel">Version</a>
+              <a href="#deploymentPanel">Deployment</a>
+              <a href="#otherServersPanel">Other servers</a>
+            </nav>
             <section class="settings-section" id="versionPanel" aria-label="Version and updates">
               <div class="section-heading">
                 <div>
@@ -145,10 +172,10 @@
               <div id="versionDetails" class="version-details"></div>
               <pre id="versionUpgradeLog" class="requests-detail-body version-upgrade-log" hidden></pre>
             </section>
-            <section class="settings-section" aria-label="Deployment">
+            <section class="settings-section" id="deploymentPanel" aria-label="Deployment">
               <div class="section-heading">
                 <div>
-                  <h3>Deployment</h3>
+                  <h3 id="deploymentHeading">Deployment</h3>
                   <p>
                     How the optional tray app (<code>mcc-desktop</code>) and the
                     headless server (<code>mcc-server</code>) run on this machine.
@@ -237,10 +264,10 @@
               <div id="otherServersList" class="other-servers-list"></div>
               <p id="otherServersStatus" class="other-servers-status" role="status"></p>
             </section>
-            <section class="settings-section" aria-label="Token optimizer">
+            <section class="settings-section" id="rtkPanel" aria-label="Token optimizer">
               <div class="section-heading">
                 <div>
-                  <h3>Token optimizer</h3>
+                  <h3 id="rtkHeading">Token optimizer</h3>
                   <p>
                     Patch each coding agent with the RTK token optimizer. These write
                     <code>~/.mcc/rtk.json</code> and apply immediately.
@@ -255,7 +282,7 @@
             </section>
             <section class="provider-strip" aria-label="Custom providers">
               <div class="strip-header">
-                <h3>Custom providers</h3>
+                <h3 id="customProvidersHeading">Custom providers</h3>
                 <button
                   id="addCustomProviderButton"
                   class="secondary-button"
@@ -335,6 +362,15 @@
                opened; it owns no manifest settings section, so renderSections()
                skips it and `containerId` stays null. -->
           <section id="view-proxying" class="admin-view" data-view="proxying" hidden>
+            <!-- 7.122.3 (U15): the page's own contents. The chain cards were
+                 below nine blocks of sources; they are the page's subject, so
+                 they come first and this rail says where everything else is. -->
+            <nav id="proxyingJumpBar" class="jump-bar" aria-label="Proxying sections">
+              <span class="jump-bar-label">On this page</span>
+              <a href="#proxyingList">Chains</a>
+              <a href="#proxyingSourcesTitle">Sources</a>
+              <a href="#proxyingFeedsTitle">Proxy lists</a>
+            </nav>
             <p class="view-intro">
               One chain per provider you have configured: the order MCC goes
               out through, the rotation policy that picks between the entries,
@@ -415,6 +451,16 @@
                  hidden view while this page is open. -->
             <div id="proxyingStatus" class="route-status" role="status"
               aria-live="polite" aria-atomic="true" hidden></div>
+
+            <!-- 7.122.3 (U15): the chain cards come first -- they are the
+                 page's subject -- and the topbar's rail points at them. No
+                 heading of its own: the rail already names them, and a
+                 heading would make the page taller than it was. -->
+            <div id="proxyingList" class="proxy-card-list"></div>
+            <p id="proxyingEmpty" class="field-description" hidden>
+              No provider on this install is configured yet. Add a key on the
+              Providers page and its card appears here.
+            </p>
 
             <!-- 7.89.0 (PR-S3): proxies already running on this computer,
                  found by one press of Scan and offered as chain addresses.
@@ -545,11 +591,6 @@
               <div id="proxyingCandidates"></div>
             </section>
 
-            <div id="proxyingList" class="proxy-card-list"></div>
-            <p id="proxyingEmpty" class="field-description" hidden>
-              No provider on this install is configured yet. Add a key on the
-              Providers page and its card appears here.
-            </p>
           </section>
 
           <!-- 7.110.0: the marketplace page (InferHub). Filled from
@@ -691,7 +732,7 @@
                     <code>settings.json</code>, so <em>every</em> session points
                     here. Claude Code reads that file before your environment, so
                     a stale one silently overrides your exports. The previous file
-                    is backed up with a <code>.fcc-backup</code> suffix.
+                    is kept beside it, under the same name with a backup suffix.
                   </p>
                 </div>
                 <div class="observability-actions">
@@ -983,11 +1024,10 @@
                   <div class="claude-command-block"><code>mcc-claude-old</code></div>
                 </li>
               </ul>
+              <!-- 7.122.3: the paragraph about the pre-7.0.0 command
+                   spellings is gone. Those commands are removed by the
+                   retirement PR, and nothing here names them. -->
               <p class="claude-launcher-note">
-                The old <code>fcc-</code> spellings were retired in 7.0.0: each
-                one now prints the <code>mcc-</code> name that replaced it and
-                exits, so a script that still uses one fails loudly instead of
-                quietly. They are removed entirely in 8.0.0.
                 Run <code>mcc-help</code> for the full command reference.
               </p>
             </section>
@@ -1091,7 +1131,7 @@
                  desktop apps alike, and it changes nothing but which cards are
                  shown: every card is already in this document, the match is a
                  case-insensitive substring of the text each card renders (its
-                 name, its commands and legacy aliases, its labels), and an
+                 name, its commands, its labels), and an
                  empty box shows them all again. No request, no server change. -->
             <div class="coding-agents-filter" id="codingAgentsFilterBar" role="search">
               <label class="coding-agents-filter-label" for="codingAgentsFilter">
@@ -1256,11 +1296,15 @@
                 <code>MODEL</code> or a fallback chain still serves.
               </p>
               <div class="models-actions">
-                <button type="button" class="secondary" id="modelsPreviewVisibility">
+                <!-- 7.122.3 (U23): these four shipped with a `secondary` class
+                     nothing styles, and one with no class at all, so they
+                     rendered as flat grey squares beside every styled button
+                     in the console. -->
+                <button type="button" class="secondary-button" id="modelsPreviewVisibility">
                   Preview
                 </button>
-                <button type="button" id="modelsSaveVisibility">Save patterns</button>
-                <button type="button" class="secondary" id="modelsMigrateGlobs"
+                <button type="button" class="secondary-button" id="modelsSaveVisibility">Save patterns</button>
+                <button type="button" class="secondary-button" id="modelsMigrateGlobs"
                   title="Fold every provider whose models are all individually hidden into one provider/* pattern">
                   Migrate exact patterns to globs
                 </button>
@@ -1279,7 +1323,7 @@
                     placeholder="Filter models or providers"
                     aria-label="Filter models or providers"
                     aria-describedby="modelsTreeSummary" />
-                  <button type="button" class="secondary" id="modelsReload">
+                  <button type="button" class="secondary-button" id="modelsReload">
                     Reload
                   </button>
                 </div>
@@ -1384,6 +1428,18 @@
                 <span id="reqLastUpdated" class="last-updated">Not loaded</span>
               </div>
             </div>
+            <!-- 7.122.3 (U14): the page is 7,000 px tall at 1440x900 and the
+                 request list used to start at 4,530 px of it. Its own contents
+                 rail, so any block is one click away without reading the rest. -->
+            <nav id="reqJumpBar" class="jump-bar" aria-label="Analytics sections">
+              <span class="jump-bar-label">On this page</span>
+              <a href="#reqSummaryHeading">Summary</a>
+              <a href="#reqInflightHeading">In flight</a>
+              <a href="#reqLogHeading">Requests</a>
+              <a href="#reqChartsHeading">Charts</a>
+              <a href="#reqCostHeading">Cost</a>
+              <a href="#reqMaintenance">Maintenance</a>
+            </nav>
             <div class="requests-toolbar">
               <label>
                 Provider
@@ -1539,14 +1595,11 @@
                   <option value="500">500</option>
                 </select>
               </label>
-              <button id="reqApplyFilters" class="secondary-button" type="button">Apply</button>
+              <button id="reqApplyFilters" class="secondary-button" type="button">Apply filters</button>
               <button id="reqClearFilters" class="secondary-button" type="button">Clear filters</button>
               <button id="reqExportButton" class="secondary-button" type="button">Export</button>
               <button id="reqExportAttemptsButton" class="secondary-button" type="button">Export attempts</button>
               <span id="reqBodiesIndicator" class="requests-indicator"></span>
-              <button id="reqClearDescriptionsButton" class="secondary-button danger" type="button">Clear image descriptions</button>
-              <button id="reqForgetLearnedButton" class="secondary-button danger" type="button">Forget all learned facts</button>
-              <button id="reqClearButton" class="secondary-button danger" type="button">Clear log</button>
             </div>
             <!-- 7.91.2: what the search box is doing. A search saved from an
                  earlier visit waits here for Run instead of running by itself;
@@ -1567,162 +1620,15 @@
               <button id="reqSearchIndexBuild" class="requests-search-action" type="button" hidden>Build search index</button>
               <button id="reqSearchIndexPause" class="requests-search-action" type="button" hidden>Pause</button>
             </p>
+            <!-- 7.122.3 (ADDENDUM 2): the order the user asked for is the order
+                 the page reads in -- the usage tiles (with a cost tile), then
+                 in flight, then the request list with its filters above it,
+                 then the summary charts and the secondary panels. -->
+            <h3 id="reqSummaryHeading" class="analytics-section-heading">
+              Usage in this window
+            </h3>
             <div id="reqStatsCards" class="requests-cards"></div>
             <p id="reqRetentionNote" class="requests-retention" hidden></p>
-            <div class="requests-lifetime">
-              <div class="chart-heading">
-                <h4>All time</h4>
-                <span id="reqLifetimeSpan" class="requests-indicator"></span>
-                <!-- 7.93.0: the background conversion of older history (prompts
-                     stored as chunks, freed space handed back) can be paused. -->
-                <button id="reqHistoryPause" class="requests-search-action" type="button" hidden>Pause</button>
-              </div>
-              <p class="requests-retention">
-                Counted once per request and never pruned, so these keep rising
-                after the stored rows above start rolling over. Filters and the
-                time range do not apply.
-              </p>
-              <div id="reqLifetimeCards" class="requests-cards"></div>
-              <div id="reqLifetimeModels"></div>
-            </div>
-            <div class="requests-charts">
-              <div class="requests-chart">
-                <div class="chart-heading">
-                  <h4>Requests over time</h4>
-                  <div class="chart-legend">
-                    <span><i class="legend-swatch requests"></i>Requests</span>
-                    <span><i class="legend-swatch errors"></i>Errors</span>
-                  </div>
-                </div>
-                <p id="reqCoverageNote" class="requests-retention" hidden></p>
-                <canvas
-                  id="reqSeriesChart"
-                  width="640"
-                  height="180"
-                  role="img"
-                  aria-label="Requests and errors over time"
-                ></canvas>
-              </div>
-              <div class="requests-chart">
-                <h4>Tokens by model</h4>
-                <canvas
-                  id="reqModelChart"
-                  width="640"
-                  height="180"
-                  role="img"
-                  aria-label="Token usage by model"
-                ></canvas>
-              </div>
-            </div>
-            <p class="analytics-footnote">
-              Table timestamps use your browser locale; chart bucket boundaries use UTC.
-            </p>
-            <p id="reqBreakdownTruncatedNote" class="analytics-footnote" hidden></p>
-            <section class="analytics-panel cost-panel">
-              <h4 id="reqCostHeading">Cost</h4>
-              <p id="reqCostNote" class="analytics-footnote"></p>
-              <div id="reqCostCards" class="requests-cards"></div>
-              <div class="requests-breakdowns">
-                <section class="analytics-panel">
-                  <h4>Cost by provider</h4>
-                  <div id="reqCostProvider"></div>
-                </section>
-                <section class="analytics-panel">
-                  <h4>Cost by model</h4>
-                  <div id="reqCostModel"></div>
-                </section>
-                <section class="analytics-panel">
-                  <h4>Cost by harness</h4>
-                  <div id="reqCostHarness"></div>
-                </section>
-                <section class="analytics-panel">
-                  <h4>Cost by day</h4>
-                  <div id="reqCostDay"></div>
-                </section>
-              </div>
-            </section>
-            <section class="analytics-panel">
-              <h4>Why requests were cancelled</h4>
-              <p class="analytics-footnote">
-                "Cancelled" means the client stopped reading before the stream
-                finished, and it covers four different events. All four are
-                derived from what was already recorded, so rows logged long
-                before this panel existed are counted too.
-              </p>
-              <div id="reqCancelledBreakdown"></div>
-            </section>
-            <section class="analytics-panel">
-              <h4>Successful requests with no answer</h4>
-              <p class="analytics-footnote">
-                "Success" means the client received a valid message. A few of
-                those messages carried no text and no tool call. They keep the
-                success status; this panel counts them, derived from what was
-                already recorded. MCC's own local answers are not counted.
-              </p>
-              <div id="reqNoAnswerBreakdown"></div>
-            </section>
-            <section class="analytics-panel">
-              <h4>Model latency</h4>
-              <p id="reqModelLatencyNote" class="analytics-footnote"></p>
-              <div id="reqModelLatency"></div>
-            </section>
-            <div class="requests-breakdowns">
-              <section class="analytics-panel">
-                <h4>Provider performance</h4>
-                <div id="reqProviderBreakdown"></div>
-              </section>
-              <section class="analytics-panel">
-                <h4>Requests by harness</h4>
-                <div id="reqHarnessBreakdown"></div>
-              </section>
-              <section class="analytics-panel" aria-labelledby="reqFolderBreakdownHeading">
-                <h4 id="reqFolderBreakdownHeading">Requests by folder</h4>
-                <p id="reqFolderBreakdownNote" class="analytics-footnote"></p>
-                <div id="reqFolderBreakdown"></div>
-              </section>
-              <section class="analytics-panel" aria-labelledby="reqSessionBreakdownHeading">
-                <h4 id="reqSessionBreakdownHeading">Requests by session</h4>
-                <p id="reqSessionBreakdownNote" class="analytics-footnote"></p>
-                <div id="reqSessionBreakdown"></div>
-              </section>
-              <section class="analytics-panel">
-                <h4>Key performance</h4>
-                <div id="reqKeyBreakdown"></div>
-              </section>
-              <section class="analytics-panel">
-                <h4>Top errors</h4>
-                <div id="reqTopErrors"></div>
-              </section>
-              <section class="analytics-panel">
-                <h4>Upstream statuses</h4>
-                <div id="reqUpstreamStatuses"></div>
-              </section>
-              <section class="analytics-panel">
-                <h4>Failover</h4>
-                <div id="reqFallbackRoutes"></div>
-              </section>
-              <section class="analytics-panel">
-                <h4>Vision adapter</h4>
-                <div id="reqDivertedRoutes"></div>
-              </section>
-            </div>
-            <!-- 7.67.0: media requests, apart from every chat number above. -->
-            <section id="reqMediaPanel" class="analytics-panel media-analytics-panel"
-              aria-labelledby="reqMediaHeading">
-              <h4 id="reqMediaHeading">Media</h4>
-              <p class="analytics-footnote">
-                Requests to the image, speech, transcription and video endpoints, by
-                rail and by provider and model. Only the window applies to this
-                block; the page's other filters do not. A dash is a measure no
-                request reported (an MP3 states no length, a URL answer carries no
-                bytes), never a zero.
-              </p>
-              <p id="reqMediaNote" class="analytics-footnote media-analytics-note"
-                role="status" hidden></p>
-              <div id="reqMediaRails"></div>
-              <div id="reqMediaModels"></div>
-              <div id="reqMediaJobs"></div>
-            </section>
             <section
               id="reqInflightPanel"
               class="inflight-panel"
@@ -1834,7 +1740,10 @@
                 </button>
               </div>
             </div>
-            <div class="table-scroll">
+            <h3 id="reqLogHeading" class="analytics-section-heading">
+              Requests
+            </h3>
+            <div id="reqLogTableWrap" class="table-scroll">
               <table class="requests-table" aria-label="Request log">
                 <thead>
                   <tr>
@@ -1871,6 +1780,241 @@
               <span id="reqPageInfo"></span>
               <button id="reqNextPage" class="secondary-button" type="button">Next</button>
             </div>
+            <p id="reqEmptyState" class="requests-empty-state" role="status" hidden>
+              No requests yet. Connect a coding agent &mdash; run it through a
+              <code>mcc-*</code> launcher, or point Claude Code at this server on
+              <a href="#" data-goto-view="claude">Configure Claude Code</a> &mdash;
+              and its first request appears here.
+            </p>            <div class="requests-lifetime">
+              <div class="chart-heading">
+                <h4>All time</h4>
+                <span id="reqLifetimeSpan" class="requests-indicator"></span>
+                <!-- 7.93.0: the background conversion of older history (prompts
+                     stored as chunks, freed space handed back) can be paused. -->
+                <button id="reqHistoryPause" class="requests-search-action" type="button" hidden>Pause</button>
+              </div>
+              <p class="requests-retention">
+                Counted once per request and never pruned, so these keep rising
+                after the stored rows above start rolling over. Filters and the
+                time range do not apply.
+              </p>
+              <div id="reqLifetimeCards" class="requests-cards"></div>
+              <div id="reqLifetimeModels"></div>
+            </div>
+            <!-- 7.122.3 (ADDENDUM 2): the summary charts. Four series families,
+                 each with a hover/focus tooltip, arrow-key reading and a
+                 screen-reader table: requests and errors over time, the first
+                 visible byte's p50 to p95 per model, cost over time (reported
+                 and estimated, never added), and tokens per model. -->
+            <h3 id="reqChartsHeading" class="analytics-section-heading">Charts</h3>
+            <div class="requests-charts">
+              <div class="requests-chart">
+                <div class="chart-heading">
+                  <h4>Requests over time</h4>
+                  <div class="chart-legend">
+                    <span><i class="legend-swatch requests"></i>Requests</span>
+                    <span><i class="legend-swatch errors"></i>Errors</span>
+                  </div>
+                </div>
+                <p id="reqCoverageNote" class="requests-retention" hidden></p>
+                <canvas
+                  id="reqSeriesChart"
+                  width="640"
+                  height="180"
+                  tabindex="0"
+                  role="img"
+                  aria-label="Requests and errors over time"
+                  aria-describedby="reqSeriesChartReadout"
+                ></canvas>
+                <p id="reqSeriesChartReadout" class="chart-readout" aria-live="polite"></p>
+              </div>
+              <div class="requests-chart">
+                <div class="chart-heading">
+                  <h4>First visible byte, p50 to p95</h4>
+                  <div class="chart-legend">
+                    <span><i class="legend-swatch requests"></i>p50 → p95</span>
+                  </div>
+                </div>
+                <p class="requests-retention">
+                  Per model, over the answering order attempts the Model latency table counts.
+                  A shorter bar is a faster model; the dot is the median.
+                </p>
+                <canvas
+                  id="reqTtftChart"
+                  width="640"
+                  height="180"
+                  tabindex="0"
+                  role="img"
+                  aria-label="First visible byte, p50 to p95, by model"
+                  aria-describedby="reqTtftChartReadout"
+                ></canvas>
+                <p id="reqTtftChartReadout" class="chart-readout" aria-live="polite"></p>
+              </div>
+              <div class="requests-chart">
+                <div class="chart-heading">
+                  <h4>Cost over time</h4>
+                  <div class="chart-legend">
+                    <span><i class="legend-swatch requests"></i>Reported</span>
+                    <span><i class="legend-swatch errors"></i>Estimated</span>
+                  </div>
+                </div>
+                <p id="reqCostChartNote" class="requests-retention" hidden></p>
+                <canvas
+                  id="reqCostChart"
+                  width="640"
+                  height="180"
+                  tabindex="0"
+                  role="img"
+                  aria-label="Reported and estimated cost per day"
+                  aria-describedby="reqCostChartReadout"
+                ></canvas>
+                <p id="reqCostChartReadout" class="chart-readout" aria-live="polite"></p>
+              </div>
+              <div class="requests-chart">
+                <div class="chart-heading">
+                  <h4>Tokens by model</h4>
+                  <div class="chart-legend">
+                    <span><i class="legend-swatch requests"></i>Input + output</span>
+                  </div>
+                </div>
+                <canvas
+                  id="reqModelChart"
+                  width="640"
+                  height="180"
+                  tabindex="0"
+                  role="img"
+                  aria-label="Token usage by model"
+                  aria-describedby="reqModelChartReadout"
+                ></canvas>
+                <p id="reqModelChartReadout" class="chart-readout" aria-live="polite"></p>
+              </div>
+            </div>
+            <p class="analytics-footnote">
+              Table timestamps use your browser locale; chart bucket boundaries use UTC.
+            </p>
+            <p id="reqBreakdownTruncatedNote" class="analytics-footnote" hidden></p>
+            <section class="analytics-panel cost-panel">
+              <h4 id="reqCostHeading">Cost</h4>
+              <p id="reqCostNote" class="analytics-footnote"></p>
+              <div id="reqCostCards" class="requests-cards"></div>
+              <div class="requests-breakdowns">
+                <section class="analytics-panel">
+                  <h4>Cost by provider</h4>
+                  <div id="reqCostProvider"></div>
+                </section>
+                <section class="analytics-panel">
+                  <h4>Cost by model</h4>
+                  <div id="reqCostModel"></div>
+                </section>
+                <section class="analytics-panel">
+                  <h4>Cost by harness</h4>
+                  <div id="reqCostHarness"></div>
+                </section>
+                <section class="analytics-panel">
+                  <h4>Cost by day</h4>
+                  <div id="reqCostDay"></div>
+                </section>
+              </div>
+            </section>
+            <section class="analytics-panel">
+              <h4>Why requests were cancelled</h4>
+              <p class="analytics-footnote">
+                "Cancelled" means the client stopped reading before the stream
+                finished, and it covers four different events. All four are
+                derived from what was already recorded, so rows logged long
+                before this panel existed are counted too.
+              </p>
+              <div id="reqCancelledBreakdown"></div>
+            </section>
+            <section class="analytics-panel">
+              <h4>Successful requests with no answer</h4>
+              <p class="analytics-footnote">
+                "Success" means the client received a valid message. A few of
+                those messages carried no text and no tool call. They keep the
+                success status; this panel counts them, derived from what was
+                already recorded. MCC's own local answers are not counted.
+              </p>
+              <div id="reqNoAnswerBreakdown"></div>
+            </section>
+            <section class="analytics-panel">
+              <h4>Model latency</h4>
+              <p id="reqModelLatencyNote" class="analytics-footnote"></p>
+              <div id="reqModelLatency"></div>
+            </section>
+            <div class="requests-breakdowns">
+              <section class="analytics-panel">
+                <h4>Provider performance</h4>
+                <div id="reqProviderBreakdown"></div>
+              </section>
+              <section class="analytics-panel">
+                <h4>Requests by harness</h4>
+                <div id="reqHarnessBreakdown"></div>
+              </section>
+              <section class="analytics-panel" aria-labelledby="reqFolderBreakdownHeading">
+                <h4 id="reqFolderBreakdownHeading">Requests by folder</h4>
+                <p id="reqFolderBreakdownNote" class="analytics-footnote"></p>
+                <div id="reqFolderBreakdown"></div>
+              </section>
+              <section class="analytics-panel" aria-labelledby="reqSessionBreakdownHeading">
+                <h4 id="reqSessionBreakdownHeading">Requests by session</h4>
+                <p id="reqSessionBreakdownNote" class="analytics-footnote"></p>
+                <div id="reqSessionBreakdown"></div>
+              </section>
+              <section class="analytics-panel">
+                <h4>Key performance</h4>
+                <div id="reqKeyBreakdown"></div>
+              </section>
+              <section class="analytics-panel">
+                <h4>Top errors</h4>
+                <div id="reqTopErrors"></div>
+              </section>
+              <section class="analytics-panel">
+                <h4>Upstream statuses</h4>
+                <div id="reqUpstreamStatuses"></div>
+              </section>
+              <section class="analytics-panel">
+                <h4>Failover</h4>
+                <div id="reqFallbackRoutes"></div>
+              </section>
+              <section class="analytics-panel">
+                <h4>Vision adapter</h4>
+                <div id="reqDivertedRoutes"></div>
+              </section>
+            </div>
+            <!-- 7.67.0: media requests, apart from every chat number above. -->
+            <section id="reqMediaPanel" class="analytics-panel media-analytics-panel"
+              aria-labelledby="reqMediaHeading">
+              <h4 id="reqMediaHeading">Media</h4>
+              <p class="analytics-footnote">
+                Requests to the image, speech, transcription and video endpoints, by
+                rail and by provider and model. Only the window applies to this
+                block; the page's other filters do not. A dash is a measure no
+                request reported (an MP3 states no length, a URL answer carries no
+                bytes), never a zero.
+              </p>
+              <p id="reqMediaNote" class="analytics-footnote media-analytics-note"
+                role="status" hidden></p>
+              <div id="reqMediaRails"></div>
+              <div id="reqMediaModels"></div>
+              <div id="reqMediaJobs"></div>
+            </section>
+            <!-- 7.122.3 (U14): the three buttons that destroy stored data sat
+                 beside the filters, at the top of a page a reader opens to look
+                 at numbers. They keep their ids and their handlers; they live
+                 at the foot now, under a heading that says what they are. -->
+            <section id="reqMaintenance" class="analytics-panel maintenance-panel"
+              aria-labelledby="reqMaintenanceHeading">
+              <h4 id="reqMaintenanceHeading">Maintenance</h4>
+              <p class="analytics-footnote">
+                These change what is stored, not what is shown: cleared items never come
+                back. Every one of them asks first.
+              </p>
+              <div class="maintenance-actions">
+                <button id="reqClearDescriptionsButton" class="secondary-button danger" type="button">Clear image descriptions</button>
+                <button id="reqForgetLearnedButton" class="secondary-button danger" type="button">Forget all learned facts</button>
+                <button id="reqClearButton" class="secondary-button danger" type="button">Clear log</button>
+              </div>
+            </section>
             <div
               id="reqDetailModal"
               class="requests-modal"
@@ -2131,8 +2275,12 @@
           <section id="view-optimizer" class="admin-view" data-view="optimizer" hidden>
             <p class="view-intro">
               What My Claude Code kept off the wire, what is keeping it off, and what
-              could keep more off. Every number here is measured from your own request
-              log. Nothing on this page is enabled for you.
+              could keep more off. Every number is measured from your request log.
+              Nothing here is turned on by opening the page; the chips say which
+              rules are already on.
+              <!-- 7.122.3 (U26): "Nothing on this page is enabled for you" sat
+                   above three rules whose chips read On. What is true is that
+                   opening the page changes nothing. -->
             </p>
 
             <section class="settings-section opt-section">
@@ -2141,9 +2289,16 @@
                   <h3>Ledger</h3>
                   <p id="optLedgerScope">Reading the request log&hellip;</p>
                 </div>
-                <button type="button" id="optRefresh" class="secondary-button">
-                  Refresh
-                </button>
+                <div class="observability-actions">
+                  <!-- 7.122.3 (U16): where the RTK patches live, on the row the
+                       Refresh button already occupies, so the page gains no
+                       height for it. -->
+                  <a class="setting-link" href="#" data-goto-view="providers"
+                    data-goto-id="rtkHeading">RTK patches on Providers</a>
+                  <button type="button" id="optRefresh" class="secondary-button">
+                    Refresh
+                  </button>
+                </div>
               </div>
               <div id="optKpis" class="opt-kpis" aria-live="polite"></div>
               <p class="opt-hint">
@@ -2218,14 +2373,26 @@
                 <h3>Web Search Providers</h3>
               </div>
               <label class="pv-search" for="webSearchProviderSearch">
-                <span class="pv-search-label">Search providers</span>
+                <span class="pv-search-label">Search providers<span
+                  id="webSearchProviderCount" class="pv-search-count"></span></span>
                 <input
                   id="webSearchProviderSearch"
                   type="search"
                   autocomplete="off"
-                  placeholder="Search by name or key…"
+                  placeholder="Search by name, service or key…"
                 />
               </label>
+              <!-- 7.122.3 (U6): the no-match sentence Providers has had all
+                   along. The box used to match the whole card's text, so
+                   "rotation" -- a control every keyed card carries since
+                   7.121.2 -- kept 13 of 15 cards and said nothing. The count
+                   rides on the label line so the page gains no row; this
+                   sentence only appears when a query is matching nothing. -->
+              <p id="webSearchNoMatch" class="pv-filter-status" hidden>
+                No search service matches that. The box matches a service's
+                name, its id, its key's variable or its URL &mdash; not the text
+                of its card.
+              </p>
               <div id="webSearchGrid" class="provider-grid"></div>
             </section>
             <!-- 7.113.0: what a drag or a Pause on the Search chain card did,
@@ -2304,7 +2471,7 @@
                   class="secondary-button"
                   type="button"
                 >
-                  Apply
+                  Apply filters
                 </button>
                 <button id="webSearchExportButton" class="secondary-button" type="button">Export</button>
                 <button
@@ -2766,18 +2933,17 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                 </p>
                 <p>
                   <strong>If you installed before 6.40.0</strong>, your configuration
-                  is in the legacy <code>~/.fcc</code> instead &mdash; the same file,
-                  the same everything, just the older directory name. It stays fully
-                  supported and MCC never moves it for you. The startup log names the
-                  directory actually in use, and so does the banner at the top of
-                  Get Started.
+                  may sit in the older config directory &mdash; the same file, the
+                  same everything, just the earlier directory name. Nothing is moved
+                  for you. The startup log names the directory actually in use, and
+                  so does the banner at the top of Get Started.
                 </p>
                 <p>
                   To move it, stop the server and quit the tray, run
                   <code>mcc-migrate</code> in a terminal, then start the server again.
                   That renames the directory in one atomic step &mdash; nothing is
-                  copied, deleted or merged &mdash; and leaves a
-                  <code>~/.fcc-old/RESTORE.txt</code> note saying how to undo it. There
+                  copied, deleted or merged &mdash; and leaves a note beside the old
+                  one saying how to undo it. There
                   is deliberately no button here for it: relocating your keys and your
                   request history should not be one click away in a browser tab, and on
                   Windows the rename cannot succeed while this server is running
@@ -3720,8 +3886,8 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <strong>2.</strong> Press <strong>Configure</strong>. It writes
                   <code>ANTHROPIC_BASE_URL</code> and <code>ANTHROPIC_AUTH_TOKEN</code>
                   into that file's <code>env</code> block, merging with anything else
-                  already there. The previous file is backed up next to it with a
-                  <code>.fcc-backup</code> suffix the first time it writes. If the file
+                  already there. The previous file is kept next to it, under the same
+                  name with a backup suffix, the first time it writes. If the file
                   already points somewhere else, the status line shows what is there before
                   you overwrite it; <strong>Remove</strong> deletes just those two keys. If
                   a higher-precedence file (like an enterprise managed settings file) also
@@ -3745,7 +3911,6 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   shell session, without touching any file. Add <code>--discover-models</code>
                   to also enable the picker above (an extra request to the proxy on every
                   launch, so it is opt-in): <code>mcc-claude --discover-models</code>.
-                  The legacy <code>fcc-claude</code> alias was retired in 7.0.0.
                 </p>
                 <details class="guide-note">
                   <summary>Editing the file by hand instead</summary>
@@ -3762,8 +3927,11 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
 }</code></pre>
                   <p>
                     The token must match this server's <code>ANTHROPIC_AUTH_TOKEN</code>,
-                    generated for this machine on the first start and shown on the
-                    <strong>Providers</strong> page under <strong>Runtime</strong>. It
+                    generated for this machine on the first start. It is the
+                    <code>ANTHROPIC_AUTH_TOKEN=</code> line in <code>~/.mcc/.env</code>
+                    &mdash; the <strong>Providers</strong> page under
+                    <strong>Runtime</strong> shows only that it is set, because it is a
+                    secret with no reveal. It
                     authenticates your agent to the
                     proxy and is not a provider key. To also populate the native model
                     picker, add <code>"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1"</code>
@@ -3795,7 +3963,12 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <tbody>
                     <tr><td>Connection</td><td><code>Gateway</code></td></tr>
                     <tr><td>Gateway base URL</td><td><code>http://127.0.0.1:8082</code></td></tr>
-                    <tr><td>Gateway API key</td><td>your <code>ANTHROPIC_AUTH_TOKEN</code> (Providers &rarr; Runtime)</td></tr>
+                    <!-- 7.122.3 (U4): the Runtime field is a masked password
+                         box with no reveal, so "read it under Providers →
+                         Runtime" was a dead end. The token lives in the file
+                         the first start wrote, and every launcher and
+                         Configure Claude Code already passes it. -->
+                    <tr><td>Gateway API key</td><td>your <code>ANTHROPIC_AUTH_TOKEN</code> &mdash; the line <code>ANTHROPIC_AUTH_TOKEN=</code> in <code>~/.mcc/.env</code> (Providers &rarr; Runtime shows only that it is set; the launchers and Configure Claude Code pass it for you)</td></tr>
                     <tr><td>Gateway auth scheme</td><td><code>bearer</code></td></tr>
                     <tr><td>Credential kind</td><td><code>Static API key</code></td></tr>
                     <tr><td>Model discovery</td><td>off</td></tr>
@@ -7390,9 +7563,9 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                     now how long every restart waits.</li>
                   <li><strong>My data is still in a legacy directory</strong> &mdash; from
                     6.65.0 the server moves it for you, once, on its first start:
-                    <code>~/.fcc</code> becomes <code>~/.mcc</code> by a single atomic
-                    rename, nothing is copied, merged or deleted, and a
-                    <code>~/.fcc-migrated.txt</code> note says how to move it back.
+                    the older config directory becomes <code>~/.mcc</code> by a single
+                    atomic rename, nothing is copied, merged or deleted, and a note
+                    beside it says how to move it back.
                     It refuses &mdash; changing nothing &mdash; while anything still holds
                     the directory, so quit the desktop app before updating: it holds
                     <code>desktop.lock</code> for its whole lifetime.

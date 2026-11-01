@@ -293,7 +293,10 @@ def test_admin_static_exposes_professional_observability_controls():
     ):
         assert f'id="{control_id}"' in html
     assert 'label: "Analytics"' in script
-    assert 'title: "Observability"' in script
+    # 7.122.3 (U19): the page title is the navigation label now. It read
+    # "Observability" while every link into it read "Analytics", so a reader
+    # told to open Analytics had to recognise it under another word.
+    assert 'title: "Analytics"' in script
     assert 'params.set("endpoint", endpoint)' in script
     assert "stats.p50_duration_ms" in script
     assert "stats.top_errors" in script
@@ -350,7 +353,11 @@ def test_admin_static_exposes_professional_observability_controls():
     assert "View request" in script
     assert "all stored rows will be deleted" in script
     assert 'clearChart(byId("reqSeriesChart"))' in script
-    assert 'tr.addEventListener("click"' not in script
+    # 7.122.3 (U35): the row opens its own detail now -- and never on a click
+    # that belonged to a control inside it (the View button is the keyboard
+    # affordance and must not open the modal twice).
+    assert 'tr.addEventListener("click"' in script
+    assert 'if (event.target.closest("button, a")) return;' in script
     assert "chart bucket boundaries use UTC" in html
     assert "setInterval" in script
     assert "downloadJson" in script
