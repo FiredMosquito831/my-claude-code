@@ -37,11 +37,29 @@ What stays is deliberate and each entry says why. Three kinds:
 
 A new hit anywhere else fails, and the fix is to remove the string -- not to add
 a line here without one.
+
+**8.0.2 (OWNEDBY) closes the last user-visible occurrence.** ``/v1/models``
+reported ``owned_by: free-claude-code`` on every row. 8.0.0 changed it and
+reverted, because ``tests/contracts/test_metadata_ladder_equality.py`` and
+``tests/contracts/test_mcp_media_off_is_byte_identical.py`` pin that field
+byte-for-byte; 8.0.2 changed the value to :data:`NATIVE_DISTRIBUTION` and
+recaptured both baselines (only the ``owned_by`` cells moved). So the
+allow-list entry that excused ``api/model_catalog.py`` is **deleted** -- the
+module that emits the field needs no licence for it -- and
+``test_the_models_payload_reports_mcc_and_never_the_retired_owner`` below states
+the half the scan cannot: the value built into the payload, not just the
+literals in ``src/``.
 """
 
+import json
 import re
 import tomllib
 from pathlib import Path
+
+from my_claude_code.api.model_catalog import build_models_list_response
+from my_claude_code.config.settings import Settings
+from my_claude_code.core.version import NATIVE_DISTRIBUTION
+from tests.application.test_catalogue_model import FakeRuntime
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -151,12 +169,10 @@ ALLOWED_FILES: dict[str, str] = {
     "docs/ANTHROPIC-SUBSCRIPTION.md": "names the legacy store path",
     "scripts/gen_claude_config_reference.py": "names the .fcc-backup file",
     # --- 4. the legacy tool owner an old install is upgraded/uninstalled through
-    "src/my_claude_code/api/model_catalog.py": (
-        "the owned_by value on every /v1/models row; two byte-identity "
-        "contracts pin it (the metadata-ladder equality snapshot and the "
-        "MCP-media-off baseline), so renaming it is a response-format change "
-        "of its own rather than part of the command retirement"
-    ),
+    # 8.0.2 (OWNEDBY): ``api/model_catalog.py`` is NOT here any more. It carried
+    # the ``owned_by`` value the two byte-identity baselines pinned; 8.0.2
+    # changed it to NATIVE_DISTRIBUTION and recaptured both, so the module that
+    # emits the field must carry no retired string and needs no entry.
     "src/my_claude_code/core/version.py": (
         "a pre-5.14 install's distribution is still named free-claude-code; "
         "the version lookup falls back to it so such an install reports its "
@@ -370,3 +386,22 @@ def test_the_shipped_env_template_names_no_retired_variable() -> None:
     ]
 
     assert not offenders, f".env.example still names a retired surface: {offenders}"
+
+
+def test_the_models_payload_reports_mcc_and_never_the_retired_owner() -> None:
+    """8.0.2: the value on the wire, not only the literals in ``src/``.
+
+    The scan above cannot see a name that is assembled or read from somewhere
+    else, and ``owned_by`` is the one place a client actually reads the product
+    name. 8.0.2 answers it with :data:`NATIVE_DISTRIBUTION` -- the same constant
+    that names the distribution, not a second spelling of the brand -- and
+    deleted this module's allow-list entry, so a reintroduced literal fails the
+    scan above as well as this test.
+    """
+
+    settings = Settings.model_validate({"MODEL": "open_router/example"})
+    payload = build_models_list_response(settings, FakeRuntime(settings=settings))
+
+    assert payload.data, "the models payload is empty; this test would pass vacuously"
+    assert {entry.owned_by for entry in payload.data} == {NATIVE_DISTRIBUTION}
+    assert "free-claude-code" not in json.dumps(payload.model_dump())
