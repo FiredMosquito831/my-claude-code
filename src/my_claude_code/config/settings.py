@@ -6,10 +6,24 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .constants import (
+    ADMIN_DENSITY_DEFAULT,
+    ADMIN_DENSITY_VALUES,
+    ADMIN_DESIGN_DEFAULT,
+    ADMIN_DESIGN_VALUES,
+    ADMIN_MODE_DEFAULT,
+    ADMIN_MODE_VALUES,
+    ADMIN_THEME_DEFAULT,
+    ADMIN_THEME_VALUES,
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CATALOGUE_FETCH_TIMEOUT_SECONDS,
@@ -2221,6 +2235,35 @@ class Settings(BaseSettings):
         default=False, validation_alias="COST_SOURCE_LITELLM_ENABLED"
     )
 
+    # ==================== Dashboard appearance ====================
+    # 8.1.0 (specs/DESIGN-REVAMP-OPTIONS.md §13.2.3). The MACHINE/ACCOUNT
+    # default for the dashboard's four appearance axes. The browser keeps its
+    # own per-viewer choice and that one wins; these exist so a machine, or a
+    # shared account, can decide what a fresh browser opens on. Changing them
+    # alters no request path and no provider: they are read by the page only.
+    #
+    # `design` names a row of the registry (api/admin_static/designs.js), and
+    # `today` is the one row 8.1.0 ships — zero CSS, the current rendering.
+    # `theme` is the colour FAMILY and `mode` is light/dark; every family has
+    # both forms, so choosing one never has to change the other (§13.4).
+    # `density` is "design" (whatever the row declares), or a fixed override.
+    admin_design: str = Field(
+        default=ADMIN_DESIGN_DEFAULT,
+        validation_alias="ADMIN_DESIGN",
+    )
+    admin_theme: str = Field(
+        default=ADMIN_THEME_DEFAULT,
+        validation_alias="ADMIN_THEME",
+    )
+    admin_mode: str = Field(
+        default=ADMIN_MODE_DEFAULT,
+        validation_alias="ADMIN_MODE",
+    )
+    admin_density: str = Field(
+        default=ADMIN_DENSITY_DEFAULT,
+        validation_alias="ADMIN_DENSITY",
+    )
+
     # ==================== NIM Settings ====================
     nim: NimSettings = Field(default_factory=NimSettings)
 
@@ -2578,6 +2621,34 @@ class Settings(BaseSettings):
                 f"messaging_platform must be 'telegram', 'discord', or 'none', got {v!r}"
             )
         return v
+
+    @field_validator(
+        "admin_design", "admin_theme", "admin_mode", "admin_density", mode="before"
+    )
+    @classmethod
+    def validate_dashboard_appearance(cls, v: object, info: ValidationInfo) -> str:
+        """One vocabulary per axis, refused rather than silently defaulted.
+
+        The dashboard refuses an unknown value client-side before it is saved;
+        this is the server's half of the same rule, so a hand-edited ``.env``
+        naming a design that does not exist fails loudly at start instead of
+        rendering an unstyled page. Case and surrounding space are folded,
+        because the template and a human disagree about both.
+        """
+
+        vocabularies: dict[str, tuple[str, ...]] = {
+            "admin_design": ADMIN_DESIGN_VALUES,
+            "admin_theme": ADMIN_THEME_VALUES,
+            "admin_mode": ADMIN_MODE_VALUES,
+            "admin_density": ADMIN_DENSITY_VALUES,
+        }
+        allowed = vocabularies[info.field_name or ""]
+        value = str(v if v is not None else "").strip().lower()
+        if value not in allowed:
+            raise ValueError(
+                f"{info.field_name} must be one of {', '.join(allowed)}, got {v!r}"
+            )
+        return value
 
     @field_validator("messaging_rate_limit")
     @classmethod

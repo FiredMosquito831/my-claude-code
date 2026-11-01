@@ -2,7 +2,7 @@
  "written_by": "tests/api/admin_jsdom_select_blank.mjs, run against the BASE tree f6de93ad (v7.121.0) with this scenario and this harness copied in, on the fixture .env in tests/support/select_blank_payload.py. The after-answers are this tree's own run of the same scenario.",
  "scenario": "select_blank",
  "fixture_env_sha256": "ebccabeb67b1ccc86404dae8c3d77cf2337b539267582b04d3d5d2c62da6ac90",
- "payload_field_count": 547,
+ "payload_field_count": 551,
  "base": {
   "footerOnLoad": "5 unsaved changes",
   "changedOnLoad": [
