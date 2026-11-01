@@ -362,6 +362,23 @@ body:has(.admin-view:not([hidden]) > .section-navigator) .topbar {
   border-left: 2px solid var(--accent);
 }
 
+/* The provenance chip never wraps INSIDE the Appearance card.
+   `admin.css` gives `.field-source` a background, a radius and uppercase
+   tracking, but no `white-space`, so when a label is long enough to squeeze
+   the meta row the chip breaks "DEFAULT VALUE" across two lines and grows
+   the field by 15 px. Every settings page happened to have enough width that
+   this never showed; the Appearance card's long design label is the first
+   field that does not.
+
+   SCOPED TO THE CARD ON PURPOSE. Applying it to every `.field-source` fixed
+   the card and grew the Guide page by 587 px, because the Guide is prose and
+   a chip that cannot wrap pushes the paragraph it sits in wider at narrow
+   column widths. A 15 px chip is not worth 587 px of a page this release is
+   not otherwise touching. */
+#appearanceCard .field-source {
+  white-space: nowrap;
+}
+
 /* ───────────────────────────────────────────────── 5. the appendix card ──
    The Appearance card in Settings (S4). It is deliberately the same
    `settings-section` shape every other settings card uses, so it renders even
@@ -463,7 +480,12 @@ body:has(.admin-view:not([hidden]) > .section-navigator) .topbar {
    four-button theme switch had, sized by its options rather than by a count,
    which is the property #themeSwitch's own fix established. */
 /* Five options per row on a wide screen, so the four axes' rows never wrap
-   into the page's height. Below that they reflow to as many as fit. */
+   into the page's height. Below that they reflow to as many as fit.
+   The card's four machine-default fields render into the standard
+   `.field-grid`, so they take the 4/3/2/1 rule like every other settings
+   section — and the chip ("default value") needs the width a 280 px track
+   gives it, or it wraps onto two lines. That is why this grid keeps the
+   default tracks and the tile above is the only thing with a max-width. */
 .appearance-options {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
