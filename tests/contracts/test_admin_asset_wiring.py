@@ -39,10 +39,25 @@ ADMIN_STATIC = (
 ADMIN_JS = ADMIN_STATIC / "admin.js"
 INDEX_HTML = ADMIN_STATIC / "index.html"
 ADMIN_CSS = ADMIN_STATIC / "admin.css"
+#: 8.1.0: the stylesheet is three files, not one. `admin.css` stays the
+#: component layer; `themes.css` carries the colour families and
+#: `foundation.css` the skin tokens, the density variant, the per-page section
+#: navigator and the left-rail floor. The class and `var()` guards below are
+#: about "is this name styled ANYWHERE a page loads", so they read the layer a
+#: name was moved into as well — reading only admin.css would report eighteen
+#: false positives for rules that exist and are loaded.
+_EXTRA_STYLESHEETS = ("themes.css", "foundation.css")
 
 _JS_SOURCE = ADMIN_JS.read_text(encoding="utf-8")
 _HTML_SOURCE = INDEX_HTML.read_text(encoding="utf-8")
 _CSS_SOURCE = ADMIN_CSS.read_text(encoding="utf-8")
+#: Every stylesheet index.html actually loads, in load order. The class and
+#: custom-property guards ask "does a rule exist for this name", and a name is
+#: styled if ANY loaded sheet styles it.
+_LOADED_CSS_SOURCES = [
+    _CSS_SOURCE,
+    *((ADMIN_STATIC / name).read_text(encoding="utf-8") for name in _EXTRA_STYLESHEETS),
+]
 
 
 # --------------------------------------------------------------------- A ---
@@ -106,6 +121,12 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # render); loadOriginBackfillStatus() fills the line when Analytics opens.
     "originBackfillButton",
     "originBackfillStatus",
+    # designStylesheet: the <link> a design's own stylesheet arrives on,
+    # created by loadDesignStylesheet() in admin.js and given a stable id so a
+    # later design SWAPPING it can find and remove the previous one. It is not
+    # declared in index.html because whether it exists at all depends on the
+    # selected registry row (8.1.0's only row, `today`, has no CSS).
+    "designStylesheet",
 }
 
 
@@ -258,7 +279,10 @@ _CSS_CLASS_RULE = re.compile(r"\.([a-zA-Z_][a-zA-Z0-9_-]*)")
 
 
 def _classes_defined_in_admin_css() -> set[str]:
-    return set(_CSS_CLASS_RULE.findall(_CSS_SOURCE))
+    classes: set[str] = set()
+    for source in _LOADED_CSS_SOURCES:
+        classes.update(_CSS_CLASS_RULE.findall(source))
+    return classes
 
 
 # Classes admin.js emits with no matching rule in admin.css, confirmed by
@@ -319,7 +343,9 @@ def test_every_css_class_emitted_by_admin_js_has_a_rule_in_admin_css() -> None:
 # Every var(--token) used in admin.css must resolve to a defined token,
 # either directly or through its fallback chain.
 
-_CSS_NO_COMMENTS = re.sub(r"/\*.*?\*/", "", _CSS_SOURCE, flags=re.DOTALL)
+_CSS_NO_COMMENTS = "\n".join(
+    re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL) for source in _LOADED_CSS_SOURCES
+)
 _CUSTOM_PROPERTY_DEFINITION = re.compile(r"(--[a-zA-Z0-9-]+)\s*:")
 _VAR_REFERENCE = re.compile(r"var\(\s*(--[a-zA-Z0-9-]+)\s*(,)?")
 

@@ -5,7 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>My Claude Code Admin</title>
     <link rel="icon" type="image/png" href="/admin/img/app-icon-96.png" />
+    <!-- 8.1.0: the shared token layer. admin.css stays the component layer;
+         themes.css carries the seven colour families in both modes, and
+         foundation.css the skin tokens, the density variant, the per-page
+         section navigator and the left-rail typography floor. A design's own
+         `<id>.css` is appended by the registry loader AFTER these, which is
+         what lets a later design override a token without a specificity
+         fight. Order is load-bearing: admin.css first, because the two layers
+         below only ever add to or override it. -->
     <link rel="stylesheet" href="/admin/assets/admin.css" />
+    <link rel="stylesheet" href="/admin/assets/themes.css" />
+    <link rel="stylesheet" href="/admin/assets/foundation.css" />
   </head>
   <body>
     <div class="app-shell">
@@ -127,6 +137,39 @@
               <div id="getStartedFeatures" class="get-started-features"></div>
               <div id="getStartedMore" class="get-started-more"></div>
               <div id="getStartedAdvanced" class="get-started-advanced"></div>
+              <!-- 8.1.0 (specs/DESIGN-REVAMP-OPTIONS.md §13.2.3): the
+                   Appearance card lives under Get Started -> Optional, which
+                   is this page's optional area. It is declared here, outside
+                   every renderer-owned container, because it must survive the
+                   page's own re-render after every visit and every save and
+                   because a script failure must still leave it on screen. Its
+                   body is filled by renderAppearanceCard(); only its controls
+                   are built, never the card. -->
+              <section class="settings-section" id="appearanceCard" aria-labelledby="appearanceHeading">
+                <div class="section-heading">
+                  <div>
+                    <h3 id="appearanceHeading">Appearance</h3>
+                    <p>
+                      The design, the colour theme and the density of this
+                      dashboard. What you pick applies at once and is
+                      remembered in this browser; the settings below are the
+                      machine defaults.
+                    </p>
+                  </div>
+                </div>
+                <div id="appearanceCardBody"></div>
+                <!-- The machine/account layer. A real settings section, drawn
+                     by renderSections() from the manifest like every other
+                     one, so each value carries its source chip, its default
+                     and "Use default", and the page's own Validate/Apply
+                     saves it. §13.2.3: "served in /admin/api/config like
+                     every other setting, with the existing source chip". -->
+                <div
+                  id="appearanceMachineSections"
+                  class="form-sections"
+                  aria-label="Dashboard appearance defaults"
+                ></div>
+              </section>
               <div id="getStartedFooter" class="get-started-footer">
                 <!-- The Dismiss button is declared here and never rebuilt: the
                      page re-renders after every visit and every save, and a
@@ -7689,6 +7732,11 @@ EXA_API_KEY_ROTATION=failover</code></pre>
       <p class="guide-lightbox-hint">Click anywhere or press Esc to close</p>
     </div>
 
+    <!-- 8.1.0: the design registry, as DATA, loaded before admin.js so the
+         loader finds `ADMIN_DESIGNS` already declared. It is a separate file
+         for the reason §13.2.2 gives: adding a design must be one CSS file
+         plus one row, never an edit to admin.js. -->
+    <script src="/admin/assets/designs.js"></script>
     <script src="/admin/assets/admin.js"></script>
   </body>
 </html>

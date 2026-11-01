@@ -862,6 +862,33 @@ DASHBOARD_RECONNECT_TIMEOUT_SECONDS = (
 COST_ESTIMATION_MODE_DEFAULT = "auto"
 COST_ESTIMATION_MODES = ("auto", "reported_only", "computed_only")
 
+# The dashboard's appearance (8.1.0, specs/DESIGN-REVAMP-OPTIONS.md §13.2.3).
+#
+# Four settings, one per axis, because each is a separate decision a reader
+# can change without disturbing the other three (§13.4: "Changing one never
+# resets another"). They are the MACHINE/ACCOUNT default only: the dashboard
+# also stores a per-viewer choice in the browser, and that one wins. Blank is
+# the honest way to say "whatever the compiled default is", which is why the
+# code default and the template's written default are the same word.
+#
+# The compiled defaults are the user's own instruction (round-4 Q4, Q9):
+# Velvet in DARK, and Today in light until the light default is decided. The
+# two are separate settings precisely so that instruction is expressible:
+# ADMIN_THEME is a dark-mode default and ADMIN_MODE says which mode a fresh
+# browser opens in.
+ADMIN_DESIGN_DEFAULT = "today"
+ADMIN_THEME_DEFAULT = "velvet"
+ADMIN_MODE_DEFAULT = "dark"
+ADMIN_DENSITY_DEFAULT = "design"
+# Every legal value, published so the browser can refuse one before it is
+# saved and so the contract tests read the vocabulary from one place.
+# ``ADMIN_DENSITY=design`` means "whatever the selected design declares"
+# (§13.2.1: per-design default with a Compact/Comfortable override).
+ADMIN_DESIGN_VALUES = ("today",)
+ADMIN_THEME_VALUES = ("today", "midnight", "paper", "hc", "velvet", "navy", "own")
+ADMIN_MODE_VALUES = ("light", "dark")
+ADMIN_DENSITY_VALUES = ("design", "compact", "comfortable")
+
 # Request log storage.
 # Sized for a log worth reading months later rather than for the smallest
 # possible file: the rows are zstd-compressed and 700k of them cost a few

@@ -1,0 +1,411 @@
+{
+ "base_commit": "421d81f7",
+ "disabled_views": {
+  "claude": {
+   "children": 5,
+   "length": 20313,
+   "sha256": "ce928dedf3450071cd02503c4689f87fdf148a04c67f4e1c424ce9a1c89ccdc0",
+   "stripFreeLength": 20047,
+   "stripFreeSha256": "2c7e689369ba73947d768d776e481f35018f69ae585868b0d35075c8a6acb4ab"
+  },
+  "coding_agents": {
+   "children": 5,
+   "length": 58589,
+   "sha256": "95f99fdf5a31d259f1cb434fc120af204a60152eec21ab14c11d6bd19859e4cf",
+   "stripFreeLength": 57206,
+   "stripFreeSha256": "8ca73e2df7c73a055c1d11644a5fbb3e1862ee54710e53810453e990444b8766"
+  },
+  "docs": {
+   "children": 1,
+   "length": 2555,
+   "sha256": "c4992490988bc9417833ef3272423c3ff8d273201ac7772b567b8cfb98fbf9f5",
+   "stripFreeLength": 2503,
+   "stripFreeSha256": "a327e16915f98c95acc628b34599c5c9febe204ac5968d90f45cab9b90831631"
+  },
+  "get_started": {
+   "children": 1,
+   "length": 64602,
+   "sha256": "19a4d7bd8a8541070058b0a541af10fe134c1890a8a8a0bf325967a610089b38",
+   "stripFreeLength": 63238,
+   "stripFreeSha256": "5998d4cb6c94bf9097f9b49beb5fd47fe24d7b8bf75bbef040e412ca9e085156"
+  },
+  "guide": {
+   "children": 1,
+   "length": 360205,
+   "sha256": "192b5b07b7c40d1f8cefa0049964a989ceb9e7eff3cc0a2c4cbb81aed724a731",
+   "stripFreeLength": 358836,
+   "stripFreeSha256": "5965b7ac8e4b1a6a7dd2dacb4e60621fb82b65c4bbd7fe2e49c3a05e237d16d9"
+  },
+  "limits": {
+   "children": 1,
+   "length": 39984,
+   "sha256": "9e1ff51218dc3b77fab72e004b535e2902281479a411de11b81b4dcc104227ff",
+   "stripFreeLength": 39872,
+   "stripFreeSha256": "bc23d89811dd4f14416494e4e8912627c2e9de47becae0fbf7e0ef6966565ddf"
+  },
+  "marketplaces": {
+   "children": 11,
+   "length": 6290,
+   "sha256": "17bc7543acc2ccc55fd6a08d1560b8a661fb1d182a25dadc6a80db291a05f1a6",
+   "stripFreeLength": 6200,
+   "stripFreeSha256": "6c343c02e1a494879da040341e3e3c3d0cc9a8f17410a3b38d11323685fb1b4e"
+  },
+  "messaging": {
+   "children": 1,
+   "length": 117,
+   "sha256": "2759d6a4a439e1578a515a084f2c9f3a78e8f9bf8a1c056bff685d1cfb76edb1",
+   "stripFreeLength": 117,
+   "stripFreeSha256": "2759d6a4a439e1578a515a084f2c9f3a78e8f9bf8a1c056bff685d1cfb76edb1"
+  },
+  "model_config": {
+   "children": 2,
+   "length": 47856,
+   "sha256": "b15a433aa4860817488361e02e67cb51a7a3351262183e6853c25a0a22a21a98",
+   "stripFreeLength": 47376,
+   "stripFreeSha256": "db87de23e18fe547963ad6045ce8b46be0c1278effc74283c79f7226d0a10db3"
+  },
+  "models": {
+   "children": 4,
+   "length": 16768,
+   "sha256": "69a0448d6a7707c001b7eac018ac33e4f2dbc0e55f5d8ff55ac8960604435bf5",
+   "stripFreeLength": 16161,
+   "stripFreeSha256": "e4c83bcecb274e34ab1dd7396cff935a987169747b2d31325e519b87aaed0bca"
+  },
+  "optimizer": {
+   "children": 6,
+   "length": 18010,
+   "sha256": "0756190907ebd46a41ee5387011a3b03e2a96019e60a9d6af0f3001bf5216e81",
+   "stripFreeLength": 17519,
+   "stripFreeSha256": "b36c078e1c91e9788bbb1dc61f71d09f491333c36cf1d27cd7fdf327f8cc49a7"
+  },
+  "providers": {
+   "children": 6,
+   "length": 21849,
+   "sha256": "abb392101f1851b828fdaf41b405106fe23975657931e63c20891c64dd1d1def",
+   "stripFreeLength": 21136,
+   "stripFreeSha256": "94f236d725ed4694bf7e708cbe8fcb5668ed55e2902baef96caab1aefc56abee"
+  },
+  "proxying": {
+   "children": 13,
+   "length": 60070,
+   "sha256": "8772454f3a29da66d5606741685a2cb96ab1649e8e18819db35411337d5b6ccb",
+   "stripFreeLength": 58465,
+   "stripFreeSha256": "e308938ca9eb3c1045f8fc56a112a8ae70df25eeb9d2f21d89b428062453fbfc"
+  },
+  "requests": {
+   "children": 28,
+   "length": 70191,
+   "sha256": "bd5555df7bfa91277001f5f954d34fc886eb0ba5f0d9aec08f2748caf23ccf6a",
+   "stripFreeLength": 67151,
+   "stripFreeSha256": "0fecc0168e31c1201648fd2f15c8ad9e41f8799572b16420ebc98fbf93a6574a"
+  },
+  "web_search": {
+   "children": 6,
+   "length": 10627,
+   "sha256": "75765c61f56a01bb3e780b519d384adc1be63e6c8f1142ead71c7630eee07f42",
+   "stripFreeLength": 9789,
+   "stripFreeSha256": "1eff1b6b156b1b7287c33e009bafebfcd64820bcc0df1b07ffb803dcdf1f94f1"
+  }
+ },
+ "enabled_deltas": {
+  "claude": {
+   "lengthAfter": 20782,
+   "lengthBefore": 20313,
+   "sha256After": "766ec41f63ee70bf1924fa7c47f4f6ff254cb580fe0356d03b044b53594ba563",
+   "sha256Before": "ce928dedf3450071cd02503c4689f87fdf148a04c67f4e1c424ce9a1c89ccdc0"
+  },
+  "coding_agents": {
+   "lengthAfter": 59221,
+   "lengthBefore": 58589,
+   "sha256After": "8e291e99e0fd2a8dd5f861fac74a5a35589b51429ac393911d82f4afc6aae3fe",
+   "sha256Before": "95f99fdf5a31d259f1cb434fc120af204a60152eec21ab14c11d6bd19859e4cf"
+  },
+  "docs": {
+   "lengthAfter": 2980,
+   "lengthBefore": 2555,
+   "sha256After": "88c55f95a0c5914164afa427ec2e2899340eaf972e01145c3efba107a31202d6",
+   "sha256Before": "c4992490988bc9417833ef3272423c3ff8d273201ac7772b567b8cfb98fbf9f5"
+  },
+  "get_started": {
+   "lengthAfter": 70523,
+   "lengthBefore": 64602,
+   "sha256After": "832ba8b07995d63ad52e32a3bf288f1aaebbace621e6f3d77ff7a1cbe1cfb8ca",
+   "sha256Before": "19a4d7bd8a8541070058b0a541af10fe134c1890a8a8a0bf325967a610089b38"
+  },
+  "guide": {
+   "lengthAfter": 363726,
+   "lengthBefore": 360205,
+   "sha256After": "1b986d4fb2d2c2a66fa56cefc37f7927638224b2c30dc58acb98ec069da3a151",
+   "sha256Before": "192b5b07b7c40d1f8cefa0049964a989ceb9e7eff3cc0a2c4cbb81aed724a731"
+  },
+  "limits": {
+   "lengthAfter": 40887,
+   "lengthBefore": 39984,
+   "sha256After": "652c5dfa12a7c2eb0903275aaaa595c8eb079765d580d91a7c6b76401201d582",
+   "sha256Before": "9e1ff51218dc3b77fab72e004b535e2902281479a411de11b81b4dcc104227ff"
+  },
+  "marketplaces": {
+   "lengthAfter": 6995,
+   "lengthBefore": 6290,
+   "sha256After": "360b512b2e307b23b4401c7bd24defc96fcc7ae287427a9890fc2ed9171be2cb",
+   "sha256Before": "17bc7543acc2ccc55fd6a08d1560b8a661fb1d182a25dadc6a80db291a05f1a6"
+  },
+  "model_config": {
+   "lengthAfter": 48392,
+   "lengthBefore": 47856,
+   "sha256After": "419217b551997c13ff4562faa1e45307351ce9822416cd7f63e8e047221dcd64",
+   "sha256Before": "b15a433aa4860817488361e02e67cb51a7a3351262183e6853c25a0a22a21a98"
+  },
+  "models": {
+   "lengthAfter": 17224,
+   "lengthBefore": 16768,
+   "sha256After": "319eef1f5edca292d0f0d110696de6948ec98a891decbe359ed1df88e5bcdfc8",
+   "sha256Before": "69a0448d6a7707c001b7eac018ac33e4f2dbc0e55f5d8ff55ac8960604435bf5"
+  },
+  "optimizer": {
+   "lengthAfter": 18589,
+   "lengthBefore": 18010,
+   "sha256After": "0d0458ca47689b94f1029206478b83d8971c1806311c90ea11a3f9b50729c718",
+   "sha256Before": "0756190907ebd46a41ee5387011a3b03e2a96019e60a9d6af0f3001bf5216e81"
+  },
+  "providers": {
+   "lengthAfter": 23072,
+   "lengthBefore": 21849,
+   "sha256After": "80383ad0074d2c2da8c7db4419b0412527973c6a764644e5b8e0684920de2b1d",
+   "sha256Before": "abb392101f1851b828fdaf41b405106fe23975657931e63c20891c64dd1d1def"
+  },
+  "proxying": {
+   "lengthAfter": 60860,
+   "lengthBefore": 60070,
+   "sha256After": "0d2baa36ca55a959726cd0fb10629a1030bf70ec66a15200f2c78436cded99a1",
+   "sha256Before": "8772454f3a29da66d5606741685a2cb96ab1649e8e18819db35411337d5b6ccb"
+  },
+  "requests": {
+   "lengthAfter": 71667,
+   "lengthBefore": 70191,
+   "sha256After": "cf5fa79d45dbbfcbcbc33757b378b8ede1f47a1f1551960aab630ab5f01a2c02",
+   "sha256Before": "bd5555df7bfa91277001f5f954d34fc886eb0ba5f0d9aec08f2748caf23ccf6a"
+  },
+  "web_search": {
+   "lengthAfter": 11156,
+   "lengthBefore": 10627,
+   "sha256After": "192e35623e4b919615939b403eb776b1ef8d8b1f9682d675e7fdefde0de5b4de",
+   "sha256Before": "75765c61f56a01bb3e780b519d384adc1be63e6c8f1142ead71c7630eee07f42"
+  }
+ },
+ "enabled_views": {
+  "claude": {
+   "children": 6,
+   "length": 20782,
+   "stripFreeLength": 20047,
+   "stripFreeSha256": "2c7e689369ba73947d768d776e481f35018f69ae585868b0d35075c8a6acb4ab"
+  },
+  "coding_agents": {
+   "children": 6,
+   "length": 59221,
+   "stripFreeLength": 57206,
+   "stripFreeSha256": "8ca73e2df7c73a055c1d11644a5fbb3e1862ee54710e53810453e990444b8766"
+  },
+  "docs": {
+   "children": 2,
+   "length": 2980,
+   "stripFreeLength": 2503,
+   "stripFreeSha256": "a327e16915f98c95acc628b34599c5c9febe204ac5968d90f45cab9b90831631"
+  },
+  "get_started": {
+   "children": 1,
+   "length": 70523,
+   "stripFreeLength": 63238,
+   "stripFreeSha256": "5998d4cb6c94bf9097f9b49beb5fd47fe24d7b8bf75bbef040e412ca9e085156"
+  },
+  "guide": {
+   "children": 2,
+   "length": 363726,
+   "stripFreeLength": 358836,
+   "stripFreeSha256": "5965b7ac8e4b1a6a7dd2dacb4e60621fb82b65c4bbd7fe2e49c3a05e237d16d9"
+  },
+  "limits": {
+   "children": 2,
+   "length": 40887,
+   "stripFreeLength": 39872,
+   "stripFreeSha256": "bc23d89811dd4f14416494e4e8912627c2e9de47becae0fbf7e0ef6966565ddf"
+  },
+  "marketplaces": {
+   "children": 12,
+   "length": 6995,
+   "stripFreeLength": 6200,
+   "stripFreeSha256": "6c343c02e1a494879da040341e3e3c3d0cc9a8f17410a3b38d11323685fb1b4e"
+  },
+  "messaging": {
+   "children": 1,
+   "length": 117,
+   "stripFreeLength": 117,
+   "stripFreeSha256": "2759d6a4a439e1578a515a084f2c9f3a78e8f9bf8a1c056bff685d1cfb76edb1"
+  },
+  "model_config": {
+   "children": 3,
+   "length": 48392,
+   "stripFreeLength": 47376,
+   "stripFreeSha256": "db87de23e18fe547963ad6045ce8b46be0c1278effc74283c79f7226d0a10db3"
+  },
+  "models": {
+   "children": 5,
+   "length": 17224,
+   "stripFreeLength": 16161,
+   "stripFreeSha256": "e4c83bcecb274e34ab1dd7396cff935a987169747b2d31325e519b87aaed0bca"
+  },
+  "optimizer": {
+   "children": 7,
+   "length": 18589,
+   "stripFreeLength": 17519,
+   "stripFreeSha256": "b36c078e1c91e9788bbb1dc61f71d09f491333c36cf1d27cd7fdf327f8cc49a7"
+  },
+  "providers": {
+   "children": 7,
+   "length": 23072,
+   "stripFreeLength": 21136,
+   "stripFreeSha256": "94f236d725ed4694bf7e708cbe8fcb5668ed55e2902baef96caab1aefc56abee"
+  },
+  "proxying": {
+   "children": 14,
+   "length": 60860,
+   "stripFreeLength": 58465,
+   "stripFreeSha256": "e308938ca9eb3c1045f8fc56a112a8ae70df25eeb9d2f21d89b428062453fbfc"
+  },
+  "requests": {
+   "children": 29,
+   "length": 71667,
+   "stripFreeLength": 67151,
+   "stripFreeSha256": "0fecc0168e31c1201648fd2f15c8ad9e41f8799572b16420ebc98fbf93a6574a"
+  },
+  "web_search": {
+   "children": 7,
+   "length": 11156,
+   "stripFreeLength": 9789,
+   "stripFreeSha256": "1eff1b6b156b1b7287c33e009bafebfcd64820bcc0df1b07ffb803dcdf1f94f1"
+  }
+ },
+ "navigator_pages": [
+  "claude",
+  "coding_agents",
+  "docs",
+  "guide",
+  "limits",
+  "marketplaces",
+  "model_config",
+  "models",
+  "optimizer",
+  "providers",
+  "proxying",
+  "requests",
+  "web_search"
+ ],
+ "views": {
+  "claude": {
+   "children": 5,
+   "length": 20262,
+   "sha256": "6f57179aec4b70443ebd6ddde6c7d435834e87f628c217dccff1aee3ed69ba21",
+   "stripFreeLength": 20047,
+   "stripFreeSha256": "2c7e689369ba73947d768d776e481f35018f69ae585868b0d35075c8a6acb4ab"
+  },
+  "coding_agents": {
+   "children": 5,
+   "length": 58501,
+   "sha256": "69747adc392f27bb53910add030865945fb075718ac7844a00329e6b9b67f8b3",
+   "stripFreeLength": 57206,
+   "stripFreeSha256": "8ca73e2df7c73a055c1d11644a5fbb3e1862ee54710e53810453e990444b8766"
+  },
+  "docs": {
+   "children": 1,
+   "length": 2504,
+   "sha256": "04fba5121e5db035f57fb2e59e8867dbe73a3c97aa1eefd406f57db4f19070b7",
+   "stripFreeLength": 2503,
+   "stripFreeSha256": "a327e16915f98c95acc628b34599c5c9febe204ac5968d90f45cab9b90831631"
+  },
+  "get_started": {
+   "children": 1,
+   "length": 63996,
+   "sha256": "723ae508e38f226870b0b3fe311efa00a30a808e24faab129216dcd473abafd2",
+   "stripFreeLength": 63238,
+   "stripFreeSha256": "5998d4cb6c94bf9097f9b49beb5fd47fe24d7b8bf75bbef040e412ca9e085156"
+  },
+  "guide": {
+   "children": 1,
+   "length": 359262,
+   "sha256": "fee11c7086a9142ae25c543eb18fafe1fe829c6a0b9f20d47168123c2294e94e",
+   "stripFreeLength": 358836,
+   "stripFreeSha256": "5965b7ac8e4b1a6a7dd2dacb4e60621fb82b65c4bbd7fe2e49c3a05e237d16d9"
+  },
+  "limits": {
+   "children": 1,
+   "length": 39872,
+   "sha256": "bc23d89811dd4f14416494e4e8912627c2e9de47becae0fbf7e0ef6966565ddf",
+   "stripFreeLength": 39872,
+   "stripFreeSha256": "bc23d89811dd4f14416494e4e8912627c2e9de47becae0fbf7e0ef6966565ddf"
+  },
+  "marketplaces": {
+   "children": 11,
+   "length": 6206,
+   "sha256": "b56b25e9ff0e2cd1e4663880e9f74cb01453afd0078979338be141dd58687c75",
+   "stripFreeLength": 6200,
+   "stripFreeSha256": "6c343c02e1a494879da040341e3e3c3d0cc9a8f17410a3b38d11323685fb1b4e"
+  },
+  "messaging": {
+   "children": 1,
+   "length": 117,
+   "sha256": "2759d6a4a439e1578a515a084f2c9f3a78e8f9bf8a1c056bff685d1cfb76edb1",
+   "stripFreeLength": 117,
+   "stripFreeSha256": "2759d6a4a439e1578a515a084f2c9f3a78e8f9bf8a1c056bff685d1cfb76edb1"
+  },
+  "model_config": {
+   "children": 2,
+   "length": 47842,
+   "sha256": "2d0bed6622a76a01f3136d81d96677e1a5d4a7a8ea4e92db2dafc30f83766b5c",
+   "stripFreeLength": 47376,
+   "stripFreeSha256": "db87de23e18fe547963ad6045ce8b46be0c1278effc74283c79f7226d0a10db3"
+  },
+  "models": {
+   "children": 4,
+   "length": 16726,
+   "sha256": "b01b241a2f438cd02b71454e3bfcb30cfc2820f634f0a0d0ca6d57614c914aee",
+   "stripFreeLength": 16161,
+   "stripFreeSha256": "e4c83bcecb274e34ab1dd7396cff935a987169747b2d31325e519b87aaed0bca"
+  },
+  "optimizer": {
+   "children": 6,
+   "length": 17940,
+   "sha256": "67ff8dfefb8da0da04cccdf19208a4d698a872cc510aa0d9e0bc5e402a58c4af",
+   "stripFreeLength": 17519,
+   "stripFreeSha256": "b36c078e1c91e9788bbb1dc61f71d09f491333c36cf1d27cd7fdf327f8cc49a7"
+  },
+  "providers": {
+   "children": 6,
+   "length": 21747,
+   "sha256": "cbe0dad36bd1396c61482481f72ecc145bfa78750dc184818dc66b101abf3271",
+   "stripFreeLength": 21136,
+   "stripFreeSha256": "94f236d725ed4694bf7e708cbe8fcb5668ed55e2902baef96caab1aefc56abee"
+  },
+  "proxying": {
+   "children": 13,
+   "length": 60028,
+   "sha256": "659b0fed3c98c77db09f293b31dc9eb7b18b290d025a36966f75c3be560a3f91",
+   "stripFreeLength": 58465,
+   "stripFreeSha256": "e308938ca9eb3c1045f8fc56a112a8ae70df25eeb9d2f21d89b428062453fbfc"
+  },
+  "requests": {
+   "children": 28,
+   "length": 70024,
+   "sha256": "2b7d33c3e2b11ccd71c9fc97f319939dbfc82be98043cb1add8c5feda792a1bd",
+   "stripFreeLength": 67151,
+   "stripFreeSha256": "0fecc0168e31c1201648fd2f15c8ad9e41f8799572b16420ebc98fbf93a6574a"
+  },
+  "web_search": {
+   "children": 6,
+   "length": 10571,
+   "sha256": "423217c8bf5a03374e695093af1878bfd3bf434d4847c627fc41abf0116b8a9b",
+   "stripFreeLength": 9789,
+   "stripFreeSha256": "1eff1b6b156b1b7287c33e009bafebfcd64820bcc0df1b07ffb803dcdf1f94f1"
+  }
+ },
+ "written_by": "tests/api/admin_jsdom_design_system.mjs (MCC_JSDOM_SCENARIO=design_system), run against the BASE tree 421d81f7 (v8.0.2) with MCC_JSDOM_DS_FEATURE=disabled, and against this tree with the same scenario at both settings. `disabled` is the equality baseline: with the per-page section navigator and the Appearance card not built, every view's strip-free DOM is the base tree's. `enabled_deltas` names the views the two features change on purpose, view by view."
+}

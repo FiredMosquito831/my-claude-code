@@ -163,6 +163,14 @@ const state = {
   // not persist half-restored state (e.g. empty analytics filters) over the
   // saved state we are in the middle of restoring.
   loading: false,
+  // 8.1.0: set by `initSectionNavigatorSpy`, called by `setActiveView` after
+  // the view swap so the new page's strip is the visible one and its current
+  // section is already marked on the first paint.
+  refreshSectionNavigator: null,
+  // 8.1.0: the resolved (design, theme, mode, density) plus which layer each
+  // came from. Written by `applyAppearance`; read by the Appearance card and
+  // by the registry loader. Null until the first resolve.
+  appearance: null,
 };
 
 const MASKED_SECRET = "********";
@@ -173,8 +181,11 @@ const VIEW_GROUPS = [
     id: "get_started",
     label: "Get Started",
     title: "Get Started",
-    sections: [],
-    containerId: null,
+    // 8.1.0: the Appearance card's four machine defaults are ordinary
+    // manifest fields and render into this view like every other section.
+    // They are the only section this view claims.
+    sections: ["appearance"],
+    containerId: "appearanceMachineSections",
   },
   {
     id: "providers",
@@ -764,6 +775,14 @@ async function loadDashboardState() {
   const config = await api("/admin/api/config");
   state.config = config;
   state.fields = adoptConfigFields(config.fields);
+  // 8.1.0: the machine's appearance defaults were in that payload, so the
+  // precedence can be resolved for real now — before this line the only
+  // layers that existed were the viewer's and the compiled ones, and a
+  // machine default would have lost to the compiled one until a reload.
+  applyAppearance(resolveAppearance());
+  // The "where this came from" sentence names the machine layer, which only
+  // exists now that the payload is here.
+  renderAppearanceCard();
   state.credentialEnvs = new Set(
     (config.provider_status || [])
       .map((provider) => provider.credential_env)
@@ -880,8 +899,11 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (messageArea && messageArea.classList.contains("ok")) showMessage("");
   // 7.122.3 (U13): the footer is a settings bar; it follows the view.
   refreshActionBarVisibility();
-  // 7.122.3 (U14–U16): the topbar shows the active page's own contents rail.
-  if (typeof state.showJumpBars === "function") state.showJumpBars();
+  // 8.1.0: the active page's own section navigator is the only one on screen.
+  // It replaced the three topbar rails, which now live inside it.
+  if (typeof state.refreshSectionNavigator === "function") {
+    state.refreshSectionNavigator();
+  }
   // Persist real navigation, but never the forced onboarding view, and never
   // while load() is mid-restore (it would clobber the saved state with the
   // not-yet-restored DOM).
@@ -11243,6 +11265,31 @@ function uxPassHarness() {
     renderProviderGroups,
     renderCredentialHealth,
     renderSections,
+  };
+}
+
+/** A handle on 8.1.0's own machinery, for the design-system jsdom scenario.
+ *
+ * Same shape and same purpose as ``uxPassHarness`` above: a function with no
+ * behaviour of its own, returning references the page already has, so a
+ * scenario can open a view and resolve the appearance without evaluating this
+ * file a second time. Nothing here is new state and nothing reads it.
+ */
+function designSystemHarness() {
+  return {
+    state,
+    setActiveView,
+    resolveAppearance,
+    applyAppearance,
+    renderAppearanceCard,
+    SECTION_NAVIGATOR,
+    VIEW_GROUPS,
+    ADMIN_DESIGNS,
+    ADMIN_THEME_FAMILIES,
+    ADMIN_THEME_MODES,
+    ADMIN_DENSITIES,
+    LEGACY_THEME_MAP,
+    APPEARANCE_KEYS,
   };
 }
 
@@ -30088,24 +30135,292 @@ function token(name, fallback) {
   return value || fallback;
 }
 
-/* â”€â”€ Theme switching (brand: Midnight / Paper / High Contrast) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-   Themes are applied by setting [data-theme] on <html>; every color is a
-   semantic token, so the whole console re-themes at once. Charts read tokens
-   through token(), so re-running their last draw re-themes the canvas too. */
+/* ═══════════════ 8.1.0 — Theme family × mode, and the design registry ═════
+   specs/DESIGN-REVAMP-OPTIONS.md §5, §13.2.1–13.2.4, §13.4, round-4 Q4/Q5/Q9–
+   Q13.
+
+   TWO AXES, DELIBERATELY ORTHOGONAL (§13.4):
+     - FAMILY (today · midnight · paper · hc · velvet · navy · a design's own)
+       and MODE (light · dark). Every family has both forms, so switching mode
+       never has to switch family.
+     - DESIGN (structure and interaction). One real entry ships in 8.1.0 and
+       it is `today`: zero CSS, zero JS, the current rendering.
+
+   THE THREE STORAGE LAYERS, in precedence order (§13.2.3 Q10):
+     1. this viewer, in localStorage: `mcc-admin-design`, `mcc-admin-theme`,
+        `mcc-admin-mode`, `mcc-admin-density`;
+     2. the machine/account default, in the managed config: `ADMIN_DESIGN`,
+        `ADMIN_THEME`, `ADMIN_MODE`, `ADMIN_DENSITY`, read out of the same
+        `/admin/api/config` payload every other setting comes from;
+     3. the compiled default (`ADMIN_APPEARANCE_DEFAULTS` in designs.js):
+        velvet in dark, today in light.
+   **An empty viewer value means "follow the machine."** That is why every
+   read treats "" as absent rather than as a choice.
+
+   THE MIGRATION (§13.2.3, round-4 Q12). 7.122.3 and earlier stored one key,
+   `mcc-theme`, with exactly four values, and — because `applyTheme()` wrote it
+   on every page load — essentially every existing browser has one. Each maps
+   to a (family, mode) pair that looks the same as it did:
+
+       midnight       -> midnight / dark
+       paper          -> paper    / light
+       high-contrast  -> hc       / dark
+       velvet         -> velvet   / dark
+
+   A saved value therefore keeps looking the same; a browser with nothing saved
+   gets velvet in dark. The legacy key is READ, never written, and never
+   deleted: an older build of the dashboard (a pinned wheel, a second browser
+   profile) still reads it, and the map is a pure function of it, so the two
+   cannot disagree about what the user chose.
+
+   NOT IN THE URL (§13.2.3 Q6, round-4 Q13). The design is a preference, not a
+   route. Nothing here reads or writes `location` for the design; the only
+   `location` traffic in this file is the section navigator's anchor. */
+
 const THEME_KEY = "mcc-theme";
+const APPEARANCE_KEYS = {
+  design: "mcc-admin-design",
+  theme: "mcc-admin-theme",
+  mode: "mcc-admin-mode",
+  density: "mcc-admin-density",
+};
+/** The one legacy value -> (family, mode) map. Read by nothing else. */
+const LEGACY_THEME_MAP = {
+  midnight: { theme: "midnight", mode: "dark" },
+  paper: { theme: "paper", mode: "light" },
+  "high-contrast": { theme: "hc", mode: "dark" },
+  velvet: { theme: "velvet", mode: "dark" },
+};
+/** The machine-default settings, as the manifest publishes them. */
+const APPEARANCE_SETTINGS = {
+  design: "ADMIN_DESIGN",
+  theme: "ADMIN_THEME",
+  mode: "ADMIN_MODE",
+  density: "ADMIN_DENSITY",
+};
 const chartRedrawers = new Map();
 function registerChartRedraw(canvasId, fn) {
   chartRedrawers.set(canvasId, fn);
 }
+
+/** One reader for the three storage layers. Never throws. */
+function readViewerAppearance() {
+  const viewer = {};
+  try {
+    Object.entries(APPEARANCE_KEYS).forEach(([axis, key]) => {
+      const value = localStorage.getItem(key);
+      // "" means "follow the machine", which is the same thing as absent.
+      if (value !== null && String(value).trim() !== "") {
+        viewer[axis] = String(value).trim();
+      }
+    });
+  } catch (_) {
+    /* storage unavailable (a private window, a sandboxed frame) */
+  }
+  return viewer;
+}
+
+/** The legacy single key, read only when the new keys are silent.
+ *
+ * It is read *after* the new keys and *before* the machine, because it is a
+ * record of what this viewer chose on an older build — a viewer choice, not a
+ * machine one — and migrating it one step later than the new keys would make
+ * a machine default outrank the user's own saved pick.
+ */
+function readLegacyTheme() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(THEME_KEY);
+  } catch (_) {
+    return null;
+  }
+  if (!raw) return null;
+  return Object.prototype.hasOwnProperty.call(LEGACY_THEME_MAP, raw)
+    ? LEGACY_THEME_MAP[raw]
+    : null;
+}
+
+/** The machine default for one axis, out of the config payload. */
+function machineAppearance(axis) {
+  const key = APPEARANCE_SETTINGS[axis];
+  const field = state.fields && state.fields.get ? state.fields.get(key) : null;
+  const value = field ? String(field.value ?? "").trim() : "";
+  return value || null;
+}
+
+/** Whether a value is legal for an axis. A bad value is ignored, not used. */
+function appearanceValueIsLegal(axis, value) {
+  if (axis === "theme") return ADMIN_THEME_FAMILIES.some((f) => f.id === value);
+  if (axis === "mode") return ADMIN_THEME_MODES.some((m) => m.id === value);
+  if (axis === "density") return ADMIN_DENSITIES.some((d) => d.id === value);
+  if (axis === "design") return ADMIN_DESIGNS.some((d) => d.id === value);
+  return false;
+}
+
+/** The design row the reader is on. `today` when nothing names a real one. */
+function currentDesign() {
+  const wanted = state.appearance && state.appearance.design;
+  const found = ADMIN_DESIGNS.find((row) => row.id === wanted);
+  if (found) return found;
+  const fallback = ADMIN_DESIGNS.find((row) => row.defaultFor === "fallback");
+  return fallback || ADMIN_DESIGNS[0];
+}
+
+/** Resolve all four axes across the three layers, then apply them.
+ *
+ * `viewer` overrides `machine` overrides `compiled`; a legacy `mcc-theme`
+ * value sits between viewer and machine because it *is* a viewer choice.
+ * A value that is not legal for its axis is ignored at the layer it came
+ * from, so a corrupted or hand-edited key falls through to the next layer
+ * rather than painting a page with a family that has no palette.
+ */
+function resolveAppearance() {
+  const viewer = readViewerAppearance();
+  const legacy = readLegacyTheme();
+  const defaults = ADMIN_APPEARANCE_DEFAULTS;
+  const picked = {};
+  const sourceOf = {};
+  ["design", "theme", "mode", "density"].forEach((axis) => {
+    const candidates = [
+      ["viewer", viewer[axis]],
+      ["legacy", legacy && legacy[axis]],
+      ["machine", machineAppearance(axis)],
+      ["compiled", defaults[axis]],
+    ];
+    for (const [source, value] of candidates) {
+      if (value === undefined || value === null || value === "") continue;
+      if (!appearanceValueIsLegal(axis, value)) continue;
+      picked[axis] = value;
+      sourceOf[axis] = source;
+      break;
+    }
+    if (picked[axis] === undefined) {
+      picked[axis] = defaults[axis];
+      sourceOf[axis] = "compiled";
+    }
+  });
+  // Mode and family are chosen independently, but the compiled default for
+  // light is `today` (§13.2.1, round-4 Q4). A reader who has never chosen a
+  // family and lands in light mode gets Today's light palette, not Velvet's.
+  if (
+    sourceOf.theme === "compiled" &&
+    picked.mode === "light" &&
+    defaults.lightTheme
+  ) {
+    picked.theme = defaults.lightTheme;
+  }
+  return { values: picked, source: sourceOf };
+}
+
+/** Write the resolved appearance onto <html>, and load a design's own CSS.
+ *
+ * The attributes are the whole interface a stylesheet gets:
+ *   data-mcc-theme   the family
+ *   data-mcc-mode    the mode
+ *   data-design      the design's id (a later design selects on it)
+ *   data-density     the resolved density — ABSENT when the reader chose
+ *                    "Design default" and the design's default is
+ *                    `comfortable`, because comfortable IS today's rhythm and
+ *                    writing the attribute would be a change for no reason.
+ */
+function applyAppearance(appearance) {
+  const root = document.documentElement;
+  const { values } = appearance;
+  root.dataset.mccTheme = values.theme;
+  root.dataset.mccMode = values.mode;
+  root.dataset.design = values.design;
+  const design = currentDesign();
+  const density =
+    values.density === "design" ? design.defaultDensity || "comfortable" : values.density;
+  if (density === "comfortable") delete root.dataset.density;
+  else root.dataset.density = density;
+  state.appearance = { ...values, resolvedDensity: density, source: appearance.source };
+  // The old `data-theme` attribute is kept in step with the family for the
+  // two rules in admin.css that still select on it (`--action-bar` and the
+  // high-contrast 2 px borders). It is the *legacy* axis, so it gets the
+  // legacy word: `hc` is `high-contrast` there.
+  const legacyWord =
+    values.theme === "hc" ? "high-contrast" : values.theme === "midnight" ? "" : values.theme;
+  if (!legacyWord || legacyWord === "today" || legacyWord === "navy" || legacyWord === "own") {
+    delete root.dataset.theme;
+  } else {
+    root.dataset.theme = legacyWord;
+  }
+  loadDesignStylesheet(design);
+  chartRedrawers.forEach((fn) => { try { fn(); } catch (_) {} });
+}
+
+/** Add (or swap) the selected design's own stylesheet.
+ *
+ * §13.2.2 rule 4: "Adding a design = 1 CSS file (+1 optional JS) + 1 registry
+ * row." This is the whole loader. `today` has `css: null`, so nothing is
+ * fetched and nothing is added — which is what makes the base page's render
+ * byte-identical when the design is `today`.
+ */
+function loadDesignStylesheet(design) {
+  const existing = document.getElementById("designStylesheet");
+  const href = design && design.css ? `/admin/assets/${design.css}` : null;
+  if (!href) {
+    if (existing) existing.remove();
+    return;
+  }
+  if (existing && existing.getAttribute("href") === href) return;
+  if (existing) existing.remove();
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.id = "designStylesheet";
+  link.href = href;
+  document.head.appendChild(link);
+}
+
+/** Store one axis for this viewer. An empty value means "follow the machine". */
+function setViewerAppearance(axis, value) {
+  const key = APPEARANCE_KEYS[axis];
+  if (!key) return;
+  try {
+    if (value === "" || value === undefined || value === null) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, String(value));
+    }
+  } catch (_) {
+    /* storage unavailable; the change still applies for this page */
+  }
+}
+
+/** Change one axis, for this viewer only, and repaint.
+ *
+ * **No Apply call.** §13.2.5 item 4 and this release's proof bar item 7: a
+ * design, theme or density switch must never POST `/admin/api/config/apply`
+ * for the viewer layer. The machine default has its own explicit button.
+ */
+function setAppearance(axis, value) {
+  setViewerAppearance(axis, value);
+  applyAppearance(resolveAppearance());
+  renderAppearanceCard();
+}
+
+/** The legacy entry point, kept because `applyTheme` is referenced by the
+ *  four static buttons' handler and by the charts' own redraw path.
+ *
+ * It now means "set the family and the mode together", which is exactly what
+ * a single-word legacy value always meant.
+ */
 function applyTheme(name) {
-  if (name !== "paper" && name !== "high-contrast" && name !== "velvet") name = "midnight";
-  if (name === "midnight") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = name;
-  try { localStorage.setItem(THEME_KEY, name); } catch (_) {}
+  const pair = LEGACY_THEME_MAP[name] || (name === "midnight" ? LEGACY_THEME_MAP.midnight : null);
+  if (!pair) return;
+  setAppearance2("theme", pair.theme, pair.mode);
   document.querySelectorAll(".theme-option").forEach((btn) => {
     btn.setAttribute("aria-checked", String(btn.dataset.themeValue === name));
   });
-  chartRedrawers.forEach((fn) => { try { fn(); } catch (_) {} });
+}
+
+/** Two axes in one commit, so a family/mode pair repaints once. */
+function setAppearance2(axis, value, mode) {
+  setViewerAppearance(axis, value);
+  if (mode) setViewerAppearance("mode", mode);
+  applyAppearance(resolveAppearance());
+  renderAppearanceCard();
 }
 /* ------------------------------------------------- dashboard state persistence
    The theme is persisted separately above (``mcc-theme``); this remembers the
@@ -30190,10 +30505,269 @@ function restoreDashboardState() {
   }
 }
 
+/* ══════════════ 8.1.0 — the Appearance card (Settings → Optional) ═════════
+   specs/DESIGN-REVAMP-OPTIONS.md §13.2.3, round-4 Q10/Q11.
+
+   ONE card, three choices:
+     DESIGN  — a grid of live preview tiles. 8.1.0 ships one row (`today`), so
+               the grid has one tile, and the tile is sized by its own
+               `max-width` so one entry reads as a card and not as a bar.
+     THEME   — family × mode, which is where 7.122.3's four theme buttons went.
+     DENSITY — Design default / Compact / Comfortable.
+
+   Storage: every control below writes the VIEWER layer only. The machine
+   default is set by the explicit button at the foot of the card, which is the
+   only thing here that can reach `/admin/api/config/apply` — and even that
+   goes through the ordinary settings pipeline (a provisional value plus the
+   page's own Apply), never a hidden write of its own. §13.2.5 item 4 and this
+   release's proof item 7 depend on that distinction.
+
+   THE CARD IS STATIC MARKUP, not a settings section: it must render even when
+   the settings payload has not arrived (its two source chips then read
+   "loading"), and it must not be one of the manifest's sections, because
+   nothing in it is a `.env` key the page edits in a field grid. */
+
+/** The card body, once. Idempotent: a re-render replaces its own children. */
+function renderAppearanceCard() {
+  const host = byId("appearanceCardBody");
+  if (!host) return;
+  const appearance = state.appearance || resolveAppearance().values;
+  host.textContent = "";
+
+  /* ---- Design ---------------------------------------------------------- */
+  const designRow = document.createElement("div");
+  designRow.className = "appearance-row";
+  designRow.id = "appearanceDesignRow";
+  const designLabel = document.createElement("span");
+  designLabel.className = "appearance-row-label";
+  designLabel.id = "appearanceDesignLabel";
+  designLabel.textContent = "Design";
+  const tiles = document.createElement("ul");
+  tiles.className = "appearance-grid";
+  tiles.setAttribute("role", "radiogroup");
+  tiles.setAttribute("aria-labelledby", "appearanceDesignLabel");
+  ADMIN_DESIGNS.forEach((design) => {
+    const item = document.createElement("li");
+    item.style.display = "contents";
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "appearance-tile";
+    tile.setAttribute("role", "radio");
+    tile.dataset.designId = design.id;
+    const current = design.id === appearance.design;
+    tile.setAttribute("aria-checked", String(current));
+    tile.setAttribute("aria-label", `${design.name}: ${design.note}`);
+    const preview = document.createElement("div");
+    preview.className = "appearance-preview";
+    preview.setAttribute("aria-hidden", "true");
+    const rail = document.createElement("div");
+    rail.className = "appearance-preview-rail";
+    const body = document.createElement("div");
+    body.className = "appearance-preview-body";
+    for (let line = 0; line < 3; line += 1) {
+      const bar = document.createElement("div");
+      bar.className = "appearance-preview-line";
+      body.appendChild(bar);
+    }
+    preview.append(rail, body);
+    const nameLine = document.createElement("span");
+    nameLine.className = "appearance-tile-head";
+    const name = document.createElement("span");
+    name.className = "appearance-tile-name";
+    name.textContent = design.name;
+    nameLine.appendChild(name);
+    if (design.status === "classic") {
+      const badge = document.createElement("span");
+      badge.className = "appearance-tile-badge";
+      badge.textContent = "Classic";
+      nameLine.appendChild(badge);
+    }
+    const note = document.createElement("span");
+    note.className = "appearance-tile-note";
+    note.textContent = design.note;
+    tile.append(preview, nameLine, note);
+    tile.addEventListener("click", () => setAppearance("design", design.id));
+    item.appendChild(tile);
+    tiles.appendChild(item);
+  });
+  designRow.append(designLabel, tiles);
+  host.appendChild(designRow);
+
+  /* ---- Theme family + mode --------------------------------------------- */
+  host.appendChild(
+    appearanceOptionsRow(
+      "appearanceThemeRow",
+      "Theme",
+      "appearanceThemeLabel",
+      // "theme", not "family": the axis name is the storage key
+      // (`mcc-admin-theme`) and the ADMIN_THEME setting, so one word is used
+      // everywhere. "family" is the SPEC's word for what this axis chooses,
+      // and the labels say "colour family" — but a third spelling of the same
+      // axis is how a control ends up writing a key nothing reads.
+      "theme",
+      ADMIN_THEME_FAMILIES,
+      appearance.theme,
+    ),
+  );
+  host.appendChild(
+    appearanceOptionsRow(
+      "appearanceModeRow",
+      "Mode",
+      "appearanceModeLabel",
+      "mode",
+      ADMIN_THEME_MODES,
+      appearance.mode,
+    ),
+  );
+
+  /* ---- Density --------------------------------------------------------- */
+  host.appendChild(
+    appearanceOptionsRow(
+      "appearanceDensityRow",
+      "Density",
+      "appearanceDensityLabel",
+      "density",
+      ADMIN_DENSITIES,
+      appearance.density,
+    ),
+  );
+
+  /* ---- Where the current values came from ------------------------------ */
+  const note = document.createElement("p");
+  note.className = "appearance-note";
+  note.id = "appearanceSourceNote";
+  const source = (state.appearance && state.appearance.source) || {};
+  const words = {
+    viewer: "this browser",
+    legacy: "carried over from before 8.1.0",
+    machine: "the machine default",
+    compiled: "the built-in default",
+  };
+  const describe = (axis) => words[source[axis]] || words.compiled;
+  note.append(
+    "Each choice is stored in this browser only; leave one unset to follow " +
+      "the machine. Now: design " +
+      `${describe("design")}, theme ${describe("theme")}, mode ` +
+      `${describe("mode")}, density ${describe("density")}. The machine ` +
+      "defaults are ",
+  );
+  const designKey = document.createElement("code");
+  designKey.textContent = "ADMIN_DESIGN";
+  const themeKey = document.createElement("code");
+  themeKey.textContent = "ADMIN_THEME";
+  const modeKey = document.createElement("code");
+  modeKey.textContent = "ADMIN_MODE";
+  const densityKey = document.createElement("code");
+  densityKey.textContent = "ADMIN_DENSITY";
+  note.append(designKey, ", ", themeKey, ", ", modeKey, " and ", densityKey);
+  note.append(". Switching anything here never saves a setting.");
+  host.appendChild(note);
+
+  /* ---- Follow the machine / set the machine ---------------------------- */
+  const actions = document.createElement("div");
+  actions.className = "appearance-row";
+  actions.id = "appearanceActions";
+  const follow = document.createElement("button");
+  follow.type = "button";
+  follow.className = "secondary-button";
+  follow.id = "appearanceFollowMachine";
+  follow.textContent = "Follow the machine";
+  follow.setAttribute(
+    "title",
+    "Clear this browser's design, theme, mode and density, so all four follow ADMIN_DESIGN, ADMIN_THEME, ADMIN_MODE and ADMIN_DENSITY again.",
+  );
+  follow.addEventListener("click", () => {
+    Object.values(APPEARANCE_KEYS).forEach((key) => {
+      try {
+        localStorage.removeItem(key);
+      } catch (_) {
+        /* storage unavailable; the next resolve uses the machine anyway */
+      }
+    });
+    applyAppearance(resolveAppearance());
+    renderAppearanceCard();
+    showMessage("This browser now follows the machine defaults", "ok");
+  });
+  const makeDefault = document.createElement("button");
+  makeDefault.type = "button";
+  makeDefault.className = "secondary-button";
+  makeDefault.id = "appearanceSetMachineDefault";
+  makeDefault.textContent = "Use this as the machine default";
+  makeDefault.setAttribute(
+    "title",
+    "Put the current design, theme, mode and density into ADMIN_DESIGN, ADMIN_THEME, ADMIN_MODE and ADMIN_DENSITY as unsaved changes, then use Apply at the foot of the page to save them.",
+  );
+  makeDefault.addEventListener("click", () => {
+    const current = state.appearance || resolveAppearance().values;
+    const pairs = [
+      ["ADMIN_DESIGN", current.design],
+      ["ADMIN_THEME", current.theme],
+      ["ADMIN_MODE", current.mode],
+      ["ADMIN_DENSITY", current.density],
+    ];
+    let staged = 0;
+    pairs.forEach(([key, value]) => {
+      const input = document.querySelector(`#field-${goToSelectorPart(key)}`);
+      if (!input) return;
+      input.value = value;
+      // The page's own dirty accounting, so Apply lights up exactly as it
+      // does for a hand-typed edit and the change is saved the same way.
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+      input.dispatchEvent(new window.Event("change", { bubbles: true }));
+      staged += 1;
+    });
+    if (staged === pairs.length) {
+      showMessage(
+        "Machine defaults staged below — Apply to save them, Validate to check first",
+        "ok",
+      );
+    }
+  });
+  actions.append(follow, makeDefault);
+  host.appendChild(actions);
+}
+
+/** One labelled row of radio-style options. Shared by all three axes. */
+function appearanceOptionsRow(rowId, labelText, labelId, axis, options, selected) {
+  const row = document.createElement("div");
+  row.className = "appearance-row";
+  row.id = rowId;
+  const label = document.createElement("span");
+  label.className = "appearance-row-label";
+  label.id = labelId;
+  label.textContent = labelText;
+  const grid = document.createElement("div");
+  grid.className = "appearance-options";
+  grid.setAttribute("role", "radiogroup");
+  grid.setAttribute("aria-labelledby", labelId);
+  options.forEach((option) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "appearance-option";
+    button.setAttribute("role", "radio");
+    button.dataset.appearanceAxis = axis;
+    button.dataset.appearanceValue = option.id;
+    const checked = option.id === selected;
+    button.setAttribute("aria-checked", String(checked));
+    button.textContent = option.name;
+    button.addEventListener("click", () => setAppearance(axis, option.id));
+    grid.appendChild(button);
+  });
+  row.append(label, grid);
+  return row;
+}
+
+/** 8.1.0: resolve the three storage layers and paint.
+ *
+ * The legacy four-button switch is kept — hidden, and only until the
+ * Appearance card has rendered — because an old page (or a script failure)
+ * must still be able to change the theme, and because `applyTheme` is what
+ * those buttons' own handler calls. Settings' Appearance card is where the
+ * choice lives now (§13.2.3: "Today's four buttons fold into this menu;
+ * nothing is lost").
+ */
 function initThemeSwitch() {
-  let saved = "midnight";
-  try { saved = localStorage.getItem(THEME_KEY) || "midnight"; } catch (_) {}
-  applyTheme(saved);
+  applyAppearance(resolveAppearance());
   const sw = document.getElementById("themeSwitch");
   if (sw) sw.addEventListener("click", (e) => {
     const btn = e.target.closest(".theme-option");
@@ -36279,6 +36853,13 @@ initOptimizerView();
 
 initThemeSwitch();
 
+/* 8.1.0: the Appearance card's controls are built once here, before any
+   request, so it is usable even when the settings payload never arrives. Its
+   "where this came from" sentence is rewritten by renderAppearanceCard() after
+   the payload lands and the machine layer is known. */
+renderAppearanceCard();
+document.body.classList.add("has-appearance-card");
+
 /* ----------------------------------------------------------------- models
    The Models page. One payload from /admin/api/model-admin drives two
    sections: which models the catalogue shows, and -- per provider or per
@@ -41535,50 +42116,393 @@ function initSidebarFold() {
   });
 }
 
-/** U14/U15/U16: the in-page contents rails, one behaviour for all of them.
+/* ════════════════════ 8.1.0 — the per-page section navigator ══════════════
+   specs/DESIGN-REVAMP-OPTIONS.md, "PER-PAGE SECTION NAVIGATOR" (settled
+   2026-11-01 ~21:45 with the user's refinement "but more visible for each
+   page too").
+
+   ONE SHARED DATA TABLE. `page -> [[label, selector], …]` and nothing else.
+   It is DATA, never a per-design fork, so every design a later PR adds
+   inherits the navigator with no change here. The labels are short — one or
+   two words, every one under 18 characters — because the row must not wrap
+   at 1280 px.
+
+   THE THREE APIS BELOW REPLACE THE TOPBAR RAILS. 7.122.3 shipped three
+   quick-jump rails (`providersJumpBar`, `proxyingJumpBar`, `reqJumpBar`)
+   parked in the topbar. This release folds them into the navigator: their
+   `<nav>` elements are re-parented INTO the strip and their links join the
+   row. One mechanism, not two, and no page shows both — the topbar keeps only
+   the page title.
+
+   THE BEHAVIOUR IS THE PRODUCT'S EXISTING ONE, reused rather than rewritten:
+   `scrollIntoView` honouring `prefers-reduced-motion`, the
+   `onboarding-highlight` pulse the rest of the dashboard already uses for
+   "this is what you asked for", and the tabindex-then-focus dance that puts
+   the reader's caret on the section so a keyboard can carry on from there.
+   What is new is only (a) the URL hash, so a reload keeps the position, and
+   (b) the active state as the page scrolls.
+
+   WHY THE HASH IS SET ON EVERY JUMP. §5 says the design is not in the URL; a
+   section anchor is not the design — it is the position within one page, and
+   the section navigator's own requirement is "page-anchors it (so a reload
+   keeps the position)". `history.replaceState` is used rather than assigning
+   `location.hash`, so a jump does not push a history entry: Back still means
+   "the page I came from", which is what a reader expects from a contents
+   strip. */
+
+/** Every page's own sections, in page order. `[label, selector]`.
  *
- * 7.122.3: the rails live in the topbar, at the right of the page title,
- * rather than as a strip above each page's first card. They are navigation,
- * not content, and a strip of links would have made every page it sits on
- * taller -- the one thing this pass must not do to a settings page.
+ * Selectors name an element that ALREADY exists in this release's markup
+ * wherever one does — an id, or an attribute, class or structural path that
+ * index.html already carries. The 8.1.0 PR adds exactly four new ids, all on
+ * Analytics, and only because three of its sections are anonymous
+ * `<section class="analytics-panel">` siblings that no existing attribute
+ * distinguishes. Keeping the additions to those four is what keeps every
+ * other page's DOM byte-identical to the base tree's, which is this
+ * release's governing proof.
+ *
+ * A selector that stops resolving fails a contract test rather than scrolling
+ * nowhere: `tests/contracts/test_admin_section_navigator.py` feeds this table
+ * to the shipped index.html through the same DOM the page uses.
+ */
+const SECTION_NAVIGATOR = {
+  providers: [
+    ["Providers", "#providersSections"],
+    ["Custom", "#customProvidersHeading"],
+    ["Optimizer", "#rtkHeading"],
+    ["Version", "#versionPanel"],
+    ["Deployment", "#deploymentPanel"],
+    ["Other servers", "#otherServersPanel"],
+  ],
+  proxying: [
+    ["Chains", "#proxyingList"],
+    ["Sources", "#proxyingSourcesSection"],
+    ["Public lists", "#proxyingFeedSection"],
+  ],
+  marketplaces: [
+    ["Account", "#marketplaceAccount"],
+    ["Profiles", "#marketplaceProfiles"],
+    ["Assignments", "#marketplaceAssignments"],
+    ["Explorer", "#marketplaceExplorer"],
+    ["Recent", "#marketplaceRecent"],
+    ["Snapshot", "#marketplaceSnapshot"],
+  ],
+  claude: [
+    ["Connection", "#claudeSettingsPanel"],
+    ["Launchers", "#claudeLaunchersTitle"],
+    ["Settings", "#claudeConfigEditor"],
+  ],
+  coding_agents: [
+    ["Find", "#codingAgentsFilterBar"],
+    ["Agents", "#codingAgentsHeading"],
+    ["Media server", "#mcpMediaServerCard"],
+    ["Desktop apps", "#desktopAppsHeading"],
+    ["Settings", "#codingAgentsSettings"],
+  ],
+  model_config: [
+    ["Routing", "#section-models"],
+    ["Reasoning", "#section-reasoning"],
+    ["Web tools", "#section-web_tools"],
+    ["Catalogue", "#section-catalogue"],
+  ],
+  models: [
+    ["Visibility", "#section-model-visibility"],
+    ["Catalogue", "#section-model-tree"],
+    ["Media", "#section-media-models"],
+  ],
+  requests: [
+    ["Summary", "#reqSummaryHeading"],
+    ["Filters", "#reqFilterProvider"],
+    ["Requests", "#reqLogHeading"],
+    ["In flight", "#reqInflightPanel"],
+    ["Charts", "#reqChartsHeading"],
+    ["Cost", "#reqCostHeading"],
+    ["Breakdowns", "#reqProviderBreakdown"],
+    ["Media", "#reqMediaPanel"],
+    ["Maintenance", "#reqMaintenance"],
+    ["Settings", "#requestsSections"],
+  ],
+  optimizer: [
+    ["Ledger", "#optKpis"],
+    ["Rules", "#optRules"],
+    ["Candidates", "#optCandidates"],
+    ["Cache", "#optCache"],
+    ["Settings", "#optimizerSections"],
+  ],
+  web_search: [
+    ["Route", "#webSearchRouteSummary"],
+    ["Services", "#webSearchGrid"],
+    ["Chain", "#webSearchSections"],
+    ["Analytics", "#webSearchAnalytics"],
+  ],
+  limits: [
+    ["Budgets", "#section-budgets"],
+    ["Deadlines", "#section-deadlines"],
+    ["Keepalive", "#section-stream_keepalive"],
+    ["Benching", "#section-benching"],
+    ["Retries", "#section-provider_retries"],
+    ["Credential health", "#section-credential_health"],
+    ["Responsiveness", "#section-loop_health"],
+    ["Diagnostics", "#section-diagnostics"],
+  ],
+  guide: [
+    ["How it works", "#guide-start"],
+    ["First run", "#guide-walkthrough"],
+    ["Providers", "#guide-keys"],
+    ["Claude models", "#guide-claude-models"],
+    ["Tiers", "#guide-models"],
+    ["Learned facts", "#guide-learned"],
+    ["Agent tiers", "#guide-agent-tiers"],
+    ["Reasoning", "#guide-reasoning"],
+    ["Cache lifetime", "#guide-prompt-cache-lifetime"],
+    ["InferHub", "#guide-inferhub"],
+    ["Claude Code", "#guide-cli"],
+    ["Claude Desktop", "#guide-desktop"],
+    ["Desktop apps", "#guide-desktop-apps"],
+    ["Other CLIs", "#guide-other"],
+    ["Install agents", "#guide-install-agents"],
+    ["OpenAI clients", "#guide-openai-clients"],
+    ["Gemini clients", "#guide-gemini-clients"],
+    ["Web search", "#guide-websearch"],
+    ["VPN · Tor", "#guide-vpn-tor"],
+    ["Proxy chains", "#guide-proxy-chains"],
+    ["Keep trying", "#guide-proxy-keep-trying"],
+    ["Proxy speed", "#guide-proxy-speed"],
+    ["Proxy sources", "#guide-proxy-sources"],
+    ["Bring your Tor", "#guide-proxy-tor"],
+    ["Proxy vendors", "#guide-proxy-vendors"],
+    ["WireGuard", "#guide-proxy-runners"],
+    ["Advanced", "#guide-advanced"],
+    ["Media", "#guide-media"],
+    ["Media MCP", "#guide-media-mcp"],
+    ["Image cost", "#guide-images"],
+    ["Analytics", "#guide-analytics"],
+    ["Request cost", "#guide-cost"],
+    ["Attribution", "#guide-attribution"],
+    ["Desktop & RTK", "#guide-deploy"],
+    ["Optimizer", "#guide-optimizer"],
+    ["Limits", "#guide-limits"],
+    ["Credits", "#guide-credits"],
+    ["Key rotation", "#guide-rotation"],
+    ["Updates", "#guide-updates"],
+    ["Security", "#guide-security"],
+    ["Troubleshooting", "#guide-trouble"],
+  ],
+  docs: [
+    ["Documents", "#docsList"],
+    ["This document", "#docsTitle"],
+    ["Contents", "#docsHeadings"],
+  ],
+};
+
+/** The strip for one page, built once and kept. */
+function buildSectionNavigator(viewId, entries) {  const host = document.querySelector(`.admin-view[data-view="${viewId}"]`);
+  if (!host) return null;
+  const existing = host.querySelector(":scope > .section-navigator");
+  if (existing) return existing;
+  const nav = document.createElement("nav");
+  nav.className = "section-navigator";
+  nav.id = `sectionNavigator-${viewId}`;
+  nav.setAttribute("aria-label", `${viewIdLabel(viewId)} sections`);
+  const label = document.createElement("span");
+  label.className = "section-navigator-label";
+  label.setAttribute("aria-hidden", "true");
+  label.textContent = "On this page";
+  nav.appendChild(label);
+  entries.forEach((entry) => {
+    const [text, selector] = entry;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = text;
+    button.dataset.sectionTarget = selector;
+    button.addEventListener("click", () => jumpToSection(nav, button, selector));
+    nav.appendChild(button);
+  });
+  /* The three 7.122.3 rails move INTO the strip rather than staying beside it,
+     so the result is one row of names and not a bar inside a bar.
+     Each rail link is dropped when the strip already has a button for the same
+     target — which is every one of them on Providers, Proxying and Analytics,
+     because the table's entries were written from those rails' own semantics.
+     A link the table does NOT cover keeps its place, so folding a rail can
+     never lose a destination. That is what "one mechanism, not two, and no
+     page shows both" means in practice: the reader sees each section named
+     once.
+     The `<nav>` elements themselves stay in the DOM (inside the strip), so a
+     test — or a later design — can still find them; only their duplicate
+     links are hidden. */
+  const covered = new Set(entries.map(([, selector]) => selector));
+  const moved = [];
+  ((VIEW_GROUPS.find((entry) => entry.id === viewId) || {}).railIds || []).forEach(
+    (railId) => {
+      const rail = byId(railId);
+      if (!rail || nav.contains(rail)) return;
+      rail.hidden = false;
+      nav.appendChild(rail);
+      rail.querySelectorAll("a[href^='#']").forEach((link) => {
+        if (covered.has(link.getAttribute("href"))) link.remove();
+      });
+      moved.push(railId);
+    },
+  );
+  nav.dataset.rails = moved.join(" ");
+  host.insertBefore(nav, host.firstChild);
+  return nav;
+}
+
+/** A view id as words, for the strip's accessible name. */
+function viewIdLabel(viewId) {
+  const entry = VIEW_GROUPS.find((view) => view.id === viewId);
+  return entry ? entry.label : viewId;
+}
+
+/** Scroll to a section, mark it, and put the position in the URL. */
+function jumpToSection(nav, button, selector) {
+  const target = document.querySelector(selector);
+  if (!target) return;
+  const reduced =
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  target.classList.add("onboarding-highlight");
+  window.setTimeout(() => target.classList.remove("onboarding-highlight"), 2000);
+  if (!target.hasAttribute("tabindex")) {
+    target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }
+  markSectionCurrent(nav, button);
+  rememberSectionTarget(selector);
+}
+
+/** The current section, as the page is read. */
+function markSectionCurrent(nav, button) {
+  nav.querySelectorAll("button[data-section-target]").forEach((candidate) => {
+    if (candidate === button) candidate.setAttribute("aria-current", "true");
+    else candidate.removeAttribute("aria-current");
+  });
+}
+
+/** Put the anchor in the URL without adding a history entry.
+ *
+ * A section anchor is not the design (§13.2.3 Q6): the design is a
+ * preference, a position within a page is a place, and the requirement is
+ * that a reload keeps the position. `replaceState` rather than assigning
+ * `location.hash` so Back still means "the page I came from". Wrapped
+ * because a `file://` page (the design previews) and a sandboxed frame both
+ * throw here, and a contents strip must never take the page down.
+ */
+function rememberSectionTarget(selector) {
+  try {
+    const hash = selector.startsWith("#") ? selector : `#${selector}`;
+    if (window.location.hash === hash) return;
+    if (window.history && typeof window.history.replaceState === "function") {
+      window.history.replaceState(null, "", hash);
+    }
+  } catch (_) {
+    /* about:blank, file://, or a sandboxed frame: the jump still happened */
+  }
+}
+
+/** Which button the hash names, when a page is opened straight at an anchor. */
+function sectionFromHash(nav) {
+  const raw = String((window.location && window.location.hash) || "");
+  if (!raw.startsWith("#") || raw.length < 2) return null;
+  let decoded = raw;
+  try {
+    decoded = `#${decodeURIComponent(raw.slice(1))}`;
+  } catch (_) {
+    /* a malformed escape keeps the raw form, which simply matches nothing */
+  }
+  return nav.querySelector(`button[data-section-target="${cssEscape(decoded)}"]`);
+}
+
+/** `CSS.escape` with a fallback, for a selector this file writes itself. */
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(value);
+  }
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+/** Build every page's strip that has three or more named sections.
+ *
+ * §"PER-PAGE SECTION NAVIGATOR" item 5: "a page with fewer than three
+ * sections gets none", and item 1: "every page that has more than ~3
+ * sections". The product's threshold is three. Twelve of the fifteen views
+ * qualify; the three that do not are Get Started, Messaging and Docs, each of
+ * which has two or fewer named blocks — a page whose every section is on the
+ * first screen does not need a contents strip, and giving it one would add a
+ * row of height for nothing. Which pages get one is a data question, never a
+ * page count.
+ */
+function initSectionNavigator() {
+  Object.keys(SECTION_NAVIGATOR).forEach((viewId) => {
+    const entries = SECTION_NAVIGATOR[viewId];
+    if (!entries || entries.length < 3) return;
+    buildSectionNavigator(viewId, entries);
+  });
+}
+
+/** Show the strip that belongs to the active page, and only that one. */
+function showSectionNavigatorForActiveView() {
+  document.querySelectorAll(".section-navigator").forEach((nav) => {
+    const view = nav.closest(".admin-view");
+    const active = Boolean(view) && view.dataset.view === state.activeView;
+    nav.hidden = !active;
+  });
+}
+
+/** The scrollspy: as each section crosses the top of the content, its button
+ *  takes the accent pill. One rAF per frame, one listener for every page, and
+ *  nothing at all when the active page has no strip.
+ *
+ *  The threshold is 120 px rather than 0 so a section whose heading has just
+ *  passed under the sticky strip still counts as "the one you are reading";
+ *  the last section that crossed wins, which is what makes the mark move down
+ *  the row monotonically as the page is read.
+ */
+function initSectionNavigatorSpy() {
+  let frame = 0;
+  const update = () => {
+    frame = 0;
+    const nav = document.querySelector(
+      `.admin-view[data-view="${state.activeView}"] > .section-navigator`,
+    );
+    if (!nav || nav.hidden) return;
+    const buttons = Array.from(
+      nav.querySelectorAll("button[data-section-target]"),
+    );
+    let current = null;
+    buttons.forEach((button) => {
+      const target = document.querySelector(button.dataset.sectionTarget);
+      if (!target) return;
+      if (target.getBoundingClientRect().top <= 120) current = button;
+    });
+    if (!current) current = buttons[0] || null;
+    if (!current) return;
+    if (current.getAttribute("aria-current") === "true") return;
+    markSectionCurrent(nav, current);
+  };
+  const onScroll = () => {
+    if (!frame) frame = window.requestAnimationFrame(update);
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll);
+  state.refreshSectionNavigator = () => {
+    showSectionNavigatorForActiveView();
+    update();
+  };
+}
+
+/** The 7.122.3 rails are now part of the navigator, so their own click
+ *  behaviour is this file's `jumpToSection` and nothing else.
+ *
+ * Kept as a named function because `initDashboardChrome()` calls it and an
+ * older call site is worse than a one-line shim.
  */
 function initSectionJumpBars() {
-  const topbar = document.querySelector(".topbar");
-  const bars = Array.from(document.querySelectorAll(".jump-bar"));
-  if (topbar) {
-    bars.forEach((bar) => {
-      bar.hidden = true;
-      topbar.appendChild(bar);
-    });
-  }
-  const showForView = () => {
-    const active = VIEW_GROUPS.find((entry) => entry.id === state.activeView);
-    const ids = new Set((active && active.railIds) || []);
-    bars.forEach((bar) => {
-      bar.hidden = !ids.has(bar.id);
-    });
-  };
-  state.showJumpBars = showForView;
-  showForView();
-  bars.forEach((bar) => {
-    bar.addEventListener("click", (event) => {
-      const link = event.target.closest('a[href^="#"]');
-      if (!link) return;
-      const target = document.getElementById(link.getAttribute("href").slice(1));
-      if (!target) return;
-      event.preventDefault();
-      const reduced =
-        window.matchMedia &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
-      target.classList.add("onboarding-highlight");
-      window.setTimeout(() => target.classList.remove("onboarding-highlight"), 2000);
-      if (!target.hasAttribute("tabindex")) {
-        target.setAttribute("tabindex", "-1");
-        target.focus({ preventScroll: true });
-      }
-    });
-  });
+  initSectionNavigator();
+  initSectionNavigatorSpy();
+  showSectionNavigatorForActiveView();
 }
 
 initDashboardChrome();

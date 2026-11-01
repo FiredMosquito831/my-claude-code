@@ -75,6 +75,16 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     :func:`tests.api.admin_jsdom_ux_views.uxNormalise`), so the three
     display-only changes this pass makes to every settings control cannot hide
     a real change on the pages they touch.
+
+    Since 8.1.0 a page with four or more named sections also carries the
+    per-page section navigator. It is normalised OUT on both sides
+    (``uxNormalise``), because the base tree predates it: leaving it in would
+    move twelve of fifteen views and say nothing about the page underneath.
+    8.1.0 proves the strip against its own base-written baseline in
+    ``tests/api/test_admin_design_system_jsdom.py``.
+
+    Get Started is declared separately: 8.1.0 puts the Appearance card there,
+    which is that release's own addition and is proved in the same file.
     """
 
     baseline = json.loads(UX_BASELINE.read_text(encoding="utf-8"))
@@ -87,7 +97,7 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     }
     assert set(base) == set(mine)
     moved = sorted(name for name, digest in base.items() if mine[name] != digest)
-    assert moved == sorted(UX_CHANGED_VIEWS)
+    assert moved == sorted(UX_CHANGED_VIEWS | {"get_started"})
 
 
 def test_ux_pass_the_unmoved_views_are_not_vacuous(ux_views) -> None:

@@ -70,11 +70,17 @@ export function prepareNotYetCardScenario({ window, ROUTES }) {
   const captureDom = () => {
     const view = doc.querySelector("#view-coding_agents");
     if (!view) return null;
-    const children = Array.from(view.children).map((el) => {
-      const clone = el.cloneNode(true);
-      clone.querySelectorAll(NOT_YET_SELECTOR).forEach((node) => node.remove());
-      return clone.outerHTML.replace(/\r\n/g, "\n");
-    });
+    const children = Array.from(view.children)
+      // 8.1.0: the per-page section navigator is a child this view gained
+      // after this comparison was written. It is a later release's addition,
+      // so it is taken out here the same way the not-yet card is -- what this
+      // capture compares is the cards.
+      .filter((el) => !el.classList.contains("section-navigator"))
+      .map((el) => {
+        const clone = el.cloneNode(true);
+        clone.querySelectorAll(NOT_YET_SELECTOR).forEach((node) => node.remove());
+        return clone.outerHTML.replace(/\r\n/g, "\n");
+      });
     return { children, viewChildCount: view.children.length };
   };
 

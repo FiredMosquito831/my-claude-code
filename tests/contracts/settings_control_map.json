@@ -1,6 +1,22 @@
 {
- "written_by": "tests/api/admin_jsdom_select_blank.mjs (controlMap): the page each setting's manifest section renders into, and the id of the form control that edits it ON that page, read from the 7.121.2 page rendering the server's own /admin/api/config payload (tests/support/select_blank_payload.py). Regenerate from a real run when a setting is added or moves; tests/api/test_admin_static_jsdom.py proves this file equals the page.",
+ "written_by": "tests/api/admin_jsdom_select_blank.mjs (controlMap): the page each setting's manifest section renders into, and the id of the form control that edits it ON that page, read from the 8.1.0 page rendering the server's own /admin/api/config payload (tests/support/select_blank_payload.py). Regenerate from a real run when a setting is added or moves; tests/api/test_admin_static_jsdom.py proves this file equals the page.",
  "fields": {
+  "ADMIN_DENSITY": {
+   "page": "get_started",
+   "control": "field-ADMIN_DENSITY"
+  },
+  "ADMIN_DESIGN": {
+   "page": "get_started",
+   "control": "field-ADMIN_DESIGN"
+  },
+  "ADMIN_MODE": {
+   "page": "get_started",
+   "control": "field-ADMIN_MODE"
+  },
+  "ADMIN_THEME": {
+   "page": "get_started",
+   "control": "field-ADMIN_THEME"
+  },
   "AGNES_API_KEY": {
    "page": "providers",
    "control": "field-AGNES_API_KEY"

@@ -5732,6 +5732,61 @@ The web search log lives in its own file, `~/.mcc/logs/websearch.db`, and almost
 
 ---
 
+## 11a. Appearance: design, theme, mode and density (8.1.0)
+
+The dashboard's own look is a feature with three independent choices, on **Get Started → Appearance**. Nothing here touches a request, a provider or a model.
+
+**Design** — which structure the dashboard draws. 8.1.0 ships one: **Today**, the dashboard as it already is — one page at a time, a grouped sidebar, every setting on the page that owns it. It is labelled *Classic* and stays selectable for good. Further designs arrive as new choices on this same card in later releases.
+
+**Theme** — a colour family, each drawn in both light and dark: **Today** (the colours the dashboard shipped with), **Midnight**, **Paper**, **High Contrast**, **Velvet**, **Navy**, and a design's own palette where it declares one. **Mode** — light or dark — is a separate button, and neither choice ever resets the other.
+
+**Density** — *Design default*, *Compact* or *Comfortable*. Density is spacing and type size only. On a wide window it decides how many controls share a row (four at 1500 px and above, three from 1100 to 1500, two from 760 to 1100, one below 760 — a phone is the only single-column case), and no setting is hidden at any density.
+
+### The two places a choice is kept
+
+Every control on the card writes **this browser** and nothing else. That is what makes switching a theme instant and what keeps it from changing anybody else's dashboard. The four settings below the card are the **machine defaults**:
+
+```bash
+ADMIN_DESIGN=today      # the design a fresh browser opens on
+ADMIN_THEME=velvet      # the colour family: today | midnight | paper | hc | velvet | navy | own
+ADMIN_MODE=dark         # dark | light, and never changes the family
+ADMIN_DENSITY=design    # design | compact | comfortable
+```
+
+They are ordinary settings: they carry their source chip, their default and a “Use default” button, and the page's own Validate/Apply saves them. **A browser choice always wins over the machine default**, and leaving a browser value unset means *follow the machine* — which is what **Follow the machine** on the card restores. **Use this as the machine default** stages the current four values as unsaved changes, so Apply saves them the same way any other edit is saved. Neither button writes anything by itself.
+
+### What changed for an existing install
+
+Versions up to 8.0.2 stored one browser value — the theme key in this browser's local storage — with four choices. Each still means exactly what it did:
+
+| Saved theme value | Now reads as |
+|---|---|
+| `midnight` (or nothing saved) | Midnight, dark |
+| `paper` | Paper, light |
+| `high-contrast` | High Contrast, dark |
+| `velvet` | Velvet, dark |
+
+A browser with nothing saved at all opens on **Velvet in dark**.
+
+### Two colours changed, because they failed the contrast check
+
+Two of the shipped palettes put text on a surface it could not be read against at WCAG 2.2 AA. Both are corrected:
+
+- **Paper** (and Today in light): accent text `#059669` measured **3.77:1** on white and **3.52:1** on the page — below the 4.5:1 text floor. It is now `#047857`, one emerald step darker (**5.48:1** / **5.12:1**). The warning colour `#b45309` measured **4.38:1** on its own tint; it is now `#9a4f06` (**5.6:1** or better).
+- **Velvet dark**: white on the filled-button crimson `#e6435e` measured **3.94:1**. The fill is now `#f0607a` with a dark ink (`#1a0610`) on it — **6.18:1**. Accent text on its tint measured 4.09:1 and now measures 5.05:1.
+
+### The section navigator
+
+Every page with four or more named sections opens with a **row of short section names under its title** — `Summary · Filters · Requests · In flight · Charts · Cost · Breakdowns · Media · Maintenance · Settings` on Analytics, for instance. Each button scrolls to its section, marks it, and puts the anchor in the URL so a reload keeps your place. The strip is sticky, sits on its own surface, and marks the section you are reading as you scroll.
+
+The three quick-jump rails that used to sit in the top bar (Providers, Proxying and Analytics) are now part of this strip — one mechanism, not two, and no page shows both.
+
+### The left rail is bigger
+
+The sidebar's typography has a floor: link text is at least the dashboard's own 14 px, a row is at least 36 px tall, and a numbered item's index is at least 11 px. Group headings stay small caps with slightly more letter-spacing. The active item is distinguished by weight and its accent border, never by dimming everything else — contrast was already fine and nothing was darkened.
+
+---
+
 ## 12. Multi-key rotation
 
 Both model and web search providers accept several keys in one variable:

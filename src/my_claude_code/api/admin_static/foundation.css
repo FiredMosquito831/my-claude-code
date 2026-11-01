@@ -1,0 +1,573 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   8.1.0 — FOUNDATION: the shared skin layer every design inherits.
+
+   specs/DESIGN-REVAMP-OPTIONS.md §13.2.1–13.2.3, §14.1, and the two settling
+   sections at the end of that file (PER-PAGE SECTION NAVIGATOR, LEFT RAIL).
+
+   What this file is allowed to do — and this is the whole constraint that
+   makes the PR safe:
+
+   1. Name the *skin* tokens (fonts, sizes, radii, rhythm, density) with
+      TODAY'S VALUES AS THE DEFAULTS, so a page with no attribute on <html>
+      resolves every token to exactly the number admin.css already uses.
+   2. Implement the variant systems a design will declare (`data-density`),
+      once, in the foundation — never per design.
+   3. Carry the two features this release actually ships on every page: the
+      per-page section navigator and the left-rail typography floor.
+
+   It does NOT restate component CSS. admin.css stays the component layer; a
+   design's own `<id>.css` (a later PR) loads after this file and changes
+   tokens or selectors, never components.
+
+   ORDER: admin.css -> themes.css -> foundation.css -> designs/<id>.css.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────── 1. the skin tokens ───
+   Every default below is the value admin.css already hard-codes, so the
+   tokens are additive: nothing on the page moves until a design or a density
+   changes one. `--body-size` is 14px because that is what `body` inherits
+   from nothing at all on most pages and what `nav-link` sets explicitly. */
+:root {
+  --font-ui: var(--font-sans);
+  --font-display: var(--font-sans);
+  --font-num: var(--font-sans);
+
+  --body-size: 14px;
+  --title-size: 30px;
+  --title-weight: 800;
+  --title-tracking: -0.02em;
+  --h3-size: 18px;
+  --h3-weight: 700;
+
+  --section-pad: 24px;
+  --section-gap: 24px;
+  --section-radius: var(--radius-lg);
+  --section-bg: var(--panel);
+  --section-border: 1px solid var(--line);
+  --section-shadow: var(--shadow);
+  --card-radius: var(--radius-md);
+  --control-radius: var(--radius-md);
+  --control-h: 36px;
+  --field-gap: 20px;
+  --main-pad-y: 40px;
+  --main-pad-x: 48px;
+  --sidebar-w: 260px;
+
+  /* The rail's own floor (LEFT RAIL, binding). A design may change the three
+     numbers upward; it may never go below them, and a contract test reads
+     these back out of this file so "upward only" is checkable. */
+  --rail-link-size: 14px;
+  --rail-row-h: 40px;
+  --rail-index-size: 11px;
+  --rail-group-size: 11.5px;
+  --rail-group-tracking: 0.08em;
+}
+
+/* DESIGN RUNTIME / DENSITY rule. `--field-gap` and the grid's minimum track
+   are the two numbers the 4/3/2/1 columns rule is made of, so they are set
+   here once and every settings page inherits them. */
+.field-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--field-gap);
+}
+
+/* §14.1 — the product contract, a BLOCKING GATE:
+     ≥ 1500 px -> 4 controls per row, 1100–1500 px -> 3, 760–1100 px -> 2,
+     < 760 px -> 1 (a phone is the only single-column case).
+
+   The mechanism is the preview kit's, whose numbers came from measuring the
+   real thing: `auto-fit, minmax(280px, 1fr)` above 1100 px and
+   `minmax(240px, 1fr)` below it, with an explicit single column under 760.
+   At a 1440 px window the content column is ~1076 px, so 280 px tracks give
+   three across — the count the rule asks for. A narrower guess here (230 px)
+   gives four at 1440 and is exactly the "more columns than the rule allows"
+   mistake this section exists to prevent; it is written down because it was
+   made and caught by the density measurement on Model Config (+288 px). */
+@media (max-width: 1099.98px) {
+  .field-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+}
+@media (max-width: 759.98px) {
+  .field-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Only a control that genuinely needs the width spans two columns: a
+   textarea, a chain editor, a key pool. Never the page. */
+.field-grid > .field:has(> textarea),
+.field-grid > .field:has(.model-chain-editor),
+.field-grid > .field:has(.key-manager) {
+  grid-column: span 2;
+}
+@media (max-width: 759.98px) {
+  .field-grid > .field:has(> textarea),
+  .field-grid > .field:has(.model-chain-editor),
+  .field-grid > .field:has(.key-manager) {
+    grid-column: auto;
+  }
+}
+
+/* ──────────────────────────────────────────────── 2. density (variant) ───
+   `data-density` on <html>. `comfortable` is today's rhythm exactly, so the
+   attribute is only ever a change when a design's default is `compact` or a
+   reader picks one in Settings. `design` is not an attribute value: it means
+   "whatever the selected design declares", and the loader simply does not
+   write `data-density` at all in that case. */
+html[data-density="compact"] {
+  --body-size: 13px;
+  --control-h: 30px;
+  --section-pad: 16px;
+  --section-gap: 16px;
+  --field-gap: 14px;
+  --title-size: 24px;
+  --h3-size: 15px;
+}
+html[data-density="compact"] .field { gap: 5px; }
+html[data-density="compact"] .requests-table td,
+html[data-density="compact"] .requests-table th {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+html[data-density="comfortable"] {
+  --body-size: 15px;
+  --section-pad: 28px;
+  --field-gap: 24px;
+}
+
+/* ────────────────────────────────────── 3. the per-page section navigator ─
+   specs/DESIGN-REVAMP-OPTIONS.md, "PER-PAGE SECTION NAVIGATOR", confirmed by
+   the user 2026-11-01 ~21:45 with the refinement "but more visible for each
+   page too".
+
+   THE SHAPE. One row of short section names under the page title, one button
+   per real section of that page. Not a dropdown, not a sidebar tree, not a
+   command box.
+
+   THE BEHAVIOUR REFERENCE is round 3's quiet strip (12.5 px, --muted, no
+   border, transparent). That is the reference for HOW IT WORKS only. It is
+   deliberately NOT the reference for how it looks: this is a first-class
+   control, and the four minimums below are the difference.
+
+   THE THREE THINGS IT MUST NOT DO:
+     - make a settings page taller (it earns its height by removing the old
+       topbar rails: see `initSectionJumpBars` in admin.js — the rails are
+       re-parented into this bar, not shown beside it);
+     - shrink below the page's body text (14 px today, and
+       `--body-size` under a compact design, so it uses the token);
+     - use the muted metadata colour for its labels.
+
+   Sticky: it is a direct child of `.admin-view`, which is a plain block
+   inside `.admin-views` -> `main` -> the `.app-shell` grid — no ancestor has
+   `overflow` other than `visible`, so `position: sticky` resolves against the
+   viewport and the strip parks under the top of the window as the page
+   scrolls. `top: 0` rather than a fixed offset because the topbar is not
+   sticky; leaving a gap would detach the strip from the content it names. */
+.section-navigator {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  /* THE STRIP'S HEIGHT IS PAID FOR, NOT ADDED. 7.122.3's rails shared the
+     page title's row, so folding them in below the title is a real second
+     line — and the requirement is that no settings page ends up taller than
+     the 8.0.2 baseline. The row is therefore taken out of the topbar's own
+     bottom margin (32 px), which the strip now provides the separation for
+     (its bottom border is the rule), and out of the strip's own box: 32 px of
+     strip replaces 32 px of gap, so a page without a rail is unchanged and a
+     page that had one is shorter. Measured, page by page, at 1440×900: see
+     the release's density table. */
+  margin: 0;
+  padding: 0 4px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  /* The separating rule this strip is required to have ("its own surface and a
+     separating rule"). Drawn in `--muted` rather than `--line-strong`: a 1 px
+     boundary that identifies a control is a WCAG 1.4.11 non-text component,
+     and `--line-strong` measures 1.39–1.70:1 against the plate in the eight
+     non-high-contrast families — below the 3:1 floor. `--muted` clears it in
+     every one of the fourteen sets (measured; the table is in the release's
+     report). */
+  border-bottom: 1px solid var(--muted);
+  border-radius: var(--card-radius);
+  /* Its OWN surface, one step off the page, so the eye finds it without
+     hunting: --panel sits above --bg, and today's --panel-strong is
+     #171b26/#eef0f4 — a visible plate in every one of the fourteen sets. */
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.section-navigator .section-navigator-label {
+  margin: 0 6px 0 2px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Labels are BODY-TEXT SIZED, in the page's NORMAL TEXT COLOUR. Round 3 used
+   12.5 px and --muted; that is the thing the user called "not visible
+   enough". */
+.section-navigator button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--body-size);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.section-navigator button:hover {
+  background: var(--panel-strong);
+  color: var(--text-strong);
+}
+
+/* A focus ring that passes AA in every set: --focus is the theme's own
+   verified non-text colour (>= 3:1 against bg and panel in all 14 sets,
+   §5.3), drawn at 2 px with an offset so it is never clipped by the plate. */
+.section-navigator button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* WHERE YOU ARE, as the page scrolls past each section. An accent pill on the
+   current one — not a hairline underline, which is what read as a footnote. */
+.section-navigator button[aria-current="true"] {
+  background: var(--accent-muted);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* The three rails that used to live in the topbar are re-parented into this
+   bar by `initSectionJumpBars()`. On the three pages that have one, their
+   links join the row rather than starting a second mechanism — the mechanism
+   is this one, and no page shows both. */
+.section-navigator .jump-bar {
+  display: contents;
+}
+.section-navigator .jump-bar-label {
+  display: none;
+}
+.section-navigator .jump-bar a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--body-size);
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.section-navigator .jump-bar a:hover,
+.section-navigator .jump-bar a:focus-visible {
+  background: var(--panel-strong);
+  color: var(--text-strong);
+  text-decoration: none;
+}
+
+/* A page too short for the strip to be worth its height does not get one. */
+.section-navigator[hidden] {
+  display: none;
+}
+
+/* A page that has a strip takes its separation from the strip's own bottom
+   border, so the 32 px the topbar used to spend on a gap is not spent twice.
+   That is what makes the strip cost nothing on the settings pages that already
+   had a rail, and what caps the ones that did not: see the density table. */
+body:has(.admin-view:not([hidden]) > .section-navigator) .topbar {
+  margin-bottom: 0;
+}
+
+/* On a phone the labels wrap; a sticky strip that takes a third of the screen
+   would be worse than no strip, so below 760 px it scrolls sideways in one
+   row instead of wrapping into a block. */
+@media (max-width: 759.98px) {
+  .section-navigator {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .section-navigator .section-navigator-label {
+    display: none;
+  }
+}
+
+/* A sticky bar must never bury the thing the reader just asked for. */
+.section-navigator [id] {
+  scroll-margin-top: 64px;
+}
+
+/* ──────────────────────────────────────────────────── 4. left rail floor ──
+   specs/DESIGN-REVAMP-OPTIONS.md, "LEFT RAIL", binding: the grouped structure
+   (SETUP · AGENTS · ROUTING · OBSERVE · SYSTEM, numbered items, accent mark on
+   the active one) is APPROVED and must not be lost. Only the typography is
+   fixed here, and only upward:
+
+       link text   >= 14 px        (the product default; designs were cutting it to 12.5)
+       row height  >= 36 px        (40 where the design can afford it)
+       item index  >= 11 px        tabular
+       group label  11–11.5 px, ~0.08em tracking
+       active       weight 700 + the accent border — never by lightening the rest
+
+   CONTRAST IS NOT THE PROBLEM AND MUST NOT BE "FIXED". Measured on Velvet
+   dark: group label 8.31:1, link text 15.61:1, accent 5.94:1 — all AA. The
+   rail is legible in colour and illegible in SIZE, so nothing here darkens or
+   lightens a single colour. `--rail-*` are the tokens; a design overrides the
+   numbers, and a contract test refuses a registry row that sets any of them
+   below these floors. */
+.sidebar .nav-link {
+  min-height: var(--rail-row-h);
+  font-size: var(--rail-link-size);
+  font-weight: 500;
+}
+
+/* The item's own index ("1", "12"). A label, not a whisper. */
+.sidebar .nav-link .nav-index {
+  font-size: var(--rail-index-size);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  opacity: 0.75;
+}
+
+/* Group headings: small caps stay, with the tracking that makes them read as
+   a heading rather than as a truncated link. */
+.sidebar .nav-group-label {
+  font-size: var(--rail-group-size);
+  letter-spacing: var(--rail-group-tracking);
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* Weight contrast, not colour contrast: the active item keeps its accent
+   left-border and goes to 700; the inactive items stay at 500 and keep the
+   colour they already had. */
+.sidebar .nav-link.active {
+  font-weight: 700;
+  border-left: 2px solid var(--accent);
+}
+
+/* ───────────────────────────────────────────────── 5. the appendix card ──
+   The Appearance card in Settings (S4). It is deliberately the same
+   `settings-section` shape every other settings card uses, so it renders even
+   when the settings payload has not arrived and it costs no new component. */
+.appearance-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One tile must look right with one. It is sized by its own `max-width`
+   rather than stretched, so a single entry reads as a card and a later grid of
+   five reads as a grid. The preview is deliberately SHORT: this card costs
+   Get Started height, and the tile's job is to be tellable-apart at a glance,
+   not to be a screenshot. */
+.appearance-tile {
+  flex: 1 1 200px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--card-radius);
+  background: var(--card);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.appearance-tile:hover {
+  background: var(--card-hover);
+}
+
+.appearance-tile:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.appearance-tile[aria-checked="true"] {
+  border-color: var(--accent-border);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+
+.appearance-tile-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.appearance-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.appearance-tile-note {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.appearance-tile-badge {
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.appearance-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.appearance-row-label {
+  min-width: 84px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.appearance-source {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* One grid of swatch buttons per axis. The same segmented-pill shape the old
+   four-button theme switch had, sized by its options rather than by a count,
+   which is the property #themeSwitch's own fix established. */
+/* Five options per row on a wide screen, so the four axes' rows never wrap
+   into the page's height. Below that they reflow to as many as fit. */
+.appearance-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 5px;
+  flex: 1 1 320px;
+}
+
+.appearance-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 2px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.appearance-option:hover {
+  background: var(--panel-strong);
+}
+
+.appearance-option:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.appearance-option[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.appearance-note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+  max-width: 92ch;
+}
+
+.appearance-note code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+/* The tile's preview is a miniature of the page it selects, drawn from the
+   same four surfaces the real page uses, so a reader can tell two tiles apart
+   without reading their names. No design ships in 8.1.0, so the grid has one
+   tile — and the tile is `flex: 1 1 220px; max-width: 320px`, which means one
+   tile renders as one right-sized card rather than a stretched bar. */
+.appearance-preview {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 3px;
+  height: 30px;
+  margin-bottom: 4px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.appearance-preview-rail,
+.appearance-preview-body {
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+.appearance-preview-body {
+  display: grid;
+  gap: 3px;
+  padding: 4px;
+  background: var(--panel-strong);
+}
+
+.appearance-preview-line {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel);
+}
+
+.appearance-preview-line:first-child {
+  background: var(--accent);
+  width: 45%;
+}
+
+/* The design's own CSS is loaded on demand by the registry loader. It always
+   loads AFTER this file, which is what lets a later design override a token
+   without a specificity fight. */
+
+/* The old four-button switch is gone (U34: a theme switch above the
+   navigation). It is kept in the markup, hidden, because `applyTheme()` still
+   writes `aria-checked` onto its options and a contract still asserts each of
+   them is a child of the pill; and because a page whose script failed still
+   needs a control that works. Settings' Appearance card is where it lives
+   now: S4 folds those four choices into family × mode and loses nothing. */
+body.has-appearance-card .theme-switch {
+  display: none;
+}

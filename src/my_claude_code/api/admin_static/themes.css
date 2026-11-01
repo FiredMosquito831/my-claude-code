@@ -1,0 +1,382 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   8.1.0 — THEMES: family × mode (specs/DESIGN-REVAMP-OPTIONS.md §5, §13.2.3).
+
+   A theme is a CSS-variable set over whatever design is selected. The family
+   and the mode are two attributes on <html>:
+
+       <html data-mcc-theme="today|midnight|paper|hc|velvet|navy|own"
+             data-mcc-mode="light|dark">
+
+   Every family has BOTH forms, so switching mode never has to change family.
+   The palettes are the measured ones from the preview kit's `themes.css`
+   (§5.3: 0 failing pairs in the 12 shared sets, both forms), with the two AA
+   corrections from §5.2 applied to today's palettes:
+
+     - Paper light accent  #059669 -> #047857  (3.77:1 -> 5.48:1)
+     - Paper light warn    #b45309 -> #9a4f06  (4.38:1 -> >= 5.6:1)
+     - Velvet dark accent  #e6435e -> #f0607a with a dark ink `--accent-on`
+                                              (3.94:1 -> 6.18:1)
+
+   WHY THE SELECTORS LOOK LIKE THIS. admin.css already carries the product's
+   own `:root[data-theme="paper"|"high-contrast"|"velvet"]` blocks (the four
+   theme buttons). They must keep working for the migration and for anything
+   reading them, but the new pair of attributes always wins: `html[..][..]` is
+   specificity (0,2,1) against `:root[data-theme]`'s (0,2,0). Nothing here
+   depends on source order.
+
+   `--accent-on` is the ink drawn ON an accent fill. Two of today's palettes
+   put white on a fill that cannot carry it, which is exactly the pair §5.2
+   measured failing, so the token exists in every set rather than being an
+   exception for two of them.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ───────────────────────────────────────────────────────────── today ────── */
+/* Today's exact colours: Midnight in dark, Paper in light. */
+html[data-mcc-theme="today"][data-mcc-mode="dark"] {
+  color-scheme: dark;
+  --bg: #090a0f; --panel: #11131c; --panel-strong: #171b26; --card: #151822;
+  --card-hover: #1e2230; --input: #0a0b10; --input-focus: #0f1118;
+  --text: #f3f4f6; --text-strong: #ffffff; --muted: #9ca3af;
+  --line: rgba(255, 255, 255, 0.06); --line-strong: rgba(255, 255, 255, 0.12);
+  --accent: #10b981; --accent-dark: #059669;
+  --accent-muted: rgba(16, 185, 129, 0.08); --accent-border: rgba(16, 185, 129, 0.3);
+  --accent-on: #04130d;
+  --ok: #10b981; --ok-bg: rgba(16, 185, 129, 0.08); --ok-border: rgba(16, 185, 129, 0.25);
+  --warn: #f59e0b; --warn-bg: rgba(245, 158, 11, 0.08); --warn-border: rgba(245, 158, 11, 0.25);
+  --error: #ef4444; --error-bg: rgba(239, 68, 68, 0.08); --error-border: rgba(239, 68, 68, 0.25);
+  --neutral: #6b7280; --neutral-bg: rgba(107, 114, 128, 0.08); --neutral-border: rgba(107, 114, 128, 0.25);
+  --info: #3b82f6; --reasoning: #3b82f6;
+  --reasoning-bg: rgba(59, 130, 246, 0.06); --reasoning-border: rgba(59, 130, 246, 0.28);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2); --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --glow-accent: 0 0 12px rgba(16, 185, 129, 0.15);
+  --focus: #10b981;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+html[data-mcc-theme="today"][data-mcc-mode="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9; --panel: #ffffff; --panel-strong: #eef0f4; --card: #ffffff;
+  --card-hover: #f1f3f7; --input: #ffffff; --input-focus: #f6f7f9;
+  --text: #11131c; --text-strong: #000000; --muted: #5b6472;
+  --line: rgba(0, 0, 0, 0.08); --line-strong: rgba(0, 0, 0, 0.16);
+  /* §5.2 CORRECTION 1: emerald one step darker than #059669, which measured
+     3.77:1 on white and 3.52:1 on --bg -- below AA for text. */
+  --accent: #047857; --accent-dark: #065f46;
+  --accent-muted: rgba(4, 120, 87, 0.1); --accent-border: rgba(4, 120, 87, 0.35);
+  --accent-on: #ffffff;
+  --ok: #047857; --ok-bg: rgba(4, 120, 87, 0.1); --ok-border: rgba(4, 120, 87, 0.3);
+  /* §5.2 CORRECTION 2: #b45309 measured 4.38:1 on its own tint. */
+  --warn: #9a4f06; --warn-bg: rgba(154, 79, 6, 0.09); --warn-border: rgba(154, 79, 6, 0.3);
+  --error: #b91c1c; --error-bg: rgba(185, 28, 28, 0.1); --error-border: rgba(185, 28, 28, 0.3);
+  --neutral: #4b5563; --neutral-bg: rgba(75, 85, 99, 0.1); --neutral-border: rgba(75, 85, 99, 0.3);
+  --info: #1d4ed8; --reasoning: #1d4ed8;
+  --reasoning-bg: rgba(29, 78, 216, 0.08); --reasoning-border: rgba(29, 78, 216, 0.3);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08); --shadow: 0 12px 34px rgba(0, 0, 0, 0.12);
+  --glow-accent: 0 0 12px rgba(4, 120, 87, 0.12);
+  --focus: #047857;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --scrim: rgba(17, 19, 28, 0.45);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%235b6472' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+
+/* ───────────────────────────────────────────────────────────── midnight ── */
+html[data-mcc-theme="midnight"][data-mcc-mode="dark"] {
+  color-scheme: dark;
+  --bg: #090a0f; --panel: #11131c; --panel-strong: #171b26; --card: #151822;
+  --card-hover: #1e2230; --input: #0a0b10; --input-focus: #0f1118;
+  --text: #f3f4f6; --text-strong: #ffffff; --muted: #9ca3af;
+  --line: rgba(255, 255, 255, 0.06); --line-strong: rgba(255, 255, 255, 0.12);
+  --accent: #10b981; --accent-dark: #059669;
+  --accent-muted: rgba(16, 185, 129, 0.08); --accent-border: rgba(16, 185, 129, 0.3);
+  --accent-on: #04130d;
+  --ok: #10b981; --ok-bg: rgba(16, 185, 129, 0.08); --ok-border: rgba(16, 185, 129, 0.25);
+  --warn: #f59e0b; --warn-bg: rgba(245, 158, 11, 0.08); --warn-border: rgba(245, 158, 11, 0.25);
+  --error: #ef4444; --error-bg: rgba(239, 68, 68, 0.08); --error-border: rgba(239, 68, 68, 0.25);
+  --neutral: #6b7280; --neutral-bg: rgba(107, 114, 128, 0.08); --neutral-border: rgba(107, 114, 128, 0.25);
+  --info: #3b82f6; --reasoning: #3b82f6;
+  --reasoning-bg: rgba(59, 130, 246, 0.06); --reasoning-border: rgba(59, 130, 246, 0.28);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2); --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --glow-accent: 0 0 12px rgba(16, 185, 129, 0.15);
+  --focus: #10b981;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+html[data-mcc-theme="midnight"][data-mcc-mode="light"] {
+  color-scheme: light;
+  --bg: #f4f7f6; --panel: #ffffff; --panel-strong: #e9efed; --card: #ffffff;
+  --card-hover: #eef4f2; --input: #ffffff; --input-focus: #f7faf9;
+  --text: #0f1513; --text-strong: #000000; --muted: #4f5a56;
+  --line: rgba(0, 0, 0, 0.08); --line-strong: rgba(0, 0, 0, 0.17);
+  --accent: #047857; --accent-dark: #065f46;
+  --accent-muted: rgba(4, 120, 87, 0.09); --accent-border: rgba(4, 120, 87, 0.36);
+  --accent-on: #ffffff;
+  --ok: #047857; --ok-bg: rgba(4, 120, 87, 0.09); --ok-border: rgba(4, 120, 87, 0.3);
+  --warn: #9a4f06; --warn-bg: rgba(154, 79, 6, 0.09); --warn-border: rgba(154, 79, 6, 0.3);
+  --error: #b91c1c; --error-bg: rgba(185, 28, 28, 0.08); --error-border: rgba(185, 28, 28, 0.3);
+  --neutral: #4b5563; --neutral-bg: rgba(75, 85, 99, 0.08); --neutral-border: rgba(75, 85, 99, 0.3);
+  --info: #1d4ed8; --reasoning: #1d4ed8;
+  --reasoning-bg: rgba(29, 78, 216, 0.07); --reasoning-border: rgba(29, 78, 216, 0.3);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.07); --shadow: 0 12px 30px rgba(0, 0, 0, 0.1);
+  --glow-accent: none;
+  --focus: #047857;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --scrim: rgba(15, 21, 19, 0.45);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%234f5a56' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+
+/* ──────────────────────────────────────────────────────────────── paper ── */
+html[data-mcc-theme="paper"][data-mcc-mode="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9; --panel: #ffffff; --panel-strong: #eef0f4; --card: #ffffff;
+  --card-hover: #f1f3f7; --input: #ffffff; --input-focus: #f6f7f9;
+  --text: #11131c; --text-strong: #000000; --muted: #5b6472;
+  --line: rgba(0, 0, 0, 0.08); --line-strong: rgba(0, 0, 0, 0.16);
+  --accent: #047857; --accent-dark: #065f46;
+  --accent-muted: rgba(4, 120, 87, 0.1); --accent-border: rgba(4, 120, 87, 0.35);
+  --accent-on: #ffffff;
+  --ok: #047857; --ok-bg: rgba(4, 120, 87, 0.1); --ok-border: rgba(4, 120, 87, 0.3);
+  --warn: #9a4f06; --warn-bg: rgba(154, 79, 6, 0.09); --warn-border: rgba(154, 79, 6, 0.3);
+  --error: #b91c1c; --error-bg: rgba(185, 28, 28, 0.1); --error-border: rgba(185, 28, 28, 0.3);
+  --neutral: #4b5563; --neutral-bg: rgba(75, 85, 99, 0.1); --neutral-border: rgba(75, 85, 99, 0.3);
+  --info: #1d4ed8; --reasoning: #1d4ed8;
+  --reasoning-bg: rgba(29, 78, 216, 0.08); --reasoning-border: rgba(29, 78, 216, 0.3);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08); --shadow: 0 12px 34px rgba(0, 0, 0, 0.12);
+  --glow-accent: 0 0 12px rgba(4, 120, 87, 0.12);
+  --focus: #047857;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --scrim: rgba(17, 19, 28, 0.45);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%235b6472' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+html[data-mcc-theme="paper"][data-mcc-mode="dark"] {
+  color-scheme: dark;
+  --bg: #181715; --panel: #201f1c; --panel-strong: #292824; --card: #22211e;
+  --card-hover: #2c2a26; --input: #151412; --input-focus: #1c1b18;
+  --text: #ece9e2; --text-strong: #ffffff; --muted: #b0aba0;
+  --line: rgba(255, 255, 255, 0.07); --line-strong: rgba(255, 255, 255, 0.14);
+  --accent: #3ccf91; --accent-dark: #2bb57c;
+  --accent-muted: rgba(60, 207, 145, 0.1); --accent-border: rgba(60, 207, 145, 0.34);
+  --accent-on: #06170f;
+  --ok: #3ccf91; --ok-bg: rgba(60, 207, 145, 0.1); --ok-border: rgba(60, 207, 145, 0.3);
+  --warn: #efb04a; --warn-bg: rgba(239, 176, 74, 0.1); --warn-border: rgba(239, 176, 74, 0.32);
+  --error: #f58a80; --error-bg: rgba(245, 138, 128, 0.1); --error-border: rgba(245, 138, 128, 0.32);
+  --neutral: #a8a397; --neutral-bg: rgba(168, 163, 151, 0.1); --neutral-border: rgba(168, 163, 151, 0.3);
+  --info: #86aefc; --reasoning: #86aefc;
+  --reasoning-bg: rgba(134, 174, 252, 0.08); --reasoning-border: rgba(134, 174, 252, 0.3);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3); --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --glow-accent: none;
+  --focus: #3ccf91;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23b0aba0' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+
+/* ───────────────────────────────────────────────────────── high contrast ── */
+html[data-mcc-theme="hc"][data-mcc-mode="dark"] {
+  color-scheme: dark;
+  --bg: #000000; --panel: #000000; --panel-strong: #0a0a0a; --card: #0a0a0a;
+  --card-hover: #161616; --input: #000000; --input-focus: #0a0a0a;
+  --text: #ffffff; --text-strong: #ffffff; --muted: #e5e7eb;
+  --line: #ffffff; --line-strong: #ffffff;
+  --accent: #00ffa3; --accent-dark: #00e090;
+  --accent-muted: rgba(0, 255, 163, 0.18); --accent-border: #00ffa3;
+  --accent-on: #000000;
+  --ok: #00ffa3; --ok-bg: rgba(0, 255, 163, 0.16); --ok-border: #00ffa3;
+  --warn: #ffd400; --warn-bg: rgba(255, 212, 0, 0.16); --warn-border: #ffd400;
+  --error: #ff6b6b; --error-bg: rgba(255, 107, 107, 0.16); --error-border: #ff6b6b;
+  --neutral: #ffffff; --neutral-bg: rgba(255, 255, 255, 0.12); --neutral-border: #ffffff;
+  --info: #66b2ff; --reasoning: #66b2ff;
+  --reasoning-bg: rgba(102, 178, 255, 0.14); --reasoning-border: #66b2ff;
+  --shadow-sm: none; --shadow: none; --glow-accent: none;
+  --focus: #ffd400;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --scrim: rgba(0, 0, 0, 0.85);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23ffffff' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+html[data-mcc-theme="hc"][data-mcc-mode="light"] {
+  color-scheme: light;
+  --bg: #ffffff; --panel: #ffffff; --panel-strong: #f0f0f0; --card: #ffffff;
+  --card-hover: #e8e8e8; --input: #ffffff; --input-focus: #f5f5f5;
+  --text: #000000; --text-strong: #000000; --muted: #1c1c1c;
+  --line: #000000; --line-strong: #000000;
+  --accent: #005c35; --accent-dark: #00472a;
+  --accent-muted: rgba(0, 92, 53, 0.12); --accent-border: #005c35;
+  --accent-on: #ffffff;
+  --ok: #005c35; --ok-bg: rgba(0, 92, 53, 0.1); --ok-border: #005c35;
+  --warn: #6e4400; --warn-bg: rgba(110, 68, 0, 0.1); --warn-border: #6e4400;
+  --error: #a30000; --error-bg: rgba(163, 0, 0, 0.08); --error-border: #a30000;
+  --neutral: #000000; --neutral-bg: rgba(0, 0, 0, 0.06); --neutral-border: #000000;
+  --info: #003f9e; --reasoning: #003f9e;
+  --reasoning-bg: rgba(0, 63, 158, 0.08); --reasoning-border: #003f9e;
+  --shadow-sm: none; --shadow: none; --glow-accent: none;
+  --focus: #003f9e;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23000000' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+/* High contrast is a promise about *borders*, not only colours. */
+html[data-mcc-theme="hc"] :is(button, input, select, textarea, .settings-section,
+  .provider-card, .route-card, .requests-card, .analytics-panel, .panel) {
+  border-width: 2px;
+}
+html[data-mcc-theme="hc"] :focus-visible {
+  outline-width: 3px;
+}
+
+/* ─────────────────────────────────────────────────────────────── velvet ── */
+html[data-mcc-theme="velvet"][data-mcc-mode="dark"] {
+  color-scheme: dark;
+  --bg: #0a1220; --panel: #0d1526; --panel-strong: #131d30; --card: #101a2c;
+  --card-hover: #162238; --input: #08101f; --input-focus: #0c1424;
+  --text: #e8eaf2; --text-strong: #ffffff; --muted: #a3adc2;
+  --line: rgba(255, 255, 255, 0.07); --line-strong: rgba(255, 255, 255, 0.14);
+  /* §5.2 CORRECTION 3: #e6435e could not carry white button text (3.94:1).
+     The fill is lightened one step and filled buttons take the dark ink,
+     which is the pair that measures 6.18:1. */
+  --accent: #f0607a; --accent-dark: #e6435e;
+  --accent-muted: rgba(240, 96, 122, 0.12); --accent-border: rgba(240, 96, 122, 0.45);
+  --accent-on: #1a0610;
+  --ok: #34d399; --ok-bg: rgba(52, 211, 153, 0.12); --ok-border: rgba(52, 211, 153, 0.32);
+  --warn: #f5b041; --warn-bg: rgba(245, 176, 65, 0.12); --warn-border: rgba(245, 176, 65, 0.32);
+  --error: #ff6b6b; --error-bg: rgba(255, 107, 107, 0.12); --error-border: rgba(255, 107, 107, 0.32);
+  --neutral: #94a3b8; --neutral-bg: rgba(148, 163, 184, 0.12); --neutral-border: rgba(148, 163, 184, 0.32);
+  --info: #6ea8ff; --reasoning: #6ea8ff;
+  --reasoning-bg: rgba(110, 168, 255, 0.1); --reasoning-border: rgba(110, 168, 255, 0.32);
+  --shadow-sm: 0 2px 8px rgba(4, 8, 18, 0.42); --shadow: 0 12px 34px rgba(4, 8, 18, 0.62);
+  --glow-accent: 0 0 12px rgba(230, 67, 94, 0.22);
+  --focus: #ff8aa0;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --scrim: rgba(2, 6, 14, 0.66);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a3adc2' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+html[data-mcc-theme="velvet"][data-mcc-mode="light"] {
+  color-scheme: light;
+  --bg: #faf6f7; --panel: #ffffff; --panel-strong: #f3eaed; --card: #ffffff;
+  --card-hover: #f8eff2; --input: #ffffff; --input-focus: #fdf9fa;
+  --text: #151a2e; --text-strong: #0a0f1f; --muted: #535a70;
+  --line: rgba(21, 26, 46, 0.09); --line-strong: rgba(21, 26, 46, 0.19);
+  --accent: #b01f3d; --accent-dark: #911a33;
+  --accent-muted: rgba(176, 31, 61, 0.08); --accent-border: rgba(176, 31, 61, 0.35);
+  --accent-on: #ffffff;
+  --ok: #157347; --ok-bg: rgba(21, 115, 71, 0.08); --ok-border: rgba(21, 115, 71, 0.3);
+  --warn: #8f5300; --warn-bg: rgba(143, 83, 0, 0.08); --warn-border: rgba(143, 83, 0, 0.3);
+  --error: #b42318; --error-bg: rgba(180, 35, 24, 0.08); --error-border: rgba(180, 35, 24, 0.3);
+  --neutral: #535a70; --neutral-bg: rgba(83, 90, 112, 0.08); --neutral-border: rgba(83, 90, 112, 0.3);
+  --info: #1e4fd6; --reasoning: #1e4fd6;
+  --reasoning-bg: rgba(30, 79, 214, 0.07); --reasoning-border: rgba(30, 79, 214, 0.3);
+  --shadow-sm: 0 1px 4px rgba(21, 26, 46, 0.08); --shadow: 0 12px 30px rgba(21, 26, 46, 0.12);
+  --glow-accent: none;
+  --focus: #b01f3d;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --scrim: rgba(21, 26, 46, 0.45);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23535a70' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+
+/* ───────────────────────────────────────────────────────────────── navy ── */
+html[data-mcc-theme="navy"][data-mcc-mode="dark"] {
+  color-scheme: dark;
+  --bg: #071428; --panel: #0b1c37; --panel-strong: #112648; --card: #0e2140;
+  --card-hover: #142d55; --input: #061123; --input-focus: #0a1830;
+  --text: #e6eefb; --text-strong: #ffffff; --muted: #a2b4d0;
+  --line: rgba(160, 190, 240, 0.12); --line-strong: rgba(160, 190, 240, 0.24);
+  --accent: #5cb2ff; --accent-dark: #3d9cf5;
+  --accent-muted: rgba(92, 178, 255, 0.13); --accent-border: rgba(92, 178, 255, 0.42);
+  --accent-on: #031020;
+  --ok: #4ddd99; --ok-bg: rgba(77, 221, 153, 0.11); --ok-border: rgba(77, 221, 153, 0.32);
+  --warn: #f6c35b; --warn-bg: rgba(246, 195, 91, 0.11); --warn-border: rgba(246, 195, 91, 0.32);
+  --error: #ff8a8a; --error-bg: rgba(255, 138, 138, 0.11); --error-border: rgba(255, 138, 138, 0.32);
+  --neutral: #a2b4d0; --neutral-bg: rgba(162, 180, 208, 0.11); --neutral-border: rgba(162, 180, 208, 0.3);
+  --info: #9cc9ff; --reasoning: #9cc9ff;
+  --reasoning-bg: rgba(156, 201, 255, 0.09); --reasoning-border: rgba(156, 201, 255, 0.3);
+  --shadow-sm: 0 2px 8px rgba(1, 6, 16, 0.45); --shadow: 0 14px 36px rgba(1, 6, 16, 0.6);
+  --glow-accent: 0 0 12px rgba(92, 178, 255, 0.2);
+  --focus: #8fcaff;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --scrim: rgba(1, 6, 16, 0.66);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a2b4d0' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+html[data-mcc-theme="navy"][data-mcc-mode="light"] {
+  color-scheme: light;
+  --bg: #f2f5fa; --panel: #ffffff; --panel-strong: #e6ecf6; --card: #ffffff;
+  --card-hover: #ecf1f9; --input: #ffffff; --input-focus: #f7f9fc;
+  --text: #0b1b33; --text-strong: #020b1a; --muted: #4a5a74;
+  --line: rgba(11, 27, 51, 0.1); --line-strong: rgba(11, 27, 51, 0.2);
+  --accent: #1d4fb8; --accent-dark: #173f94;
+  --accent-muted: rgba(29, 79, 184, 0.08); --accent-border: rgba(29, 79, 184, 0.35);
+  --accent-on: #ffffff;
+  --ok: #146c43; --ok-bg: rgba(20, 108, 67, 0.08); --ok-border: rgba(20, 108, 67, 0.3);
+  --warn: #8a5300; --warn-bg: rgba(138, 83, 0, 0.08); --warn-border: rgba(138, 83, 0, 0.3);
+  --error: #b42318; --error-bg: rgba(180, 35, 24, 0.08); --error-border: rgba(180, 35, 24, 0.3);
+  --neutral: #4a5a74; --neutral-bg: rgba(74, 90, 116, 0.08); --neutral-border: rgba(74, 90, 116, 0.3);
+  --info: #1d4fb8; --reasoning: #1d4fb8;
+  --reasoning-bg: rgba(29, 79, 184, 0.07); --reasoning-border: rgba(29, 79, 184, 0.3);
+  --shadow-sm: 0 1px 4px rgba(11, 27, 51, 0.08); --shadow: 0 12px 30px rgba(11, 27, 51, 0.12);
+  --glow-accent: none;
+  --focus: #1d4fb8;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --scrim: rgba(11, 27, 51, 0.45);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%234a5a74' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+
+/* ───────────────────────────────────────────────────────────────── own ─── */
+/* A design's own palette. No design ships in 8.1.0, so `own` deliberately
+   falls through to Today's colours: the registry declares
+   `defaultTheme: "velvet"` for `today`, and a row that asks for a palette it
+   does not define gets a working page rather than an unstyled one. The two
+   blocks exist so a later design's `<id>.css` can override them by loading
+   after this file, and so a saved `mcc-admin-theme=own` value is always a
+   valid, readable page. */
+html[data-mcc-theme="own"][data-mcc-mode="dark"] {
+  color-scheme: dark;
+  --bg: #090a0f; --panel: #11131c; --panel-strong: #171b26; --card: #151822;
+  --card-hover: #1e2230; --input: #0a0b10; --input-focus: #0f1118;
+  --text: #f3f4f6; --text-strong: #ffffff; --muted: #9ca3af;
+  --line: rgba(255, 255, 255, 0.06); --line-strong: rgba(255, 255, 255, 0.12);
+  --accent: #10b981; --accent-dark: #059669;
+  --accent-muted: rgba(16, 185, 129, 0.08); --accent-border: rgba(16, 185, 129, 0.3);
+  --accent-on: #04130d;
+  --ok: #10b981; --ok-bg: rgba(16, 185, 129, 0.08); --ok-border: rgba(16, 185, 129, 0.25);
+  --warn: #f59e0b; --warn-bg: rgba(245, 158, 11, 0.08); --warn-border: rgba(245, 158, 11, 0.25);
+  --error: #ef4444; --error-bg: rgba(239, 68, 68, 0.08); --error-border: rgba(239, 68, 68, 0.25);
+  --neutral: #6b7280; --neutral-bg: rgba(107, 114, 128, 0.08); --neutral-border: rgba(107, 114, 128, 0.25);
+  --info: #3b82f6; --reasoning: #3b82f6;
+  --reasoning-bg: rgba(59, 130, 246, 0.06); --reasoning-border: rgba(59, 130, 246, 0.28);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2); --shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --glow-accent: 0 0 12px rgba(16, 185, 129, 0.15);
+  --focus: #10b981;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+html[data-mcc-theme="own"][data-mcc-mode="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9; --panel: #ffffff; --panel-strong: #eef0f4; --card: #ffffff;
+  --card-hover: #f1f3f7; --input: #ffffff; --input-focus: #f6f7f9;
+  --text: #11131c; --text-strong: #000000; --muted: #5b6472;
+  --line: rgba(0, 0, 0, 0.08); --line-strong: rgba(0, 0, 0, 0.16);
+  --accent: #047857; --accent-dark: #065f46;
+  --accent-muted: rgba(4, 120, 87, 0.1); --accent-border: rgba(4, 120, 87, 0.35);
+  --accent-on: #ffffff;
+  --ok: #047857; --ok-bg: rgba(4, 120, 87, 0.1); --ok-border: rgba(4, 120, 87, 0.3);
+  --warn: #9a4f06; --warn-bg: rgba(154, 79, 6, 0.09); --warn-border: rgba(154, 79, 6, 0.3);
+  --error: #b91c1c; --error-bg: rgba(185, 28, 28, 0.1); --error-border: rgba(185, 28, 28, 0.3);
+  --neutral: #4b5563; --neutral-bg: rgba(75, 85, 99, 0.1); --neutral-border: rgba(75, 85, 99, 0.3);
+  --info: #1d4ed8; --reasoning: #1d4ed8;
+  --reasoning-bg: rgba(29, 78, 216, 0.08); --reasoning-border: rgba(29, 78, 216, 0.3);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08); --shadow: 0 12px 34px rgba(0, 0, 0, 0.12);
+  --glow-accent: 0 0 12px rgba(4, 120, 87, 0.12);
+  --focus: #047857;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --scrim: rgba(17, 19, 28, 0.45);
+  --dropdown-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%235b6472' stroke-width='2.5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19.5 8.25l-7.5 7.5-7.5-7.5'/%3E%3C/svg%3E");
+}
+
+/* The action bar is a surface too, and it was the one the old hard-coded
+   dark rgba got wrong in every light theme (U24). It follows the theme. */
+html[data-mcc-theme][data-mcc-mode="light"] {
+  --action-bar: rgba(255, 255, 255, 0.92);
+}
+html[data-mcc-theme][data-mcc-mode="dark"] {
+  --action-bar: rgba(9, 10, 15, 0.82);
+}
