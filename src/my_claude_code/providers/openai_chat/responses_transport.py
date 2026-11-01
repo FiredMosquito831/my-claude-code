@@ -863,16 +863,27 @@ class ResponsesTransport:
                     # tags are parsed, so a delta released at the end was
                     # generated much earlier (7.122.2).
                     generation = GenerationClock()
-                    async for event in iter_responses_sse_events(response.aiter_raw()):
-                        note_responses_event_shape(shape, event)
-                        note_responses_generation_delta(generation, event)
-                        for sse_event in converter.feed(event):
+                    try:
+                        async for event in iter_responses_sse_events(
+                            response.aiter_raw()
+                        ):
+                            note_responses_event_shape(shape, event)
+                            note_responses_generation_delta(generation, event)
+                            for sse_event in converter.feed(event):
+                                yield sse_event
+                        for sse_event in converter.finish():
                             yield sse_event
-                    for sse_event in converter.finish():
-                        yield sse_event
-                    if shape is not None:
-                        shape.note_generation(generation.first_at, generation.last_at)
-                    record_response_shape(shape)
+                    finally:
+                        # Recorded whatever ended the stream, including the
+                        # failure the converter raises for an incomplete turn
+                        # that produced nothing and for a response.failed
+                        # (8.0.1). The shape is the evidence that names the
+                        # attempt afterwards.
+                        if shape is not None:
+                            shape.note_generation(
+                                generation.first_at, generation.last_at
+                            )
+                        record_response_shape(shape)
                 finally:
                     await response.aclose()
 

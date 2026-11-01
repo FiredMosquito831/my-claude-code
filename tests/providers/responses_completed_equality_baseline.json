@@ -1,0 +1,10 @@
+{
+  "cached_usage": "2b933a62b145c59c2e7c84f1ea7d02678d616d27894ef3d6fbf864c64d614da0",
+  "held_tag_then_completed": "35b53398b32e7e6d2c25f1243bcbfbd766f145b88a3a78cd50768150f78c638f",
+  "no_usage_block": "2c920c04dde2ca44134577a5e6bdb8926443a1e9afd4ebcfb4757ca4de790f8c",
+  "reasoning_then_text": "8aa18479953ddaa8188eba0c582ad57c109af11eecb948bb237b4d1599b3c7d8",
+  "response_done_alias": "29df32faa49427b700d0d87fe04d5509d3605d8de87251bc11d45e7dadde1732",
+  "text_then_completed": "398761c638d4249b9080b0c05023e287499b2d8af7fc6731dd1d6458da929d8f",
+  "tool_call": "9b7abf92edced2261262534e6d7f6e42f1fb2ffc7d216966e0426ed6217cb52c",
+  "zero_usage_no_output": "9592f454a89ac4ff1499267097efdef239dde5d1b1213a304e97a226af2965ee"
+}

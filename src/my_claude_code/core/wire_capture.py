@@ -834,6 +834,10 @@ class ResponseShape:
     counts: dict[str, int] = field(default_factory=dict)
     chars: dict[str, int] = field(default_factory=dict)
     finish_reason: str | None = None
+    #: The upstream's own ``incomplete_details.reason``, verbatim and bounded,
+    #: when its terminal frame carried one (8.0.1). Absent means the frame did
+    #: not say; the Responses protocol only writes it on ``incomplete``.
+    incomplete_reason: str | None = None
     usage_keys: tuple[str, ...] = ()
     first_chunk_ms: int | None = None
     chunks: int = 0
@@ -875,6 +879,17 @@ class ResponseShape:
     def note_finish(self, reason: object) -> None:
         if isinstance(reason, str) and reason:
             self.finish_reason = reason[:64]
+
+    def note_incomplete_reason(self, reason: object) -> None:
+        """Record the host's own reason for stopping a turn early.
+
+        Verbatim (it is one of a handful of protocol words, and the whole
+        point is to read the word the host chose), bounded like the finish
+        reason beside it. Never written unless the frame carried one, so a
+        reply without the field is recorded exactly as before.
+        """
+        if isinstance(reason, str) and reason:
+            self.incomplete_reason = reason[:64]
 
     def note_generation(self, first_at: float | None, last_at: float | None) -> None:
         """Record the provider's generation window on this reply's own clock.
@@ -932,6 +947,11 @@ class ResponseShape:
             "usage_keys": list(self.usage_keys),
             "first_chunk_ms": self.first_chunk_ms,
         }
+        # Written only when the terminal frame carried it, so every reply that
+        # predates it -- and every completed one, which has no such reason --
+        # keeps exactly the payload it always had.
+        if self.incomplete_reason is not None:
+            out["incomplete_reason"] = self.incomplete_reason
         if self.reasoning:
             out["reasoning"] = {
                 name: self.reasoning[name] for name in sorted(self.reasoning)
