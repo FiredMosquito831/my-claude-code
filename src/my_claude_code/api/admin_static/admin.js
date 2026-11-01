@@ -182,6 +182,8 @@ const VIEW_GROUPS = [
     title: "Providers",
     sections: ["providers", "runtime", "desktop"],
     containerId: "providersSections",
+    // 7.122.3 (U16): the page's own contents, shown in the topbar.
+    railIds: ["providersJumpBar"],
   },
   {
     // Egress: which addresses each configured provider may go out through.
@@ -193,6 +195,8 @@ const VIEW_GROUPS = [
     title: "Proxying",
     sections: [],
     containerId: null,
+    // 7.122.3 (U15): the page's own contents, shown in the topbar.
+    railIds: ["proxyingJumpBar"],
   },
   {
     // 7.110.0: a price marketplace's own page (InferHub). Backed by
@@ -258,12 +262,17 @@ const VIEW_GROUPS = [
   {
     id: "requests",
     label: "Analytics",
-    title: "Observability",
+    // 7.122.3 (U19): the page says the name the sidebar says. It read
+    // "Observability" while every link into it read "Analytics", so a reader
+    // told to open Analytics had to recognise it under another word.
+    title: "Analytics",
     // The page that shows the consequence owns the control: what the log keeps
     // is what these tables and content search can ever display, and what
     // prices a request is what the cost cards on this page can ever total.
     sections: ["request_log", "cost"],
     containerId: "requestsSections",
+    // 7.122.3 (U14): the page's own contents, shown in the topbar.
+    railIds: ["reqJumpBar"],
   },
   {
     // Measurement first, controls beside the number they affect. The
@@ -320,7 +329,8 @@ const VIEW_GROUPS = [
     // so containerId stays null and renderSections() skips it.
     id: "docs",
     label: "Docs",
-    title: "Documentation",
+    // 7.122.3 (U19): label = title, as for every other view.
+    title: "Docs",
     sections: [],
     containerId: null,
   },
@@ -342,7 +352,7 @@ function sourceLabel(source) {
 
 function sourceText(field) {
   const parts = [];
-  const label = sourceLabel(field.source);
+  const label = fieldSourceLabel(field);
   if (label) {
     parts.push(label);
   }
@@ -350,6 +360,32 @@ function sourceText(field) {
     parts.push("locked");
   }
   return parts.join(" ");
+}
+
+/** The source chip's word for one field (7.122.3, U12).
+ *
+ * The first start writes the whole template into the managed `.env`, so a
+ * fresh install showed 363 "set here" chips and 235 "Use default" buttons for
+ * settings nobody chose. When the saved value *is* the field's own default the
+ * chip says "default value" instead: display only, the file is untouched, and
+ * a value somebody actually set still reads "set here". Secrets are never
+ * compared -- the payload carries a mask, not the value, so comparing it to a
+ * default would be comparing two different things.
+ */
+function fieldSourceLabel(field) {
+  if (field && field.source === "managed_env" && !field.secret) {
+    if (sameFieldValue(field.value, field.default)) return "default value";
+  }
+  return sourceLabel(field.source);
+}
+
+/** Whether two setting values say the same thing, for the chip above. */
+function sameFieldValue(value, fallback) {
+  const left = String(value ?? "").trim();
+  const right = String(fallback ?? "").trim();
+  if (left === right) return true;
+  // true/TRUE and False/false are the same switch; nothing else is folded.
+  return left.toLowerCase() === right.toLowerCase();
 }
 
 function statusClass(status) {
@@ -837,6 +873,15 @@ function setActiveView(viewId, { scroll = false } = {}) {
     VIEW_GROUPS.find((view) => view.id === viewId) || VIEW_GROUPS[0];
   state.activeView = activeView.id;
   byId("pageTitle").textContent = activeView.title;
+  // 7.122.3 (U22): a success message belongs to the page that produced it.
+  // "Added key gsk_…" followed the reader onto Model Config and Web Search.
+  // Errors and warnings stay: they are about the server, not about a page.
+  const messageArea = byId("messageArea");
+  if (messageArea && messageArea.classList.contains("ok")) showMessage("");
+  // 7.122.3 (U13): the footer is a settings bar; it follows the view.
+  refreshActionBarVisibility();
+  // 7.122.3 (U14–U16): the topbar shows the active page's own contents rail.
+  if (typeof state.showJumpBars === "function") state.showJumpBars();
   // Persist real navigation, but never the forced onboarding view, and never
   // while load() is mid-restore (it would clobber the saved state with the
   // not-yet-restored DOM).
@@ -2878,16 +2923,28 @@ function renderProxyFeeds() {
   const refresh = proxyVocabulary().refresh || {};
   const note = document.createElement("p");
   note.className = "field-description";
-  note.textContent = refresh.enabled
-    ? `Scheduled refresh is on: the feeds you switched on above are re-read ` +
+  if (refresh.enabled) {
+    note.textContent =
+      `Scheduled refresh is on: the feeds you switched on above are re-read ` +
       `about every ${Math.max(
         Number(refresh.interval_minutes) || 0,
         Number(refresh.minimum_minutes) || 30,
       )} minutes, tested the same way, and only what passes is kept. It ` +
-      "writes this candidate list and nothing else."
-    : "Scheduled refresh is off, so these lists are read only when you press " +
-      "Fetch. Turn on PROXY_FEED_REFRESH_ENABLED on Limits & Resilience to " +
-      "have them re-read -- and re-tested -- on a timer.";
+      "writes this candidate list and nothing else.";
+  } else {
+    // 7.122.3 (U15): the setting it names is a link to its own control.
+    note.append(
+      document.createTextNode(
+        "Scheduled refresh is off, so these lists are read only when you " +
+          "press Fetch. Turn on ",
+      ),
+      settingLink("PROXY_FEED_REFRESH_ENABLED"),
+      document.createTextNode(
+        " on Limits & Resilience to have them re-read -- and re-tested -- on " +
+          "a timer.",
+      ),
+    );
+  }
   panel.appendChild(note);
 
   /* The bound, said out loud, in the operator's own number. 0 ships and means
@@ -2896,13 +2953,29 @@ function renderProxyFeeds() {
   const cap = proxyCandidateCap();
   const bound = document.createElement("p");
   bound.className = "field-description proxy-feed-bound";
-  bound.textContent = cap
-    ? `A fetch tests at most ${cap} address(es), best-ranked first -- you set ` +
-      `PROXY_CANDIDATES_MAX to ${cap} on Limits & Resilience. Set it to 0 to ` +
-      "test everything the lists offer."
-    : "A fetch tests every address the lists offer, however many that is, and " +
-      "keeps the ones that work. Set PROXY_CANDIDATES_MAX on Limits & " +
-      "Resilience if you would rather it stopped at a number.";
+  if (cap) {
+    bound.append(
+      document.createTextNode(
+        `A fetch tests at most ${cap} address(es), best-ranked first -- you set `,
+      ),
+      settingLink("PROXY_CANDIDATES_MAX"),
+      document.createTextNode(
+        ` to ${cap} on Limits & Resilience. Set it to 0 to test everything the ` +
+          "lists offer.",
+      ),
+    );
+  } else {
+    bound.append(
+      document.createTextNode(
+        "A fetch tests every address the lists offer, however many that is, " +
+          "and keeps the ones that work. Set ",
+      ),
+      settingLink("PROXY_CANDIDATES_MAX"),
+      document.createTextNode(
+        " on Limits & Resilience if you would rather it stopped at a number.",
+      ),
+    );
+  }
   panel.appendChild(bound);
 }
 
@@ -8613,9 +8686,12 @@ function proxyAddRow(provider, draft) {
   if (full) {
     const note = document.createElement("p");
     note.className = "proxy-note";
-    note.textContent =
-      `A chain holds at most ${cap} entries -- your own ` +
-      "PROXY_CHAIN_MAX_ENTRIES, on Limits & Resilience. 0 means no limit.";
+    // 7.122.3 (U15): the cap it names links to the control that sets it.
+    note.append(
+      document.createTextNode(`A chain holds at most ${cap} entries -- your own `),
+      settingLink("PROXY_CHAIN_MAX_ENTRIES"),
+      document.createTextNode(", on Limits & Resilience. 0 means no limit."),
+    );
     row.appendChild(note);
   }
   return row;
@@ -9406,7 +9482,7 @@ async function updateOnboarding(patch) {
   return data;
 }
 
-// The config-dir banner tells a user on the legacy ``~/.fcc`` home where their
+// The config-dir banner tells a user on an older config-directory name where
 // configuration actually lives and what to type to move it. It is purely
 // informational and always has been safe to ignore: moving the directory is a
 // single atomic rename that only ``mcc-migrate`` performs, from a shell, with
@@ -10133,6 +10209,9 @@ function goTo(target) {
     }
     const element = goToElement(target);
     if (!element) return;
+    // A pool target is opened before it is scrolled to, so the card grows to
+    // its open height first and the scroll lands on what the reader asked for.
+    if (target.openPool) openPoolInElement(element, target.openPool);
     const reduced =
       window.matchMedia &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -10147,6 +10226,117 @@ function goTo(target) {
       element.focus({ preventScroll: true });
     }
   });
+}
+
+/** Open the key pool for `credentialKey` inside `root`, when it has one.
+ *
+ * 7.122.3 (U1). A provider card builds its pool lazily on "Manage keys", and
+ * a web-search card does the same with its own button; both are opened here
+ * by the affordance the card itself offers, so the page arrives in exactly the
+ * state a click on that control would leave it in. */
+function openPoolInElement(root, credentialKey) {
+  if (!root) return;
+  // A provider card keeps its whole form behind Configure; an unopened card
+  // has no visible field to scroll to and its pool is still display:none.
+  if (root.classList && root.classList.contains("pv-card")) {
+    const configure = root.querySelector(".pv-configure");
+    if (configure && configure.getAttribute("aria-expanded") === "false") {
+      configure.click();
+    }
+  }
+  const wrapper = Array.from(root.querySelectorAll(".field[data-key]")).find(
+    (node) => node.dataset.key === credentialKey,
+  );
+  const manager = wrapper ? wrapper.querySelector(".key-manager") : null;
+  if (manager && typeof manager.openKeyPool === "function") {
+    manager.openKeyPool();
+    return;
+  }
+  const panel = root.querySelector(".ws-key-manager");
+  if (panel && panel.hidden) {
+    const button = Array.from(root.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent === "Manage keys",
+    );
+    if (button) button.click();
+  }
+}
+
+/** Land on the card that owns a credential pool, with the pool open.
+ *
+ * 7.122.3 (U1, LINKFIX widened as U1/U7). The link used to set
+ * `state.reopenKeyManager` and switch to Providers. Every provider card had
+ * already been rendered by then, so nothing re-read the flag: a web-search
+ * pool opened the *Providers* grid -- a different page from the one its
+ * rotation control is on -- and a model pool opened Providers at its top,
+ * with the card it named 3,350 px below. Route by the credential's own
+ * section, then land on that card with its pool open.
+ */
+function openCredentialPool(credentialKey) {
+  const key = String(credentialKey || "");
+  if (!key) return;
+  const searchProvider = webSearchProviders().find(
+    (provider) => provider.envKey === key,
+  );
+  if (searchProvider) {
+    goTo({
+      view: "web_search",
+      selector: `[data-websearch-provider="${searchProvider.id}"]`,
+      openPool: key,
+      center: true,
+    });
+    return;
+  }
+  // A model credential lives on a provider card. The card is found by the
+  // field it renders, which is how a shared credential (two providers, one
+  // variable) resolves to whichever card actually carries the control.
+  const wrapper = document.querySelector(
+    `.pv-card .field[data-key="${goToSelectorPart(key)}"]`,
+  );
+  const card = wrapper ? wrapper.closest(".pv-card") : null;
+  if (card && card.dataset.provider) {
+    goTo({
+      view: "providers",
+      selector: `.pv-card[data-provider="${card.dataset.provider}"]`,
+      openPool: key,
+      center: true,
+    });
+    return;
+  }
+  // Nothing on the page carries that variable: the Providers search is the
+  // honest answer, and it still narrows to the credential's name.
+  goTo({ view: "providers", providerQuery: key });
+}
+
+/** The view that owns a settings section, from the one table that says so. */
+function viewForSection(sectionId) {
+  const view = VIEW_GROUPS.find((entry) =>
+    (entry.sections || []).includes(sectionId),
+  );
+  return view ? view.id : null;
+}
+
+/** An inline link to one setting's own control, wherever that control lives.
+ *
+ * 7.122.3 (U15): the Proxying page named settings as raw variables -- "Turn on
+ * PROXY_FEED_REFRESH_ENABLED on Limits & Resilience" -- and gave the reader
+ * nothing to click. The page a section belongs to is already declared in
+ * VIEW_GROUPS, so the link can be computed rather than written down twice.
+ */
+function settingLink(key, text) {
+  const link = document.createElement("a");
+  link.href = "#";
+  link.className = "setting-link";
+  link.dataset.gotoKey = key;
+  const field = state.fields?.get(key);
+  const page = field ? viewForSection(field.section) : null;
+  link.textContent = text || key;
+  link.title = `Open ${key}${field && field.label ? ` — ${field.label}` : ""}`;
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (page) goTo({ view: page, key, center: true });
+    else goTo({ view: "limits" });
+  });
+  return link;
 }
 
 /** A setting key as a selector fragment. The keys are [A-Z0-9_], so this is a
@@ -11037,6 +11227,24 @@ const GET_STARTED_STEP_HOMES = {
   messaging: "messaging_bridge",
   guide: "guide-links",
 };
+
+/** A handle on the page's own state and renderers, for the jsdom scenarios.
+ *
+ * 7.122.3. `state` is a script-level const and is not reachable from a
+ * scenario's `window.eval`, and the UX pass has to build a provider card and
+ * a web-search card from a payload the harness does not otherwise serve. Same
+ * shape and same purpose as `getStartedSnapshot` below: a function, no
+ * behaviour of its own, and nothing the page reads.
+ */
+function uxPassHarness() {
+  return {
+    state,
+    renderWebSearchProviders,
+    renderProviderGroups,
+    renderCredentialHealth,
+    renderSections,
+  };
+}
 
 /** Every fact a status or a chip reads, gathered once per render.
  *
@@ -13512,7 +13720,6 @@ const CALC_KEYS = new Set([
 ]);
 
 let calcListenerBound = false;
-let limitsScrollspyBound = false;
 
 /** The value a setting holds right now: the live control first, payload second.
  *
@@ -14277,11 +14484,13 @@ function renderCredentialHealth(fields) {
       const open = document.createElement("a");
       open.href = "#";
       open.dataset.openProvider = pool.label;
+      open.dataset.openPool = pool.credentialKey;
       open.textContent = "Open provider card";
       open.addEventListener("click", (event) => {
         event.preventDefault();
-        state.reopenKeyManager = pool.credentialKey;
-        setActiveView("providers", { scroll: true });
+        // 7.122.3 (U1): the card, opened, with its pool open -- not the top of
+        // another page. See openCredentialPool.
+        openCredentialPool(pool.credentialKey);
       });
       item.appendChild(open);
       list.appendChild(item);
@@ -14562,10 +14771,12 @@ function renderSections(sections, fields) {
   });
 
   // The limits rail's targets are rendered, not static markup, so the observer
-  // cannot be set up at script evaluation time the way the guide's is. Guarded
-  // so a re-render after load() does not stack observers.
-  if (!limitsScrollspyBound && document.querySelector("#limitsToc a")) {
-    limitsScrollspyBound = true;
+  // cannot be set up at script evaluation time the way the guide's is.
+  // 7.122.3 (U18): re-bound on every render rather than once. A Save or "Add
+  // key" rebuilds these sections, and the old observer was left watching the
+  // detached headings it was given -- so the highlight froze wherever it was
+  // and never moved again, inside a Credential health card 8,700 px tall.
+  if (document.querySelector("#limitsToc a")) {
     setupScrollspy("#limitsToc");
   }
 }
@@ -15288,14 +15499,11 @@ function renderField(field) {
     label.appendChild(tag);
   }
 
-  const source = sourceText(field);
-  if (source) {
-    const sourceEl = document.createElement("span");
-    sourceEl.className = "field-source";
-    sourceEl.textContent = source;
-    label.appendChild(sourceEl);
-  }
-
+  // 7.122.3 (U12): the provenance chip moved from the label line to the meta
+  // row below it. "default value" is three words where "set here" was two, and
+  // on the longest labels it pushed the label onto a second line -- which made
+  // those pages taller, the one thing this pass must not do. The meta row has
+  // room for it: it is the row about where the value came from.
   const { input, control } = buildFieldControl(field);
   wrapper.append(label, control);
   // A saved number the box cannot hold is shown as text (see inputForField);
@@ -15369,9 +15577,24 @@ function fieldMetaRow(field, input) {
   row.className = "field-meta";
   const defaults = document.createElement("span");
   defaults.className = "field-default";
-  defaults.textContent = `default: ${field.default || "none"}`;
+  defaults.textContent = `default: ${fieldDefaultText(field)}`;
+  const source = sourceText(field);
+  if (source) {
+    const sourceEl = document.createElement("span");
+    sourceEl.className = "field-source";
+    sourceEl.textContent = source;
+    row.appendChild(sourceEl);
+  }
   row.appendChild(defaults);
-  if (fieldCanResetToDefault(field)) {
+  // 7.122.3 (U12): a line the first start wrote with the value the code
+  // already defaults to is not a choice to undo. The chip above says "default
+  // value" for it, and offering "Use default" there was the second half of the
+  // same noise -- 235 buttons on a fresh install that could change nothing.
+  const alreadyDefault =
+    field.source === "managed_env" &&
+    !field.secret &&
+    sameFieldValue(field.value, field.default);
+  if (fieldCanResetToDefault(field) && !alreadyDefault) {
     const reset = document.createElement("button");
     reset.type = "button";
     reset.className = "field-reset";
@@ -15380,6 +15603,37 @@ function fieldMetaRow(field, input) {
     row.appendChild(reset);
   }
   return row;
+}
+
+/** What a field's default is called, in the words its own control uses.
+ *
+ * 7.122.3 (U30): a rotation select read "Default (Auto (failover across
+ * comma-separated keys…))" while the line under it read "default: none" --
+ * the same setting, named two different ways. An unset select whose options
+ * carry an empty-valued entry (how "Auto" is declared) has that entry's
+ * label; a boolean is Off/On; anything else keeps its literal default.
+ */
+function fieldDefaultText(field) {
+  const options =
+    field.type === "boolean"
+      ? [
+          { value: "true", label: "On" },
+          { value: "false", label: "Off" },
+        ]
+      : selectOptionsWithBooleanLabels(field.options);
+  const fallback = String(field.default ?? "");
+  const match = (Array.isArray(options) ? options : []).find(
+    (item) => String(item && item.value) === fallback,
+  );
+  if (match && match.label) {
+    // The first clause only. A select's option label often carries a
+    // parenthetical explanation ("A count of addresses (not a percentage)");
+    // the default line sits in a narrow column and the full label wrapped it
+    // onto a second line, which made pages taller than they were. The
+    // select's own Default (…) option still carries the whole label.
+    return String(match.label).split(" (")[0];
+  }
+  return field.default || "none";
 }
 
 /** Secrets are managed as a key pool and chains by their own editor; clearing
@@ -16176,6 +16430,27 @@ async function removeCredentialKey(field, index, button, id) {
  * submit a value nobody had picked: that is how `FALLBACK_BENCH_ENABLED=false`
  * ended up written into managed .env files that had never been edited.
  */
+/** A select's options with the one word they should read as.
+ *
+ * 7.122.3 (U27): a `select` whose options are exactly `false` and `true` is a
+ * switch stored as a select, and it read `Default (false) / false / true`
+ * beside every other switch's Default/On/Off. The *values* are untouched --
+ * this is a label, and the file keeps reading what it always did.
+ */
+function selectOptionsWithBooleanLabels(options) {
+  const list = Array.isArray(options) ? options : [];
+  const values = list.map((item) =>
+    typeof item === "string" ? item : String(item.value ?? ""),
+  );
+  const booleanPair =
+    values.length === 2 && values.includes("true") && values.includes("false");
+  if (!booleanPair) return list;
+  return list.map((item) => {
+    const value = typeof item === "string" ? item : item.value;
+    return { value, label: value === "true" ? "On" : "Off" };
+  });
+}
+
 function selectWithDefaultOption(field, options) {
   const select = document.createElement("select");
   const fallback = field.default ?? "";
@@ -16278,7 +16553,7 @@ function inputForField(field) {
   }
 
   if (field.type === "select") {
-    return selectWithDefaultOption(field, field.options);
+    return selectWithDefaultOption(field, selectOptionsWithBooleanLabels(field.options));
   }
 
   if (field.type === "textarea") {
@@ -17118,9 +17393,23 @@ function syncSharedControls(source) {
 
 function updateDirtyState() {
   const count = Object.keys(changedValues()).length;
+  state.dirtyCount = count;
   byId("dirtyState").textContent =
     count === 0 ? "No changes" : `${count} unsaved change${count === 1 ? "" : "s"}`;
   byId("applyButton").disabled = count === 0;
+  refreshActionBarVisibility();
+}
+
+/** 7.122.3 (U13): the footer saves settings, so on a view that has none --
+ *  Get Started, Models, Guide, Docs -- it is a bar about nothing. It stays
+ *  while something is dirty, though: a change made elsewhere must be
+ *  saveable from wherever the reader happens to be. */
+function refreshActionBarVisibility() {
+  const bar = document.querySelector(".action-bar");
+  if (!bar) return;
+  const view = VIEW_GROUPS.find((entry) => entry.id === state.activeView);
+  const hasSettings = Boolean(view && view.containerId);
+  bar.hidden = !hasSettings && (state.dirtyCount || 0) === 0;
 }
 
 async function validate(showResult = true) {
@@ -18774,6 +19063,10 @@ function renderWebSearchProviders() {
     const card = document.createElement("article");
     card.className = "provider-card";
     card.dataset.websearchProvider = provider.id;
+    // U6: what the find box is allowed to match (see
+    // webSearchProviderHaystack); the card's rendered text is not in it.
+    card.dataset.wsSearch = webSearchProviderHaystack(provider);
+    card.dataset.wsConfigured = provider.configured ? "true" : "false";
 
     const title = document.createElement("div");
     title.className = "provider-title";
@@ -18865,11 +19158,41 @@ function renderWebSearchProviders() {
 // applyProviderFilter(): every field input has to stay in the document for
 // changedValues()/Apply to see it, and `hidden` already removes an element
 // from the tab order, so a hidden card cannot trap keyboard focus.
+//
+// 7.122.3 (U6): the haystack is curated, never the card's rendered text. Every
+// keyed card has carried a Rotation select since 7.121.2, so matching
+// `textContent` made "rotation" keep 13 of 15 cards and made the box useless
+// for the one thing it is for -- finding a service by name, id, key variable
+// or URL. The count line and the no-match sentence are Providers' pattern.
+function webSearchProviderHaystack(provider) {
+  const baseUrl =
+    provider.id === "searxng"
+      ? String(state.fields?.get("SEARXNG_BASE_URL")?.value || "")
+      : "";
+  return [provider.label, provider.id, provider.envKey || "", baseUrl]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
 function applyWebSearchProviderFilter(query) {
-  document.querySelectorAll("#webSearchGrid .provider-card").forEach((card) => {
-    const haystack = (card.textContent || "").toLowerCase();
-    card.hidden = Boolean(query) && !haystack.includes(query);
+  const cards = Array.from(
+    document.querySelectorAll("#webSearchGrid .provider-card"),
+  );
+  let shown = 0;
+  cards.forEach((card) => {
+    const matches = !query || (card.dataset.wsSearch || "").includes(query);
+    card.hidden = !matches;
+    if (matches) shown += 1;
   });
+  const count = byId("webSearchProviderCount");
+  if (count) {
+    count.textContent = query
+      ? `${shown} of ${cards.length}`
+      : `${cards.length} services · ${cards.filter((card) => card.dataset.wsConfigured === "true").length} configured`;
+  }
+  const empty = byId("webSearchNoMatch");
+  if (empty) empty.hidden = !(query && shown === 0);
 }
 
 function wireWebSearchProviderSearch() {
@@ -19713,21 +20036,34 @@ function webSearchSeriesChart(series) {
   canvas.id = "wsSeriesChart";
   canvas.width = 960;
   canvas.height = 220;
+  canvas.tabIndex = 0;
   canvas.setAttribute("role", "img");
   canvas.setAttribute("aria-label", "Logical web searches and errors over time");
-  wrapper.append(heading, canvas);
+  canvas.setAttribute("aria-describedby", "wsSeriesChartReadout");
+  const readout = document.createElement("p");
+  readout.id = "wsSeriesChartReadout";
+  readout.className = "chart-readout";
+  readout.setAttribute("aria-live", "polite");
+  wrapper.append(heading, canvas, readout);
   const aggregate = aggregateWebSearchSeries(series);
+  // Once the wrapper is in the document, so the canvas has a box to size to.
   requestAnimationFrame(() => {
-    const drawWs = () => drawBarChart(
-      canvas,
-      aggregate.map((entry) => entry.bucket),
-      [
-        { values: aggregate.map((entry) => entry.requests) },
-        { values: aggregate.map((entry) => entry.errors) },
+    renderChart("wsSeriesChart", {
+      kind: "v-bars",
+      labels: aggregate.map((entry) => entry.bucket),
+      series: [
+        {
+          label: "Logical searches",
+          values: aggregate.map((entry) => entry.requests),
+        },
+        {
+          label: "Errors",
+          values: aggregate.map((entry) => entry.errors),
+          tone: "error",
+        },
       ],
-    );
-    drawWs();
-    registerChartRedraw("wsSeriesChart", drawWs);
+      format: formatChartCount,
+    });
   });
   return wrapper;
 }
@@ -21475,9 +21811,13 @@ async function submitCustomProviderForm(event) {
         );
       } else {
         const preview = result.models.slice(0, 3).join(", ");
+        // 7.122.3 (U28): a list cut at three said "4 models detected: a, b,
+        // c" and left the fourth uncounted, which reads as a missing model.
+        const more =
+          result.models.length > 3 ? ` (+${result.models.length - 3} more)` : "";
         showMessage(
           `Added ${result.display_name} — ${result.model_count} models detected` +
-            (preview ? `: ${preview}` : ""),
+            (preview ? `: ${preview}${more}` : ""),
           "ok",
         );
       }
@@ -22009,7 +22349,9 @@ function renderDesktopWindow() {
 }
 
 function autostartTargetLabel(target) {
-  return target === "tray" ? "Tray (mcc-desktop)" : "Server (mcc-server, headless)";
+  // 7.122.3 (U31): "Start at Login (Tray (mcc-desktop))" nested one pair of
+  // brackets inside another, and read as a mistake.
+  return target === "tray" ? "tray (mcc-desktop)" : "server (mcc-server, headless)";
 }
 
 function renderDesktopAutostartOptions() {
@@ -22049,7 +22391,7 @@ function renderDesktopAutostartOptions() {
     const label = document.createElement("label");
     label.className = "toggle-control";
     label.htmlFor = inputId;
-    label.append(input, ` Start at Login (${autostartTargetLabel(target)})`);
+    label.append(input, ` Start at Login — ${autostartTargetLabel(target)}`);
     container.append(label);
 
     if (known && registered !== wanted) {
@@ -24605,21 +24947,41 @@ async function toggleHarnessTierPause(parsed, modelKey, ref, paused, button) {
 }
 
 // Every command line this agent answers to, generated server-side from the
-// registry: the launcher, its documented arguments, its retired fcc- name and
+// registry: the launcher, its documented arguments and
 // the RTK toggles. The list is the reason the page exists -- "what can I
 // actually type" used to be answerable only by reading three doc pages that
 // disagreed. Each row copies itself, so the answer is one click from useful.
+// 7.122.3: retired command names are filtered out here. The dashboard names
+// no command that only exists to print a newer one; the commands themselves
+// are removed by the retirement PR.
 const HARNESS_COMMAND_KIND_LABELS = {
   flag: "argument",
   legacy: "legacy alias",
   rtk: "token optimizer",
 };
 
-function harnessCommandList(harness) {
-  const list = document.createElement("ul");
+/** Whether a command line names a retired command (7.122.3).
+ *
+ * The registry keeps these lines so the retirement PR can remove them from
+ * the source; the dashboard stops rendering them here, which is what makes
+ * "no retired command name anywhere in the dashboard" true today. The
+ * registry's own `kind` is the marker, so this file never has to spell one of
+ * those names out.
+ */
+function isRetiredCommandLine(line) {
+  if (!line) return true;
+  return String(line.kind || "").toLowerCase() === "legacy";
+}
+
+function harnessCommandList(harness) {  const list = document.createElement("ul");
   list.className = "agent-command-list";
   const lines = Array.isArray(harness.command_lines) ? harness.command_lines : [];
-  lines.forEach((line) => {
+  lines
+    // 7.122.3: no retired command name is named on this page. The server
+    // still lists them for the retirement PR to remove at the source; the
+    // dashboard's contract is that it mentions none of them.
+    .filter((line) => !isRetiredCommandLine(line))
+    .forEach((line) => {
     const row = document.createElement("li");
     row.className = "agent-command-row";
     row.dataset.kind = line.kind || "primary";
@@ -25903,7 +26265,7 @@ function ccRenderReview(plan) {
   const backup = document.createElement("p");
   backup.className = "cc-review-backup";
   backup.textContent =
-    "The current file is copied to a .fcc-backup sibling before the first write.";
+    "The current file is kept as a sibling under the same name plus a backup suffix, before the first write.";
   body.append(backup);
 }
 
@@ -26160,6 +26522,9 @@ const reqState = {
   // the stats payload the cards were last drawn from so they can be redrawn
   // with them.
   ttft: null,
+  // The cost payload the tile and the cost-over-time chart are painted from
+  // (7.122.3). `null` until its own panel's request answers.
+  cost: null,
   // The successes-with-no-answer breakdown, which arrives the same way and
   // feeds the Success rate card's note and its own panel.
   noAnswer: null,
@@ -26551,6 +26916,9 @@ async function loadRequestsView({ auto = false } = {}) {
   if (stats.enabled === false) {
     byId("reqStatsCards").innerHTML = "";
     byId("reqTableBody").innerHTML = "";
+    // 7.122.3: "connect an agent" is not the answer when logging is off.
+    const emptyState = byId("reqEmptyState");
+    if (emptyState) emptyState.hidden = true;
     byId("reqProviderBreakdown").innerHTML = "";
     byId("reqHarnessBreakdown").innerHTML = "";
     renderRequestOriginBreakdowns(null);
@@ -26565,9 +26933,16 @@ async function loadRequestsView({ auto = false } = {}) {
     renderRequestLifetime(null);
     clearChart(byId("reqSeriesChart"));
     clearChart(byId("reqModelChart"));
+    // The two charts added in 7.122.3 clear the same way: an empty canvas is
+    // what "the log is off" looks like, and a stale drawing would outlive it.
+    ["reqTtftChart", "reqCostChart"].forEach((id) => {
+      const canvas = byId(id);
+      if (canvas) clearChart(canvas);
+    });
     reqState.total = 0;
     byId("reqBreakdownTruncatedNote").hidden = true;
-    renderRequestCost(null);
+    // Says "off", not "working out…": the payload was never going to come.
+    renderRequestCost({ enabled: false });
     renderRequestModelLatency(null);
     byId("reqBodiesIndicator").textContent = "Request log disabled (REQUEST_LOG_ENABLED=false)";
     renderReqPager();
@@ -27415,9 +27790,11 @@ function renderRequestStatsCards(stats) {
       byId("reqStatsCards"),
       cards.map(([label, _value, note]) => [label, "counting…", note]),
     );
+    paintRequestCostTile();
     return;
   }
   renderStatCards(byId("reqStatsCards"), cards);
+  paintRequestCostTile();
   renderRequestCancelledBreakdown(stats.cancelled_breakdown);
 }
 
@@ -27877,6 +28254,11 @@ async function loadRequestCostPanel(loadId, params, options = {}, ready = null) 
 function renderRequestCost(cost) {
   const cards = byId("reqCostCards");
   const note = byId("reqCostNote");
+  // Kept for the summary tile and the cost-over-time chart, which are drawn
+  // where the tiles and charts are rather than down here (7.122.3).
+  reqState.cost = cost || null;
+  paintRequestCostTile();
+  renderReqCostChart(cost);
   const panels = [
     ["reqCostProvider", "Provider", "by_provider", providerDisplayLabel],
     ["reqCostModel", "Model", "by_model", (key) => key],
@@ -27924,9 +28306,49 @@ function renderRequestCost(cost) {
   });
 }
 
+/** The cost tile in the summary band, painted from the cost payload.
+ *
+ * ADDENDUM 2 asks for a cost tile *among the usage tiles*, and the cost panel
+ * is computed apart from the stats rollup (9.0 s against 0.11 s on a 4.5 GB
+ * log), so the tile is the one card that fills in after the band is painted.
+ * "Counting…" is not used here: the number is not late, the panel is simply
+ * still being computed, and it says which.
+ */
+function paintRequestCostTile() {
+  const container = byId("reqStatsCards");
+  if (!container) return;
+  let tile = byId("reqCostTile");
+  if (!tile) {
+    tile = document.createElement("div");
+    tile.id = "reqCostTile";
+    tile.className = "requests-card cost-tile";
+    container.insertBefore(tile, container.firstChild);
+  }
+  tile.textContent = "";
+  const value = document.createElement("strong");
+  value.id = "reqCostTileValue";
+  const label = document.createElement("span");
+  label.textContent = "Cost (reported)";
+  const note = document.createElement("small");
+  const cost = reqState.cost;
+  if (!cost) {
+    value.textContent = "…";
+    note.textContent = "working out what this window cost";
+  } else if (cost.enabled === false) {
+    value.textContent = "—";
+    note.textContent = "the request log is off, so nothing is being priced";
+  } else {
+    const totals = cost.totals || {};
+    value.textContent = formatCostAmount(totals.reported_usd);
+    note.textContent =
+      `${formatPricedShare(totals.priced, totals.requests)} · ` +
+      `estimated ${formatCostAmount(totals.estimated_usd)} shown separately`;
+  }
+  tile.append(value, label, note);
+}
+
 /* Why a cost panel is empty, in the panel. "Nothing priced" and "nothing was
-   asked to price" are different answers and a blank card says neither. */
-function costPanelNote(cost) {
+   asked to price" are different answers and a blank card says neither. */function costPanelNote(cost) {
   if (!cost.cost_estimation_enabled) {
     return "Cost estimation is off (COST_ESTIMATION_ENABLED=false). Requests already priced keep their figures.";
   }
@@ -28207,6 +28629,10 @@ function renderStatCards(container, cards) {
     card.className = "requests-card";
     const valueEl = document.createElement("strong");
     valueEl.textContent = value;
+    // 7.122.3 (U33): "not measured yet" sat in the 18 px display type the
+    // figures use, so a number nobody measured shouted as loudly as a number
+    // that was. A value that is a sentence is marked as the note it is.
+    if (statValueIsNote(value)) valueEl.className = "stat-value-note";
     const labelEl = document.createElement("span");
     labelEl.textContent = label;
     card.append(valueEl, labelEl);
@@ -28217,6 +28643,13 @@ function renderStatCards(container, cards) {
     }
     container.appendChild(card);
   });
+}
+
+/** Whether a tile's value is a sentence rather than a figure (U33). */
+function statValueIsNote(value) {
+  const text = String(value ?? "").trim();
+  if (text === "—" || text === "…") return true;
+  return /^(not measured|counting|no data|not reported|unavailable)/i.test(text);
 }
 
 /* How long each model took to say anything, per outcome.
@@ -28452,6 +28885,9 @@ function renderRequestModelLatency(latency) {
     container.appendChild(
       analyticsTable(["Model"], [], "The request log is off."),
     );
+    // The chart is part of this panel (7.122.3): an empty drawing, not the
+    // last window's.
+    renderReqTtftChart(null);
     return;
   }
   const rows = latency.rows || [];
@@ -28509,6 +28945,8 @@ function renderRequestModelLatency(latency) {
       "No attempts in this range.",
     ),
   );
+  // The same rows as a picture, beside the numbers (7.122.3, ADDENDUM 2).
+  renderReqTtftChart(latency);
 }
 
 /** One rate cell: the number, and the basis of it on hover. */
@@ -29402,7 +29840,12 @@ function buildTtftCell(row) {
 function renderRequestsTable(rows) {
   const body = byId("reqTableBody");
   body.innerHTML = "";
+  paintRequestsEmptyState(rows);
   if (rows.length === 0) {
+    // The first-run sentence has the floor when it is shown; two "nothing
+    // here" lines stacked read as a fault.
+    const emptyState = byId("reqEmptyState");
+    if (emptyState && !emptyState.hidden) return;
     const tr = document.createElement("tr");
     const td = document.createElement("td");
     td.colSpan = requestTableColumnCount();
@@ -29417,13 +29860,26 @@ function renderRequestsTable(rows) {
   populateExitFilterOptions(rows);
   rows.forEach((row) => {
     const tr = document.createElement("tr");
-    tr.className = `req-row req-status-${row.status}`;
+    tr.className = `req-row req-status-${row.status} is-clickable`;
+    tr.dataset.requestId = row.id;
+    // 7.122.3 (U35): the row opens the detail it belongs to. The button is
+    // still there -- it is the keyboard affordance, and its own click must not
+    // open the same modal twice -- and the Details column is pinned by CSS so
+    // it is reachable without scrolling the table sideways.
+    tr.addEventListener("click", (event) => {
+      if (event.target.closest("button, a")) return;
+      openRequestDetail(row.id);
+    });
     const addText = (text) => {
       const td = document.createElement("td");
       td.textContent = text;
       tr.appendChild(td);
     };
-    addText(formatRequestTime(row));
+    const timeCell = document.createElement("td");
+    timeCell.className = "req-time-open";
+    timeCell.textContent = formatRequestTime(row);
+    timeCell.title = "Open this request";
+    tr.appendChild(timeCell);
     addText(row.endpoint || "");
     // Beside Endpoint: both answer "what came in", before the columns that
     // say what MCC did with it.
@@ -29458,6 +29914,38 @@ function renderRequestsTable(rows) {
     tr.appendChild(actionCell);
     body.appendChild(tr);
   });
+}
+
+/* The first-run sentence, in the place a reader with no requests looks
+   (7.122.3, U14). Shown only when the log is empty *and* nothing is filtering
+   it: with a filter on, the table's own "No requests match" is the true
+   answer, and telling that reader to connect an agent would be false. */
+function paintRequestsEmptyState(rows) {
+  const el = byId("reqEmptyState");
+  if (!el) return;
+  const nothingYet =
+    rows.length === 0 && reqState.total === 0 && !reqState.countDeferred;
+  el.hidden = !(nothingYet && !requestsFiltersActive());
+}
+
+/** Whether any filter above the table is narrowing it. */
+function requestsFiltersActive() {
+  const ids = [
+    "reqFilterProvider",
+    "reqFilterModel",
+    "reqFilterKey",
+    "reqFilterHarness",
+    "reqFilterSession",
+    "reqFilterFolder",
+    "reqFilterExit",
+    "reqFilterSearch",
+    "reqFilterStatus",
+    "reqFilterEndpoint",
+    "reqFilterWindow",
+  ];
+  if (ids.some((id) => String(byId(id)?.value || "").trim() !== "")) return true;
+  const local = String(byId("reqFilterLocal")?.value || "hide");
+  return local !== "hide";
 }
 
 /* The status, and -- when it is `cancelled` -- which of the four things that
@@ -29740,44 +30228,125 @@ function compactNumber(value) {
   return String(Math.round(value));
 }
 
-function drawBarChart(canvas, labels, series) {
+/* ---------------------------------------------------------- chart engine --
+   7.122.3 (ADDENDUM 2): one small engine for every Analytics chart, so each
+   of them gets the same three things. A tooltip on hover; arrow-key reading
+   over the same buckets for a keyboard and for a reader who cannot see the
+   bars; and a screen-reader table carrying the numbers the drawing only
+   implies. A canvas is a picture of numbers, and before this the numbers
+   existed nowhere else on the page.
+
+   Three shapes cover the page: vertical bars over time (`v-bars`), horizontal
+   bars per model (`h-bars`), and a range bar per model (`range`, p50 to p95).
+   Every spec carries its own formatter, so "3 requests", "1.2 ms" and "$0.42"
+   all print the way their panel does. */
+
+const chartSpecs = new Map();
+const chartGeometry = new Map();
+const chartFocus = new Map();
+const chartWired = new Set();
+
+function palette() {
+  return {
+    accent: token("--accent", "#10b981"),
+    error: token("--error", "#ef4444"),
+    warn: token("--warn", "#f59e0b"),
+    muted: token("--muted", "#9ca3af"),
+    line: token("--line", "rgba(255,255,255,0.06)"),
+    focus: token("--panel-strong", "#171b26"),
+    text: token("--text", "#f3f4f6"),
+  };
+}
+
+function seriesColor(series, colors) {
+  if (series.color) return series.color;
+  if (series.tone === "error") return colors.error;
+  if (series.tone === "warn") return colors.warn;
+  return colors.accent;
+}
+
+/** Paint one chart from its spec, and register the redraw for the themes. */
+function renderChart(canvasId, spec) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  chartSpecs.set(canvasId, spec);
+  chartFocus.set(canvasId, -1);
+  const draw = () => drawChart(canvasId);
+  draw();
+  registerChartRedraw(canvasId, draw);
+  ensureChartTable(canvasId, spec);
+  wireChartInteractions(canvas);
+  paintChartReadout(canvasId, -1);
+}
+
+/** The buckets (or rows) a chart can be read at. */
+function chartItemCount(spec) {
+  if (!spec) return 0;
+  if (spec.kind === "v-bars") return (spec.labels || []).length;
+  return (spec.rows || []).length;
+}
+
+function drawChart(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  const spec = chartSpecs.get(canvasId);
+  if (!canvas || !spec) return;
   const { ctx, width, height } = prepareCanvas(canvas);
-  const padX = 40;
-  const padY = 22;
-  const max = Math.max(1, ...series.flatMap((s) => s.values));
-  const groups = labels.length || 1;
+  const colors = palette();
+  const focused = chartFocus.get(canvasId);
+  if (spec.kind === "v-bars") {
+    drawVerticalBars(ctx, width, height, spec, colors, focused, chartGeometry, canvasId);
+  } else if (spec.kind === "h-bars") {
+    drawHorizontalBars(ctx, width, height, spec, colors, focused, chartGeometry, canvasId);
+  } else if (spec.kind === "range") {
+    drawRangeBars(ctx, width, height, spec, colors, focused, chartGeometry, canvasId);
+  }
+}
+
+function drawVerticalBars(ctx, width, height, spec, colors, focused, geometry, canvasId) {
+  const padX = 42;
+  const padY = 18;
+  const labels = spec.labels || [];
+  const series = spec.series || [];
+  const max = Math.max(
+    1,
+    ...series.flatMap((entry) => (entry.values || []).map((value) => Number(value) || 0)),
+  );
+  const groups = Math.max(1, labels.length);
   const groupWidth = (width - padX - 12) / groups;
   const plotHeight = height - padY * 2;
-  const colors = [token("--accent", "#10b981"), token("--error", "#ef4444")];
-  const muted = token("--muted", "#9ca3af");
-  const line = token("--line", "rgba(255,255,255,0.06)");
+  geometry.set(canvasId, { padX, padY, groupWidth, plotHeight, height, width, rowHeight: 0 });
 
-  // A value scale: the bars were previously unreadable in absolute terms.
   ctx.font = "10px system-ui, sans-serif";
   ctx.textBaseline = "middle";
   [0, 0.5, 1].forEach((fraction) => {
     const y = height - padY - plotHeight * fraction;
-    ctx.strokeStyle = line;
+    ctx.strokeStyle = colors.line;
     ctx.beginPath();
     ctx.moveTo(padX, y + 0.5);
     ctx.lineTo(width - 8, y + 0.5);
     ctx.stroke();
-    ctx.fillStyle = muted;
+    ctx.fillStyle = colors.muted;
     ctx.textAlign = "right";
     ctx.fillText(compactNumber(max * fraction), padX - 6, y);
   });
 
-  series.forEach((s, seriesIndex) => {
-    ctx.fillStyle = colors[seriesIndex % colors.length];
-    s.values.forEach((value, i) => {
-      const barWidth = groupWidth / (series.length + 1);
+  if (focused >= 0 && focused < groups) {
+    ctx.fillStyle = colors.focus;
+    ctx.fillRect(padX + focused * groupWidth, padY, groupWidth, plotHeight);
+  }
+
+  series.forEach((entry, seriesIndex) => {
+    ctx.fillStyle = seriesColor(entry, colors);
+    const barWidth = groupWidth / (series.length + 1);
+    (entry.values || []).forEach((raw, i) => {
+      const value = Number(raw) || 0;
       const x = padX + i * groupWidth + seriesIndex * barWidth;
       const barHeight = (plotHeight * value) / max;
       ctx.fillRect(x, height - padY - barHeight, Math.max(1, barWidth * 0.8), barHeight);
     });
   });
 
-  ctx.fillStyle = muted;
+  ctx.fillStyle = colors.muted;
   ctx.textAlign = "left";
   labels.forEach((label, i) => {
     if (labels.length > 12 && i % Math.ceil(labels.length / 12) !== 0) return;
@@ -29785,44 +30354,402 @@ function drawBarChart(canvas, labels, series) {
   });
 }
 
+function drawHorizontalBars(ctx, width, height, spec, colors, focused, geometry, canvasId) {
+  const rows = spec.rows || [];
+  if (rows.length === 0) {
+    geometry.set(canvasId, { rowHeight: 0, height, width });
+    return;
+  }
+  const format = spec.format || compactNumber;
+  const max = Math.max(1, ...rows.map((row) => Number(row.value) || 0));
+  const labelWidth = Math.min(150, Math.max(70, width * 0.3));
+  const valueWidth = 56;
+  const rowHeight = Math.min(22, height / rows.length);
+  geometry.set(canvasId, { labelWidth, valueWidth, rowHeight, height, width });
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  if (focused >= 0 && focused < rows.length) {
+    ctx.fillStyle = colors.focus;
+    ctx.fillRect(0, focused * rowHeight, width, rowHeight);
+  }
+  rows.forEach((row, i) => {
+    const value = Number(row.value) || 0;
+    const y = i * rowHeight;
+    const mid = y + rowHeight / 2;
+    const barWidth = ((width - labelWidth - valueWidth) * value) / max;
+    ctx.fillStyle = row.tone === "error" ? colors.error : colors.accent;
+    ctx.fillRect(labelWidth, y + 2, Math.max(1, barWidth), rowHeight - 5);
+    ctx.fillStyle = colors.muted;
+    ctx.textAlign = "right";
+    ctx.fillText(String(row.label || "").slice(0, 28), labelWidth - 8, mid);
+    ctx.textAlign = "left";
+    ctx.fillText(format(value), labelWidth + barWidth + 6, mid);
+  });
+}
+
+function drawRangeBars(ctx, width, height, spec, colors, focused, geometry, canvasId) {
+  const rows = spec.rows || [];
+  if (rows.length === 0) {
+    geometry.set(canvasId, { rowHeight: 0, height, width });
+    return;
+  }
+  const format = spec.format || ((value) => String(value));
+  const max = Math.max(1, ...rows.map((row) => Number(row.p95) || 0));
+  const labelWidth = Math.min(150, Math.max(70, width * 0.3));
+  const valueWidth = 96;
+  const rowHeight = Math.min(22, height / rows.length);
+  const track = Math.max(10, width - labelWidth - valueWidth);
+  geometry.set(canvasId, { labelWidth, valueWidth, rowHeight, height, width, track, max });
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  if (focused >= 0 && focused < rows.length) {
+    ctx.fillStyle = colors.focus;
+    ctx.fillRect(0, focused * rowHeight, width, rowHeight);
+  }
+  rows.forEach((row, i) => {
+    const y = i * rowHeight;
+    const mid = y + rowHeight / 2;
+    const low = (track * (Number(row.p50) || 0)) / max;
+    const high = (track * (Number(row.p95) || 0)) / max;
+    ctx.fillStyle = colors.accent;
+    ctx.fillRect(labelWidth + low, mid - (rowHeight - 8) / 2, Math.max(1, high - low), rowHeight - 8);
+    ctx.fillStyle = colors.text;
+    ctx.beginPath();
+    ctx.arc(labelWidth + low, mid, Math.min(3.5, rowHeight / 4), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = colors.muted;
+    ctx.textAlign = "right";
+    ctx.fillText(String(row.label || "").slice(0, 28), labelWidth - 8, mid);
+    ctx.textAlign = "left";
+    ctx.fillText(format(row.p95), labelWidth + high + 6, mid);
+  });
+}
+
+/** What one bucket says, in one sentence, for the tooltip and the readout. */
+function chartReadoutText(spec, index) {
+  if (!spec) return "";
+  if (spec.kind === "v-bars") {
+    const label = (spec.labels || [])[index];
+    if (label === undefined) return "";
+    const parts = (spec.series || []).map((entry) => {
+      const value = Number((entry.values || [])[index]) || 0;
+      const text = spec.format ? spec.format(value) : compactNumber(value);
+      return `${entry.label}: ${text}`;
+    });
+    return `${label} — ${parts.join(" · ")}`;
+  }
+  const row = (spec.rows || [])[index];
+  if (!row) return "";
+  return spec.readout ? spec.readout(row) : `${row.label}: ${row.value}`;
+}
+
+function paintChartReadout(canvasId, index) {
+  const spec = chartSpecs.get(canvasId);
+  const readout = document.getElementById(`${canvasId}Readout`);
+  const text = chartReadoutText(spec, index);
+  if (readout) {
+    readout.textContent = text;
+  }
+  return text;
+}
+
+/** One tooltip per chart, positioned over the canvas in its own panel. */
+function chartTooltip(canvas) {
+  const host = canvas.parentElement;
+  if (!host) return null;
+  let tip = host.querySelector(":scope > .chart-tooltip");
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "chart-tooltip";
+    tip.setAttribute("aria-hidden", "true");
+    host.appendChild(tip);
+  }
+  return tip;
+}
+
+function showChartTooltip(canvasId, index, offsetX, offsetY) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const tip = chartTooltip(canvas);
+  if (!tip) return;
+  const text = paintChartReadout(canvasId, index);
+  if (!text) {
+    tip.hidden = true;
+    return;
+  }
+  tip.textContent = text;
+  tip.hidden = false;
+  const hostWidth = canvas.clientWidth || canvas.width;
+  const left = Math.max(4, Math.min((offsetX || 0) + 12, hostWidth - 180));
+  tip.style.left = `${left}px`;
+  tip.style.top = `${Math.max(4, (offsetY || 0) - 34)}px`;
+}
+
+function hideChartTooltip(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  const tip = canvas && canvas.parentElement
+    ? canvas.parentElement.querySelector(":scope > .chart-tooltip")
+    : null;
+  if (tip) tip.hidden = true;
+  paintChartReadout(canvasId, -1);
+}
+
+/** Which bucket a pointer is over, or -1 outside the plot. */
+function chartIndexAt(canvasId, offsetX, offsetY) {
+  const spec = chartSpecs.get(canvasId);
+  const geometry = chartGeometry.get(canvasId);
+  if (!spec || !geometry) return -1;
+  if (spec.kind === "v-bars") {
+    const count = (spec.labels || []).length;
+    if (!count || offsetX < geometry.padX) return -1;
+    const index = Math.floor((offsetX - geometry.padX) / geometry.groupWidth);
+    return index >= 0 && index < count ? index : -1;
+  }
+  const count = (spec.rows || []).length;
+  if (!count || !geometry.rowHeight) return -1;
+  const index = Math.floor(offsetY / geometry.rowHeight);
+  return index >= 0 && index < count ? index : -1;
+}
+
+function setChartFocus(canvasId, index) {
+  const count = chartItemCount(chartSpecs.get(canvasId));
+  if (!count) return;
+  let next = index;
+  if (next < 0) next = 0;
+  if (next >= count) next = count - 1;
+  chartFocus.set(canvasId, next);
+  drawChart(canvasId);
+  const geometry = chartGeometry.get(canvasId) || {};
+  const spec = chartSpecs.get(canvasId);
+  let x = 0;
+  let y = 0;
+  if (spec && spec.kind === "v-bars") {
+    x = geometry.padX + next * geometry.groupWidth + geometry.groupWidth / 2;
+    y = geometry.height;
+  } else {
+    x = 20;
+    y = next * (geometry.rowHeight || 0) + (geometry.rowHeight || 0);
+  }
+  showChartTooltip(canvasId, next, x, y);
+}
+
+function wireChartInteractions(canvas) {
+  if (chartWired.has(canvas.id)) return;
+  chartWired.add(canvas.id);
+  canvas.addEventListener("pointermove", (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const index = chartIndexAt(canvas.id, event.clientX - rect.left, event.clientY - rect.top);
+    if (index < 0) {
+      hideChartTooltip(canvas.id);
+      return;
+    }
+    chartFocus.set(canvas.id, index);
+    drawChart(canvas.id);
+    showChartTooltip(canvas.id, index, event.clientX - rect.left, event.clientY - rect.top);
+  });
+  canvas.addEventListener("pointerleave", () => {
+    chartFocus.set(canvas.id, -1);
+    drawChart(canvas.id);
+    hideChartTooltip(canvas.id);
+  });
+  canvas.addEventListener("focus", () => {
+    if (chartItemCount(chartSpecs.get(canvas.id))) setChartFocus(canvas.id, 0);
+  });
+  canvas.addEventListener("blur", () => hideChartTooltip(canvas.id));
+  canvas.addEventListener("keydown", (event) => {
+    const count = chartItemCount(chartSpecs.get(canvas.id));
+    if (!count) return;
+    const current = chartFocus.get(canvas.id);
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step) {
+      event.preventDefault();
+      setChartFocus(canvas.id, (current < 0 ? (step > 0 ? -1 : count) : current) + step);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      setChartFocus(canvas.id, 0);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setChartFocus(canvas.id, count - 1);
+    } else if (event.key === "Escape") {
+      hideChartTooltip(canvas.id);
+    }
+  });
+}
+
+/** The numbers the drawing implies, as a table for a screen reader. */
+function ensureChartTable(canvasId, spec) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const host = canvas.parentElement;
+  if (!host) return;
+  const previous = host.querySelector(":scope > .chart-data-table");
+  if (previous) previous.remove();
+  const table = document.createElement("table");
+  table.className = "sr-only chart-data-table";
+  // 7.122.3: an aria-label, not a <caption>. A caption is laid out outside
+  // the table's box, so `.sr-only`'s clip did not hide it and every chart
+  // printed its own name as a heading under itself.
+  table.setAttribute("aria-label", canvas.getAttribute("aria-label") || "Chart data");
+  const head = document.createElement("tr");
+  if (spec.kind === "v-bars") {
+    head.appendChild(Object.assign(document.createElement("th"), { textContent: "Bucket" }));
+    (spec.series || []).forEach((entry) => {
+      head.appendChild(Object.assign(document.createElement("th"), { textContent: entry.label }));
+    });
+  } else if (spec.kind === "range") {
+    ["Model", "p50", "p95"].forEach((label) => {
+      head.appendChild(Object.assign(document.createElement("th"), { textContent: label }));
+    });
+  } else {
+    ["Model", "Value"].forEach((label) => {
+      head.appendChild(Object.assign(document.createElement("th"), { textContent: label }));
+    });
+  }
+  table.appendChild(head);
+  if (spec.kind === "v-bars") {
+    (spec.labels || []).forEach((label, i) => {
+      const row = document.createElement("tr");
+      row.appendChild(Object.assign(document.createElement("td"), { textContent: label }));
+      (spec.series || []).forEach((entry) => {
+        const value = Number((entry.values || [])[i]) || 0;
+        row.appendChild(
+          Object.assign(document.createElement("td"), {
+            textContent: spec.format ? spec.format(value) : String(value),
+          }),
+        );
+      });
+      table.appendChild(row);
+    });
+  } else if (spec.kind === "range") {
+    (spec.rows || []).forEach((row) => {
+      const tr = document.createElement("tr");
+      [row.label, spec.format ? spec.format(row.p50) : row.p50, spec.format ? spec.format(row.p95) : row.p95]
+        .forEach((cell) => {
+          tr.appendChild(Object.assign(document.createElement("td"), { textContent: String(cell) }));
+        });
+      table.appendChild(tr);
+    });
+  } else {
+    (spec.rows || []).forEach((row) => {
+      const tr = document.createElement("tr");
+      [String(row.label), spec.format ? spec.format(row.value) : String(row.value)].forEach(
+        (cell) => {
+          tr.appendChild(Object.assign(document.createElement("td"), { textContent: cell }));
+        },
+      );
+      table.appendChild(tr);
+    });
+  }
+  host.appendChild(table);
+}
+
+function formatChartCount(value) {
+  return formatAnalyticsNumber(Number(value) || 0);
+}
+
 function renderReqSeriesChart(series) {
-  const labels = series.map((point) => (point.bucket || "").slice(5));
-  const draw = () => drawBarChart(document.getElementById("reqSeriesChart"), labels, [
-    { values: series.map((point) => point.requests) },
-    { values: series.map((point) => point.errors) },
-  ]);
-  draw();
-  registerChartRedraw("reqSeriesChart", draw);
+  const points = series || [];
+  renderChart("reqSeriesChart", {
+    kind: "v-bars",
+    labels: points.map((point) => (point.bucket || "").slice(5)),
+    series: [
+      { label: "Requests", values: points.map((point) => Number(point.requests) || 0) },
+      {
+        label: "Errors",
+        values: points.map((point) => Number(point.errors) || 0),
+        tone: "error",
+      },
+    ],
+    format: formatChartCount,
+  });
 }
 
 function renderReqModelChart(byModel) {
-  const top = byModel.slice(0, 10);
-  const canvas = document.getElementById("reqModelChart");
-  const { ctx, width, height } = prepareCanvas(canvas);
-  if (top.length === 0) return;
+  const top = (byModel || []).slice(0, 10);
   // Total input, not just the uncached slice, or a warm model reads as idle.
   const modelTokens = (m) => totalInputTokens(m) + Number(m.tokens_out || 0);
-  const max = Math.max(1, ...top.map(modelTokens));
-  const labelWidth = 150;
-  const valueWidth = 52;
-  const rowHeight = Math.min(20, height / top.length);
-  const accent = token("--accent", "#10b981");
-  const muted = token("--muted", "#9ca3af");
-  ctx.font = "10px system-ui, sans-serif";
-  ctx.textBaseline = "middle";
-  top.forEach((model, i) => {
-    const tokens = modelTokens(model);
-    const y = i * rowHeight;
-    const mid = y + rowHeight / 2;
-    const barWidth = ((width - labelWidth - valueWidth) * tokens) / max;
-    ctx.fillStyle = accent;
-    ctx.fillRect(labelWidth, y + 2, Math.max(1, barWidth), rowHeight - 5);
-    ctx.fillStyle = muted;
-    ctx.textAlign = "right";
-    ctx.fillText(model.key.slice(0, 26), labelWidth - 8, mid);
-    // The bar shows proportion; the number is what people actually quote.
-    ctx.textAlign = "left";
-    ctx.fillText(compactNumber(tokens), labelWidth + barWidth + 6, mid);
+  renderChart("reqModelChart", {
+    kind: "h-bars",
+    rows: top.map((model) => ({ label: model.key, value: modelTokens(model) })),
+    format: (value) => compactNumber(Number(value) || 0),
+    readout: (row) => `${row.label}: ${compactNumber(Number(row.value) || 0)} tokens`,
+  });
+}
+
+/** First visible byte per model, p50 to p95 -- the latency panel's own rows. */
+function renderReqTtftChart(latency) {
+  const rows = (latency && latency.rows) || [];
+  // One row per model: the answered outcome if there is one, else whichever
+  // outcome carries the most attempts. Percentiles are already per outcome;
+  // merging them into one number would be a mean of medians.
+  const byModel = new Map();
+  rows.forEach((row) => {
+    if (row.p50_ttft_ms == null || row.p95_ttft_ms == null) return;
+    const key = String(row.model_ref || "");
+    if (!key) return;
+    const attempts = Number(row.attempts || 0);
+    const previous = byModel.get(key);
+    const preferred = row.outcome === "answered";
+    if (!previous) {
+      byModel.set(key, { row, attempts, preferred });
+      return;
+    }
+    if (preferred && !previous.preferred) {
+      byModel.set(key, { row, attempts, preferred });
+    } else if (preferred === previous.preferred && attempts > previous.attempts) {
+      byModel.set(key, { row, attempts, preferred });
+    }
+  });
+  const chartRows = Array.from(byModel.values())
+    .map(({ row }) => ({
+      label: row.model_ref,
+      p50: Number(row.p50_ttft_ms),
+      p95: Number(row.p95_ttft_ms),
+    }))
+    .sort((a, b) => a.p50 - b.p50)
+    .slice(0, 12);
+  renderChart("reqTtftChart", {
+    kind: "range",
+    rows: chartRows,
+    format: (value) => formatChainDuration(Number(value)),
+    readout: (row) =>
+      `${row.label}: p50 ${formatChainDuration(row.p50)}, p95 ${formatChainDuration(row.p95)}`,
+  });
+}
+
+/** Reported and estimated spend per day, never added into one figure. */
+function renderReqCostChart(cost) {
+  const note = byId("reqCostChartNote");
+  const rows = (cost && cost.by_day) || [];
+  if (note) {
+    note.hidden = !(cost && cost.enabled === false);
+    note.textContent = cost && cost.enabled === false
+      ? "The request log is off, so nothing is being priced."
+      : "";
+  }
+  const labels = rows.map((row) => String(row.key || ""));
+  renderChart("reqCostChart", {
+    kind: "v-bars",
+    labels,
+    series: [
+      {
+        label: "Reported",
+        values: rows.map((row) => Number(row.reported_usd) || 0),
+      },
+      {
+        label: "Estimated",
+        values: rows.map((row) => Number(row.estimated_usd) || 0),
+        tone: "warn",
+      },
+    ],
+    format: (value) => formatCostAmount(Number(value) || 0),
   });
 }
 
@@ -34355,45 +35282,57 @@ function setupGuideScreenshots() {
   });
 }
 
-/** Mark the section currently being read in an in-page contents rail. */
-function setupScrollspy(railSelector) {
-  const links = Array.from(document.querySelectorAll(`${railSelector} a`));
-  if (links.length === 0) return;
-  const byHash = new Map(links.map((link) => [link.getAttribute("href"), link]));
-  const headings = links
-    .map((link) => document.querySelector(link.getAttribute("href")))
-    .filter(Boolean);
-  if (headings.length === 0) return;
+/** What each rail's scroll listener is, so a re-bind can drop the old one. */
+const scrollspyBindings = new Map();
 
-  const mark = (id) => {
-    byHash.forEach((link, hash) => {
-      if (hash === `#${id}`) {
+/** Mark the section currently being read in an in-page contents rail.
+ *
+ * 7.122.3 (U18): recomputed from the live document on every scroll frame,
+ * rather than from an IntersectionObserver bound once to nodes that a
+ * re-render replaces. Two things follow. A rail whose headings are rebuilt
+ * (Limits after a Save or an "Add key") keeps tracking, and a section taller
+ * than the screen -- Credential health, 8,700 px -- keeps its entry marked
+ * while you read through it, because the mark is the last heading that has
+ * passed the reading line, not the first one still inside a band.
+ */
+function setupScrollspy(railSelector) {
+  const rail = document.querySelector(railSelector);
+  if (!rail) return;
+  const links = Array.from(rail.querySelectorAll("a"));
+  if (links.length === 0) return;
+  const previous = scrollspyBindings.get(railSelector);
+  if (previous) previous();
+
+  let frame = 0;
+  const update = () => {
+    frame = 0;
+    let current = null;
+    links.forEach((link) => {
+      const heading = document.querySelector(link.getAttribute("href"));
+      if (!heading) return;
+      if (!current) current = heading.id;
+      if (heading.getBoundingClientRect().top <= 140) current = heading.id;
+    });
+    if (!current) return;
+    links.forEach((link) => {
+      if (link.getAttribute("href") === `#${current}`) {
         link.setAttribute("aria-current", "true");
       } else {
         link.removeAttribute("aria-current");
       }
     });
   };
-
-  const seen = new Set();
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          seen.add(entry.target.id);
-        } else {
-          seen.delete(entry.target.id);
-        }
-      });
-      // Headings leave the band from the top as you scroll down, so the first
-      // one still inside it is the section you are reading.
-      const current = headings.find((heading) => seen.has(heading.id));
-      if (current) mark(current.id);
-    },
-    { rootMargin: "-8% 0px -70% 0px", threshold: 0 },
-  );
-  headings.forEach((heading) => observer.observe(heading));
-  mark(headings[0].id);
+  const onScroll = () => {
+    if (!frame) frame = window.requestAnimationFrame(update);
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll);
+  update();
+  scrollspyBindings.set(railSelector, () => {
+    window.removeEventListener("scroll", onScroll);
+    window.removeEventListener("resize", onScroll);
+    if (frame) window.cancelAnimationFrame(frame);
+  });
 }
 
 // Code blocks hold literal env vars, JSON and commands the reader is about to
@@ -40539,6 +41478,110 @@ initModelsView();
    input is static markup and sits outside both card lists, so it survives
    every re-render of either of them with its query (and its value) intact. */
 initCodingAgentsFilter();
+
+/* --------------------------------------------------------- dashboard chrome
+   7.122.3: the three page-level behaviours this pass adds, bound once at
+   start-up because every element they touch is static markup. */
+function initDashboardChrome() {
+  initSidebarFold();
+  initSectionJumpBars();
+  // Links that name a view instead of a URL (the Analytics empty state, the
+  // cross-links this pass adds) go through the one deep-link helper.
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-goto-view]");
+    if (!link) return;
+    event.preventDefault();
+    goTo({
+      view: link.dataset.gotoView,
+      id: link.dataset.gotoId || null,
+      key: link.dataset.gotoKey || null,
+      section: link.dataset.gotoSection || null,
+    });
+  });
+}
+
+/** U20: below 720 px the sidebar is off-canvas, behind one button.
+ *
+ * It was stacked above every page -- logo, theme buttons and fourteen links --
+ * so content started 2,068 px down on a 390 px viewport. Above 720 px nothing
+ * changes: the button is hidden and the sidebar is the column it always was.
+ */
+function initSidebarFold() {
+  const toggle = byId("sidebarToggle");
+  const sidebar = byId("appSidebar");
+  if (!toggle || !sidebar) return;
+  const setOpen = (open) => {
+    sidebar.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    document.body.classList.toggle("nav-open", open);
+  };
+  toggle.addEventListener("click", () => {
+    setOpen(!sidebar.classList.contains("is-open"));
+  });
+  // Choosing a page closes the panel it was chosen in.
+  sidebar.addEventListener("click", (event) => {
+    if (event.target.closest(".nav-link")) setOpen(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && sidebar.classList.contains("is-open")) {
+      setOpen(false);
+      toggle.focus();
+    }
+  });
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 720 && sidebar.classList.contains("is-open")) {
+      setOpen(false);
+    }
+  });
+}
+
+/** U14/U15/U16: the in-page contents rails, one behaviour for all of them.
+ *
+ * 7.122.3: the rails live in the topbar, at the right of the page title,
+ * rather than as a strip above each page's first card. They are navigation,
+ * not content, and a strip of links would have made every page it sits on
+ * taller -- the one thing this pass must not do to a settings page.
+ */
+function initSectionJumpBars() {
+  const topbar = document.querySelector(".topbar");
+  const bars = Array.from(document.querySelectorAll(".jump-bar"));
+  if (topbar) {
+    bars.forEach((bar) => {
+      bar.hidden = true;
+      topbar.appendChild(bar);
+    });
+  }
+  const showForView = () => {
+    const active = VIEW_GROUPS.find((entry) => entry.id === state.activeView);
+    const ids = new Set((active && active.railIds) || []);
+    bars.forEach((bar) => {
+      bar.hidden = !ids.has(bar.id);
+    });
+  };
+  state.showJumpBars = showForView;
+  showForView();
+  bars.forEach((bar) => {
+    bar.addEventListener("click", (event) => {
+      const link = event.target.closest('a[href^="#"]');
+      if (!link) return;
+      const target = document.getElementById(link.getAttribute("href").slice(1));
+      if (!target) return;
+      event.preventDefault();
+      const reduced =
+        window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+      target.classList.add("onboarding-highlight");
+      window.setTimeout(() => target.classList.remove("onboarding-highlight"), 2000);
+      if (!target.hasAttribute("tabindex")) {
+        target.setAttribute("tabindex", "-1");
+        target.focus({ preventScroll: true });
+      }
+    });
+  });
+}
+
+initDashboardChrome();
 
 /* ------------------------------------------------------ route rail wiring
    The drop target is tracked by pointerover on the container rather than

@@ -311,11 +311,15 @@ export function prepareSearchPageScenario({ window, ROUTES }) {
     }));
   const persisted = () =>
     JSON.parse(window.localStorage.getItem("mcc-dashboard-state") || "{}").reqFilters || {};
+  // 7.122.3: the cost tile is one of the band's cards but has its own
+  // lifecycle (its panel is computed apart from the stats rollup), so the
+  // "every card says counting…" invariant is measured over the rest.
   const countingCards = () =>
-    Array.from(doc.querySelectorAll("#reqStatsCards .requests-card strong")).filter((el) =>
-      el.textContent.startsWith("counting"),
-    ).length;
-  const cards = () => doc.querySelectorAll("#reqStatsCards .requests-card").length;
+    Array.from(
+      doc.querySelectorAll("#reqStatsCards .requests-card:not(.cost-tile) strong"),
+    ).filter((el) => el.textContent.startsWith("counting")).length;
+  const cards = () =>
+    doc.querySelectorAll("#reqStatsCards .requests-card:not(.cost-tile)").length;
   const tableRows = () => doc.querySelectorAll("#reqTableBody tr").length;
   // A missing control is recorded, not thrown: the run then reports what the
   // page did without it (how a page without the change is told apart).

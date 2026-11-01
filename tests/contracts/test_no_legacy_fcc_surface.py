@@ -45,9 +45,10 @@ ALLOWED_FILES: dict[str, str] = {
         "says why FCC_ is no longer an owned prefix"
     ),
     "src/my_claude_code/cli/desktop.py": "says the FCC_OPEN_BROWSER alias is gone",
-    "src/my_claude_code/api/admin_static/index.html": (
-        "the Guide's migration section and the retirement notice"
-    ),
+    # 7.122.3 removed the dashboard's last mentions (the Guide's migration
+    # section, the retirement notice, the .fcc-backup wording and the legacy
+    # alias lines on agent cards), so admin_static/ is no longer on this list:
+    # the gate now fails if any of them comes back.
     # --- the retired command family (tombstones, removed in 8.0.0) ---
     "src/my_claude_code/cli/legacy_stubs.py": "is the tombstone module",
     "src/my_claude_code/cli/entrypoints.py": "mcc-help says the family is retired",
@@ -72,9 +73,6 @@ ALLOWED_FILES: dict[str, str] = {
     "src/my_claude_code/config/harnesses.py": (
         "the registry records which harnesses have a retired fcc- name, so the "
         "tombstone list and the installer command lists are generated, not typed"
-    ),
-    "src/my_claude_code/api/admin_static/admin.js": (
-        "the config-home banner and the .fcc-backup notice on Coding agents"
     ),
     # ``anthropic_oauth/auth.py`` was on this list for naming the old
     # "fcc-...auth" placeholder in a docstring. 7.30.0 rewrote that docstring
