@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "7.122.4"
+version = "8.0.0"
 description = "Local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents: 57 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -100,27 +100,11 @@ mcc-migrate = "my_claude_code.cli.entrypoints:migrate_config_dir"
 # MCC's media server for MCP apps (7.99.0): started by an app over stdio,
 # never by the user; the Coding agents page's Add MCP server button registers it.
 mcc-mcp = "my_claude_code.mcp_media.server:main"
-# Retired command family (the pre-5.0.0 free-claude-code owner). 7.0.0 removed
-# the legacy surface: these names are still installed, but every one of them is
-# a tombstone that prints the mcc-* name that replaced it and exits 1. They are
-# removed entirely in 8.0.0. See src/my_claude_code/cli/legacy_stubs.py.
-fcc-server = "my_claude_code.cli.legacy_stubs:main"
-free-claude-code = "my_claude_code.cli.legacy_stubs:main"
-fcc-init = "my_claude_code.cli.legacy_stubs:main"
-fcc-claude = "my_claude_code.cli.legacy_stubs:main"
-fcc-claude-old = "my_claude_code.cli.legacy_stubs:main"
-fcc-codex = "my_claude_code.cli.legacy_stubs:main"
-fcc-pi = "my_claude_code.cli.legacy_stubs:main"
-fcc-chatgpt-oauth-login = "my_claude_code.cli.legacy_stubs:main"
-fcc-anthropic-oauth-login = "my_claude_code.cli.legacy_stubs:main"
-fcc-compact-log = "my_claude_code.cli.legacy_stubs:main"
-fcc-rtk = "my_claude_code.cli.legacy_stubs:main"
-fcc-help = "my_claude_code.cli.legacy_stubs:main"
-fcc-migrate = "my_claude_code.cli.legacy_stubs:main"
-# ``fcc-desktop`` was a gui-script (no console on Windows). A tombstone that
-# writes one line to stderr needs a console to be seen at all, so it moves to
-# [project.scripts] for its last release.
-fcc-desktop = "my_claude_code.cli.legacy_stubs:main"
+# The pre-5.0.0 legacy command family is gone as of 8.0.0: 7.0.0 had kept the
+# fourteen names installed as tombstones that named their mcc-* replacement and
+# exited 1, and this release removes them. An update still drops the old shims --
+# uv rewrites the entry points from the new receipt, and the installers move any
+# surviving legacy launcher aside as part of the swap.
 
 [project.gui-scripts]
 mcc-desktop = "my_claude_code.cli.desktop_entrypoint:launch"

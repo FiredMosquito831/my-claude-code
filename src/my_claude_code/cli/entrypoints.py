@@ -1,8 +1,7 @@
 """Lightweight entry points for installed commands.
 
 The ``my-claude-code`` owner registers every console script against these
-implementations. The pre-7.0.0 ``fcc-*`` family is retired: those names now
-resolve to ``cli.legacy_stubs``, which prints the rename and exits 1.
+implementations.
 """
 
 import sys
@@ -31,8 +30,7 @@ def _harness_command_lines() -> str:
     for spec in harness_specs():
         for line in harness_command_lines(spec):
             if line.kind not in ("primary", "flag"):
-                # The retired fcc- names are covered by the paragraph below,
-                # and the RTK toggles belong under "Manage and inspect".
+                # The RTK toggles belong under "Manage and inspect".
                 continue
             lines.append(f"  {line.command:<23} {line.help_text}".rstrip())
     lines.append("  mcc-desktop             Open the system tray app (desktop)")
@@ -69,10 +67,6 @@ Manage and inspect:
   mcc-help                Show this command reference
   mcc-migrate             Move a legacy ~/.fcc home to ~/.mcc (stop the server
                           and the tray first)
-
-The legacy fcc-* commands were retired in 7.0.0. They are still installed for
-this major version, but each one now prints the mcc-* name that replaced it and
-exits 1; they are removed entirely in 8.0.0.
 
 Updates: install while the server is running. On Windows the update is staged
 and completes after you stop and restart the app; on Linux/WSL it applies

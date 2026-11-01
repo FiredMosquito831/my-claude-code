@@ -2,7 +2,7 @@
 
 Editor integrations, and the [API reference](#api-reference) for any OpenAI-, Anthropic- or Gemini-shaped client: every endpoint MCC serves, how to authenticate, and one runnable example each.
 
-For terminal use, start `mcc-server`, then run `mcc-claude`, `mcc-codex`, or `mcc-pi`. (The legacy `fcc-*` names were retired in 7.0.0: each prints the `mcc-*` name that replaced it and exits 1.) Use the guides below for editor integrations.
+For terminal use, start `mcc-server`, then run `mcc-claude`, `mcc-codex`, or `mcc-pi`. Use the guides below for editor integrations.
 
 <div align="center">
   <img src="../assets/admin-launchers.png" alt="A list of one-line shell commands, each beside the coding agent it starts and a Copy button" width="860">

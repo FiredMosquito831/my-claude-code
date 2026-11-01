@@ -33,6 +33,7 @@ from my_claude_code.cli.launchers.pi import (
 from my_claude_code.config.harnesses import (
     HARNESS_SPECS,
     PROTOCOL_LABELS,
+    HarnessCommand,
     HarnessProtocol,
     catalogue_specs,
     harness_command_lines,
@@ -59,18 +60,13 @@ def test_every_spec_has_a_console_script_entry() -> None:
     scripts = _pyproject_scripts()
     for command in harness_commands():
         assert scripts.get(command.command) == command.target, command.command
-        if command.legacy_command is not None:
-            # 7.0.0: the fcc- name is still registered so it can say what it was
-            # renamed to, but it points at the tombstone, never at the launcher.
-            assert (
-                scripts.get(command.legacy_command)
-                == "my_claude_code.cli.legacy_stubs:main"
-            ), command.legacy_command
+        # 8.0.0 removed the legacy family: a registry entry has no second name.
+        assert f"fcc-{command.suffix}" not in scripts, command.command
 
 
 def test_every_launcher_console_script_belongs_to_a_registered_harness() -> None:
-    # Only the ``mcc-`` names: since 7.0.0 a registered ``fcc-`` alias points at
-    # the tombstone, not at ``cli.launchers.*``, so it is not a launcher script.
+    # Only the ``mcc-`` names exist since 8.0.0, and every one of them is a
+    # launcher script owned by a registered harness.
     registered = {command.command for command in harness_commands()}
     launcher_scripts = {
         name
@@ -380,16 +376,19 @@ def test_every_command_line_carries_a_sentence_of_its_own() -> None:
         assert lines[0].command == spec.command
 
 
-def test_only_harnesses_that_shipped_before_the_registry_have_an_fcc_alias() -> None:
-    """No install in the world carries an ``fcc-opencode``."""
+def test_no_harness_command_has_a_legacy_alias_any_more() -> None:
+    """8.0.0 removed the ``fcc-*`` family; the registry generates no second name.
 
-    with_alias = {
-        spec.id
-        for spec in harness_specs()
-        for command in spec.commands
-        if command.legacy_command is not None
-    }
-    assert with_alias == {"claude", "codex", "pi"}
+    The retired alias used to be a registry field. It is gone with the names it
+    produced, so a card, the installer or the command reference cannot render
+    one again by adding a flag.
+    """
+
+    assert not hasattr(HarnessCommand, "legacy_alias")
+    assert not hasattr(HarnessCommand, "legacy_command")
+    for spec in harness_specs():
+        for line in harness_command_lines(spec):
+            assert not line.command.startswith("fcc-"), (spec.id, line.command)
 
 
 def test_a_config_owning_harness_names_the_variable_it_is_pointed_with() -> None:

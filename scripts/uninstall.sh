@@ -70,7 +70,7 @@ DESKTOP_APP_DEB_PACKAGE="my-claude-code-desktop"
 # Must mirror every entry in [project.scripts] + [project.gui-scripts] (the
 # same list as Get-LauncherCommands in scripts/install.ps1); pinned by
 # tests/contracts/test_uninstaller_parity.py.
-ALL_COMMANDS="fcc-server fcc-claude fcc-claude-old fcc-codex fcc-pi fcc-init fcc-chatgpt-oauth-login fcc-compact-log free-claude-code fcc-anthropic-oauth-login fcc-rtk fcc-help fcc-migrate fcc-desktop mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-openclaw mcc-hermes mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-migrate mcc-apps mcc-mcp mcc-desktop my-claude-code"
+ALL_COMMANDS="mcc-server mcc-claude mcc-claude-old mcc-codex mcc-pi mcc-opencode mcc-opencode2 mcc-kilo mcc-commandcode mcc-kimi mcc-qwen mcc-crush mcc-cline mcc-goose mcc-aider mcc-droid mcc-gemini mcc-openclaw mcc-hermes mcc-init mcc-chatgpt-oauth-login mcc-compact-log mcc-anthropic-oauth-login mcc-rtk mcc-help mcc-migrate mcc-apps mcc-mcp mcc-desktop my-claude-code"
 
 dry_run=0
 uv_tool_bin=""
@@ -164,7 +164,7 @@ add_known_uv_paths() {
     hash -r 2>/dev/null || true
 }
 
-is_fcc_command_running() {
+is_mcc_command_running() {
     command_name=$1
 
     if command -v pgrep >/dev/null 2>&1; then
@@ -180,10 +180,10 @@ is_fcc_command_running() {
     ps -A -o comm= 2>/dev/null | grep -qx "$command_name"
 }
 
-assert_no_fcc_processes_running() {
+assert_no_mcc_processes_running() {
     running=""
     for command_name in $ALL_COMMANDS; do
-        if is_fcc_command_running "$command_name"; then
+        if is_mcc_command_running "$command_name"; then
             running="${running} ${command_name}"
         fi
     done
@@ -242,7 +242,7 @@ uninstall_uv_tool() {
     fail "uv tool uninstall $tool_name failed with exit code $status; ~/.mcc was not deleted."
 }
 
-verify_fcc_commands_removed() {
+verify_mcc_commands_removed() {
     if [ "$dry_run" -eq 1 ]; then
         printf '+ verify all My Claude Code entry points are absent from the uv tool bin directory\n'
         return 0
@@ -443,7 +443,7 @@ parse_args "$@"
 [ -n "${HOME:-}" ] || fail "HOME is not set; cannot locate My Claude Code data."
 
 step "Checking for running My Claude Code processes"
-assert_no_fcc_processes_running
+assert_no_mcc_processes_running
 
 step "Locating the uv-managed My Claude Code installation"
 initialize_uv_context
@@ -453,7 +453,7 @@ uninstall_uv_tool "$PACKAGE_NAME"
 uninstall_uv_tool "$LEGACY_PACKAGE_NAME"
 
 step "Verifying My Claude Code entry points were removed"
-verify_fcc_commands_removed
+verify_mcc_commands_removed
 
 step "Removing the desktop launcher, the desktop app and the start-at-login registration"
 remove_desktop_artifacts

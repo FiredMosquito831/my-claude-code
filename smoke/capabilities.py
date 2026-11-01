@@ -470,7 +470,7 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "process cleanup in finally",
         ("tests/cli/test_entrypoints.py", "tests/core/test_version.py"),
         (
-            "test_fcc_init_scaffolds_user_config",
+            "test_mcc_init_scaffolds_user_config",
             "test_my_claude_code_entrypoint_starts_server",
             "test_entrypoint_version_e2e",
         ),
@@ -496,7 +496,7 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
         "codex_cli_drop_in",
         "drop_in_codex_replacement",
         "my_claude_code.cli.launchers.codex",
-        "Codex CLI binary and fcc provider env",
+        "Codex CLI binary and MCC provider env",
         "Responses config, auth env, and native /model catalog injection",
         "proxy preflight and catalog fail-open warning",
         (

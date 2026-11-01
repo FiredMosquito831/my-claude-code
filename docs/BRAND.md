@@ -6,17 +6,16 @@ this file wins.
 
 > Rebrand context: the product was "Free Claude Code" (FCC). The package was
 > renamed `free_claude_code` → `my_claude_code` and the product rebranded to
-> **My Claude Code**. A dual command family is preserved (`mcc-*` primary,
-> `fcc-*` legacy aliases) until 7.0.0, which retired the legacy half.
+> **My Claude Code**. The legacy half of the dual command family was retired in
+> 7.0.0 and removed in 8.0.0; only the `mcc-*` names exist.
 
 ## 1. Name & abbreviation
 
 - **Name:** My Claude Code
 - **Abbreviation:** MCC
 - **Package:** `my-claude-code` (PyPI / wheel)
-- **Server command:** `mcc-server` (`fcc-server` retired in 7.0.0)
+- **Server command:** `mcc-server`
 - **Launchers:** `mcc-claude`, `mcc-codex`, `mcc-pi`, `mcc-claude-old`
-  (`fcc-claude`, `fcc-codex`, `fcc-pi`, `fcc-claude-old` retired in 7.0.0)
 
 ## 2. Positioning
 
@@ -208,7 +207,7 @@ compatibility, even though the product is now My Claude Code:
 | Retired | Replacement | How an existing install is carried across |
 | --- | --- | --- |
 | `FCC_*` environment variables (`FCC_ENV_FILE`, `FCC_OPEN_BROWSER`, `FCC_SMOKE_*`, `FCC_CODEX_API_KEY`, `FCC_PI_API_KEY`, `FCC_PI_BASE_URL`) | the `MCC_*` name of each | a managed `.env` is rewritten once on the first 7.x start, with a `.env.bak-<stamp>` beside it and one log line per key; a name still exported by a shell is named in a warning and ignored |
-| the working `fcc-*` command family and `free-claude-code` | `mcc-*` and `my-claude-code` | the names stay installed for this MAJOR as tombstones: each prints its replacement and exits 1. Removed in 8.0.0 |
+| the working `fcc-*` command family and `free-claude-code` | `mcc-*` and `my-claude-code` | 7.0.0 kept the names installed as tombstones that printed their replacement and exited 1. 8.0.0 **removes them**: uv rewrites the entry points from the new receipt, and the installers move any surviving legacy launcher aside |
 | the `free_claude_code` importable package | `my_claude_code` | nothing in the product ever imported it |
 | config directory `.fcc` | `.mcc` | migrated once, atomically, on the first start since 6.65.0 |
 
@@ -218,5 +217,5 @@ the `.fcc-tmp` atomic staging suffix, the `.fcc-backup` Claude settings backup,
 the `fcc-managed`/`fcc-managed-oauth`/`fcc-managed-anthropic-oauth` credential
 markers, the `fcc-no-auth` proxy sentinel, and the Codex provider id `fcc`.
 
-When writing docs or UI, use the `mcc-*` names. Name an `fcc-*` name only to say
-what replaced it.
+When writing docs or UI, use the `mcc-*` names. The only place an `fcc-*`
+spelling belongs is the list of on-disk values above, which cannot change.

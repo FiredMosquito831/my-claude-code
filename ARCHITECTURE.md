@@ -166,17 +166,17 @@ FCC optimizes for installed user workflows, not internal compatibility. The
 behavior that must be preserved is that these user-facing surfaces run correctly
 for real prompts against supported providers:
 
-- `fcc-server` and the local Admin UI for configuring supported providers,
+- `mcc-server` and the local Admin UI for configuring supported providers,
   model routing, auth, server tools, messaging, and diagnostics.
-- `fcc-claude`/`fcc-claude-old`, Claude Code, and the Anthropic-compatible proxy
+- `mcc-claude`/`mcc-claude-old`, Claude Code, and the Anthropic-compatible proxy
   behavior Claude Code relies on, including streaming text, native/interleaved
   thinking, tool use/results, model discovery, token counting, retries/recovery,
   and supported local server-tool behavior.
-- `fcc-codex`, Codex CLI/extensions, and the streaming OpenAI Responses behavior
+- `mcc-codex`, Codex CLI/extensions, and the streaming OpenAI Responses behavior
   Codex relies on, including native/interleaved reasoning, function and custom
   tool calls, generated `/model` catalog support, Responses stream lifecycle
   events, and Responses-to-Anthropic conversion at the adapter boundary.
-- `fcc-pi`, Pi, and the Anthropic-compatible proxy behavior Pi relies on,
+- `mcc-pi`, Pi, and the Anthropic-compatible proxy behavior Pi relies on,
   including an FCC-scoped model catalog, streaming text and reasoning, and tool
   use/results.
 - Configured Discord and Telegram messaging bridges, including command handling,
@@ -227,13 +227,13 @@ new places to add unrelated behavior:
 
 Console scripts are registered in [pyproject.toml](pyproject.toml):
 
-- `mcc-server` (legacy aliases `fcc-server`, `free-claude-code`) calls
+- `mcc-server` calls
   `my_claude_code.cli.entrypoints:serve`.
-- `mcc-init` (legacy alias `fcc-init`) calls `my_claude_code.cli.entrypoints:init`.
-- `fcc-claude` calls `my_claude_code.cli.launchers.claude:launch`.
-- `fcc-claude-old` calls `my_claude_code.cli.launchers.claude:launch_legacy`.
-- `fcc-codex` calls `my_claude_code.cli.launchers.codex:launch`.
-- `fcc-pi` calls `my_claude_code.cli.launchers.pi:launch`.
+- `mcc-init` calls `my_claude_code.cli.entrypoints:init`.
+- `mcc-claude` calls `my_claude_code.cli.launchers.claude:launch`.
+- `mcc-claude-old` calls `my_claude_code.cli.launchers.claude:launch_legacy`.
+- `mcc-codex` calls `my_claude_code.cli.launchers.codex:launch`.
+- `mcc-pi` calls `my_claude_code.cli.launchers.pi:launch`.
 - `mcc-opencode` / `mcc-opencode2` / `mcc-kilo` call
   `my_claude_code.cli.launchers.opencode:launch` / `:launch_v2` / `:launch_kilo`.
 - `mcc-commandcode` calls `my_claude_code.cli.launchers.commandcode:launch`.
@@ -244,9 +244,7 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
 - `mcc-goose` calls `my_claude_code.cli.launchers.goose:launch`.
 - `mcc-aider` calls `my_claude_code.cli.launchers.aider:launch`.
 - `mcc-droid` calls `my_claude_code.cli.launchers.droid:launch`.
-  These eleven have no `fcc-` alias: no installed copy of MCC ever published
-  one, so inventing it would ship a command that never had users.
-- `mcc-desktop` (legacy alias `fcc-desktop`) calls `my_claude_code.cli.desktop_entrypoint:main`;
+- `mcc-desktop` calls `my_claude_code.cli.desktop_entrypoint:main`;
   [cli/desktop_status.py](src/my_claude_code/cli/desktop_status.py) answers its
   `--print-status` flag with one JSON document (`schema: 1`) describing the config
   directory, the loopback URLs, the healthy/free/foreign presence of the port, the
@@ -351,7 +349,7 @@ Console scripts are registered in [pyproject.toml](pyproject.toml):
   runs `WindowOnlyHost` rather than pystray. The Python tray remains the fallback for
   machines with no desktop app, and for macOS, where pystray's backend must own the main
   thread.
-- `mcc-rtk` (legacy alias `fcc-rtk`) calls `my_claude_code.cli.entrypoints:rtk`,
+- `mcc-rtk` calls `my_claude_code.cli.entrypoints:rtk`,
   which dispatches to [cli/rtk_commands.py](src/my_claude_code/cli/rtk_commands.py).
 
 [scripts/install.sh](scripts/install.sh) and [scripts/install.ps1](scripts/install.ps1)
@@ -577,7 +575,7 @@ Restart-required changes preserve the existing supervisor restart flow and do
 not publish an in-process generation first.
 
 [.env.example](.env.example) is the single install/init/admin template source.
-It is packaged as a [src/my_claude_code/config/](src/my_claude_code/config/) resource for `fcc-init` and Admin UI
+It is packaged as a [src/my_claude_code/config/](src/my_claude_code/config/) resource for `mcc-init` and Admin UI
 template defaults; runtime settings do not read it as a live config file.
 
 Admin routes call `require_loopback_admin()`, which rejects non-loopback clients
@@ -793,7 +791,7 @@ warning and do not fail server startup, Admin operations, discovery, or
 inference. Shutdown never publishes the cleared in-memory cache.
 
 The Codex App reads `model_catalog_json` at startup, so it must restart to see a
-later catalog publication. `fcc-codex` remains an additional launch-time
+later catalog publication. `mcc-codex` remains an additional launch-time
 synchronizer: it fetches the same `/v1/models` response, uses the same adapter
 and writer, and passes the path as an ephemeral override. Codex users open the
 native picker with `/model`; FCC does not implement a proxy-level `/models`
@@ -1756,7 +1754,7 @@ Code proxy environment policies used by FCC-launched Claude processes:
   users who have configured that file don't need — and shouldn't have —
   their environment rewritten. A keyword-only `enable_model_discovery` flag
   (default `False`) additionally sets
-  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, which `fcc-claude` wires to
+  `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, which `mcc-claude` wires to
   its `--discover-models` argument.
 - `build_claude_proxy_env` is the legacy, more aggressive policy: it strips
   inherited `ANTHROPIC_*` variables, sets `ANTHROPIC_BASE_URL`, enables gateway
@@ -1790,10 +1788,10 @@ server cannot know which repository the user is in, so the UI states that as a
 caveat rather than scanning for it.
 
 [cli/launchers/claude.py](src/my_claude_code/cli/launchers/claude.py) owns the installed
-`fcc-claude` and `fcc-claude-old` launchers, sharing one internal launch
+`mcc-claude` and `mcc-claude-old` launchers, sharing one internal launch
 helper parameterized by env builder:
 
-- `fcc-claude` (`launch`) applies `build_minimal_claude_proxy_env` without
+- `mcc-claude` (`launch`) applies `build_minimal_claude_proxy_env` without
   changing the user's Claude command arguments. It additionally recognizes an
   FCC-only `--discover-models` flag, stripped from argv before Claude Code
   ever sees it, that passes `enable_model_discovery=True` to the env builder
@@ -1802,8 +1800,8 @@ helper parameterized by env builder:
   is only recognized before the first bare `--` argument separator; a literal
   `--discover-models` after `--` (e.g. inside a `-p` prompt) passes through
   untouched.
-- `fcc-claude-old` (`launch_legacy`) applies `build_claude_proxy_env`,
-  preserving the previous `fcc-claude` behavior under a new name; it does not
+- `mcc-claude-old` (`launch_legacy`) applies `build_claude_proxy_env`,
+  preserving the previous `mcc-claude` behavior under a new name; it does not
   gain the `--discover-models` flag since gateway model discovery is already
   always on for it.
 
@@ -2086,9 +2084,9 @@ provider declared `api: "anthropic-messages"`. `Authorization` still wins when
 both are present, and `anthropic-auth-token` is still not read.
 
 [cli/launchers/codex.py](src/my_claude_code/cli/launchers/codex.py) owns the installed
-`fcc-codex` launcher:
+`mcc-codex` launcher:
 
-- `fcc-codex` strips official OpenAI and Codex credential variables.
+- `mcc-codex` strips official OpenAI and Codex credential variables.
 - It strips parent-only Codex thread, shell, permission, and origin context so
   each launched client owns an independent runtime identity.
 - It creates an ephemeral `fcc` model provider with `wire_api = "responses"` and
@@ -2108,7 +2106,7 @@ both are present, and `anthropic-auth-token` is still not read.
 - It stores the proxy auth token in `FCC_CODEX_API_KEY` for Codex's provider
   `env_key` to read. This process-local variable is a client credential carrier,
   not a second FCC setting. Codex App and IDE processes that are not launched
-  through `fcc-codex` read the same `env_key` from the persistent `~/.codex`
+  through `mcc-codex` read the same `env_key` from the persistent `~/.codex`
   config against the server-published catalog.
 
 [cli/launchers/pi.py](src/my_claude_code/cli/launchers/pi.py) owns the installed
@@ -2607,9 +2605,8 @@ when maintainers want branch-level assurance.
    [config/harnesses.py](src/my_claude_code/config/harnesses.py). Set
    `rtk_agent` only after someone has confirmed RTK's shell-tool wrapper
    applies to that agent.
-2. Add its `mcc-<id>` console script to [pyproject.toml](pyproject.toml)
-   (an `fcc-<id>` alias only if that spelling already shipped), and add the
-   command to both installers' verification, cleanup and summary lists.
+2. Add its `mcc-<id>` console script to [pyproject.toml](pyproject.toml), and
+   add the command to both installers' verification, cleanup and summary lists.
    `tests/cli/test_harness_registry.py` and
    `tests/scripts/test_installer_harnesses.py` fail until all of them agree.
 3. Add a launcher under [cli/launchers/](src/my_claude_code/cli/launchers/) that

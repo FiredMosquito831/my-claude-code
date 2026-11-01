@@ -1,88 +1,122 @@
-"""The 7.0.0 grep gate: nothing may say ``fcc`` without a reason on this list.
+"""The grep gate: nothing may name the retired command family or product name.
 
-The spec for 7.0.0 asked for one command:
+7.0.0 asked for one command:
 
     rg -n "\\.fcc|fcc-|FCC_" src/ scripts/ packaging/ docs/ README.md
 
 and required that what comes back is only the migration code and docs plus the
-retired-command tombstones. A bare grep cannot express "only": what keeps the
-surface from growing back is this test, which runs the same search and checks
-every hit against an enumerated allowlist. Each entry carries the reason the
-string is still there. A new hit anywhere else fails, and the fix is to remove
-the string -- not to add a line here without one.
+retired-command tombstones. A bare grep cannot express "only", so the gate was
+this test, which runs the same search and checks every hit against an
+enumerated allowlist.
+
+**8.0.0 retires the family for good and tightens the gate** (USER DECISIONS
+2026-10-31 ~07:00, Q13 — "fully retire old fcc commands and any mentions"):
+
+* the pattern gains the two spellings of the product name, which the 7.0.0
+  pattern never saw: ``free-claude-code`` contains no ``fcc-`` at all, so the
+  tombstone's own target, the ``--version`` string and a docs sentence could all
+  have come back with the gate green;
+* the roots gain ``ARCHITECTURE.md`` (a published document), ``pyproject.toml``
+  (where the commands are declared) and ``.github`` (the bug-report form is what
+  a user fills in);
+* the fourteen console scripts and the module behind them are gone, and
+  ``test_no_console_script_is_a_retired_name`` below is the part that no
+  allowlist entry can excuse.
+
+What stays is deliberate and each entry says why. Three kinds:
+
+1. **The one-time ``~/.fcc`` -> ``~/.mcc`` move** (6.65.0, still live): a data
+   rescue for an install old enough to have a legacy home. It is not a command
+   and not a product name.
+2. **Values already written to users' disks** -- ``.fcc-tmp``, ``.fcc-backup``,
+   ``fcc-managed``, ``fcc-no-auth``, the Codex provider id ``fcc``, the Pi
+   provider id, the legacy distribution name. Renaming one silently breaks an
+   install that has it, so they keep their spelling for ever.
+3. **The record of what was retired** (this repo's own brand and release
+   documents) and **the upstream MIT notice**, which travels with the code.
+
+A new hit anywhere else fails, and the fix is to remove the string -- not to add
+a line here without one.
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: Exactly the spec's pattern and exactly the spec's roots.
-GATE_PATTERN = r"\.fcc|fcc-|FCC_"
-GATE_ROOTS = ("src", "scripts", "packaging", "docs", "README.md")
+#: The spec's pattern, plus the product name the 7.0.0 pattern could not see.
+GATE_PATTERN = r"\.fcc|fcc-|FCC_|free-claude-code|free_claude_code"
+
+#: The spec's five roots, plus the three 8.0.0 adds: a published document, the
+#: file the commands are declared in, and the GitHub templates a user reads.
+GATE_ROOTS = (
+    "src",
+    "scripts",
+    "packaging",
+    "docs",
+    "README.md",
+    "ARCHITECTURE.md",
+    "pyproject.toml",
+    ".github",
+)
+
+#: A retired console-script name: the family prefix, or the old product name.
+RETIRED_COMMAND_PATTERN = re.compile(r"^(?:fcc-|free-claude-code$)")
 
 #: path (posix, repo-relative) -> why any ``fcc`` string in it is deliberate.
 #: A file listed here is allowed to carry the strings its reason describes; it
 #: is NOT a blanket exemption for the repository.
 ALLOWED_FILES: dict[str, str] = {
-    # --- the one-time ~/.fcc -> ~/.mcc migration (shipped 6.65.0, still live) ---
+    # --- 1. the one-time ~/.fcc -> ~/.mcc move (shipped 6.65.0, still live) ---
     "src/my_claude_code/config/paths.py": (
-        "names the legacy home, the rollback-note dir and the migrated pointer; "
-        "the resolver that reads them is the migration"
+        "is the migration: the legacy home, the rollback-note dir, the "
+        "migrated pointer and the resolver that reads all three"
     ),
     "src/my_claude_code/cli/first_start.py": "performs the one-time migration",
-    "src/my_claude_code/cli/migrate_config_dir.py": "is mcc-migrate",
+    "src/my_claude_code/cli/migrate_config_dir.py": (
+        "is mcc-migrate, the command that moves the legacy home on request"
+    ),
+    "src/my_claude_code/cli/entrypoints.py": (
+        "mcc-help prints mcc-migrate's line, which names the home it moves"
+    ),
     "src/my_claude_code/api/admin_routes.py": "the config-home banner explains the move",
     "src/my_claude_code/core/request_log.py": "documents the config-dir rule",
+    "scripts/install.ps1": (
+        "Get-MccConfigDir keeps the legacy-home rung, and Get-ManagedShimName "
+        "sweeps the family pattern so an older install's shims are moved aside "
+        "instead of handed to uv (a shim uv cannot replace aborts the install)"
+    ),
+    "scripts/install.sh": (
+        "the same legacy-home rung and the same family pattern in the "
+        "missing-entry-point sweep"
+    ),
+    "scripts/uninstall.ps1": (
+        "removes both config homes and both tool owners, so a pre-5.14 install "
+        "still uninstalls cleanly"
+    ),
+    "scripts/uninstall.sh": "the same, in the POSIX uninstaller",
+    ".github/workflows/install-smoke.yml": (
+        "the install smoke asserts both config homes are left untouched"
+    ),
+    # --- 2. the one-time FCC_* -> MCC_* rewrite of a managed .env (7.0.0) ---
     "src/my_claude_code/config/legacy_env_rewrite.py": (
-        "is the one-time FCC_* -> MCC_* .env rewrite"
+        "is the one-time FCC_* -> MCC_* rewrite of a managed .env"
     ),
     "src/my_claude_code/config/settings.py": (
-        "warns about FCC_* names still exported by a shell"
+        "warns about FCC_* names a shell still exports"
     ),
     "src/my_claude_code/config/env_files.py": "says the FCC_ENV_FILE alias is gone",
     "src/my_claude_code/config/admin/persistence.py": (
         "says why FCC_ is no longer an owned prefix"
     ),
     "src/my_claude_code/cli/desktop.py": "says the FCC_OPEN_BROWSER alias is gone",
-    # 7.122.3 removed the dashboard's last mentions (the Guide's migration
-    # section, the retirement notice, the .fcc-backup wording and the legacy
-    # alias lines on agent cards), so admin_static/ is no longer on this list:
-    # the gate now fails if any of them comes back.
-    # --- the retired command family (tombstones, removed in 8.0.0) ---
-    "src/my_claude_code/cli/legacy_stubs.py": "is the tombstone module",
-    "src/my_claude_code/cli/entrypoints.py": "mcc-help says the family is retired",
-    "src/my_claude_code/cli/rtk_commands.py": "says fcc-rtk is retired",
-    "src/my_claude_code/core/identity.py": (
-        "the pre-5.0.0 free-claude-code tool owner is still recognised so such "
-        "an install can be upgraded and uninstalled"
-    ),
-    "src/my_claude_code/core/mcc_processes.py": (
-        "an fcc-* process from an older install is still an MCC process; the "
-        "detector must keep seeing it"
-    ),
-    "scripts/install.ps1": "verifies the tombstone shims exist and says they are retired",
-    "scripts/install.sh": "same, plus the legacy config-home rung",
-    "scripts/uninstall.ps1": "removes the tombstone shims and both config homes",
-    "scripts/uninstall.sh": "same",
-    # --- persisted strings: changing the value would break existing installs ---
+    # 7.122.3 removed the dashboard's last mentions, so admin_static/ is not on
+    # this list: the gate fails if any of them comes back.
+    # --- 3. values already written to users' disks -------------------------
     "src/my_claude_code/config/atomic_json.py": (
         '".fcc-tmp" is the atomic staging suffix; renaming it would orphan a '
         "staging file written by the previous version"
-    ),
-    "src/my_claude_code/config/harnesses.py": (
-        "the registry records which harnesses have a retired fcc- name, so the "
-        "tombstone list and the installer command lists are generated, not typed"
-    ),
-    # ``anthropic_oauth/auth.py`` was on this list for naming the old
-    # "fcc-...auth" placeholder in a docstring. 7.30.0 rewrote that docstring
-    # -- the label is the account's name now -- so the entry is gone rather
-    # than left behind as a licence nobody revoked.
-    "src/my_claude_code/providers/anthropic_oauth/provider.py": (
-        'names the old "fcc-...auth" placeholder the UI used to show'
-    ),
-    "src/my_claude_code/providers/chatgpt_oauth/provider.py": (
-        'compares against the stored "fcc-managed" source name'
     ),
     "src/my_claude_code/config/claude_config_editor.py": "uses that staging suffix",
     "src/my_claude_code/config/env_migrations.py": "uses that staging suffix",
@@ -96,23 +130,71 @@ ALLOWED_FILES: dict[str, str] = {
     "src/my_claude_code/providers/chatgpt_oauth/credentials.py": (
         '"fcc-managed" is the stored credential-source name'
     ),
-    "src/my_claude_code/config/proxy_auth.py": (
-        '"fcc-no-auth" is a stored sentinel value'
+    "src/my_claude_code/providers/chatgpt_oauth/provider.py": (
+        "compares against that stored source name"
     ),
+    "src/my_claude_code/config/proxy_auth.py": '"fcc-no-auth" is a stored sentinel value',
     "src/my_claude_code/cli/launchers/kimi.py": "documents that sentinel",
     "src/my_claude_code/cli/launchers/codex.py": (
         '"fcc" is the provider id inside the user\'s own Codex configuration; '
         "moving it would break their profiles and history (documented in-code)"
     ),
-    # --- documentation of all of the above ---
-    "README.md": "the migration bullet and the retired-commands paragraph",
-    "docs/USAGE.md": "the migration walkthrough and the retired-commands notes",
-    "docs/CLIENTS.md": "the Codex provider id and the retired-commands note",
+    "src/my_claude_code/cli/launchers/pi.py": (
+        "the Pi provider id the bundled extension registers; both sides are one "
+        "edit and Pi records model ids from it once per launch"
+    ),
+    "src/my_claude_code/cli/launchers/pi_extension.ts": "registers that provider id",
     "docs/CLAUDE-CODE-CONFIG.md": "names the .fcc-backup file",
+    "docs/CLIENTS.md": (
+        "shows the Codex provider id the user's own ~/.codex/config.toml carries"
+    ),
     "docs/ANTHROPIC-SUBSCRIPTION.md": "names the legacy store path",
+    "scripts/gen_claude_config_reference.py": "names the .fcc-backup file",
+    # --- 4. the legacy tool owner an old install is upgraded/uninstalled through
+    "src/my_claude_code/api/model_catalog.py": (
+        "the owned_by value on every /v1/models row; two byte-identity "
+        "contracts pin it (the metadata-ladder equality snapshot and the "
+        "MCP-media-off baseline), so renaming it is a response-format change "
+        "of its own rather than part of the command retirement"
+    ),
+    "src/my_claude_code/core/version.py": (
+        "a pre-5.14 install's distribution is still named free-claude-code; "
+        "the version lookup falls back to it so such an install reports its "
+        "real version"
+    ),
+    "src/my_claude_code/application/release_updates.py": (
+        "carries extras and the Python pin from whichever tool environment "
+        "owns the install, including the pre-5.14 one"
+    ),
+    "src/my_claude_code/core/identity.py": (
+        "records that owner's command family so an install can be recognised "
+        "and uninstalled; nothing reads the OS-level script rows any more"
+    ),
+    "src/my_claude_code/core/mcc_processes.py": (
+        "an fcc-* process from an older install is still an MCC process; the "
+        "detector must keep seeing it, and forgetting it would let a live "
+        "server be reported as dead"
+    ),
+    "src/my_claude_code/providers/chatgpt_oauth/oauth_login.py": (
+        "the OAuth device-flow User-Agent, an outbound header rather than a "
+        "user-visible surface; renaming it changes the sign-in handshake"
+    ),
+    # --- 5. the record of what was retired, and the inherited MIT notice ----
+    "README.md": (
+        "the Project history / credits section links the upstream repository "
+        "the code came from, beside the MIT notice in LICENSE"
+    ),
+    "ARCHITECTURE.md": (
+        "documents the legacy-home rule and the FCC_* rewrite that still run"
+    ),
+    "docs/USAGE.md": "the migration walkthrough and the sentinel values",
     "docs/BRAND.md": "is the record of what the rename retired",
     "docs/RELEASE-CHECKLIST.md": "is the record of what the rename retired",
-    "scripts/gen_claude_config_reference.py": "names the .fcc-backup file",
+    ".github/workflows/validate-bug-report-version.yml": (
+        "accepts a legacy-prefixed version string in an issue filed before the "
+        "rebrand, and its label and marker names are issue state on the "
+        "server; renaming either orphans existing issues"
+    ),
 }
 
 
@@ -153,6 +235,50 @@ def _gate_hits() -> list[tuple[str, int, str]]:
     return hits
 
 
+def _installed_commands() -> dict[str, str]:
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+    commands = dict(project.get("scripts", {}))
+    commands.update(project.get("gui-scripts", {}))
+    return commands
+
+
+def test_no_console_script_is_a_retired_name() -> None:
+    """8.0.0's own subject, and the one gate no allowlist entry can excuse.
+
+    The fourteen tombstones were the only way a retired name could be installed.
+    ``pyproject.toml`` is a gate root as well, so a re-added entry fails both
+    here and in the scan below -- but this test is the one that says *why*.
+    """
+
+    retired = sorted(
+        name for name in _installed_commands() if RETIRED_COMMAND_PATTERN.search(name)
+    )
+    assert retired == [], (
+        "pyproject.toml still installs retired command names: "
+        f"{retired}. The family was removed in 8.0.0 (USER DECISIONS "
+        "2026-10-31 ~07:00, Q13); a command that no longer works must not be "
+        "installed at all."
+    )
+
+
+def test_no_entry_point_targets_the_tombstone_module() -> None:
+    """The module is deleted -- nothing may still point at it."""
+
+    targets = set(_installed_commands().values())
+    offenders = sorted(target for target in targets if "cli.legacy_stubs" in target)
+    assert offenders == [], (
+        f"an entry point still resolves to the tombstones: {offenders}"
+    )
+
+    module = REPO_ROOT / "src" / "my_claude_code" / "cli" / "legacy_stubs.py"
+    assert not module.exists(), (
+        "src/my_claude_code/cli/legacy_stubs.py is back; the tombstone family "
+        "was removed in 8.0.0 and nothing may register it again"
+    )
+
+
 def test_the_grep_gate_returns_only_allowed_files() -> None:
     hits = _gate_hits()
     assert hits, "the gate found nothing at all -- the search itself is broken"
@@ -164,8 +290,8 @@ def test_the_grep_gate_returns_only_allowed_files() -> None:
         offenders.setdefault(path, []).append(f"{line}: {text.strip()[:100]}")
 
     assert not offenders, (
-        "these files name a retired fcc surface and are not on the 7.0.0 "
-        "allowlist:\n"
+        "these files name the retired command family or the old product name "
+        "and are not on the gate's allowlist:\n"
         + "\n".join(
             f"  {path}\n    " + "\n    ".join(lines)
             for path, lines in sorted(offenders.items())
@@ -182,8 +308,19 @@ def test_the_allowlist_has_no_stale_entries() -> None:
     stale = sorted(set(ALLOWED_FILES) - seen)
 
     assert not stale, (
-        f"these files are on the 7.0.0 allowlist but no longer contain any "
-        f"fcc surface: {stale}. Delete the entries."
+        f"these files are on the gate's allowlist but no longer contain any "
+        f"retired surface: {stale}. Delete the entries."
+    )
+
+
+def test_every_allowlist_entry_says_why() -> None:
+    """A path with no reason is the failure mode this list exists to stop."""
+
+    unexplained = sorted(
+        path for path, reason in ALLOWED_FILES.items() if len(reason) < 20
+    )
+    assert unexplained == [], (
+        f"these allowlist entries carry no real reason: {unexplained}"
     )
 
 

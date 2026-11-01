@@ -111,7 +111,5 @@ Subcommands:
   disable <agents>        Disable RTK for comma-separated agents ({_AGENT_LIST}).
   uninstall               Disable all agents and remove the RTK binary.
   apply                   Re-reconcile the machine from the stored state.
-  help                    Show this help text.
-
-The legacy fcc-rtk command was retired in 7.0.0; it prints this name and exits 1."""
+  help                    Show this help text."""
     )

@@ -2,10 +2,10 @@
 
 The resolution rule (see ``config.paths.resolve_config_dir``) never moves
 anything on its own: an existing ``~/.fcc`` keeps working as the legacy home
-until the user asks for this. That ask is ``mcc-migrate`` (and its
-``fcc-migrate`` alias) -- and only that. There is no dashboard button and no
-write route: relocating a user's keys and history is not something a page they
-happen to have open, or a stray local POST, should be able to trigger.
+until the user asks for this. That ask is ``mcc-migrate`` -- and only that.
+There is no dashboard button and no write route: relocating a user's keys and
+history is not something a page they happen to have open, or a stray local
+POST, should be able to trigger.
 
 The move is a single same-volume ``os.rename(~/.fcc, ~/.mcc)``. On one volume
 that is atomic and O(1) -- it either relocates the whole directory tree at once
@@ -464,7 +464,7 @@ def migrate_config_dir() -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """``mcc-migrate`` / ``fcc-migrate`` console entry point."""
+    """``mcc-migrate`` console entry point."""
 
     try:
         summary = migrate_config_dir()

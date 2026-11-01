@@ -1,1 +1,1 @@
-"""Local-only live smoke tests for free-claude-code."""
+"""Local-only live smoke tests for My Claude Code."""

@@ -372,9 +372,9 @@ def test_running_a_command_does_not_return_what_it_printed(
 
     It must not RETURN it. PowerShell returns everything a function writes to
     the output stream, so while this passed the command's two streams down the
-    pipeline, ``$InstalledVersion = Install-FreeClaudeCode`` was the version
+    pipeline, ``$InstalledVersion = Install-MyClaudeCode`` was the version
     string prefixed by every line uv printed -- an array -- and the very next
-    statement, ``Configure-AndConfirmFreeClaudeCode -ExpectedVersion
+    statement, ``Configure-AndConfirmMyClaudeCode -ExpectedVersion
     $InstalledVersion``, refused it with *Cannot convert value to type
     System.String*.
 
@@ -447,8 +447,8 @@ def test_the_install_returns_one_version_and_not_a_transcript(
 ) -> None:
     """The exact statement that failed, with everything around it stubbed.
 
-    ``$InstalledVersion = Install-FreeClaudeCode`` followed by
-    ``Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion``,
+    ``$InstalledVersion = Install-MyClaudeCode`` followed by
+    ``Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion``,
     where that parameter is ``[string]``. When the install's `uv` printed
     anything -- and it always does -- the assignment produced an array and the
     call died with *Cannot process argument transformation on parameter
@@ -475,7 +475,7 @@ def test_the_install_returns_one_version_and_not_a_transcript(
 
     bodies = "\n\n".join(
         _extract_function(text, function)
-        for function in (*NEEDED, *NATIVE, "Get-InstallPlan", "Install-FreeClaudeCode")
+        for function in (*NEEDED, *NATIVE, "Get-InstallPlan", "Install-MyClaudeCode")
     )
     lines = text.splitlines()
     initialisers = "\n".join(
@@ -492,7 +492,7 @@ $PythonVersion = '3.14.0'
 $env:MCC_CONFIG_DIR = '{config_dir}'
 {initialisers}
 
-# Everything Install-FreeClaudeCode leans on, stubbed. The real uv is the
+# Everything Install-MyClaudeCode leans on, stubbed. The real uv is the
 # `uv.cmd` above, which writes to stderr exactly as uv does.
 function Resolve-Release {{ return [pscustomobject]@{{ Version = '6.71.0' }} }}
 function Get-VerifiedReleaseWheel {{ param($Release) return '{tmp_path.as_posix()}/w.whl' }}
@@ -505,7 +505,7 @@ function Get-UvFailureCategory {{ param([string] $Text) return 'unknown' }}
 function Get-UvToolDir {{ param([string] $UvPath) return '{tmp_path.as_posix()}/tool' }}
 function Write-Step {{ param([string] $Message) }}
 # The verification step, with the SIGNATURE that matters: [string].
-function Configure-AndConfirmFreeClaudeCode {{
+function Configure-AndConfirmMyClaudeCode {{
     param([Parameter(Mandatory = $true)] [string] $ExpectedVersion)
     Write-Output ("VERIFIED=" + $ExpectedVersion)
 }}
@@ -513,9 +513,9 @@ function Configure-AndConfirmFreeClaudeCode {{
 {bodies}
 
 New-Item -ItemType File -Path '{tmp_path.as_posix()}/w.whl' -Force | Out-Null
-$InstalledVersion = Install-FreeClaudeCode
+$InstalledVersion = Install-MyClaudeCode
 Write-Output ("COUNT=" + @($InstalledVersion).Count)
-Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
+Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion
 """,
         encoding="utf-8",
     )
@@ -523,7 +523,7 @@ Configure-AndConfirmFreeClaudeCode -ExpectedVersion $InstalledVersion
     completed = _run(executable, script)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "COUNT=1" in completed.stdout, (
-        "Install-FreeClaudeCode returned uv's output alongside the version:\n"
+        "Install-MyClaudeCode returned uv's output alongside the version:\n"
         + completed.stdout
     )
     assert "VERIFIED=6.71.0" in completed.stdout, completed.stdout

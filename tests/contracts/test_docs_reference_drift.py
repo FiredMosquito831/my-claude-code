@@ -707,6 +707,19 @@ def _pre_pr_identifiers() -> dict[str, object]:
     return json.loads(_read(_PRE_PR_FIXTURE))
 
 
+#: 8.0.0 removed the legacy command family (USER DECISIONS 2026-10-31 ~07:00,
+#: Q13). The "move, do not delete" rule below exists so a reader who knew where
+#: to find something keeps finding it; a command that no longer exists cannot
+#: be run, so keeping its name in the docs would be the opposite of help. The
+#: names are listed here rather than dropped from the fixture, so a return is a
+#: one-line edit that has to say 8.0.0 -- and
+#: ``test_no_legacy_fcc_surface::test_no_console_script_is_a_retired_name``
+#: fails if any of them is installed again.
+_RETIRED_IN_8_0_0: frozenset[str] = frozenset(
+    {"fcc-claude", "fcc-codex", "fcc-compact-log", "fcc-migrate", "fcc-pi"}
+)
+
+
 def _all_documentation_text() -> str:
     """Every surface a reader can reach: the docs, the topic pages, the Guide."""
     parts = [_read(REPO_ROOT / name) for name in MARKDOWN_DOCS]
@@ -731,6 +744,8 @@ def test_nothing_the_old_readme_named_was_lost(kind: str) -> None:
     """
     names = _pre_pr_identifiers()[kind]
     assert isinstance(names, list)
+    if kind == "commands":
+        names = [name for name in names if str(name) not in _RETIRED_IN_8_0_0]
     text = _all_documentation_text()
     missing = sorted(str(name) for name in names if str(name) not in text)
 

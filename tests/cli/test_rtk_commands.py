@@ -45,7 +45,8 @@ def test_console_scripts_are_registered() -> None:
 
     scripts = manifest["project"]["scripts"]
     assert scripts["mcc-rtk"] == "my_claude_code.cli.entrypoints:rtk"
-    assert scripts["fcc-rtk"] == "my_claude_code.cli.legacy_stubs:main"
+    # 8.0.0 removed the tombstone names: mcc-rtk is the only spelling left.
+    assert "fcc-rtk" not in scripts
 
 
 def test_rtk_entrypoint_is_callable() -> None:

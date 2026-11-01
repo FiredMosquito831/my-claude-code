@@ -1191,9 +1191,9 @@ verify_staged_environment() {
     # This runs BEFORE the stop, so a wheel that cannot run costs a download
     # instead of an outage.
     verify_reason="The staged version could not be run."
-    # mcc-server and nothing else. The legacy bin/fcc-server was accepted as a
-    # fallback until 7.0.0; it is now a tombstone that exits 1, so falling back
-    # to it would turn a healthy install into a failed verification.
+    # mcc-server and nothing else. The pre-7.0.0 legacy launcher was accepted
+    # as a fallback until 7.0.0 and has not existed since, so falling back to
+    # it would turn a healthy install into a failed verification.
     staged_server="$staging_env/bin/mcc-server"
     staged_python="$staging_env/bin/python"
     if [ ! -x "$staged_server" ] || [ ! -x "$staged_python" ]; then
@@ -1869,10 +1869,7 @@ configure_and_verify_my_claude_code() {
     hash -r 2>/dev/null || true
 
     # Verify the native my-claude-code command family (mcc-*) plus the package
-    # name shim, exactly as the post-install reference leads with. The retired
-    # fcc-* names ship from the same distribution as tombstones, so they exist
-    # as soon as these do -- and are never verified by running them, because
-    # running one is defined to exit 1.
+    # name shim, exactly as the post-install reference leads with.
     # Report EVERY missing command at once, not just the first. The Windows
     # installer used to stop at the first miss (and, worse, skip the check
     # altogether in one branch) and so reported "verified" for commands that did
@@ -3963,8 +3960,6 @@ else
             printf '\nThe desktop launcher was not created: %s.\n' "$desktop_launcher_error"
         fi
     fi
-    printf '\nThe legacy fcc-* commands were retired in 7.0.0: each one now prints the\n'
-    printf 'mcc-* name that replaced it and exits 1. They go away entirely in 8.0.0.\n'
     printf '\nIf mcc-server is not found, open a new terminal: this install may have added\n'
     printf 'a directory to PATH that shells started earlier cannot see.\n'
     if [ "$start_allowed" -ne 1 ]; then

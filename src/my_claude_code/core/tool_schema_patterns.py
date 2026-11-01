@@ -1,6 +1,6 @@
 """Portable Unicode exclusions for a tool parameter's ``pattern``.
 
-Ported from upstream ``free-claude-code`` 39b9c272 (#1772, issue #1730).
+Ported from the upstream project at 39b9c272 (#1772, issue #1730).
 Claude Code writes JavaScript regexes, and some of them spell a Unicode
 general category as a property escape -- ``[^\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}]`` --
 which OpenAI's tool-schema validator has refused. This module rewrites exactly

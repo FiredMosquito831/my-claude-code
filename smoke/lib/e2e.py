@@ -90,7 +90,7 @@ class ConversationDriver:
         self,
         text: str,
         *,
-        model: str = "fcc-smoke-default",
+        model: str = "mcc-smoke-default",
         max_tokens: int = 256,
         extra: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,

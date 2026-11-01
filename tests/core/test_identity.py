@@ -32,10 +32,44 @@ def test_owner_for_invocation_native_names() -> None:
     assert identity.owner_for_invocation("/abs/path/mcc-codex") is identity.NATIVE_OWNER
 
 
-def test_owner_for_invocation_legacy_names_fall_back() -> None:
+def test_owner_for_invocation_legacy_names_resolve_to_the_legacy_owner() -> None:
     assert identity.owner_for_invocation("fcc-server") is identity.LEGACY_OWNER
     assert identity.owner_for_invocation("free-claude-code") is identity.LEGACY_OWNER
-    assert identity.owner_for_invocation("something-else") is identity.LEGACY_OWNER
+
+
+def test_an_unknown_invocation_reports_the_native_owner() -> None:
+    """8.0.0 removed the legacy command family, so nothing is launched as it.
+
+    Until 8.0.0 an unrecognised ``sys.argv[0]`` fell back to the legacy owner --
+    which is how ``mcc-migrate --version`` answered with the retired
+    distribution name on Windows (see the extension test below). The native
+    distribution is the only one a current install can run.
+    """
+
+    assert identity.owner_for_invocation("something-else") is identity.NATIVE_OWNER
+    assert identity.owner_for_invocation("pytest") is identity.NATIVE_OWNER
+
+
+def test_a_console_script_extension_is_stripped_before_the_lookup() -> None:
+    """Windows shims are ``.exe``: the table's names never carry a suffix.
+
+    7.122.4 and earlier looked the whole file name up, so ``mcc-migrate.exe``
+    missed and ``mcc-migrate --version`` printed ``free-claude-code <ver>`` on
+    Windows while the same command printed ``my-claude-code <ver>`` on POSIX.
+    """
+
+    for suffix in (".exe", ".EXE", ".cmd", ".bat", ".py"):
+        assert (
+            identity.owner_for_invocation(f"mcc-migrate{suffix}")
+            is identity.NATIVE_OWNER
+        ), suffix
+        assert (
+            identity.owner_for_invocation(f"C:\\tools\\mcc-server{suffix}")
+            is identity.NATIVE_OWNER
+        ), suffix
+    assert identity.owner_for_invocation("/usr/local/bin/my-claude-code") is (
+        identity.NATIVE_OWNER
+    )
 
 
 def test_owner_for_invocation_reads_sys_argv() -> None:

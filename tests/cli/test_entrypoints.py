@@ -225,15 +225,14 @@ def test_cli_scripts_are_registered() -> None:
     assert scripts["mcc-help"] == "my_claude_code.cli.entrypoints:help_command"
     assert scripts["mcc-rtk"] == "my_claude_code.cli.entrypoints:rtk"
 
-    # 7.0.0: every retired name is a tombstone, not an alias. A name that ever
-    # shipped must still be registered (so the shim exists and the message is
-    # seen instead of "command not found"), and it must point at nothing that
-    # runs.
-    from my_claude_code.cli.legacy_stubs import LEGACY_COMMAND_REPLACEMENTS
-
-    for legacy, replacement in LEGACY_COMMAND_REPLACEMENTS.items():
-        assert scripts[legacy] == "my_claude_code.cli.legacy_stubs:main", legacy
-        assert replacement in scripts or replacement == "mcc-desktop", replacement
+    # 8.0.0 removed the retired family outright: there is no second spelling of
+    # any command, and no entry point may point at the deleted tombstones.
+    retired = sorted(name for name in scripts if name.startswith("fcc-"))
+    assert retired == []
+    assert "free-claude-code" not in scripts
+    assert all("cli.legacy_stubs" not in target for target in scripts.values()), (
+        "an entry point still resolves to the deleted tombstone module"
+    )
 
     gui_scripts = pyproject["project"]["gui-scripts"]
     assert gui_scripts["mcc-desktop"] == "my_claude_code.cli.desktop_entrypoint:launch"
@@ -267,9 +266,11 @@ def test_help_command_documents_every_mcc_command(
         "mcc-help",
     ):
         assert command in out
-    # The legacy family is named as retired, not advertised as working.
-    assert "fcc-*" in out
-    assert "retired in 7.0.0" in out
+    # 8.0.0: the reference names no retired command. ``~/.fcc`` stays in
+    # mcc-migrate's line -- that is the legacy home it moves, not a command.
+    assert "fcc-" not in out.lower()
+    assert "free-claude-code" not in out.lower()
+    assert "retired in 7.0.0" not in out.lower()
     # The install-while-running / restart note is present.
     assert "restart" in out
 
@@ -279,17 +280,26 @@ def test_help_command_documents_every_mcc_command(
     "argv",
     [("--version",), ("--version", "--help"), ("--help", "--version")],
 )
-def test_fcc_owned_entrypoints_report_version_without_side_effects(
+def test_entrypoints_report_the_native_version_without_side_effects(
     entrypoint_name: str,
     argv: tuple[str, ...],
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """``--version`` prints the MCC distribution name, whatever launched it.
+
+    The real ``sys.argv[0]`` is a console-script shim -- ``mcc-server.exe`` on
+    Windows, ``mcc-server`` elsewhere -- and until 8.0.0 the ``.exe`` spelling
+    missed the owner table and answered ``free-claude-code 9.8.7``.
+    """
+
     from my_claude_code.cli import entrypoints
 
+    monkeypatch.setattr(sys, "argv", ["mcc-server", *argv])
     with patch.object(entrypoints, "package_version", return_value="9.8.7"):
         getattr(entrypoints, entrypoint_name)(argv)
 
-    assert capsys.readouterr() == ("free-claude-code 9.8.7\n", "")
+    assert capsys.readouterr() == ("my-claude-code 9.8.7\n", "")
 
 
 @pytest.mark.parametrize("flag", ["--help", "-h"])

@@ -193,7 +193,7 @@ async function fetchFccModels(baseUrl: string, apiKey: string): Promise<Provider
 	}
 }
 
-export default async function freeClaudeCode(pi: ExtensionAPI): Promise<void> {
+export default async function myClaudeCode(pi: ExtensionAPI): Promise<void> {
 	const baseUrl = normalizeBaseUrl(requireEnvironment(BASE_URL_ENV));
 	const apiKey = requireEnvironment(API_KEY_ENV);
 	const models = await fetchFccModels(baseUrl, apiKey);

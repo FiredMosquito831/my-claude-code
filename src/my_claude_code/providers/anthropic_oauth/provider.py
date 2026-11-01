@@ -312,8 +312,8 @@ class AnthropicOAuthProvider(AnthropicProvider):
         """The account's name, else the plan and the credential's origin.
 
         Every OAuth request-log row used to carry the masked *reference*
-        string ("fcc-...auth"), which is the same for every account and says
-        nothing.
+        string (a fixed placeholder), which is the same for every account and
+        says nothing.
 
         The note that used to sit here said there was no email to use because
         MCC never fetches the profile. MCC still never fetches the profile --

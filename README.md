@@ -270,7 +270,7 @@ An agent that is not installed gets an **Install** button on its card (since 7.1
 | Codex desktop, Goose desktop, OpenCode desktop, Crush, Kimi desktop, Qwen desktop | **Configure** button | each app's own |
 | VS Code (Copilot custom endpoint), Roo Code, Antigravity (`agy`), Command Code, LM Studio, Warp | **Configure** button | each app's own |
 
-The legacy `fcc-*` names were retired in 7.0.0: `fcc-claude`, `fcc-codex`, `fcc-server` and the rest are still installed for this major version, but each one prints the `mcc-*` name that replaced it and exits 1. They are removed entirely in 8.0.0. Per-agent walkthroughs live in the [Usage Guide](docs/USAGE.md#7-tutorial-connect-another-cli); anything MCC cannot launch or configure is covered in [Clients](docs/CLIENTS.md).
+Per-agent walkthroughs live in the [Usage Guide](docs/USAGE.md#7-tutorial-connect-another-cli); anything MCC cannot launch or configure is covered in [Clients](docs/CLIENTS.md).
 
 ## Model Providers
 

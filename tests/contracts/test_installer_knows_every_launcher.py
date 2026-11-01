@@ -112,7 +112,7 @@ def test_the_installer_strips_ansi_before_using_captured_output() -> None:
 def test_the_windows_verification_enumerates_every_launcher_command() -> None:
     """Verification must cover the same list, or it lies about what installed.
 
-    `Configure-AndConfirmFreeClaudeCode` used to check a second, shorter,
+    `Configure-AndConfirmMyClaudeCode` used to check a second, shorter,
     hand-written list -- and skipped it entirely whenever a shim could not be
     replaced, verifying the install with `mcc-server --version` alone. That
     check cannot fail: the shims are version-agnostic launchers, so an OLD shim
@@ -124,9 +124,9 @@ def test_the_windows_verification_enumerates_every_launcher_command() -> None:
 
     source = INSTALL_PS1.read_text(encoding="utf-8")
     confirm = re.search(
-        r"function Configure-AndConfirmFreeClaudeCode.*?\n\}", source, re.DOTALL
+        r"function Configure-AndConfirmMyClaudeCode.*?\n\}", source, re.DOTALL
     )
-    assert confirm is not None, "Configure-AndConfirmFreeClaudeCode not found"
+    assert confirm is not None, "Configure-AndConfirmMyClaudeCode not found"
     body = confirm.group(0)
 
     assert "foreach ($commandName in Get-LauncherCommands)" in body, (
@@ -250,7 +250,7 @@ def test_a_command_newer_than_the_installed_wheel_is_not_reported_missing() -> N
     assert set(gated) <= _published_commands() & _detected_launchers()
 
     confirm = re.search(
-        r"function Configure-AndConfirmFreeClaudeCode.*?\n\}", ps1, re.DOTALL
+        r"function Configure-AndConfirmMyClaudeCode.*?\n\}", ps1, re.DOTALL
     )
     assert confirm is not None
     assert (

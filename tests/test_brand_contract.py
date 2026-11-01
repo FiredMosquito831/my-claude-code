@@ -6,11 +6,10 @@ still intact:
 
 Kept contracts (must not change):
   - RETIRED in 7.0.0: the FCC_* environment variables (rewritten once in a
-    managed .env) and the working fcc-* command family (now tombstones)
+    managed .env); the legacy command family was REMOVED in 8.0.0
   - Release repository FiredMosquito831/my-claude-code (RELEASE_REPO)
   - Config dir ".fcc" (still read, and migrated once on a first start)
-  - Legacy fcc-* names still REGISTERED, so a retired name says what replaced it
-  - LEGACY_DISPLAY_NAME = "Free Claude Code"
+  - LEGACY_DISPLAY_NAME = "Free Claude Code" (the pre-5.14 tool owner)
 
 Rebrand (must be present):
   - Product name "My Claude Code", server command "mcc-server"
@@ -43,8 +42,9 @@ def test_pyproject_package_and_dual_commands():
     pyproject = _read("pyproject.toml")
     assert 'name = "my-claude-code"' in pyproject
     assert "mcc-server = " in pyproject
-    # Legacy family preserved as aliases.
-    assert "fcc-server = " in pyproject
+    # 8.0.0 removed the legacy family outright (USER DECISIONS 2026-10-31 Q13):
+    # there is no second command family left to preserve.
+    assert "fcc-server = " not in pyproject
 
 
 def test_brand_doc_is_source_of_truth():

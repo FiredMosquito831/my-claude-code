@@ -32,7 +32,6 @@ from unittest.mock import patch
 import pytest
 
 from my_claude_code.cli import entrypoints
-from my_claude_code.cli.legacy_stubs import LEGACY_COMMAND_REPLACEMENTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINTS_SOURCE = REPO_ROOT / "src" / "my_claude_code" / "cli" / "entrypoints.py"
@@ -168,20 +167,10 @@ HELP_CASES: dict[str, HelpCase] = {
     ),
 }
 
-#: The retired ``fcc-*`` names: a tombstone that names the replacement on
-#: stderr and exits 1, whatever the arguments.
-HELP_CASES.update(
-    {
-        legacy: HelpCase(
-            "my_claude_code.cli.legacy_stubs:main",
-            work=(),
-            exit_code=1,
-            text=f"{legacy} was renamed to",
-            stream="err",
-        )
-        for legacy in LEGACY_COMMAND_REPLACEMENTS
-    }
-)
+#: 8.0.0 removed the fourteen retired ``fcc-*`` names, so there is no tombstone
+#: case left to run: every installed command is now an MCC command or a coding
+#: agent launcher. ``test_no_legacy_fcc_surface`` asserts none of the retired
+#: names is installed again.
 
 _AGENT_HELP = (
     "a coding-agent launcher: --help, -h and --version belong to the agent, so "
