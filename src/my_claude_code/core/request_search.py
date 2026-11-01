@@ -371,6 +371,9 @@ class SearchIndex:
     Writes happen on the log's writer thread only (new rows after their
     commit, the build, the sweep), through the connection that thread owns;
     ``clear`` is the one write from elsewhere and takes the file's own lock.
+    Those two are also ordered by the store's ``_search_clear_lock``, which
+    every write that names a body read earlier holds across its generation
+    check and its commit (7.122.4; ``RequestLogStore._index_write_allowed``).
     Reads attach the file to a connection of the log.
     """
 
