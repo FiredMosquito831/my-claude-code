@@ -51,6 +51,9 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Catalogue refresh, and what MCC learned](#catalogue-refresh-and-what-mcc-learned)
 - [10. Web search](#10-web-search)
 - [10b. Usage: what is left](#10b-usage-what-is-left-830-extended-in-840-and-850)
+  - [Five layouts, one page (8.7.0)](#five-ways-to-read-the-same-page-870)
+  - [Every configured provider, including custom ones (8.7.0)](#every-configured-provider-including-your-own-870)
+  - [Refreshing: the picker and Refresh now (8.7.0)](#refreshing-the-picker-and-refresh-now-870)
 - [11. Analytics](#11-analytics)
   - [Tutorial: read the request detail](#tutorial-read-the-request-detail)
   - [Tutorial: read a request's cost](#tutorial-read-a-requests-cost)
@@ -4966,6 +4969,106 @@ A subscription window is a **percentage of an allowance that resets**. A credits
 - **Credits** / **Balance and spend** / **Overage** — the cash or the overage figures, under their own heading.
 
 There is no element anywhere on the page that adds the two together, and no "remaining" total. Adding a percentage of a plan to a dollars balance would be a wrong number that looks like a right one.
+
+### Five ways to read the same page (8.7.0)
+
+The page draws the same figures in one of five arrangements. It is **one
+setting** — `USAGE_LAYOUT` on [Limits and resilience](#13-limits-and-resilience),
+under **Server responsiveness** — and **one payload** underneath: every layout
+shows every configured provider and exactly the same figures. A change applies
+as soon as the page re-reads its configuration; there is no per-browser
+override and nothing is kept in `localStorage`.
+
+| `USAGE_LAYOUT` | What it looks like |
+| --- | --- |
+| `one_screen` | **The default.** One compact row per provider — the worst window as a bar, the figure, the state — and clicking a row opens its detail *in place*. Opening a second row closes the first, which is what keeps nine providers on one screen. The shortest of the five. |
+| `ledger_rows` | One table row per provider with a 4 px micro-bar beside every window, a sticky header, and a balance column. The densest: every provider on the same line height and the same baseline. |
+| `meter_board` | Four counted headline figures — providers measured, the highest window use, the cash reported in one named currency, the longest wait — over full-width bands, so every bar shares one column and one scale. Counts, never a sum. |
+| `dial_cards` | A card per provider leading with one large ring for its most-pressured window, every other window as a bar beneath, money as money. One ring per card: two arcs a few degrees apart cannot be compared. |
+| `master_detail` | A provider list on the left carrying each provider's worst window as a micro-bar, and the selected provider's full inspector on the right. It opens on the provider that needs you — the failed one. |
+
+The same list is also on the page itself: the toolbar names the layout in force
+and links the setting that decides it. An unknown value falls back to
+`one_screen` with one line in the log rather than refusing to start the server,
+because a layout is a view — a stale `.env` must still serve a page.
+
+**What every layout obeys.** These are the page's rules, not any one layout's:
+
+- **A bar or a percentage only where the provider sent a percentage or a cap.**
+  A window with a `used` and no `limit` has no fraction and is drawn as words;
+  a window nobody measured is a hatched, fill-less track, never a `0%` bar.
+- **A used/limit pair becomes a bar with a percentage.** Command Code's
+  `34.9300790367` against a `35` cap is `99.8%`; OpenRouter's `0.184` left of
+  `0.2` is `8%` consumed. Both halves are printed as money beside the bar
+  (`$34.93 of $35.00`), and the provider's exact strings are on the element's
+  tooltip.
+- **Money is money.** `$34.93`, `$0.0698`, `−$0.01` — never `0.1840009580000002`,
+  and never rounded to a figure that changes what it says. A **negative**
+  balance is real data (an account in arrears) and keeps its own tone rather
+  than being read as "no data".
+- **Timestamps are local.** `Nov 2, 11:08 PM`, never `2026-11-02T21:08:42.000Z`;
+  the provider's own string is on the tooltip.
+- **A provider's notes keep their own words.** `Free tier: false` and
+  `Rolling window: ok` are labelled pairs, never "Note 1" and "Note 2".
+- **A block where nothing was measured says so once**, with the field names it
+  would report behind a disclosure — not eight identical lines.
+- **Windows and balances are two blocks and are never added together.**
+
+### Every configured provider, including your own (8.7.0)
+
+The provider list is **derived from your configuration, never a hard-coded
+list**: between the API-key pools, the custom providers and the two OAuth
+account stores, anything you have set up appears, and a provider you add
+tomorrow appears with no code change. Each row is in exactly one of **eight**
+states:
+
+| State | What it means |
+| --- | --- |
+| `Measured` | a reading arrived inside the last 30 minutes |
+| `Stale` | a reading arrived and is older than that, shown with its age in words |
+| `Read failed` | the read did not happen; the provider's own reason is on the row |
+| `Not available` | the read worked and the provider's answer is that this account has nothing left |
+| `Needs a credential` | the provider publishes a route that needs a secret MCC does not hold and will not ask for (a management key, a browser cookie, a Copilot OAuth token). A fact about your keyring, not about the provider |
+| `Possible endpoint` | MCC recognises the address — a models.dev `api` host, or a LiteLLM / New API `key/info` gateway — but has not read it. **Words only, never a number** |
+| `Not read yet` | a mechanism exists and nothing has come through it yet, or there is no read for this provider in this release |
+| `Not published` | no usage endpoint is known, which is the honest answer and still a row |
+
+**A custom provider** is recognised by its host or its gateway family. A host
+two models.dev providers claim is **ambiguous and resolves to nothing** rather
+than to a guess, and a provider nothing recognises lands in `Not published` —
+still listed, still with its credential count, one line.
+
+**A provider with no data never renders as an empty bar, a `$0.00` or a `0%`
+ring.** That is the rule the whole page is built around, and the test suite
+asserts it with a fixture where no provider sends a percentage: no layout may
+render a filled bar, a ring arc or a percentage anywhere.
+
+### Refreshing: the picker, and Refresh now (8.7.0)
+
+The toolbar carries a **Refresh every** picker with five choices — **30
+seconds (the default)**, 1 minute, 5 minutes, 15 minutes and 30 minutes — plus
+**Refresh now**. The picker is a view over `USAGE_AUTO_REFRESH_SECONDS`: the
+stored value is **seconds**, and changing the picker saves that same setting
+through the same apply path every other control uses, then re-arms the refresh
+without a reload. A value you set by hand in `.env` that is not one of the five
+(45, say) appears as its own marked option rather than being silently rounded.
+
+**Refresh now** asks every configured provider whose own deadline allows it,
+one at a time, each behind the same gate the per-provider **Read now** uses. A
+provider inside its `Retry-After` wait or its read interval is skipped and says
+why. The walk stops the moment the tab goes hidden.
+
+**The arithmetic, at the default interval**, for a visible tab:
+
+| | Requests |
+| --- | --- |
+| One provider | 2 a minute, 120 an hour |
+| N configured providers | 2N a minute, 120N an hour |
+| A hidden tab | **0** |
+
+A `429` skips only the provider that sent it; a provider that keeps failing
+backs off on its own up to an hour, and one success puts it back on your
+interval.
 
 ### Where each figure came from
 

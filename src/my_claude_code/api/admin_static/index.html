@@ -1451,67 +1451,47 @@
                that arrives with /admin/api/config. Opening this page adds no
                request of its own. -->
           <section id="view-usage" class="admin-view" data-view="usage" hidden>
-            <p class="view-intro">
-              What each provider you configured says is left. A subscription
-              window and a cash balance are two different things and are never
-              added together. Every figure below is one a provider reported,
-              shown with the source it came from and when it was read &mdash;
-              a value nobody has measured says so rather than showing zero.
+            <!-- 8.7.0 (USAGE-LAYOUTS): the page's own chrome.
+                 The four-line intro this used to carry is GONE and its content
+                 is in the one hint line under the toolbar: a page whose whole
+                 point is compaction cannot open with a paragraph that repeats
+                 the rules every card already states beside the figures. The four
+                 controls live OUTSIDE every layout, so switching layout can
+                 never change what they do, and no layout can forget to draw
+                 them. Every row below them comes from ONE model
+                 (`usageLayoutModel()`), which is what makes all five layouts
+                 render the same data, and the counts, the picker and
+                 Refresh now are identical in all five. -->
+            <div class="usage-toolbar">
+              <div class="usage-toolbar-status">
+                <span id="usageCount" class="usage-count"></span>
+                <span class="usage-toolbar-sep" aria-hidden="true">·</span>
+                <span id="usageLastRead" class="usage-last-read"></span>
+                <span class="usage-toolbar-sep" aria-hidden="true">·</span>
+                <span class="usage-layout-name" title="Change this on Limits &amp; Resilience, under Server responsiveness.">
+                  Layout: <strong id="usageLayoutName"></strong>
+                </span>
+              </div>
+              <div class="usage-toolbar-controls">
+                <div id="usageRefreshPicker" class="usage-refresh-picker"></div>
+                <div id="usageRefreshNow" class="usage-refresh-now"></div>
+              </div>
+            </div>
+            <p class="usage-toolbar-hint">
+              A subscription window and a cash balance are two different things
+              and are never added together. Every figure is one a provider
+              reported, shown with the source and when it was read; a value
+              nobody measured says so rather than showing zero. Reads happen
+              only while this page is open, one per provider per interval: a
+              provider that answers 429 is skipped until the wait it asked for
+              has passed, one that keeps failing backs off on its own, and a
+              hidden tab reads nothing at all.
             </p>
-            <nav id="usageJumpBar" class="jump-bar" aria-label="Usage sections">
-              <span class="jump-bar-label">On this page</span>
-              <a href="#usageSubscriptionsHeading">Subscriptions</a>
-              <a href="#usageCapturedHeading">From your own traffic</a>
-              <a href="#usageOtherHeading">Other providers</a>
-            </nav>
             <p id="usageStatus" class="models-status" role="status" aria-live="polite" hidden></p>
-
-            <section class="settings-section usage-section" id="usageSubscriptions">
-              <div class="section-heading">
-                <div>
-                  <h3 id="usageSubscriptionsHeading">Subscriptions</h3>
-                  <p>
-                    The two plans MCC already reads. Their windows arrive on the
-                    responses your own requests carry, so nothing here is fetched.
-                  </p>
-                </div>
-              </div>
-              <div id="usageSubscriptionsGrid" class="usage-grid"></div>
-              <p id="usageEmptyNote" class="section-help" hidden></p>
-            </section>
-
-            <section class="settings-section usage-section" id="usageCaptured">
-              <div class="section-heading">
-                <div>
-                  <h3 id="usageCapturedHeading">From your own traffic</h3>
-                  <p>
-                    Providers that send a credits or rate-limit figure on the
-                    responses they already return. Nothing on this page asks for
-                    one: a figure appears here once a real request has carried it,
-                    and a provider that has sent nothing says
-                    <em>not read yet</em> rather than showing a zero.
-                  </p>
-                </div>
-              </div>
-              <div id="usageCapturedGrid" class="usage-grid"></div>
-              <p id="usageCapturedEmpty" class="section-help" hidden></p>
-            </section>
-
-            <section class="settings-section usage-section" id="usageOther">
-              <div class="section-heading">
-                <div>
-                  <h3 id="usageOtherHeading">Other configured providers</h3>
-                  <p>
-                    The rest of what you have set up. A provider appears here only
-                    if it holds a credential, and most of them publish no usage
-                    figure MCC can read at all &mdash; which is a fact about them,
-                    not a failure of this page.
-                  </p>
-                </div>
-              </div>
-              <ul id="usageOtherList" class="usage-other-list"></ul>
-              <p id="usageOtherEmpty" class="section-help" hidden></p>
-            </section>
+            <!-- Every provider, drawn by the selected layout. The five
+                 renderers live in `usage_layouts.js`'s registry; this div is
+                 theirs and nothing else writes it. -->
+            <div id="usageLayoutRoot" class="usage-layout-root"></div>
           </section>
 
           <section id="view-requests" class="admin-view" data-view="requests" hidden>
@@ -6293,8 +6273,10 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Nothing here is fetched from a provider.</strong> The
                   subscription cards draw from the two payloads the Providers
                   page already asks for, so opening the page makes no upstream
-                  request, starts no timer and has no refresh button. What you
-                  read is what the provider last said on a real request.
+                  request and starts no timer of its own. What you read is
+                  what the provider last said on a real request; from 8.5.0 the
+                  page can also ask, on demand or on its own interval (see the
+                  two notes below).
                 </p>
                 <p class="guide-note">
                   <strong>From your own traffic (8.4.0).</strong> Two more
@@ -6324,6 +6306,61 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   resilience: 30 by default, 10 at the lowest, 3600 at the
                   highest, and <strong>0 turns it off</strong> so the page goes
                   back to Read now only.
+                </p>
+                <p class="guide-note">
+                  <strong>Five layouts, one page (8.7.0).</strong> The same
+                  figures can be read five ways, and the arrangement is
+                  <code>USAGE_LAYOUT</code> on Limits and resilience under
+                  Server responsiveness. <em>One screen</em> (the default) puts
+                  every provider on one compact row that opens in place, one
+                  row at a time, and is the shortest. <em>Ledger rows</em> is
+                  one table row per provider with a micro-bar beside every
+                  window. <em>Meter board</em> leads with four counted headline
+                  figures over full-width bands, so every bar shares one
+                  column. <em>Dial cards</em> gives each provider a card leading
+                  with one large ring for its most-pressured window.
+                  <em>Master and detail</em> is a provider list beside a full
+                  inspector, and it opens on the provider that needs you. Every
+                  layout shows every configured provider and exactly the same
+                  figures &mdash; a bar only where the provider sent a
+                  percentage or a cap, money as money, a local timestamp rather
+                  than a raw wire value, and never a zero standing in for
+                  something nobody measured. It is a machine setting: there is
+                  no per-browser override and nothing is kept in
+                  <code>localStorage</code>.
+                </p>
+                <p class="guide-note">
+                  <strong>Every provider you configured, including your own
+                  (8.7.0).</strong> The list is built from your configuration,
+                  not from a fixed table, so a custom provider appears too.
+                  Each row is in exactly one of eight states, and the chip says
+                  which: <em>Measured</em>, <em>Stale</em> (with its age in
+                  words), <em>Read failed</em>, <em>Not available</em>,
+                  <em>Needs a credential</em> (the provider publishes a route
+                  that needs a management key, a browser cookie or a Copilot
+                  token MCC does not hold and will not ask for), <em>Possible
+                  endpoint</em> (MCC recognises the address &mdash; a models.dev
+                  host or a LiteLLM / New API gateway &mdash; but has not read
+                  it, so it shows words and never a number), <em>Not read
+                  yet</em>, and <em>Not published</em>. A custom provider
+                  nothing recognises lands in Not published, still listed, one
+                  line. A provider with no data never renders as an empty bar, a
+                  <code>$0.00</code> or a <code>0%</code> ring.
+                </p>
+                <p class="guide-note">
+                  <strong>Refresh every, and Refresh now (8.7.0).</strong> The
+                  toolbar carries a picker with five choices &mdash; 30 seconds
+                  (the default), 1 minute, 5 minutes, 15 minutes and 30 minutes
+                  &mdash; and a page-level <em>Refresh now</em>. The picker is a
+                  view over <code>USAGE_AUTO_REFRESH_SECONDS</code>: the stored
+                  value is seconds, and changing it saves that same setting
+                  through the same apply path every other control uses, with no
+                  reload. Refresh now asks every provider whose own deadline
+                  allows it, one at a time, and a provider inside its wait is
+                  skipped and says why. At the default interval a visible tab
+                  asks each provider twice a minute (120 an hour), so N
+                  configured providers cost 2N a minute &mdash; and a hidden tab
+                  costs nothing.
                 </p>
                 <p class="guide-note">
                   <strong>Why 30 seconds is affordable.</strong> A hidden tab
@@ -7940,6 +7977,12 @@ EXA_API_KEY_ROTATION=failover</code></pre>
          for the reason §13.2.2 gives: adding a design must be one CSS file
          plus one row, never an edit to admin.js. -->
     <script src="/admin/assets/designs.js"></script>
+    <!-- 8.7.0 (USAGE-LAYOUTS): the Usage page's layout registry, the same
+         shape one layer over. Five rows of `{id, name, note, render}`; the
+         page looks one up by the id its setting holds and calls `render`.
+         Adding a sixth layout is one row and one render function, and no
+         route, payload or setting changes. -->
+    <script src="/admin/assets/usage_layouts.js"></script>
     <script src="/admin/assets/admin.js"></script>
   </body>
 </html>

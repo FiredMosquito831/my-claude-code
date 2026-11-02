@@ -414,6 +414,20 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ),
     (
         "my_claude_code.api.admin_usage_routes",
+        "my_claude_code.providers.runtime.models_dev",
+    ): (
+        "Owner: the Usage page's coverage rule (8.7.0, USAGE-LAYOUTS). "
+        "Reason: a CUSTOM provider is a host somebody typed, so the only offline "
+        "way to say whether MCC could ever read it is models.dev's own `api` "
+        "host index -- the identity rung RESEARCH-BILLING-ENDPOINT-DISCOVERY's "
+        "Q7 promotes to 'the host picks the row, the row supplies the route'. "
+        "The alternative is a second copy of that index in api/, which would "
+        "drift from the one every other models.dev lookup reads. Read-only, "
+        "offline, admin surface only, and it can never produce a figure: a "
+        "recognised host yields WORDS and the `possible_endpoint` state."
+    ),
+    (
+        "my_claude_code.api.admin_usage_routes",
         "my_claude_code.providers.runtime.usage_reads",
     ): (
         "Owner: the Usage page's on-demand read (8.5.0, USAGE PR 3). "

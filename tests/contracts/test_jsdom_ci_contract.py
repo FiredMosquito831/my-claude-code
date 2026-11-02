@@ -46,6 +46,12 @@ _SUITES = (
     # 8.6.0: the automatic refresh -- the server's cadence, which providers one
     # pass may ask, one POST each, a hidden tab asking nothing, and 0 = off.
     "tests/api/test_admin_usage_refresh_jsdom.py",
+    # 8.7.0 (USAGE-LAYOUTS): the five layouts over one payload -- the registry,
+    # every provider and figure in all five, one_screen's one-row-at-a-time
+    # expansion, the no-cap fixture rendering no percentage anywhere, the
+    # eight coverage states, the compaction's formatters, the refresh picker
+    # and the page-level Refresh now.
+    "tests/api/test_admin_usage_layouts_jsdom.py",
     "tests/contracts/test_admin_static_xss.py",
 )
 _JOB_ID = "jsdom"

@@ -259,6 +259,10 @@ def test_the_section_navigator_is_the_products_and_is_neither_hidden_nor_duplica
         "providers",
         "proxying",
         "requests",
+        # 8.7.0: the Usage page joins the table. Its strip names the elements
+        # every layout shares (the page root, the refresh picker and Refresh
+        # now), because the five arrangements draw five different DOMs.
+        "usage",
         "web_search",
     ]
     assert navigators["get_started"] == 0

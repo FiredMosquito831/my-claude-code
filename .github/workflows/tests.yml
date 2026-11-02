@@ -71,6 +71,7 @@ jobs:
               --ignore=tests/api/test_admin_usage_page_jsdom.py
               --ignore=tests/api/test_admin_usage_reads_jsdom.py
               --ignore=tests/api/test_admin_usage_refresh_jsdom.py
+              --ignore=tests/api/test_admin_usage_layouts_jsdom.py
               --ignore=tests/contracts/test_admin_static_xss.py
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -163,6 +164,7 @@ jobs:
           tests/api/test_admin_usage_page_jsdom.py
           tests/api/test_admin_usage_reads_jsdom.py
           tests/api/test_admin_usage_refresh_jsdom.py
+          tests/api/test_admin_usage_layouts_jsdom.py
           tests/contracts/test_admin_static_xss.py -n 0 -v --tb=short
           -o faulthandler_timeout=660
 

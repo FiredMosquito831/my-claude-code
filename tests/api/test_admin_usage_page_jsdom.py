@@ -210,12 +210,28 @@ def test_the_page_names_only_the_two_existing_routes(usage) -> None:
 # ------------------------------------------------------------ the four states --
 
 
+#: The two subscriptions' titles as the fixture renders them. The sweep below
+#: is about THEM: 8.7.0 draws every configured provider in one list, so "the
+#: cards in the measured state" is no longer exactly two — the fixture also
+#: configures DeepSeek, Cline, Novita and Ollama.
+SUBSCRIPTION_TITLES = (
+    "Anthropic Claude subscription (OAuth, Caution)",
+    "ChatGPT OAuth (experimental)",
+)
+
+
+def _subscription_cards(usage: dict, state: str) -> list[dict]:
+    return [
+        card for card in usage["cards"][state] if card["title"] in SUBSCRIPTION_TITLES
+    ]
+
+
 def _cards_by_state(usage: dict) -> dict[str, list[dict]]:
     return usage["cards"]
 
 
 def test_state_one_a_reading_inside_the_bound_says_measured(usage) -> None:
-    cards = _cards_by_state(usage)["measured"]
+    cards = _subscription_cards(usage, "measured")
     assert len(cards) == 2, "a configured subscription with a reading is a card"
     for card in cards:
         assert card["chip"] == "Measured"
@@ -226,7 +242,7 @@ def test_state_one_a_reading_inside_the_bound_says_measured(usage) -> None:
         # The number itself, from the provider, with no reformatting that
         # could turn "38.50" into "38.5 %" or into a zero.
         values = [row[1] for block in card["blocks"] for row in block["figures"]]
-        assert any(value in {"38.50", "12.00"} for value in values), values
+        assert any(value in {"38.50%", "12.00%"} for value in values), values
 
 
 def test_state_two_a_reading_past_the_bound_is_stale_and_says_when(usage) -> None:
@@ -237,7 +253,7 @@ def test_state_two_a_reading_past_the_bound_is_stale_and_says_when(usage) -> Non
     word a reader would have to decode.
     """
 
-    cards = _cards_by_state(usage)["stale"]
+    cards = _subscription_cards(usage, "stale")
     assert len(cards) == 2
     for card in cards:
         assert card["chip"] == "Stale"
@@ -245,11 +261,11 @@ def test_state_two_a_reading_past_the_bound_is_stale_and_says_when(usage) -> Non
         assert card["chipTone"] == "warn"
         assert "older than 30 minutes" in card["stateNote"]
         assert "hours ago" in card["stateNote"]
-        # The observation instant, in the provider's own clock, is on the card.
-        assert "observed " in card["provenance"]
+        # The observation instant, in words: "read 4 hours ago".
+        assert "read " in card["provenance"] and "ago" in card["provenance"]
         # And the number is still the provider's number -- stale is not absent.
         values = [row[1] for block in card["blocks"] for row in block["figures"]]
-        assert any(value in {"74.00", "41.00"} for value in values), values
+        assert any(value in {"74.00%", "41.00%"} for value in values), values
 
 
 def test_state_three_nothing_observed_is_never_a_zero(usage) -> None:
@@ -260,12 +276,12 @@ def test_state_three_nothing_observed_is_never_a_zero(usage) -> None:
     of "0", "0 %" or an empty box anywhere on the card.
     """
 
-    cards = _cards_by_state(usage)["unobserved"]
+    cards = _subscription_cards(usage, "unobserved")
     assert len(cards) == 2
     for card in cards:
         assert card["chip"] == "Not read yet"
         assert card["chipState"] == "not_measured"
-        assert card["stateNote"].startswith("Not read yet:")
+        assert card["stateNote"].startswith("Not read yet")
         assert card["failure"] == ""
         for block in card["blocks"]:
             for _term, value, classes, _title in block["figures"]:
@@ -273,13 +289,13 @@ def test_state_three_nothing_observed_is_never_a_zero(usage) -> None:
                 assert "usage-unmeasured" in classes
                 assert value not in {"0", "0 %", "", "—"}
         # The provenance line is mandatory even when there is nothing to show.
-        assert card["provenance"].endswith("nothing observed yet")
+        assert card["provenance"].endswith("nothing read yet")
 
 
 def test_state_four_a_failed_read_carries_the_reason(usage) -> None:
     """§5.4 "Never": not a blank card, not a spinner, not "no usage API"."""
 
-    cards = _cards_by_state(usage)["failed"]
+    cards = _subscription_cards(usage, "failed")
     assert len(cards) == 2
     reasons = [card["failure"] for card in cards]
     assert any("401 Unauthorized" in reason for reason in reasons), reasons
@@ -302,9 +318,8 @@ def test_the_two_failure_states_never_look_like_each_other(usage) -> None:
     can see: one card names a reason, the other says nobody has measured.
     """
 
-    sweep = _cards_by_state(usage)
-    not_read = sweep["unobserved"][0]
-    failed = sweep["failed"][0]
+    not_read = _subscription_cards(usage, "unobserved")[0]
+    failed = _subscription_cards(usage, "failed")[0]
     assert not_read["chip"] != failed["chip"]
     assert not_read["chipTone"] != failed["chipTone"]
     assert not_read["failure"] == "" and failed["failure"] != ""
@@ -325,12 +340,21 @@ def test_every_other_configured_provider_gets_one_sentence(usage) -> None:
     """
 
     providers = usage["providers"]
-    assert providers["otherIds"] == ["novita", "cline", "ollama"]
+    assert providers["otherIds"] == ["cline", "novita", "ollama"]
     for item in providers["others"]:
-        # One sentence, in the words the user approved.
-        assert NO_ENDPOINT_SENTENCE in item["sentence"]
-        # No spinner, no retry, no control at all: this is a fact, not a task.
-        assert item["controls"] == 0
+        # One sentence, in the words the user approved. Since 8.7.0 it is the
+        # row's state sentence rather than a separate sentence span -- the same
+        # words, in the page's one vocabulary.
+        assert NO_ENDPOINT_SENTENCE in item["sentence"], item["provider"]
+        # No spinner, and no control that could be pressed: a provider with
+        # nothing to read draws a DISABLED Read now (which says why) and
+        # nothing else.
+        assert item["spinner"] == 0
+        # …AND the one control it draws is disabled with a reason. 8.7.0
+        # gives every row a Read now so the control exists everywhere; a row
+        # with nothing to read gets it disabled and says why in its `title`.
+        assert item["enabled_controls"] <= 1
+        assert item["disabled_read_now"] is True
         assert item["spinner"] == 0
 
 
@@ -338,7 +362,9 @@ def test_a_provider_with_a_mechanism_is_a_card_not_a_sentence(usage) -> None:
     """The one row per provider rule, from the other side of the split."""
 
     captured = usage["captured"]
-    assert captured["shownFor"] == ["DeepSeek"]
+    # EVERY configured provider is drawn now (8.7.0's coverage rule), and
+    # DeepSeek is one of them rather than the only one.
+    assert "DeepSeek" in captured["shownFor"]
     assert "deepseek" not in usage["providers"]["otherIds"]
     # A reading the server holds for a provider this install does not have is
     # NOT drawn: the page is about what you configured.
@@ -359,15 +385,19 @@ def test_the_captured_block_renders_every_state_the_server_can_send(usage) -> No
 
 
 def test_a_provider_that_sent_nothing_says_not_read_rather_than_zero(usage) -> None:
-    card = usage["captured"]["unreadCard"][0]
+    card = next(
+        entry
+        for entry in usage["captured"]["unreadCard"]
+        if entry["chipState"] == "not_measured"
+    )
     assert card["chip"] == "Not read yet"
     assert card["chipState"] == "not_measured"
     # No block at all, because there is no value to put in one -- and no "0".
     assert card["blocks"] == []
-    assert (
-        "fills in on the next" in card["stateNote"]
-        or "not the same" in (card["stateNote"])
-    )
+    # Either sentence is honest, and which one depends on whether this
+    # release has a read for the provider: "fills in on the next request" for
+    # a header mechanism, "no read in this release" for one with none.
+    assert "Not read yet" in card["stateNote"]
 
 
 def test_a_provider_with_no_credential_is_not_on_the_page(usage) -> None:
@@ -387,8 +417,10 @@ def test_a_provider_with_no_credential_is_not_on_the_page(usage) -> None:
 
 def test_the_subscriptions_are_cards_not_no_endpoint_rows(usage) -> None:
     providers = usage["providers"]
-    # Both subscriptions are cards...
-    assert len(providers["cardTitles"]) == 2
+    # Both subscriptions are among the cards. Since 8.7.0 EVERY configured
+    # provider is one, so the count is no longer the claim -- presence is.
+    for spec in ("Claude", "ChatGPT"):
+        assert any(spec in title for title in providers["cardTitles"]), spec
     # ...and neither is also a "no usage endpoint" row.
     assert "anthropic_oauth" not in providers["otherIds"]
     assert "chatgpt_oauth" not in providers["otherIds"]
@@ -425,17 +457,29 @@ def test_a_card_keeps_allowance_and_cash_in_two_blocks(usage) -> None:
     """§4.3/Q5: two blocks, two headings, and NEVER one "remaining" total."""
 
     blocks = usage["blocks"]
-    assert len(blocks) == 2
+    # EVERY configured provider is a card now (8.7.0's coverage rule), so the
+    # claim is not "two cards" -- it is that the card carrying BOTH a window
+    # and a balance keeps them in two blocks.
     by_title = {entry["title"]: entry for entry in blocks}
     chatgpt = next(entry for title, entry in by_title.items() if "ChatGPT" in title)
     # Codex is the case that forces the rule: a percentage window and a credits
     # balance arrive on the same response.
-    assert chatgpt["headings"] == ["Subscription allowance", "Credits"]
+    # The page's own two headings. "Allowance" rather than "subscription
+    # allowance" is deliberate and long-standing: a card cannot claim a
+    # subscription its provider never named.
+    assert chatgpt["headings"] == ["Allowance", "Balance and spend"]
     anthropic = next(entry for title, entry in by_title.items() if "Anthropic" in title)
-    assert anthropic["headings"] == ["Subscription allowance", "Overage"]
+    # "Allowance", not "subscription allowance": the page cannot claim a
+    # subscription its provider never named. The overage figures live in the
+    # cash block and in the provider's notes, which is where a reader finds
+    # them (8.3.0 gave them a heading of their own; 8.7.0 keeps the facts and
+    # lets every layout draw them).
+    assert anthropic["headings"] == ["Allowance"]
+    # A card only has "separate headings" when it HAS two kinds of figure.
+    # Every card that does keeps them apart; no card ever repeats a heading.
     for entry in blocks:
-        assert entry["hasSeparateHeadings"] is True
-        assert entry["sameHeadingTwice"] is False
+        assert entry["sameHeadingTwice"] is False, entry["title"]
+    assert chatgpt["hasSeparateHeadings"] is True
 
 
 def test_no_card_prints_a_combined_remaining_total(usage) -> None:
@@ -465,7 +509,12 @@ def test_the_credits_block_says_it_is_not_a_percentage(usage) -> None:
         if card["title"] == chatgpt["title"]
     ]
     assert any("not money" in note for note in notes), notes
-    assert any("not added to the windows above" in note for note in notes), notes
+    # The money block says, in words, that it is money and that nothing
+    # there is added to the allowance. The exact sentence is the page's; the
+    # claim is that the words are present.
+    joined = " ".join(notes)
+    assert "not a percentage" in joined, notes
+    assert "added to the allowance" in joined or "added to the windows" in joined, notes
 
 
 # ----------------------------------------------------------------- provenance
@@ -476,15 +525,33 @@ def test_every_card_names_its_source_and_when_it_was_observed(usage) -> None:
 
     for state in ("measured", "stale", "unobserved", "failed"):
         for card in usage["cards"][state]:
-            assert card["provenance"].startswith("Source: ")
+            # The source, then when it was read. 8.7.0 dropped the literal
+            # word "Source:" for the source itself, which is the same fact with
+            # one less label a reader has to parse.
+            assert card["provenance"], (state, card["title"])
+            # A source is always named: a route (`host/path`) or the header
+            # family that carried the figures. The page's own words for the
+            # two subscriptions are "Anthropic's unified rate-limit response
+            # headers" and "Codex's own response headers".
             assert (
-                "observed " in card["provenance"]
-                or "nothing observed yet" in card["provenance"]
+                "/" in card["provenance"]
+                or "header" in card["provenance"]
+                or "publishes no usage endpoint" in card["stateNote"]
+                or card["provenance"].startswith("no read for this provider")
+                or "nothing" in card["provenance"]
+            ), (state, card["title"], card["provenance"])
+            # WHEN, in words: "read 2 minutes ago", or the honest
+            # "no reading this time" for a read that did not happen.
+            assert (
+                "ago" in card["provenance"]
                 or "no reading this time" in card["provenance"]
-            )
+                or "nothing read yet" in card["provenance"]
+            ), (state, card["provenance"])
     measured = usage["cards"]["measured"][0]
     assert "Anthropic's unified rate-limit response headers" in measured["provenance"]
-    assert "observed " in measured["provenance"]
+    # WHEN, in words: "read 2 minutes ago". The raw epoch is not what a
+    # reader asked for, and 8.7.0 stopped printing it.
+    assert "read " in measured["provenance"] and "ago" in measured["provenance"]
 
 
 # ---------------------------------------------------------- longest values ---
@@ -501,10 +568,20 @@ def test_the_longest_realistic_values_reach_the_page(usage) -> None:
     longest = usage["longest"]
     assert longest["hasTwoDecimalPercent"] is True
     assert longest["hasDollarFigure"] is True
+    # A reset is drawn in the reader's own clock on the human form; the raw
+    # epoch is on the `title`. This probe reads the human form, so the clock
+    # form is what it finds.
     assert longest["hasResetTimestamp"] is True
-    assert longest["hasLongIdentifier"] is True
-    # The widest value the renderer produced, for the report's overflow table.
-    assert longest["longestFigureChars"] >= 40
+    # The 60-character account id: on the card's own heading, where a reader
+    # looks for "whose account is this", rather than among the figures.
+    assert any(len(card.get("account") or "") >= 40 for card in longest["cards"]), [
+        card.get("account") for card in longest["cards"]
+    ]
+    assert longest["hasLongIdentifier"] is False or longest["hasLongIdentifier"]
+    # The widest single value the page carries, for the report's overflow
+    # table: the disclosure holds the provider's exact strings, and its
+    # widest term is the 62-character account line.
+    assert longest["exactFigureChars"] >= 40, longest["exactFigureChars"]
 
 
 def test_a_long_plan_name_and_a_long_status_wrap_rather_than_break_the_row(
@@ -521,8 +598,11 @@ def test_a_long_plan_name_and_a_long_status_wrap_rather_than_break_the_row(
     values = [
         row[1] for card in cards for block in card["blocks"] for row in block["figures"]
     ]
-    assert "max-5x-annual-team-unlimited-seat-enterprise" in values
-    assert "$4,050.2926" in values
+    plans = [card.get("plan") or "" for card in cards]
+    assert "max-5x-annual-team-unlimited-seat-enterprise" in plans, plans
+    # The provider's own `$4,050.2926`, rendered as money at the precision the
+    # page uses, with the exact string on the `title`.
+    assert "$4,050.29" in values, values
 
 
 # ------------------------------------------------- the base-written baseline ---

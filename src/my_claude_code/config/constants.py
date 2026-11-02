@@ -382,6 +382,33 @@ USAGE_AUTO_REFRESH_MIN_SECONDS = 10.0
 # The ceiling. Above an hour the feature is indistinguishable from "off" while
 # still spending requests, and the page's own stale bound is 30 minutes.
 USAGE_AUTO_REFRESH_MAX_SECONDS = 3600.0
+
+# 8.7.0 (USAGE-LAYOUTS): the five Usage page layouts, as one setting and one
+# declared table. `specs/PR-USAGE-LAYOUTS-SPEC.md` §3 and §8.1 fix the
+# vocabulary: previews 01, 02, 03, 05 and 06 ship, 04 does not, and `one_screen`
+# (preview 06) is the default because it is the shortest at every width the
+# spec measures.
+#
+# These five ids are spelled TWICE on purpose and pinned together by a contract
+# test: here (a leaf `config` module may not read the dashboard's JavaScript)
+# and in `api/admin_static/usage_layouts.js`'s `USAGE_LAYOUTS` table, which is
+# what the page renders from. A word here with no registry row is refused by
+# the page; a row with no word here is refused by the server before it can be
+# saved -- exactly the `ADMIN_DESIGN_VALUES` posture beside it.
+USAGE_LAYOUT_DEFAULT = "one_screen"
+USAGE_LAYOUT_VALUES = (
+    "one_screen",
+    "ledger_rows",
+    "meter_board",
+    "dial_cards",
+    "master_detail",
+)
+#: What an unknown value falls back to, and the ONE log line that says so. The
+#: fallback is the default rather than a refusal because the layout is a view:
+#: a `.env` naming a layout a later release removed must render the page, not
+#: refuse to start the server. The setting's facade refuses a bad value on the
+#: way in, which is where a reader can act on it.
+USAGE_LAYOUT_FALLBACK = USAGE_LAYOUT_DEFAULT
 # The ceiling on a wait a provider published in a header. 3600 was hard-coded
 # as ``MAX_RATE_LIMIT_COOLDOWN_SECONDS`` until 7.22.0 and is the default here
 # so that an install that says nothing behaves exactly as it did: an hour is

@@ -194,20 +194,63 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
 
   /** One card's figures, as the assertions read them. */
   const readCard = (card) => ({
+    // EVERYTHING the row's detail holds. A card here is one provider's whole
+    // block whatever the layout: its row, its expansion, and every figure in
+    // it — which is what the assertions below are about.
+    text: flat(card),
     title: flat(card.querySelector(".usage-card-title")),
     chip: flat(card.querySelector(".usage-chip")),
     chipState: card.querySelector(".usage-chip")
       ? card.querySelector(".usage-chip").dataset.state
       : null,
-    blocks: Array.from(card.querySelectorAll(".usage-block")).map((block) => ({
-      heading: flat(block.querySelector(".usage-block-heading")),
-      figures: Array.from(block.querySelectorAll("dt")).map((dt, index) => [
+    // ONLY the card's own blocks: the complete figure list is behind a
+    // `<details class="usage-figures-disclosure">`, and counting it here
+    // would report the same heading twice.
+    blocks: Array.from(
+      card.querySelectorAll(".usage-detail-columns .usage-block"),
+    ).map((block) => {
+      // THE BLOCK'S OWN FIGURES, in the shape every card has used since 8.3.0.
+      //
+      // 8.7.0 draws a window as a bar with a money pair (`$1.25 of $8.00`)
+      // rather than as a `<dt>/<dd>` pair, so a reader who wants the strict
+      // term/value form finds it in the disclosure. What the block still holds
+      // is its human form, and the pairs below are that form's own text read
+      // back into the same shape — so an assertion about "this window's used
+      // and limit" is answered by the card a person sees.
+      const rows = [];
+      block.querySelectorAll(".usage-window").forEach((win) => {
+        const name = flat(win.querySelector(".usage-window-title"));
+        const figure = win.querySelector(".usage-window-figure");
+        const text = flat(figure);
+        if (name && text) rows.push([name, text]);
+        const reset = flat(win.querySelector(".usage-reset"));
+        if (name && reset) rows.push([`${name} resets`, reset.replace(/^resets /, "")]);
+      });
+      block.querySelectorAll(".usage-money-row").forEach((line) => {
+        const label = flat(line.querySelector(".usage-money-label"));
+        const amount = flat(line.querySelector(".usage-money-amount"));
+        if (label && amount) rows.push([label, amount]);
+      });
+      const exact = Array.from(block.querySelectorAll("dt")).map((dt, index) => [
         flat(dt),
         flat(block.querySelectorAll("dd")[index]),
-      ]),
-    })),
+      ]);
+      return {
+        heading: flat(block.querySelector(".usage-block-heading")),
+        figures: rows.length ? rows : exact,
+        exact,
+      };
+    }),
+    // The complete figure list, behind its own disclosure.
+    figures: Array.from(
+      card.querySelectorAll(".usage-figures-disclosure .usage-figures dt"),
+    ).map((dt) => flat(dt)),
     stateNote: flat(card.querySelector(".usage-state-note")),
-    failure: flat(card.querySelector(".usage-failure")),
+    // The failure sentence and the state sentence are ONE paragraph now:
+    // a card said the same thing twice in two boxes (the red one and the
+    // muted one) until 8.7.0.
+    failure: flat(card.querySelector(".usage-failure")) ||
+      flat(card.querySelector('.usage-state-note[data-tone="error"]')),
     provenance: flat(card.querySelector(".usage-provenance")),
     button: (() => {
       const button = card.querySelector(".usage-read-button");
@@ -224,7 +267,23 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
   });
 
   const cards = () =>
-    Array.from(doc.querySelectorAll("#usageCapturedGrid .usage-card")).map(readCard);
+    Array.from(doc.querySelectorAll("#usageLayoutRoot .usage-card")).map(readCard);
+
+
+  /** Open every row's detail.
+   *
+   * 8.7.0 puts a provider's reading, its Read now and its figure list behind
+   * the row's own expansion in `one_screen` (the default layout): the row is
+   * 44 px and the detail is one press away, which is what keeps the page on
+   * one screen. Every scenario that reads a card's CONTENTS therefore opens
+   * it first — the control is still there, one press in, exactly as
+   * UI-QUALITY-RULE §D describes a collapsed card's actions.
+   */
+  const openAllRows = () => {
+    doc.querySelectorAll(".usage-srow-button").forEach((button) => {
+      if (button.getAttribute("aria-expanded") !== "true") button.click();
+    });
+  };
 
   async function run({ scriptErrors, consoleErrors }) {
     const out = { scenarioFatal: null, scriptErrors, consoleErrors };
@@ -327,13 +386,14 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
 
     PAGE.rememberUsageCaptured(ROUTES["/admin/api/usage"]);
     PAGE.paintUsageView();
+    openAllRows();
     await wait(30);
 
     // ── 1. the button, and the countdown the SERVER owns ─────────────────
     // The subscription card is measured first, because 8.5.0 gives it a read of
     // its own; the header-derived cards follow.
     out.subscription = (() => {
-      const grid = doc.getElementById("usageSubscriptionsGrid");
+      const grid = doc.getElementById("usageLayoutRoot");
       const card = grid ? grid.querySelector(".usage-card") : null;
       if (!card) return { drawn: false };
       return {
@@ -350,9 +410,10 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
       };
     })();
     const first = cards();
+    const enabled = first.filter((card) => card.button && !card.button.disabled);
     out.button = {
       cards: first.length,
-      onReadable: first[0] ? first[0].button : null,
+      onReadable: enabled.length ? enabled[0].button : null,
       onUnreadable: first[1] ? first[1].button : null,
       // A card whose server says a read is allowed gets a live button.
       enabledWhenAllowed: (() => {
@@ -382,8 +443,15 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
     };
 
     // ── 2. the press: exactly one POST, exactly one provider id ──────────
+    //
+    // THE BUTTON THAT CAN BE PRESSED, not the first one on the page. A provider
+    // inside its read interval correctly draws a DISABLED control, and
+    // pressing that proves nothing — the scenario drives the first ENABLED
+    // one, which is what a reader does too.
     const bodiesBefore = fetchBodies.length;
-    const firstButton = doc.querySelector("#usageCapturedGrid .usage-read-button");
+    const firstButton = Array.from(
+      doc.querySelectorAll("#usageLayoutRoot .usage-read-button"),
+    ).find((button) => !button.disabled);
     out.press = { found: Boolean(firstButton), posts: [], bodies: [], stateAfter: null };
     if (firstButton) {
       firstButton.click();
@@ -393,11 +461,14 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
         .slice(bodiesBefore)
         .filter((entry) => entry.path === "/admin/api/usage/read");
       out.press.posts = out.press.bodies.map((entry) => entry.method);
+      openAllRows();
       out.press.stateAfter = cards().map((card) => ({
         title: card.title,
         chipState: card.chipState,
         button: card.button,
         blocks: card.blocks,
+        figures: card.figures,
+        hasCombinedTotal: card.hasCombinedTotal,
       }));
     }
 
@@ -422,7 +493,19 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
     // 1800 seconds), so there is nothing to press -- which IS the proof. Ask
     // the button's own state rather than dispatching a click the product would
     // never receive.
-    const secondButton = doc.querySelector("#usageCapturedGrid .usage-read-button");
+    // The button of the provider that WAS read — the DeepSeek card — because
+    // "it is now disabled for the interval" is a claim about that provider.
+    const secondButton = (() => {
+      const card = cards().find((entry) => entry.title === "DeepSeek");
+      if (card) {
+        const found = doc.querySelector(
+          `.usage-srow[data-provider="deepseek"] .usage-read-button, ` +
+            `[data-provider="deepseek"] .usage-read-button`,
+        );
+        if (found) return found;
+      }
+      return doc.querySelector("#usageLayoutRoot .usage-read-button");
+    })();
     out.interval = {
       stillDisabled: secondButton ? Boolean(secondButton.disabled) : null,
       text: secondButton ? flat(secondButton) : null,
@@ -439,33 +522,49 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
         .slice(bodiesBeforeSecond)
         .filter((entry) => entry.path === "/admin/api/usage/read").length;
       out.interval.buttonAfter = (() => {
-        const button = doc.querySelector("#usageCapturedGrid .usage-read-button");
+        const button = doc.querySelector("#usageLayoutRoot .usage-read-button");
         return button ? { disabled: Boolean(button.disabled), text: flat(button) } : null;
       })();
     }
 
     // ── 4. an unreadable provider draws no working control ───────────────
+    // The provider whose row declares NO read this release builds. Found by
+    // its own state rather than by list position: the provider list is ordered
+    // by state since 8.7.0, so "the second card" is not a stable way to name
+    // one.
+    const unreadable = cards().find(
+      (card) =>
+        card.button !== null &&
+        card.button.disabled === true &&
+        /no read for this provider/i.test(card.button.title),
+    );
     out.unreadable = {
-      button: (() => {
-        const card = cards()[1];
-        return card ? card.button : null;
-      })(),
-      stateNote: (() => {
-        const card = cards()[1];
-        return card ? card.stateNote : null;
-      })(),
+      button: unreadable ? unreadable.button : null,
+      stateNote: unreadable ? unreadable.stateNote : null,
       // A provider that sends no header figure never has that promised to it:
       // its card must not say a figure "fills in on the next request".
-      promisesHeaders: (() => {
-        const card = cards()[1];
-        return card ? /fills in on the next request/i.test(card.stateNote) : null;
-      })(),
+      promisesHeaders: unreadable
+        ? /fills in on the next request/i.test(unreadable.stateNote)
+        : null,
     };
 
     // ── 5. windows and balances are two blocks, never one total ──────────
+    // The two blocks a card keeps apart, read from the provider whose reading
+    // carries BOTH a window and a balance — DeepSeek's row here. The FIRST
+    // card is the Claude subscription, which has a window and no cash at all,
+    // so asking it for two headings would be asking the wrong card.
+    // READ FROM THE PRESSED STATE. `cards()` after a fresh paint is a page
+    // that has asked nothing, so its providers are `Not read yet` and carry no
+    // figures at all — a fixture that answers "no two headings" without ever
+    // having had a reading on screen.
+    const pressed = out.press.stateAfter;
+    const both = pressed.find((card) =>
+      card.blocks.some((block) => block.heading === "Balance and spend"),
+    );
     out.blocks = {
-      headings: cards()[0] ? cards()[0].blocks.map((block) => block.heading) : [],
-      combined: cards()[0] ? cards()[0].hasCombinedTotal : null,
+      headings: both ? both.blocks.map((block) => block.heading) : [],
+      combined: both ? both.hasCombinedTotal : null,
+      figuresBehindDisclosure: pressed.some((card) => card.figures && card.figures.length),
     };
 
     // ── 6. every state word the route can send ───────────────────────────
@@ -505,6 +604,7 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
       ],
     });
     PAGE.paintUsageView();
+    openAllRows();
     await wait(30);
     const deadlineCard = cards()[0];
     out.deadline = {
@@ -535,6 +635,7 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
       ],
     });
     PAGE.paintUsageView();
+    openAllRows();
     await wait(30);
     const unavailableCard = cards()[0];
     out.unavailable = {
@@ -545,7 +646,7 @@ export function prepareUsageReadsScenario({ window, ROUTES, fetchBodies }) {
       // The words a reader gets, which must not be the read-failed sentence.
       saysNotAvailable: /nothing available/i.test(
         `${unavailableCard.stateNote} ${unavailableCard.failure}`,
-      ) || /Nothing available/i.test(flat(doc.querySelector("#usageCapturedGrid"))),
+      ) || /Nothing available/i.test(flat(doc.querySelector("#usageLayoutRoot"))),
     };
 
     out.scriptErrorsSeen = scriptErrors;

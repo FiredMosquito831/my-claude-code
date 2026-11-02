@@ -749,6 +749,12 @@ async function load() {
   } finally {
     state.loading = false;
   }
+  // 8.7.0: the Usage page is drawn OUTSIDE the settings containers, so a
+  // `renderSections` pass does not reach it. A save that changed
+  // `USAGE_LAYOUT` must repaint it — without a reload, which is what §3 asks
+  // for — and doing it here means every path that re-reads the config (a Save,
+  // a theme change, the first load) repaints one page's root and nothing else.
+  if (state.activeView === "usage" && byId("usageLayoutRoot")) paintUsageView();
 }
 
 async function loadDashboardState() {
@@ -11392,6 +11398,33 @@ function usageHarness() {
     usageAutoRefreshMs,
     usageDueProviders,
     pollUsageReads,
+    /* 8.7.0 (USAGE-LAYOUTS): the layout registry's own machinery, so a
+       scenario can assert the five renderers against one payload without
+       reaching into a closure. `usageLayoutModel` is the model every layout
+       draws from — handing it out is what lets the proof compare five DOMs of
+       the SAME data rather than five DOMs of five fixtures. */
+    USAGE_LAYOUTS,
+    usageLayoutFor,
+    usageLayoutIds,
+    usageLayoutModel,
+    usageActiveLayout,
+    usageViewState,
+    refreshAllUsage,
+    adoptUsageReadAllAnswer,
+    saveUsageRefreshChoice,
+    renderUsagePageChrome,
+    USAGE_REFRESH_CHOICES,
+    /* The formatters the compaction depends on, exported so the proof reads
+       the product's own money/instant/percent rules instead of restating them
+       in a test — a mirror would only ever agree with itself (IX.1). */
+    usageMoney,
+    usagePct,
+    usageInstantParts,
+    usageFraction,
+    usageWindowFigure,
+    usageStateSentence,
+    usageNoteParts,
+    usageVisibilityHeader,
   };
 }
 
@@ -20085,202 +20118,2781 @@ function usageConfiguredProviders() {
   return providers;
 }
 
-/** Paint the page from what is already in memory. Fetches NOTHING. */
-function paintUsageView() {
-  const grid = byId("usageSubscriptionsGrid");
-  const otherList = byId("usageOtherList");
-  const capturedGrid = byId("usageCapturedGrid");
-  if (!grid || !otherList) return;
-  grid.replaceChildren();
-  otherList.replaceChildren();
-  // Cleared here, at the top, rather than at the append below: every branch
-  // that can skip a card must leave an empty grid, not the previous paint.
-  if (capturedGrid) capturedGrid.replaceChildren();
+/* ══════════════════════════════════════════════════════════════════════════
+   8.7.0 (USAGE-LAYOUTS) — THE PAGE'S SHARED VOCABULARY AND ITS FIVE LAYOUTS.
 
-  const configured = usageConfiguredProviders();
-  const knownToServer = new Map(
-    (Array.isArray(state.config?.provider_status)
-      ? state.config.provider_status
-      : []
-    ).map((entry) => [entry.provider_id, entry]),
-  );
+   specs/PR-USAGE-LAYOUTS-SPEC.md §1–§5. The whole design is two halves, and
+   the split is what makes five layouts safe to ship:
 
-  /** The pool count for one card, from the server's own `key_count`.
-   *
-   *  One answer rather than two: `provider_status[].key_count` counts an
-   *  OAuth provider's ACCOUNTS as well as an API-key pool's keys (the server
-   *  derives it from the same resolver the request log and the Providers page
-   *  use), so this page does not have to guess from whichever payload happens
-   *  to be in memory -- which is exactly how a card read "1 account stored"
-   *  or "" depending on whether an answer had arrived yet. */
-  const poolFor = (providerId) => {
-    const count = Number(knownToServer.get(providerId)?.key_count) || 0;
-    return count ? { count } : null;
+   1. `usageLayoutModel()` turns the three payloads the page already holds
+      (the two OAuth answers, `GET /admin/api/usage`'s `providers` and its
+      `coverage`) into ONE model: a row per configured provider, each with a
+      state, windows, money and words. **No figure is computed here.** A
+      window fraction is `used / limit` of two numbers the provider sent (or
+      `remaining / (remaining + used)` where only a remaining and a limit
+      arrived — §1 of the route's own contract), a percentage the provider
+      sent is kept verbatim, and a field nobody measured is `null`.
+   2. `window.MCCUsageLayouts` draws that model five ways. A layout chooses
+      WHERE a figure goes; it can never choose WHETHER it may be drawn, what
+      it means, or whether its provider appears. That is why all five render
+      the same data, and the proof in
+      `tests/api/test_admin_usage_layouts_jsdom.py` asserts it per layout with
+      one fixture.
+
+   THE HONESTY RULES, once, here — not once per layout:
+     * a bar or a percentage ONLY where the provider sent a percentage or a
+       cap (`usageFraction` returns `null` otherwise, and every layout draws
+       words instead);
+     * `$` where it sent money, both where it sent both, as TWO blocks that
+       are never summed;
+     * never `remaining = cap − used` unless a cap actually arrived;
+     * a negative or zero balance is real data and renders as `−$0.01`, never
+       suppressed as "no data" (an account in arrears matters);
+     * a missing figure is a sentence, never a zero and never `$0.00`;
+     * a provider in *possible endpoint, unverified* shows WORDS ONLY.
+
+   THE COMPACTION THE USER ASKED FOR (2026-11-02, with a PDF of the 8.6.0
+   page): eight consecutive "not measured by this provider" rows under one
+   heading was the failure. `usageWindowBlock()` collapses a whole block of
+   unmeasured windows into ONE sentence plus a disclosure that lists them
+   compactly, and money is formatted (`$34.93 of $35.00`), timestamps are
+   local (`Nov 2, 9:08 PM`), and a provider's notes are its own words with
+   their own label ("Free tier: false") rather than "Note 1".
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** A safe element factory. TEXT ONLY — never `innerHTML`. */
+function usageEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = String(text);
+  return node;
+}
+
+/* ─────────────────────────────── money, percentages, instants, ages ────── */
+
+/** The ISO 4217 symbols this page meets, plus the three-letter fallback. */
+const USAGE_CURRENCY_SYMBOLS = { USD: "$", EUR: "€", GBP: "£", CNY: "¥", JPY: "¥" };
+
+/** The currency symbol for a code, or the code itself with a space.
+ *
+ *  `"USD"` and an empty code are both `$`: every provider on this page that
+ *  sends a bare number is sending dollars, and the route's own adapters set
+ *  `currency="USD"` explicitly where they know. An unknown code is printed as
+ *  the code — never guessed at, because `¥` for CNY and JPY are different
+ *  currencies that share a symbol.
+ */
+function usageCurrencyPrefix(currency) {
+  const code = String(currency || "USD").toUpperCase();
+  if (code === "USD") return "$";
+  if (Object.prototype.hasOwnProperty.call(USAGE_CURRENCY_SYMBOLS, code)) {
+    return USAGE_CURRENCY_SYMBOLS[code];
+  }
+  return `${code} `;
+}
+
+/** How many decimals this page prints for one money figure.
+ *
+ *  A rule with TWO cases, chosen so every value in the user's own report reads
+ *  the way they asked for it:
+ *
+ *  * **two decimals** is money as a person writes it — `$34.93`, `$35.00`,
+ *    `−$0.01`, `¥131.06`. This is the case at or above ten cents, where a
+ *    cent is the unit a reader acts in.
+ *  * **four decimals** below ten cents — `$0.0698`, `$0.1840 of $0.2000` —
+ *    because there two decimals do real damage: `0.0697507979` would read
+ *    `$0.07` (rounding away a third of the remaining balance) and OpenRouter's
+ *    key ceiling `$0.20` against `$0.1840` left would be indistinguishable
+ *    from the same figure at two. Four is the most any provider on this page
+ *    sends in a way a reader can use.
+ *
+ *  The exact provider string is never lost: every caller puts it on the
+ *  element's `title` (§UI-QUALITY A.3), which is what lets this be a
+ *  presentation rule rather than a quote.
+ */
+function usageMoneyDecimals(magnitude) {
+  // TWO DECIMALS, EXCEPT BELOW TEN CENTS WHERE THEY WOULD LOSE THE FIGURE.
+  //
+  // Every figure at or above ten cents is money as a person writes it:
+  // `$34.93`, `$35.00`, `$4,050.29`, `¥131.06` — including DeepSeek's arrear,
+  // which is `−$0.01` and is ONE cent, not a precision artefact.
+  //
+  // Below ten cents two decimals can change what the number says, and that is
+  // the only case that gets four:
+  //   * `0.0697507979` would read `$0.07`, rounding a third of a remaining
+  //     balance away;
+  //   * OpenRouter's key ceiling left `0.1840009580000002` against a `$0.20`
+  //     cap would read `$0.18 of $0.20`, where the two figures are one cent
+  //     apart and the reader cannot see how much is really left.
+  // A value that is a whole number of cents (DeepSeek's `0.01`) is money at
+  // two decimals even though it is under ten cents: rounding it changes
+  // nothing, so four would be noise.
+  //
+  // The exact provider string is never lost: every caller puts it on the
+  // element's `title` (§UI-QUALITY A.3), so this is a presentation rule and
+  // not a quote.
+  if (!(magnitude > 0 && magnitude < 0.1)) return 2;
+  const cents = magnitude * 100;
+  return Math.abs(cents - Math.round(cents)) < 1e-9 ? 2 : 4;
+}
+
+/** One money figure, formatted for a reader — `$34.93`, `−$0.01`, `$0.0698`.
+ *
+ *  A provider may spell its own money: the Anthropic `usage_limit` header sends
+ *  `$4,050.2926` and the ChatGPT payload sends `4.18`. Parsing the raw string
+ *  makes the first one `NaN`, and the first version of this function then
+ *  prefixed its own `$` and printed `$$4,050.2926` — a defect the measurement
+ *  harness's screenshot caught. `usageBareNumber` strips any symbol and the
+ *  grouping BEFORE the parse, so both spellings format the same way. A string
+ *  with no digit in it is not a number at all and keeps the provider's own
+ *  words, unprefixed.
+ */
+function usageMoney(amount, currency) {
+  const raw = String(amount == null ? "" : amount).trim();
+  if (!raw) return "";
+  const prefix = usageCurrencyPrefix(currency);
+  const bare = usageBareNumber(raw);
+  const value = /\d/.test(bare) ? Number(bare) : Number.NaN;
+  if (!Number.isFinite(value)) {
+    return /^\s*[\u2212-]?\d/.test(raw) ? `${prefix}${raw}` : raw;
+  }
+  const magnitude = Math.abs(value);
+  const digits = usageMoneyDecimals(magnitude);
+  const body = magnitude.toLocaleString("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+  // U+2212 MINUS SIGN, not a hyphen: it is what a reader reads as "minus" and
+  // it aligns under a tabular figure. A negative balance is real data — an
+  // account in arrears — and must never be suppressed as "no data".
+  return `${value < 0 ? "−" : ""}${prefix}${body}`;
+}
+
+/** A percentage the provider sent, given its sign. `null` for nothing sent.
+ *
+ *  The provider's own string is preserved: `"7"` is `"7%"`, `"38.5"` is
+ *  `"38.5%"`, and `""` is `null` — **never `"0%"`**, which is the whole
+ *  reason this function exists instead of a `Number(x) || 0`.
+ */
+function usagePct(used) {
+  if (used === "" || used == null) return null;
+  const text = String(used).trim();
+  if (!text) return null;
+  return /[%]$/.test(text) ? text : `${text}%`;
+}
+
+/** A number a provider sent, or `null`. Never `0` for "nothing". */
+/** A provider's money string with any currency symbol and grouping removed.
+ *
+ *  MOST providers send a bare number, and a few send their own formatting — the
+ *  Anthropic `usage_limit` header spells `$4,050.2926`, and the ChatGPT payload
+ *  sends `4.18`. Parsing the raw string makes the first one `NaN`, and the first
+ *  version of `usageMoney` then prefixed its own `$` and printed
+ *  `$$4,050.2926` — a defect the measurement harness's screenshot caught.
+ *
+ *  It strips one leading symbol run, the thousands separators and any spaces,
+ *  and leaves a sign, a decimal point and the digits untouched. A string with
+ *  no digit survives as itself, which is what lets `usageMoney` fall back to
+ *  the provider's own words rather than invent a number.
+ */
+function usageBareNumber(text) {
+  return String(text == null ? "" : text)
+    .trim()
+    .replace(/^[^\d\-+.]+/, "")
+    .replace(/[\s,]/g, "");
+}
+
+function usageNumber(value) {
+  const text = usageBareNumber(value);
+  if (!text) return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** A reset instant, local and short: `Nov 2, 9:08 PM`.
+ *
+ *  `specs/INVESTIGATION-USAGE-AND-CREDITS.md` §5.3: a reset must be in the
+ *  reader's own clock, and the user's PDF showed `2026-11-02T21:08:42.000Z` on
+ *  the page — a raw wire value, which is the "raw data" complaint this release
+ *  answers. An epoch (9–13 digits) and an ISO string are both read; anything
+ *  else is shown exactly as the provider wrote it, because a provider that
+ *  sends "in 2 hours" gets its words back.
+ *
+ *  The raw value goes on the caller's `title`, so `usageInstantParts` returns
+ *  both and no caller can shorten without saying what it shortened.
+ */
+function usageInstantParts(value) {
+  const raw = String(value == null ? "" : value).trim();
+  if (!raw) return null;
+  let when = null;
+  if (/^\d{9,13}$/.test(raw)) {
+    // A bare `0` (CommandCode sends `resetAt: 0` for a window with no reset)
+    // is not the epoch: showing it as 1970 would be a fact the provider never
+    // said. Treating it as absent is the honest reading of "no reset".
+    const seconds = raw.length > 10 ? Number(raw) / 1000 : Number(raw);
+    if (!(seconds > 0)) return null;
+    when = new Date(seconds * 1000);
+  } else if (/[A-Za-z]/.test(raw)) {
+    when = new Date(raw);
+  }
+  if (when === null || Number.isNaN(when.getTime())) {
+    return { text: raw, title: raw, ok: true };
+  }
+  return {
+    text: when.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+    title: `${when.toLocaleString()} (${raw})`,
+    ok: true,
   };
+}
 
-  // ---- the two subscription cards, in the declared order
-  //
-  // `rowByProvider` is built FIRST because the subscription cards now draw a
-  // declared read of their own (8.5.0) as well as their header windows: the
-  // route reports one row per provider, and a card looks its own up by id. Two
-  // cards reading one table is the same rule the block below follows.
-  const rowByProvider = new Map(
-    (Array.isArray(usageCaptured.payload?.providers)
-      ? usageCaptured.payload.providers
-      : []
-    ).map((row) => [row.provider_id, row]),
-  );
-  const subscriptionIds = new Set(USAGE_SUBSCRIPTIONS.map((spec) => spec.id));
-  let anySubscription = false;
-  USAGE_SUBSCRIPTIONS.forEach((spec) => {
-    const known = knownToServer.get(spec.id);
-    const entry = usageSources[spec.id];
-    // Configured means the server says this provider has a credential. A
-    // subscription with none is not on the page -- the same rule every other
-    // provider follows, and the reason a fresh install shows no card here.
-    const configuredHere =
-      (Number(known?.key_count) || 0) > 0 ||
-      known?.status === "configured" ||
-      known?.status === "free_ready";
-    if (!configuredHere) return;
-    anySubscription = true;
-    const displayName = known?.display_name || spec.label;
-    const render = spec.id === "anthropic_oauth"
-      ? renderUsageAnthropicCard
-      : renderUsageChatGPTCard;
-    grid.appendChild(
-      render(spec, displayName, entry, poolFor(spec.id), rowByProvider.get(spec.id)),
-    );
-  });
-  const emptyNote = byId("usageEmptyNote");
-  if (emptyNote) {
-    emptyNote.hidden = anySubscription;
-    emptyNote.textContent = anySubscription
-      ? ""
-      : "No subscription credential is stored. MCC reads usage for Claude and " +
-        "ChatGPT only when you have signed in to one; the Providers page is " +
-        "where that happens.";
+/** An observation time as a phrase a reader can act on: "3 minutes ago". */
+function usageAgo(epochSeconds) {
+  const seconds = Number(epochSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const age = Math.max(0, Date.now() / 1000 - seconds);
+  if (age < 90) return "just now";
+  const minutes = Math.round(age / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** A future wait as words: "27 minutes", "under a minute". Never a bare number. */
+function usageWaitWords(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return "under a minute";
+  const minutes = Math.round(total / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+/* ───────────────────────────────────── the fraction a bar may be drawn at ─ */
+
+/** One window's fill percentage, or `null` when there is no honest fraction.
+ *
+ *  THE ONE PLACE A BAR IS DECIDED (§4 of the spec, restated because it is the
+ *  whole point):
+ *
+ *  * `unit: "percent"` — the provider sent the percentage. Clamped to 0–100
+ *    for the DRAW only; the text beside the bar keeps their exact string.
+ *  * `unit: "usd"` / `"requests"` with `used` AND `limit` — `used / limit` of
+ *    two numbers the provider sent. This is the user's own instruction: a
+ *    used/limit pair becomes a bar with a percentage (CommandCode's
+ *    `34.9300790367 / 35` is 99.8%).
+ *  * `remaining` AND `limit` and no `used` — `(limit − remaining) / limit`.
+ *    This is NOT an invented relationship: the provider sent a ceiling and
+ *    what is left of it, so the consumed share is the difference of two
+ *    numbers IT sent. The rule the spec forbids is `remaining = cap − used`
+ *    (deriving the complement of an absent figure); this is the mirror
+ *    direction and the ceiling is real. OpenRouter's `limit_remaining: 0.184`
+ *    against `limit: 0.2` is 8% consumed, which is what the user's PDF shows.
+ *  * `used` alone, no `limit` — **no bar**, ever. A number with no ceiling has
+ *    no fraction (IV.1).
+ *
+ *  `percent`: the display figure, from either the provider's own string or the
+ *  ratio just computed. `null` in, `null` out — every caller must then draw
+ *  words.
+ */
+function usageFraction(win) {
+  if (!win) return null;
+  const unit = String(win.unit || "");
+  if (unit === "percent") {
+    const sent = usageNumber(win.used);
+    if (sent === null) return null;
+    return {
+      percent: Math.max(0, Math.min(100, sent)),
+      text: usagePct(win.used),
+      source: "provider-percent",
+    };
   }
-
-  // ---- the providers whose figures arrive on your own traffic (8.4.0)
-  //
-  // One card per CONFIGURED provider the server has an opinion about, and the
-  // server's own state word decides what the card says. A provider the server
-  // reports but this install does not hold a credential for is skipped: the
-  // page is about what you have, and naming 59 catalogue ids to say "nothing"
-  // is a wall of unknown providers, which is the thing §5.2 forbids.
-  //
-  // `rowByProvider` was built above, before the subscription cards: one table
-  // serves both blocks, so a card cannot read a row this block never saw.
-  let anyCaptured = false;
-  configured.forEach((provider) => {
-    if (subscriptionIds.has(provider.provider_id)) return;
-    if (provider.provider_id === "openai") return;
-    const row = rowByProvider.get(provider.provider_id);
-    // No row means the server has no mechanism for this provider at all: it is
-    // the state-3 sentence below, not a card with nothing on it.
-    if (!row) return;
-    if (!row.mechanisms || !row.mechanisms.length) return;
-    anyCaptured = true;
-    if (capturedGrid) {
-      capturedGrid.appendChild(
-        renderUsageCapturedCard(
-          { ...row, display_name: row.display_name || provider.display_name },
-          provider.keys ? { count: provider.keys } : null,
-        ),
-      );
+  if (unit !== "usd" && unit !== "requests") return null;
+  const limit = usageNumber(win.limit);
+  const used = usageNumber(win.used);
+  const remaining = usageNumber(win.remaining);
+  if (limit !== null && limit > 0) {
+    if (used !== null) {
+      const share = Math.max(0, Math.min(100, (used / limit) * 100));
+      return { percent: share, text: `${usageShareText(share)}%`, source: "used-of-limit" };
     }
-  });
-  const capturedEmpty = byId("usageCapturedEmpty");
-  if (capturedEmpty) {
-    let sentence = "";
-    if (usageCaptured.state === "failed") {
-      // State 4, in the page's own words: the read of THIS server failed, which
-      // is a fact about the read and not about any provider.
-      sentence =
-        "Could not read what this server has already observed: " +
-        `${usageCaptured.error}. This is a fact about the read, not about any ` +
-        "provider, and nothing will be retried on its own.";
-    } else if (!anyCaptured) {
-      sentence =
-        "None of your configured providers sends a usage figure on its own " +
-        "responses or publishes one MCC can read, so there is nothing in this " +
-        "block yet.";
+    if (remaining !== null) {
+      const share = Math.max(0, Math.min(100, ((limit - remaining) / limit) * 100));
+      return {
+        percent: share,
+        text: `${usageShareText(share)}%`,
+        source: "remaining-of-limit",
+      };
     }
-    capturedEmpty.hidden = !sentence;
-    capturedEmpty.textContent = sentence;
   }
+  return null;
+}
 
-  // ---- every other configured provider, one plain sentence each
-  const others = configured.filter((provider) => {
-    if (subscriptionIds.has(provider.provider_id)) return false;
-    // `openai` shares CHATGPT_OAUTH_ACCESS_TOKEN with `chatgpt_oauth`: it is
-    // the same subscription behind another name, so it is the same card, not
-    // a second row saying "no usage endpoint".
-    if (provider.provider_id === "openai") return false;
-    // A provider that got a card above is not repeated as a sentence: the one
-    // row per provider rule, and the reason a configured OpenRouter does not
-    // appear twice with two different answers.
-    const row = rowByProvider.get(provider.provider_id);
-    if (row && row.mechanisms && row.mechanisms.length) return false;
-    return true;
-  });
-  others.forEach((provider) => {
-    const item = document.createElement("li");
-    item.className = "usage-other-item";
-    item.dataset.provider = provider.provider_id;
-    const name = document.createElement("strong");
-    name.className = "usage-other-name";
-    name.textContent = provider.display_name;
-    const sentence = document.createElement("span");
-    sentence.className = "usage-other-sentence";
-    sentence.textContent = ` — ${usageUnavailableSentence(provider.display_name)}`;
-    item.append(name, sentence);
-    const poolLine = usagePoolLine(provider.keys ? { count: provider.keys } : null);
-    if (poolLine) {
-      const pool = document.createElement("span");
-      pool.className = "usage-other-pool";
-      pool.textContent = ` ${poolLine.endsWith(".") ? poolLine : `${poolLine}.`}`;
-      item.appendChild(pool);
+/** A computed share, at the precision that keeps a real value visible.
+ *
+ *  One decimal below 100 and an integer at 100 or 0: `99.8%` is a different
+ *  reading from `100%` and CommandCode's nearly-exhausted window must say so,
+ *  while `0%` and `100%` should not read `0.0%`. Never rounds 99.8 up to 100.
+ */
+function usageShareText(percent) {
+  if (percent >= 99.95 && percent < 100) return "99.9";
+  if (percent >= 100) return "100";
+  if (percent <= 0) return "0";
+  if (percent >= 99) return percent.toFixed(1);
+  const rounded = Math.round(percent * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+/** The severity a fill is drawn at. The fill, never the text. */
+function usageSeverity(percent) {
+  if (percent == null) return "none";
+  if (percent >= 90) return "critical";
+  if (percent >= 75) return "warn";
+  return "ok";
+}
+
+/* ───────────────────────────────────────────────────── the seven/eight states ─ */
+
+/** The eight honest states of §2, as the page words them.
+ *
+ *  `tone` is redundant decoration on top of the WORD — a reader who cannot see
+ *  colour still gets the distinction, which is the rule every chip on this
+ *  page has followed since 8.3.0. `order` is the list order §5.2 fixes, and
+ *  the server's `USAGE_STATE_ORDER` is the same sequence.
+ */
+const USAGE_STATES = {
+  measured: { label: "Measured", tone: "ok", order: 0 },
+  stale: { label: "Stale", tone: "warn", order: 1 },
+  failed: { label: "Read failed", tone: "error", order: 2 },
+  unavailable: { label: "Not available", tone: "neutral", order: 3 },
+  needs_credential: { label: "Needs a credential", tone: "neutral", order: 4 },
+  possible_endpoint: { label: "Possible endpoint", tone: "neutral", order: 5 },
+  not_measured: { label: "Not read yet", tone: "neutral", order: 6 },
+  unsupported: { label: "Not published", tone: "neutral", order: 7 },
+};
+
+/** The chip for one state. The word carries the meaning; colour is redundant. */
+function usageStateChip(state) {
+  const entry = USAGE_STATES[state] || USAGE_STATES.not_measured;
+  const chip = usageEl("span", `usage-chip usage-chip-${entry.tone}`, entry.label);
+  chip.dataset.state = state;
+  return chip;
+}
+
+/** The one sentence a state needs, when the block above it is not enough.
+ *
+ *  §5.4's degradation table, in the words the user approved, plus the two
+ *  states 8.7.0 added. **A state 3 sentence and a state 4 sentence must never
+ *  read the same**, which is why every one of these is its own string rather
+ *  than a template with a tone flag.
+ */
+function usageStateSentence(row) {
+  const name = row.name;
+  switch (row.state) {
+    case "failed": {
+      const why = row.readError || "no reason was given";
+      return `Could not read usage: ${why} This is a fact about the read, not about the provider — its plan may well be fine.`;
     }
-    otherList.appendChild(item);
-  });
-  const otherEmpty = byId("usageOtherEmpty");
-  if (otherEmpty) {
-    otherEmpty.hidden = others.length > 0;
-    otherEmpty.textContent = others.length
-      ? ""
-      : "Nothing else is configured. A provider you add on the Providers page " +
-        "appears here once it holds a credential.";
-  }
-
-  const statusLine = byId("usageStatus");
-  if (statusLine) {
-    const failed = Object.values(usageSources).filter(
-      (entry) => entry.state === "failed",
-    ).length;
-    statusLine.hidden = failed === 0;
-    statusLine.textContent = failed
-      ? `${failed} reading${failed === 1 ? "" : "s"} could not be read; each ` +
-        "card names the reason above. Nothing will be retried on its own."
-      : "";
+    case "unavailable":
+      return row.unavailableReason
+        ? `The provider's answer is that there is nothing available for this account: ${row.unavailableReason}`
+        : "The provider's answer is that there is nothing available for this account right now. The read worked; there is simply nothing left to show.";
+    case "needs_credential":
+      // `needsCredential` already names the secret ("a management key",
+      // "a Copilot OAuth token MCC does not hold"), so the sentence does not
+      // repeat the possessive: "needs a management key, which this machine
+      // does not hold" reads once, which is the point.
+      return `${name} publishes a usage route that needs ${row.needsCredential}, and this machine does not hold it. MCC will not ask you to paste one: the credential is not needed for inference, and a panel is not worth a new secret in your config.`;
+    case "possible_endpoint": {
+      const what = row.recognised || "a host models.dev knows";
+      return `MCC has not read this provider. ${capitalise(row.sentence || `It looks like ${what}`)}. That is a hypothesis about a route, not a reading — so there is no number here, and nothing will be retried on its own.`;
+    }
+    case "not_measured":
+      return row.readable
+        ? "Not read yet. Nothing has been asked for this provider; open Read now, or leave the automatic refresh on and it fills in on the next pass."
+        : "Not read yet: MCC has no read for this provider in this release, so nothing has been asked and nothing has arrived on its traffic.";
+    case "unsupported":
+      return `${name} publishes no usage endpoint MCC can read.`;
+    case "stale": {
+      const age = usageAgo(row.observedAt) || "a while ago";
+      return `Read ${age}, which is older than 30 minutes. What follows is what the provider said then, not what it says now.`;
+    }
+    default: {
+      const age = usageAgo(row.observedAt);
+      return age ? `Read ${age}.` : "Read just now.";
+    }
   }
 }
 
-/** Open the Usage page: one local GET, and a paint of what is already here.
+function capitalise(text) {
+  const value = String(text || "");
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
+}
+
+/* ────────────────────────────────────────── the providers' own note labels ── */
+
+/** A provider note, split into a label and its words where the shape allows.
  *
- *  TWO things, and the second is the one worth stating:
+ *  `specs/PR-USAGE-LAYOUTS-SPEC.md` and the user's brief: "Note 1 / Note 2"
+ *  become the provider's own words with a label — "Free tier: false",
+ *  "Rolling window: ok". The adapters already write most notes in that shape
+ *  (`"Subscription status: active."`), so this splits at the FIRST colon and
+ *  leaves a note with no colon as its own sentence under a neutral label.
+ *  Nothing is reworded: the label is the text before the colon and the body is
+ *  the text after it, both verbatim minus the trailing full stop the adapter
+ *  adds for its own readability.
+ */
+function usageNoteParts(note) {
+  const text = String(note == null ? "" : note).trim();
+  if (!text) return null;
+  const index = text.indexOf(":");
+  if (index <= 0 || index >= text.length - 1) {
+    return { label: "The provider says", text: trimTrailingStop(text) };
+  }
+  return {
+    label: text.slice(0, index).trim(),
+    text: trimTrailingStop(text.slice(index + 1).trim()),
+  };
+}
+
+function trimTrailingStop(text) {
+  const value = String(text || "");
+  return /[.!?]$/.test(value) ? value.slice(0, -1) : value;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE MODEL. One payload in, one shape every layout reads.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** Where the two OAuth answers' figures live, as the shared window vocabulary.
  *
- *  1. 8.4.0 adds `loadUsageCaptured()` -- a single `GET /admin/api/usage`,
- *     which reads THIS SERVER'S MEMORY and nothing else. It opens no upstream
- *     connection, reads no credential and starts no timer, and there is no
- *     refresh button anywhere on this page (§5.5.2).
- *  2. 8.3.0's contract still holds for everything else: the two subscription
- *     cards are painted from payloads the Providers page already fetched, and
- *     opening the view adds no second read for them.
+ *  The subscription payloads are the two the Providers page already reads
+ *  (`_AnthropicOAuthWindows` and `_ChatGPTOAuthWindows`). They predate the
+ *  usage route's `reading` shape, and 8.7.0 is not the release that rewrites
+ *  them — so this is the ONE adapter that turns each into the same
+ *  `{id,label,used,limit,unit,resets_at}` shape the route's readings use. Every
+ *  layout then sees one shape for every provider, which is what makes "the
+ *  same data in all five" a property rather than a hope.
  *
- *  The jsdom scenario pins both halves by recording every URL the fetch stub
- *  answers: exactly one new URL on open, and it is the usage route. */
+ *  A payload in the two states below produces NO windows and NO balances, and
+ *  the reason travels with it rather than being re-derived per layout:
+ *  `pending` (nobody has answered yet) and `failed` (the answer did not
+ *  arrive). The row's state then decides the words.
+ */
+
+/** The Anthropic subscription's windows, per account, flattened to one block.
+ *
+ *  An account's own windows belong to that account (§2.5 of the investigation:
+ *  "reporting one account's 5-hour utilisation on another account's row is a
+ *  wrong answer to the only question the card is asked"). Multiple accounts
+ *  produce a window set per account, and the account's name rides in the
+ *  window's label so a layout can print it without a second lookup.
+ */
+function usageAnthropicReading(payload) {
+  const accounts = Array.isArray(payload && payload.accounts)
+    ? payload.accounts
+    : [];
+  const blocks = accounts.length
+    ? accounts.map((account) => ({ account, windows: account.windows || {} }))
+    : [{ account: null, windows: (payload && payload.windows) || {} }];
+  const windows = [];
+  const notes = [];
+  let observedAt = null;
+  let plan = "";
+  let anyObserved = false;
+  let overageLimit = "";
+  let overageStatus = "";
+  let overageReset = "";
+  blocks.forEach((block) => {
+    const w = block.windows || {};
+    if (w.observed) anyObserved = true;
+    const label =
+      (block.account && (block.account.name || block.account.account_id)) || "";
+    if (block.account && block.account.subscription_type) {
+      plan = block.account.subscription_type;
+    }
+    if (w.observed_at && (observedAt === null || Number(w.observed_at) > observedAt)) {
+      observedAt = Number(w.observed_at);
+    }
+    const prefix = label ? `${label} · ` : "";
+    if (usageNumber(w.five_hour_utilization) !== null) {
+      windows.push({
+        id: "five_hour",
+        label: `${prefix}5-hour window`,
+        used: w.five_hour_utilization,
+        limit: "",
+        remaining: "",
+        unit: "percent",
+        resets_at: w.five_hour_reset || "",
+      });
+    }
+    if (usageNumber(w.weekly_utilization) !== null) {
+      windows.push({
+        id: "weekly",
+        label: `${prefix}Weekly window`,
+        used: w.weekly_utilization,
+        limit: "",
+        remaining: "",
+        unit: "percent",
+        resets_at: w.weekly_reset || "",
+      });
+    }
+    if (w.status && w.status !== USAGE_NOT_OBSERVED) {
+      const which =
+        w.status === "session-limit-reached" ? "5-hour" : "weekly";
+      const resets =
+        w.status === "session-limit-reached"
+          ? w.five_hour_reset
+          : w.weekly_reset;
+      const when = usageInstantParts(resets);
+      notes.push(
+        w.status === "session-limit-reached"
+          ? `Anthropic says: You hit your ${which} window${when ? `; it resets ${when.text}` : ""}`
+          : `Anthropic says: ${w.status}`,
+      );
+    }
+    if (
+      w.overage_status &&
+      w.overage_status !== USAGE_NOT_OBSERVED &&
+      !overageStatus
+    ) {
+      overageStatus = String(w.overage_status);
+    }
+    if (
+      w.overage_reset &&
+      w.overage_reset !== USAGE_NOT_OBSERVED &&
+      !overageReset
+    ) {
+      overageReset = String(w.overage_reset);
+    }
+    if (usageNumber(w.usage_limit) !== null && !overageLimit) {
+      overageLimit = String(w.usage_limit);
+    }
+  });
+  // THE OVERAGE CEILING IS MONEY, and it was a note until 8.7.0.
+  //
+  // `usage_limit` is the dollar ceiling Anthropic reports for extra usage
+  // (`$4,050.2926` on this account) — the same kind of figure as a balance, so
+  // it belongs in the cash block with its own label rather than buried in a
+  // sentence. Only the FIRST account's is taken: the two subscriptions each
+  // report one per account, and a merged list of them would be one account's
+  // ceiling printed under another's heading (§2.5 of the investigation).
+  const balances = [];
+  if (usageNumber(overageLimit) !== null) {
+    balances.push({
+      id: "usage_limit",
+      label: "Overage usage limit",
+      amount: overageLimit,
+      currency: "USD",
+      kind: "available",
+    });
+  }
+  // The overage STATUS and RESET are their own facts — a word and an instant,
+  // neither of them money — so they travel as notes with their own labels
+  // rather than being dropped. 8.3.0 gave them an "Overage" block; 8.7.0 keeps
+  // the block's content and lets every layout draw it.
+  if (overageStatus) notes.push(`Overage status: ${overageStatus}`);
+  if (overageReset) {
+    const when = usageInstantParts(overageReset);
+    if (when) notes.push(`Overage resets: ${when.text}`);
+  }
+  return {
+    windows,
+    balances,
+    notes,
+    plan,
+    observedAt: anyObserved ? observedAt : null,
+    available: true,
+    unavailableReason: "",
+  };
+}
+
+/** The ChatGPT/Codex subscription's windows and its cash, split in two blocks.
+ *
+ *  Codex reports a percent of each window AND a credits balance on the same
+ *  response — the case that forces §4.3's split (Q5, the user's own decision).
+ *  The two never share a heading and nothing adds them.
+ */
+function usageChatGPTPayloadReading(payload) {
+  const windows = [];
+  const balances = [];
+  const notes = [];
+  const w = (payload && payload.windows) || {};
+  if (w.observed) {
+    if (usageNumber(w.primary_used_percent) !== null) {
+      windows.push({
+        id: "primary_window",
+        label: "Primary window",
+        used: w.primary_used_percent,
+        limit: "",
+        remaining: "",
+        unit: "percent",
+        resets_at: w.primary_reset_at || "",
+      });
+    }
+    if (usageNumber(w.secondary_used_percent) !== null) {
+      windows.push({
+        id: "secondary_window",
+        label: "Secondary window",
+        used: w.secondary_used_percent,
+        limit: "",
+        remaining: "",
+        unit: "percent",
+        resets_at: w.secondary_reset_at || "",
+      });
+    }
+    if (usageNumber(w.primary_window_minutes) !== null) {
+      notes.push(`Primary window length: ${w.primary_window_minutes} minutes`);
+    }
+    if (usageNumber(w.secondary_window_minutes) !== null) {
+      notes.push(`Secondary window length: ${w.secondary_window_minutes} minutes`);
+    }
+    // A cash balance can be exactly `0`, which is a MEASURED zero and must
+    // render. `usageNumber` returns 0 for "0", and only `""` is absent.
+    if (usageNumber(w.credits_balance) !== null) {
+      balances.push({
+        id: "credits",
+        label: "Credits balance",
+        amount: String(w.credits_balance),
+        currency: "USD",
+        kind: "available",
+      });
+    }
+    if (w.credits_has_credits && w.credits_has_credits !== USAGE_NOT_OBSERVED) {
+      notes.push(`Has credits: ${w.credits_has_credits}`);
+    }
+    if (w.credits_unlimited && w.credits_unlimited !== USAGE_NOT_OBSERVED) {
+      notes.push(`Credits unlimited: ${w.credits_unlimited}`);
+    }
+    if (w.limit_name && w.limit_name !== USAGE_NOT_OBSERVED) {
+      notes.push(`Limit name: ${w.limit_name}`);
+    }
+    if (
+      w.rate_limit_reached_type &&
+      w.rate_limit_reached_type !== USAGE_NOT_OBSERVED
+    ) {
+      notes.push(`Limit reached: ${w.rate_limit_reached_type}`);
+    }
+  }
+  return {
+    windows,
+    balances,
+    notes,
+    plan: (payload && payload.plan_type) || "",
+    observedAt: w.observed ? Number(w.observed_at) || null : null,
+    available: true,
+    unavailableReason: "",
+  };
+}
+
+/** One subscription's row, from the payload the Providers page already fetched.
+ *
+ *  `entry.state` is `pending` / `ready` / `failed`, written by
+ *  `rememberUsagePayload()` and `rememberUsageFailure()` — nothing on the Usage
+ *  page writes it. A `ready` payload whose windows were never observed is
+ *  `not_measured`: a subscription card has a mechanism and nothing has come
+ *  through it, which is a different fact from state 3.
+ */
+function usageSubscriptionRow(spec, entry, known, routeRow) {
+  const base = {
+    id: spec.id,
+    name: (known && known.display_name) || spec.label,
+    credentials: Number((known && known.key_count) || 0),
+    kind: "subscription",
+    mechanisms: ["provider-endpoint"],
+    readable: true,
+    needsCredential: "",
+    recognised: "",
+    sentence: "",
+    detail: spec.source,
+    // The DECLARED route where there is one, and the header family otherwise.
+    // A subscription is read BOTH ways, and the line must name which: the
+    // route is the richer source (8.5.0) and the headers are the one that
+    // costs nothing. Naming neither answers a different question.
+    endpointText: routeRow && routeRow.endpoint
+      ? `${routeRow.endpoint.host}${routeRow.endpoint.path} (${routeRow.endpoint.provenance})`
+      : spec.source,
+    account: spec.account || "",
+    readError: "",
+    retryInSeconds: null,
+    nextReadInSeconds: routeRow ? routeRow.next_read_in_seconds : null,
+    intervalSeconds: routeRow ? routeRow.interval_seconds : null,
+    values: {},
+  };
+  let reading = null;
+  if (entry.state === "ready") {
+    reading =
+      spec.id === "anthropic_oauth"
+        ? usageAnthropicReading(entry.payload)
+        : usageChatGPTPayloadReading(entry.payload);
+    if (
+      spec.id === "anthropic_oauth" &&
+      Array.isArray(entry.payload && entry.payload.accounts) &&
+      entry.payload.accounts.length
+    ) {
+      base.account = entry.payload.accounts
+        .map((account) => account.name || account.account_id || "")
+        .filter(Boolean)
+        .join(", ");
+    }
+  } else if (entry.state === "failed") {
+    base.readError = base.readError || entry.error || "no reason was given";
+  }
+  // The declared read's own reading wins where it exists: it is the newer,
+  // richer source (8.5.0), and it is what the "Read now" button updates. The
+  // header payload still supplies the plan and, for Anthropic, the accounts.
+  const endpointReading =
+    routeRow && routeRow.reading ? usageReadingFromPayload(routeRow.reading) : null;
+  const merged = usageMergeReadings(reading, endpointReading);
+  const row = usageFinishRow(base, merged, routeRow, entry);
+  // A payload that never arrived is state 4 — a fact about the READ — even
+  // when the route's own row, which only ever sees the last declared attempt,
+  // says `not_measured`. The two are different sources and the failure is the
+  // newer fact: the Providers page asked and the answer did not come.
+  if (!reading && !endpointReading && entry.state === "failed") {
+    row.state = "failed";
+    row.readError = base.readError;
+  }
+  return row;
+}
+
+/** The route's `reading` payload, as the same shape. */
+function usageReadingFromPayload(payload) {
+  if (!payload) return null;
+  return {
+    windows: Array.isArray(payload.windows) ? payload.windows.slice() : [],
+    balances: Array.isArray(payload.balances) ? payload.balances.slice() : [],
+    notes: Array.isArray(payload.notes) ? payload.notes.slice() : [],
+    plan: payload.plan || "",
+    observedAt: Number(payload.fetched_at) || null,
+    available: payload.available !== false,
+    unavailableReason: payload.unavailable_reason || "",
+  };
+}
+
+/** Two readings of one subscription, as one.
+ *
+ *  NOT a sum and not a merge of figures: the declared read's windows are the
+ *  same windows the headers carry, so a union would show each one twice. The
+ *  rule is "the newer answer wins, per window id, and anything only one of
+ *  them has is kept" — which is what a reader expects and what keeps the
+ *  `pending` state honest (an unread endpoint leaves the header windows
+ *  exactly as they were).
+ */
+function usageMergeReadings(primary, secondary) {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const newer = (secondary.observedAt || 0) >= (primary.observedAt || 0);
+  const first = newer ? secondary : primary;
+  const second = newer ? primary : secondary;
+  const seen = new Set(first.windows.map((window) => window.id));
+  const windows = first.windows.concat(
+    second.windows.filter((window) => !seen.has(window.id)),
+  );
+  const balanceSeen = new Set(first.balances.map((balance) => balance.id));
+  const balances = first.balances.concat(
+    second.balances.filter((balance) => !balanceSeen.has(balance.id)),
+  );
+  const noteSeen = new Set(first.notes);
+  const notes = first.notes.concat(
+    second.notes.filter((note) => !noteSeen.has(note)),
+  );
+  return {
+    windows,
+    balances,
+    notes,
+    plan: first.plan || second.plan,
+    observedAt: Math.max(primary.observedAt || 0, secondary.observedAt || 0) || null,
+    // "Nothing available" is the more recent thing the provider said, so it
+    // travels with the newer half. A reading is available unless BOTH said
+    // otherwise, because one route answering "nothing" while another carries
+    // figures is a provider that reported figures.
+    available: first.available && second.available,
+    unavailableReason: first.unavailableReason || second.unavailableReason,
+  };
+}
+
+/** The state word for one row, decided the way the server decides it.
+ *
+ *  The server's `state` is authoritative where the row came from the route:
+ *  it holds the observation time and the failure record. The two subscriptions
+ *  are the exception — their payloads arrive from different routes — so their
+ *  state is decided here from the same inputs the server would have used, and
+ *  `usageSubscriptionRow` still prefers the route's own word whenever the route
+ *  has one.
+ */
+function usageRowState(routeState, reading, entry, routeRow) {
+  if (routeState && USAGE_STATES[routeState]) return routeState;
+  if (entry && entry.state === "failed") return "failed";
+  if (!reading) return "not_measured";
+  if (reading.available === false) return "unavailable";
+  const age = reading.observedAt
+    ? Date.now() / 1000 - reading.observedAt
+    : null;
+  if (age === null) return "not_measured";
+  return age > USAGE_STALE_AFTER_SECONDS ? "stale" : "measured";
+}
+
+/** Assemble the row's final shape: state, figures, and the words beside them. */
+function usageFinishRow(base, reading, routeRow, entry) {
+  const routeState = routeRow ? routeRow.state : "";
+  const state = usageRowState(routeState, reading, entry, routeRow);
+  const observedAt =
+    (routeRow && Number(routeRow.observed_at)) ||
+    (reading && reading.observedAt) ||
+    (routeRow && Number(routeRow.fetched_at)) ||
+    null;
+  return {
+    ...base,
+    state,
+    windows: reading ? reading.windows : [],
+    balances: reading ? reading.balances : [],
+    notes: reading ? reading.notes : [],
+    plan: (reading && reading.plan) || "",
+    observedAt,
+    available: reading ? reading.available : true,
+    unavailableReason: reading ? reading.unavailableReason : "",
+    readError: (routeRow && routeRow.read_error) || base.readError,
+    retryInSeconds: routeRow ? routeRow.retry_in_seconds : base.retryInSeconds,
+    nextReadInSeconds: routeRow
+      ? routeRow.next_read_in_seconds
+      : base.nextReadInSeconds,
+    // A `failed` entry whose route row still carries an older reading keeps
+    // those figures, dimmed, with the failure's own sentence above them —
+    // "this host said nothing this time" must not erase what it said an hour
+    // ago (§4.2).
+    values: (routeRow && routeRow.values) || {},
+  };
+}
+
+/** One provider's row from a `GET /admin/api/usage` coverage entry.
+ *
+ *  The route has already decided the state and already knows whether the
+ *  entry is a reading or a hypothesis (`stage`), which is why nothing here
+ *  re-derives either: a renderer that guessed would be a second answer to the
+ *  same question, on the page whose whole subject is that a figure is either
+ *  the provider's or absent.
+ */
+function usageCoverageRow(entry, known) {
+  const reading = entry.reading ? usageReadingFromPayload(entry.reading) : null;
+  const base = {
+    id: entry.provider_id,
+    name: (known && known.display_name) || entry.display_name || entry.provider_id,
+    credentials: Number((known && known.keys) || entry.credentials || 0),
+    kind: "provider",
+    mechanisms: Array.isArray(entry.mechanisms) ? entry.mechanisms : [],
+    readable: entry.readable === true,
+    needsCredential: entry.needs_credential || "",
+    recognised: entry.recognised || "",
+    sentence: entry.sentence || "",
+    detail: entry.detail || "",
+    endpointText: entry.endpoint
+      ? `${entry.endpoint.host}${entry.endpoint.path} (${entry.endpoint.provenance})`
+      : // No declared endpoint in the row: the figure came from the provider's
+        // own traffic, and `source_for` is where the table says which family.
+        entry.detail ||
+        usageDeclaredSource(entry.provider_id),
+    account: "",
+    readError: entry.read_error || "",
+    retryInSeconds: entry.retry_in_seconds || null,
+    nextReadInSeconds: entry.next_read_in_seconds || null,
+    intervalSeconds: entry.interval_seconds || null,
+    values: entry.values && typeof entry.values === "object" ? entry.values : {},
+    consecutiveFailures: entry.consecutive_failures || 0,
+  };
+  const state = USAGE_STATES[entry.state] ? entry.state : "not_measured";
+  return {
+    ...base,
+    state,
+    windows: reading ? reading.windows : [],
+    balances: reading ? reading.balances : [],
+    notes: reading ? reading.notes : [],
+    plan: (reading && reading.plan) || "",
+    observedAt:
+      Number(entry.observed_at) ||
+      (reading && reading.observedAt) ||
+      Number(entry.fetched_at) ||
+      null,
+    available: reading ? reading.available : true,
+    unavailableReason: reading ? reading.unavailableReason : "",
+  };
+}
+
+/** THE MODEL: every configured provider, exactly once, in the order §5.2 fixes.
+ *
+ *  Sources, in the order they are trusted:
+ *
+ *  1. `usageCaptured.payload.coverage` — the route's own list of every
+ *     configured provider, which is what makes a CUSTOM provider appear at
+ *     all. Its state is authoritative.
+ *  2. The two subscriptions, whose payloads the Providers page already
+ *     fetched. A subscription the coverage list already has is not repeated:
+ *     the coverage row is richer (it knows the route's reading and its
+ *     deadline), so it wins, and the header payload only fills gaps the route
+ *     cannot see (the plan, the account names).
+ *  3. Anything configured per `state.config.provider_status` that neither list
+ *     mentions. This is the belt-and-braces half of the coverage rule: on an
+ *     older server whose payload has no `coverage`, the page still lists every
+ *     configured provider rather than showing only the subscribed two.
+ *
+ *  **Derived from configuration, never a hard-coded list** (§2). A provider
+ *  added tomorrow appears with no code change.
+ */
+function usageLayoutModel() {
+  const payload = usageCaptured.payload || {};
+  const knownById = new Map(
+    usageConfiguredProviders().map((provider) => [provider.provider_id, provider]),
+  );
+  const routeRows = new Map(
+    (Array.isArray(payload.providers) ? payload.providers : []).map((row) => [
+      row.provider_id,
+      row,
+    ]),
+  );
+  const rows = [];
+  const placed = new Set();
+
+  // 1. the route's coverage list — every configured provider, custom ones
+  //    included, each already in exactly one of the eight states.
+  const coverage = Array.isArray(payload.coverage) ? payload.coverage : [];
+  coverage.forEach((entry) => {
+    if (!entry || !entry.provider_id || placed.has(entry.provider_id)) return;
+    const known = knownById.get(entry.provider_id);
+    // A SUBSCRIPTION the coverage list calls `unsupported` is a list that does
+    // not know what the Providers routes know. Its declaring row predates
+    // custom hooks and carries no mechanisms, so "no mechanism" here means
+    // "the list has no entry for it", not "the provider publishes nothing" —
+    // which is exactly the sentence the page must NOT print about a plan whose
+    // windows it is holding. The Providers page's own payload decides instead.
+    if (
+      entry.state === "unsupported" &&
+      USAGE_SUBSCRIPTIONS.some((spec) => spec.id === entry.provider_id)
+    ) {
+      if (usageSubscriptionConfigured(entry.provider_id, known)) {
+        placed.add(entry.provider_id);
+        const spec = USAGE_SUBSCRIPTIONS.find((s) => s.id === entry.provider_id);
+        rows.push(
+          usageSubscriptionRow(spec, usageSources[spec.id] || {}, known, routeRows.get(spec.id)),
+        );
+      }
+      return;
+    }
+    placed.add(entry.provider_id);
+    const row = usageCoverageRow(entry, known);
+    // A subscription's own header payload carries its plan and its account
+    // names, which the route's reading does not. Add them rather than replace
+    // anything: the route's figures stay authoritative.
+    if (USAGE_SUBSCRIPTIONS.some((spec) => spec.id === entry.provider_id)) {
+      const spec = USAGE_SUBSCRIPTIONS.find((s) => s.id === entry.provider_id);
+      const source = usageSources[spec.id] || {};
+      const extra =
+        spec.id === "anthropic_oauth"
+          ? usageAnthropicReading(source.payload || {})
+          : usageChatGPTPayloadReading(source.payload || {});
+      if (!row.plan && extra.plan) row.plan = extra.plan;
+      if (!row.account) row.account = usageSubscriptionAccount(spec, extra);
+      // The Providers page asked its own route and the answer did not arrive.
+      // That is state 4 — a fact about the READ — and it takes precedence over
+      // the usage route's `not_measured`, which only ever sees the last
+      // declared attempt. A subscription with a live reading is never
+      // downgraded by it: an older failure cannot erase a newer reading.
+      if (
+        source.state === "failed" &&
+        !row.reading &&
+        !row.windows.length &&
+        !row.balances.length
+      ) {
+        row.state = "failed";
+        row.readError =
+          row.readError || source.error || "no reason was given";
+      }
+    }
+    rows.push(row);
+  });
+
+  // 2. the two subscriptions, when the route has no coverage entry for them
+  //    (an older server) or when the route does not know them at all.
+  //
+  //    A subscription that IS configured and that the coverage list did not
+  //    name is `unsupported` by the route's own reading of the catalogue —
+  //    which is the wrong answer when the Providers page holds a payload for
+  //    it. So the declared read is tried here too: the configured test, the
+  //    header payload's own windows, and the route's row where there is one.
+  USAGE_SUBSCRIPTIONS.forEach((spec) => {
+    if (placed.has(spec.id)) return;
+    const known = knownById.get(spec.id);
+    if (!usageSubscriptionConfigured(spec, known)) return;
+    placed.add(spec.id);
+    rows.push(
+      usageSubscriptionRow(spec, usageSources[spec.id] || {}, known, routeRows.get(spec.id)),
+    );
+  });
+
+  // 3. anything still configured that neither list named.
+  //
+  //    WHAT THIS BRANCH MAY SAY. Its only sources are the config payload's
+  //    `provider_status` and the route's own `providers` list, and neither
+  //    knows about a credential the user does not hold or a host no recogniser
+  //    claimed. So it says one of exactly two things: `unsupported` (the
+  //    route's word for a provider with no mechanism, or this install's
+  //    reading of a provider the route never listed) or the route's own state
+  //    where the route did list it. It must NOT invent `needs_credential` or
+  //    `possible_endpoint`: those are facts only the route and its declared
+  //    table can establish, and a page that guessed them would be a second
+  //    answer to the question the route exists to answer.
+  usageConfiguredProviders().forEach((provider) => {
+    if (placed.has(provider.provider_id)) return;
+    if (provider.provider_id === "openai") return; // the same subscription
+    placed.add(provider.provider_id);
+    const routeRow = routeRows.get(provider.provider_id);
+    rows.push(
+      usageCoverageRow(
+        {
+          provider_id: provider.provider_id,
+          display_name: provider.display_name,
+          credentials: provider.keys,
+          state: routeRow ? routeRow.state : "unsupported",
+          mechanisms: routeRow ? routeRow.mechanisms : [],
+          readable: Boolean(routeRow && routeRow.readable),
+          reading: routeRow ? routeRow.reading : null,
+          observed_at: routeRow ? routeRow.observed_at : null,
+          fetched_at: routeRow ? routeRow.fetched_at : null,
+          read_error: routeRow ? routeRow.read_error : "",
+          retry_in_seconds: routeRow ? routeRow.retry_in_seconds : null,
+          next_read_in_seconds: routeRow ? routeRow.next_read_in_seconds : null,
+          interval_seconds: routeRow ? routeRow.interval_seconds : null,
+          consecutive_failures: routeRow ? routeRow.consecutive_failures : 0,
+          values: routeRow ? routeRow.values : {},
+          endpoint: routeRow ? routeRow.endpoint : null,
+        },
+        provider,
+      ),
+    );
+  });
+
+  rows.sort((a, b) => {
+    const order = (USAGE_STATES[a.state] || USAGE_STATES.not_measured).order;
+    const other = (USAGE_STATES[b.state] || USAGE_STATES.not_measured).order;
+    if (order !== other) return order - other;
+    return String(a.name).localeCompare(String(b.name));
+  });
+
+  return {
+    rows,
+    configured: rows.length,
+    measured: rows.filter((row) => row.state === "measured").length,
+    stale: rows.filter((row) => row.state === "stale").length,
+    failed: rows.filter((row) => row.state === "failed").length,
+    layout: String(payload.layout || ""),
+    autoRefreshSeconds: Number(payload.auto_refresh_seconds) || 0,
+    lastReadAt: rows.reduce(
+      (newest, row) => Math.max(newest, Number(row.observedAt) || 0),
+      0,
+    ),
+    pageState: usageCaptured.state,
+    pageError: usageCaptured.error,
+  };
+}
+
+/** A subscription's account line, from the declared read's own payload. */
+function usageSubscriptionAccount(spec, reading) {
+  const payload = (usageSources[spec.id] || {}).payload || {};
+  if (spec.id === "anthropic_oauth") {
+    const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+    return accounts
+      .map((account) => account.name || account.account_id || "")
+      .filter(Boolean)
+      .join(", ");
+  }
+  return "";
+}
+
+/** Whether one subscription is configured, by the same test every card uses. */
+function usageSubscriptionConfigured(spec, known) {
+  // `usageConfiguredProviders()` shapes one row as `{keys}`, while the config
+  // payload's own `provider_status` entry carries `key_count`. Accepting only
+  // one of the two is how a subscription with accounts reads as unconfigured
+  // and gets "publishes no usage endpoint" printed over its own windows.
+  return Boolean(
+    (Number(known && (known.keys || known.key_count)) || 0) > 0 ||
+      (known && known.status === "configured") ||
+      (known && known.status === "free_ready") ||
+      (known && known.kind === "local"),
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE SHARED PIECES every layout composes.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** A meter. `percent` `null` draws the hatched "nobody measured this" track.
+ *
+ *  THE UNMEASURED TRACK IS NEVER A ZERO BAR: it carries no fill at all and a
+ *  hatched container, so a window nobody measured cannot be mistaken for a
+ *  window at 0%. A real measured zero keeps a small nub, because a provider
+ *  that said "0%" DID say something.
+ */
+function usageMeter(percent, options) {
+  const opts = options || {};
+  const wrap = usageEl(
+    "div",
+    `usage-meter${opts.thin ? " usage-meter-thin" : ""}${
+      percent == null ? " usage-meter-unmeasured" : ""
+    }`,
+  );
+  wrap.dataset.severity = usageSeverity(percent);
+  const track = usageEl("div", "usage-meter-track");
+  const fill = usageEl("div", "usage-meter-fill");
+  fill.style.width = percent == null ? "0%" : `${Math.max(percent, 1.2)}%`;
+  track.appendChild(fill);
+  wrap.appendChild(track);
+  if (opts.label) {
+    wrap.setAttribute("aria-label", opts.label);
+    wrap.setAttribute("role", "img");
+  } else {
+    wrap.setAttribute("role", "presentation");
+  }
+  return wrap;
+}
+
+/** A ring, for the one layout that leads a card with a single number. */
+function usageRing(percent, text, options) {
+  const opts = options || {};
+  const size = opts.size || 104;
+  const stroke = opts.stroke || 9;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("width", size);
+  svg.setAttribute("height", size);
+  svg.setAttribute("class", "usage-ring");
+  svg.dataset.severity = usageSeverity(percent);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", opts.label || `${text} used`);
+  const track = document.createElementNS(NS, "circle");
+  track.setAttribute("class", "usage-ring-track");
+  track.setAttribute("cx", size / 2);
+  track.setAttribute("cy", size / 2);
+  track.setAttribute("r", radius);
+  track.setAttribute("fill", "none");
+  track.setAttribute("stroke-width", stroke);
+  svg.appendChild(track);
+  if (percent != null) {
+    const arc = document.createElementNS(NS, "circle");
+    arc.setAttribute("class", "usage-ring-arc");
+    arc.setAttribute("cx", size / 2);
+    arc.setAttribute("cy", size / 2);
+    arc.setAttribute("r", radius);
+    arc.setAttribute("fill", "none");
+    arc.setAttribute("stroke-width", stroke);
+    arc.setAttribute("stroke-linecap", "round");
+    arc.setAttribute(
+      "stroke-dasharray",
+      `${(circumference * percent) / 100} ${circumference}`,
+    );
+    arc.setAttribute("transform", `rotate(-90 ${size / 2} ${size / 2})`);
+    svg.appendChild(arc);
+  }
+  const box = usageEl("div", "usage-ring-box");
+  box.appendChild(svg);
+  box.appendChild(usageEl("span", "usage-ring-label", text));
+  return box;
+}
+
+/** The reset line under a window: "resets Nov 2, 9:08 PM", with the raw value
+ *  on `title` (§UI-QUALITY A.3). */
+function usageResetNode(value) {
+  const parts = usageInstantParts(value);
+  if (!parts) return null;
+  const node = usageEl("span", "usage-reset", `resets ${parts.text}`);
+  node.title = parts.title;
+  return node;
+}
+
+/** The figure for one window: the provider's percentage, or `used of limit`.
+ *
+ *  **THIS IS WHERE THE USER'S COMPACTION LANDS.** `34.9300790367` against `35`
+ *  renders `$34.93 of $35.00` with `99.8%` beside it, and the raw values go on
+ *  the `title` so nothing is lost. A window whose provider sent no percentage
+ *  and no cap returns `null`, and the caller draws words instead — never a
+ *  zero.
+ */
+function usageWindowFigure(win) {
+  const unit = String(win.unit || "");
+  const code = win.currency || "USD";
+  if (unit === "percent") {
+    const shown = usagePct(win.used);
+    return shown ? { text: shown, percent: usageFraction(win), kind: "percent" } : null;
+  }
+  if (unit === "usd") {
+    const fraction = usageFraction(win);
+    const used = usageNumber(win.used);
+    const limit = usageNumber(win.limit);
+    const remaining = usageNumber(win.remaining);
+    let text = "";
+    if (used !== null && limit !== null) {
+      text = `${usageMoney(used, code)} of ${usageMoney(limit, code)}`;
+    } else if (remaining !== null && limit !== null) {
+      // OpenRouter: the provider sends what is LEFT and a ceiling, never a
+      // "used". "left" is its word, so the text says left and the bar is the
+      // consumed share of a ceiling the provider did send.
+      text = `${usageMoney(remaining, code)} left of ${usageMoney(limit, code)}`;
+    } else if (used !== null) {
+      text = `${usageMoney(used, code)} used`;
+    } else if (remaining !== null) {
+      text = `${usageMoney(remaining, code)} left`;
+    } else if (limit !== null) {
+      text = `${usageMoney(limit, code)} cap`;
+    }
+    if (!text) return null;
+    return { text, percent: fraction, kind: "money", raw: `${win.used}|${win.limit}` };
+  }
+  if (unit === "requests") {
+    const fraction = usageFraction(win);
+    const used = usageNumber(win.used);
+    const limit = usageNumber(win.limit);
+    if (used !== null && limit !== null) {
+      return {
+        text: `${usageCount(used)} of ${usageCount(limit)}`,
+        percent: fraction,
+        kind: "count",
+      };
+    }
+    if (used !== null) return { text: usageCount(used), percent: fraction, kind: "count" };
+    if (limit !== null) {
+      return { text: `${usageCount(limit)} allowed`, percent: null, kind: "count" };
+    }
+    return null;
+  }
+  // An unknown unit: the provider's own numbers, verbatim, and no bar.
+  const used = String(win.used || "").trim();
+  const limit = String(win.limit || "").trim();
+  if (!used && !limit) return null;
+  return { text: limit ? `${used} of ${limit}` : used, percent: null, kind: "raw" };
+}
+
+/** A count with thousands separators — `0`, `1,000`, `465,391`. */
+function usageCount(value) {
+  const number = usageNumber(value);
+  if (number === null) return String(value || "");
+  return number.toLocaleString("en-US");
+}
+
+/** One window as a row: name, figure, meter, reset. The vocabulary four of the
+ *  five layouts share; `ledger_rows` uses the thin variant and `dial_cards`
+ *  the compact one, both from this function. */
+function usageWindowRow(win, options) {
+  const opts = options || {};
+  const row = usageEl("div", "usage-window");
+  const fraction = usageFraction(win);
+  const figure = usageWindowFigure(win);
+  const title = usageEl("span", "usage-window-title", win.label || win.id);
+  row.appendChild(title);
+
+  if (figure) {
+    const value = usageEl("span", "usage-window-figure", figure.text);
+    // A.3: the shortened money pair keeps the provider's exact strings
+    // reachable. `$34.93 of $35.00` is honest at that precision; the raw
+    // `34.9300790367` is one hover away.
+    if (figure.kind === "money") {
+      value.title = `${win.used || ""}${win.limit ? ` of ${win.limit}` : ""}${
+        win.remaining ? ` · ${win.remaining} remaining` : ""
+      }`.trim();
+    }
+    if (figure.percent && figure.percent.text && figure.percent.source !== "provider-percent") {
+      // THE SHARE IS THE POINT of a used/limit pair (the user's own brief: a
+      // `34.9300790367 / 35` window IS 99.8 %). It is drawn as visible text
+      // beside the pair, in the same words the bar's aria label uses, so a
+      // reader who cannot see the bar still gets the number.
+      value.dataset.share = "computed";
+      value.title = value.title
+        ? `${value.title} · ${figure.percent.text} of the cap`
+        : `${figure.percent.text} of the cap`;
+      const share = usageEl("span", "usage-window-share", `${figure.percent.text} of the cap`);
+      row.appendChild(share);
+    }
+    row.appendChild(value);
+  } else {
+    row.appendChild(usageEl("span", "usage-window-figure usage-window-none", "no figure sent"));
+  }
+
+  const label = figure
+    ? `${win.label}: ${figure.text}${
+        figure.percent ? ` (${figure.percent.text})` : ""
+      }`
+    : `${win.label}: not measured`;
+  row.appendChild(usageMeter(opts.thin === false ? null : fraction && fraction.percent, {
+    thin: opts.thin !== false,
+    label,
+  }));
+
+  const reset = usageResetNode(win.resets_at);
+  if (reset) row.appendChild(reset);
+  if (win.unit === "percent") {
+    // A.3 — the provider's exact percentage and the note that it is theirs.
+    // The route's own contract says the provider's text stays authoritative.
+    const note = usageEl("span", "usage-window-note", "as the provider sent it");
+    note.dataset.unit = "percent";
+    if (opts.unitNote) row.appendChild(note);
+  }
+  return row;
+}
+
+/** One balance: money, its kind, never a bar and never a percentage. */
+function usageBalanceRow(balance) {
+  const row = usageEl("div", "usage-money-row");
+  row.appendChild(
+    usageEl("span", "usage-money-label", balance.label || balance.id),
+  );
+  const amount = usageEl(
+    "span",
+    "usage-money-amount",
+    usageMoney(balance.amount, balance.currency),
+  );
+  amount.title = `${balance.amount} ${balance.currency || "USD"} · ${balance.kind || "available"}`;
+  if (usageNumber(balance.amount) !== null && usageNumber(balance.amount) < 0) {
+    // A NEGATIVE balance is real data — an account in arrears — and the user's
+    // own PDF showed DeepSeek at `-0.01` being read as "no data". It keeps its
+    // own tone so the number a reader must act on is not quiet.
+    row.dataset.negative = "true";
+  }
+  row.appendChild(amount);
+  return row;
+}
+
+/** A block of unmeasured windows, said ONCE.
+ *
+ *  THE FAILURE THE USER NAMED: the 8.6.0 page printed eight consecutive "not
+ *  measured by this provider" rows under one heading. That is a wall of the
+ *  same sentence, and it buries the fields that DID arrive.
+ *
+ *  So: one sentence for the block, then a disclosure that lists the window
+ *  names compactly. Nothing is dropped — every window name is still on the
+ *  page, and a reader who wants to know what the provider reports when it has
+ *  data opens the disclosure. That is what makes this compaction rather than
+ *  omission.
+ */
+function usageUnmeasuredBlock(windows, headingText) {
+  const wrap = usageEl("div", "usage-unmeasured");
+  const names = windows.map((win) => win.label || win.id).filter(Boolean);
+  wrap.appendChild(
+    usageEl(
+      "p",
+      "usage-unmeasured-line",
+      `The provider has not reported ${headingText} yet, so nothing is drawn here — which is not the same as nothing left.`,
+    ),
+  );
+  if (!names.length) return wrap;
+  const details = usageEl("details", "usage-unmeasured-list");
+  details.appendChild(
+    usageEl(
+      "summary",
+      "usage-unmeasured-summary",
+      `${names.length} field${names.length === 1 ? "" : "s"} it reports when it has data`,
+    ),
+  );
+  const list = usageEl("ul", "usage-unmeasured-names");
+  names.forEach((name) => list.appendChild(usageEl("li", null, name)));
+  details.appendChild(list);
+  wrap.appendChild(details);
+  return wrap;
+}
+
+/** The Allowance block: every window, or one sentence when none was measured.
+ *
+ *  Two shapes and no third. A block where SOME windows arrived draws every
+ *  window (measured ones as bars, unmeasured ones as a name with "not
+ *  measured", because dropping the unmeasured ones would say the provider
+ *  never reports them); a block where NONE arrived draws the one sentence
+ *  plus the disclosure.
+ */
+function usageAllowanceBlock(row, options) {
+  const opts = options || {};
+  const windows = Array.isArray(row.windows) ? row.windows : [];
+  if (!windows.length) return null;
+  const measured = windows.filter((win) => usageWindowFigure(win) !== null);
+  const block = usageEl("section", "usage-block");
+  block.appendChild(usageEl("h4", "usage-block-heading", "Allowance"));
+  block.appendChild(
+    usageEl(
+      "p",
+      "usage-block-note",
+      "A percentage of a plan window, or a dollar allowance that resets. It is " +
+        "not money you hold.",
+    ),
+  );
+  if (!measured.length) {
+    block.appendChild(usageUnmeasuredBlock(windows, "any allowance window"));
+    return block;
+  }
+  const list = usageEl("div", "usage-windows");
+  windows.forEach((win) => list.appendChild(usageWindowRow(win, opts)));
+  block.appendChild(list);
+  return block;
+}
+
+/** The Balance and spend block. Money only: no bar, no percentage, ever. */
+function usageBalanceBlock(row) {
+  const balances = Array.isArray(row.balances) ? row.balances : [];
+  if (!balances.length) return null;
+  const block = usageEl("section", "usage-block");
+  block.appendChild(usageEl("h4", "usage-block-heading", "Balance and spend"));
+  block.appendChild(
+    usageEl(
+      "p",
+      "usage-block-note",
+      "Money the provider reports. It does not reset with a window, it is not a " +
+        "percentage, and nothing here is added to the allowance above.",
+    ),
+  );
+  const list = usageEl("div", "usage-money-list");
+  balances.forEach((balance) => list.appendChild(usageBalanceRow(balance)));
+  block.appendChild(list);
+  return block;
+}
+
+/** The provider's own notes, with their own labels. Never "Note 1". */
+function usageNotesBlock(row, options) {
+  const opts = options || {};
+  const notes = Array.isArray(row.notes) ? row.notes : [];
+  if (!notes.length) return null;
+  const block = usageEl("section", "usage-notes-block");
+  block.appendChild(usageEl("h4", "usage-notes-heading", "What the provider says"));
+  const list = usageEl("div", "usage-notes");
+  notes.slice(0, opts.limit || notes.length).forEach((note) => {
+    const parts = usageNoteParts(note);
+    if (!parts) return;
+    const line = usageEl("div", "usage-note");
+    line.appendChild(usageEl("span", "usage-note-label", parts.label));
+    // A NOTE WHOSE BODY IS AN INSTANT GETS THE SAME TREATMENT AS A RESET.
+    // CommandCode says "This period ends: 2026-11-14T00:00:00Z", and printing
+    // that raw is the "raw data" complaint this release answers — the wire
+    // timestamp is not what a reader asked for. The instant is rendered in
+    // their own clock with the provider's exact string on `title`, and a note
+    // whose body is not an instant keeps its words untouched.
+    const whole = usageInstantParts(parts.text);
+    const looksInstant = /^\d{9,13}$/.test(parts.text) || /^\d{4}-\d\d-\d\dT/.test(parts.text);
+    const text = usageEl("span", "usage-note-text", looksInstant ? whole.text : parts.text);
+    if (looksInstant && whole) text.title = whole.title;
+    line.appendChild(text);
+    list.appendChild(line);
+  });
+  const remaining = notes.length - (opts.limit || notes.length);
+  if (remaining > 0) {
+    list.appendChild(
+      usageEl(
+        "p",
+        "usage-note-more",
+        `+${remaining} more thing${remaining === 1 ? "" : "s"} the provider said`,
+      ),
+    );
+  }
+  block.appendChild(list);
+  return block;
+}
+
+/** The provenance line: what was read, from where, and when. Never optional. */
+function usageProvenanceLine(row, options) {
+  const opts = options || {};
+  const line = usageEl("p", "usage-provenance usage-provenance-line");
+  const parts = [];
+  const source = row.endpointText || row.detail;
+  if (source) parts.push(source);
+  const age = usageAgo(row.observedAt);
+  if (age) {
+    parts.push(`read ${age}`);
+  } else if (row.state === "failed") {
+    // A failed read never says "nothing observed yet": the sentence above it
+    // has just explained why nobody knows, and repeating the wrong reason here
+    // would make a broken read look like a provider with nothing to report.
+    parts.push("no reading this time");
+  } else if (opts.showUnread) {
+    parts.push("nothing read yet");
+  }
+  if (row.retryInSeconds) {
+    parts.push(`next read in ${usageWaitWords(row.retryInSeconds)}`);
+  }
+  line.textContent = parts.join(" · ");
+  return line;
+}
+
+/** The Read now control, or nothing.
+ *
+ *  Drawn only where this release can actually read: a button on a provider
+ *  whose row declares no adapter is a control that can only fail. Disabled,
+ *  with the reason in its `title` and in the word beside it, inside the
+ *  provider's own deadline or its read interval — §5.5.5's rule that a cooldown
+ *  guards manual refreshes too.
+ */
+function usageReadButton(row, options) {
+  const opts = options || {};
+  const button = usageEl(
+    "button",
+    "secondary-button usage-read-now usage-read-button",
+    "",
+  );
+  button.type = "button";
+  // One row can arrive in either vocabulary: the MODEL's camelCase (what every
+  // renderer walks) and the ROUTE's snake_case (what a caller holding a raw
+  // `GET /admin/api/usage` row has). Reading both here means the control is the
+  // same control whichever shape reached it, rather than a second `if`.
+  button.dataset.provider = row.id || row.provider_id || "";
+  const waiting =
+    Number(row.nextReadInSeconds ?? row.next_read_in_seconds) || 0;
+  const cooling = Number(row.retryInSeconds ?? row.retry_in_seconds) || 0;
+  const blocked = Math.max(waiting, cooling);
+  if (row.readable !== true) {
+    button.disabled = true;
+    button.textContent = "Read now";
+    button.title = "MCC has no read for this provider in this release.";
+    return button;
+  }
+  button.textContent = blocked > 0 ? `Read now (${usageWaitWords(blocked)})` : "Read now";
+  if (blocked > 0) {
+    button.disabled = true;
+    button.title =
+      cooling > 0
+        ? `The provider asked MCC to wait ${usageWaitWords(cooling)} before reading its usage again.`
+        : `This provider was read less than ${usageWaitWords(row.intervalSeconds ?? row.interval_seconds ?? 1800)} ago; it can be read again in ${usageWaitWords(waiting)}.`;
+    return button;
+  }
+  button.title = "Ask this provider for its usage once.";
+  button.addEventListener("click", () => {
+    readUsageForProvider(button.dataset.provider, button);
+  });
+  return button;
+}
+
+/** A disclosure that holds everything the row's summary does not.
+ *
+ *  Used by `one_screen`'s expansion and by the dense layouts' "what it reports
+ *  when it has data" behind a summary: §UI-QUALITY-§D's accordion pattern,
+ *  which keeps the row short and the detail one press away.
+ */
+function usageDetailBody(row, options) {
+  const opts = options || {};
+  const body = usageEl("div", "usage-detail-body");
+  const stateNote = usageEl("p", "usage-state-note", usageStateSentence(row));
+  stateNote.dataset.tone =
+    row.state === "failed"
+      ? "error"
+      : row.state === "unavailable"
+        ? "neutral"
+        : row.state === "stale"
+          ? "warn"
+          : "plain";
+  body.appendChild(stateNote);
+
+  // THE PLAN AND THE ACCOUNT, FIRST. Both are already in the model, and both
+  // are what a reader looks for before a number: which plan is this, and whose
+  // account is it. 8.7.0's first cut kept them in the model and drew neither,
+  // which the longest-values fixture caught.
+  const heading = usageEl("div", "usage-detail-heading");
+  if (row.plan) {
+    heading.appendChild(usageEl("p", "usage-plan", `Plan: ${row.plan}`));
+  }
+  if (row.account) {
+    heading.appendChild(usageEl("p", "usage-account", row.account));
+  }
+  if (heading.firstChild) body.appendChild(heading);
+  const columns = usageEl("div", "usage-detail-columns");
+  const allowance = usageAllowanceBlock(row, opts);
+  if (allowance) columns.appendChild(allowance);
+  const balances = usageBalanceBlock(row);
+  if (balances) columns.appendChild(balances);
+  // EVERY note the provider sent, not a capped three: a note is where a
+  // provider says something no figure can ("Free tier: false"), and a cap is
+  // how a layout quietly becomes a different page from its siblings.
+  const notes = usageNotesBlock(row);
+  if (notes) columns.appendChild(notes);
+  if (columns.firstChild) body.appendChild(columns);
+
+  // The header-derived figures, when the route has any. Only names the host
+  // actually sent are present in `values`, so a host that reports a few gets
+  // only those rows — which is the same rule the card has followed since 8.4.0.
+  const header = usageHeaderValuesBlock(row);
+  if (header) body.appendChild(header);
+
+  // EVERY FIGURE, IN THE PROVIDER'S OWN UNITS, BEHIND A DISCLOSURE.
+  //
+  // The blocks above are the human form: a bar with `$34.93 of $35.00`, a ring,
+  // a micro-bar — each one shortened to what a reader can act on at a glance.
+  // This is the complete form: one `<dl>` of term/value pairs, every number the
+  // providers sent exactly as they sent it, which is the shape a card has
+  // carried since 8.3.0 and the one a reader tabs through.
+  //
+  // It is a `<details>` for the reason the whole release exists: a block of
+  // exact figures is what the user called "raw data" when it was the ONLY form.
+  // Behind a summary it costs one line and loses nothing.
+  const figures = usageFigureList(row);
+  if (figures) {
+    const disclosure = usageEl("details", "usage-figures-disclosure");
+    disclosure.appendChild(
+      usageEl(
+        "summary",
+        "usage-figures-summary",
+        "Every figure, exactly as the provider sent it",
+      ),
+    );
+    disclosure.appendChild(figures);
+    body.appendChild(disclosure);
+  }
+
+  const foot = usageEl("div", "usage-detail-foot");
+  foot.appendChild(usageProvenanceLine(row, { showUnread: true }));
+  if (row.credentials) {
+    foot.appendChild(
+      usageEl(
+        "span",
+        "usage-pool",
+        `${row.credentials} credential${row.credentials === 1 ? "" : "s"} in this pool`,
+      ),
+    );
+  }
+  foot.appendChild(usageReadButton(row));
+  body.appendChild(foot);
+  return body;
+}
+
+/** Every figure a reading carries, as a term/value list — the 8.3.0 shape.
+ *
+ *  WHY THIS EXISTS BESIDE THE FIVE RENDERERS' OWN LISTS. Each layout draws a
+ *  reading its own way (a bar with a money pair, a ring, a micro-bar), and each
+ *  of those is the human form. This is the COMPLETE form: one `<dl>` per block,
+ *  every number the provider sent, labelled — which is what a reader tabs
+ *  through, what a card has carried since 8.3.0, and what makes "all five
+ *  layouts render the same data" a fact a test can read without knowing which
+ *  arrangement is in force.
+ *
+ *  Nothing here is computed. `used`, `limit`, `remaining` and a reset are
+ *  printed exactly as the adapter stored them, in the provider's own units, so
+ *  a figure this page would have shortened is still on the page in full.
+ *
+ *  Two blocks and never one: an allowance resets and a balance does not, and
+ *  the page has never added them.
+ */
+function usageFigureList(row) {
+  const windows = Array.isArray(row.windows) ? row.windows : [];
+  const balances = Array.isArray(row.balances) ? row.balances : [];
+  if (!windows.length && !balances.length) return null;
+  const holder = usageEl("div", "usage-read-blocks");
+  const add = (heading, note, rows) => {
+    // `usage-figures-block`, NOT `usage-block`: this is the same two facts said
+    // in the complete form, and giving it the same class as the human form
+    // would make every card read as having four blocks where it has two.
+    const block = usageEl("section", "usage-figures-block");
+    block.appendChild(usageEl("h4", "usage-figures-heading", heading));
+    if (note) block.appendChild(usageEl("p", "usage-figures-note", note));
+    const list = usageEl("dl", "usage-figures");
+    rows.forEach(([term, value, title]) => {
+      const dt = usageEl("dt", null, term);
+      const dd = usageEl("dd", null, value);
+      if (title) dd.title = title;
+      list.append(dt, dd);
+    });
+    block.appendChild(list);
+    holder.appendChild(block);
+  };
+  if (windows.length) {
+    const rows = [];
+    windows.forEach((win) => {
+      const label = win.label || win.id;
+      const unit = win.unit === "percent" ? "%" : win.unit === "usd" ? " USD" : "";
+      if (win.used !== "" && win.used != null) {
+        rows.push([`${label} used`, `${win.used}${unit}`, win.unit || ""]);
+      }
+      if (win.limit !== "" && win.limit != null) {
+        rows.push([`${label} limit`, `${win.limit}${unit}`, win.unit || ""]);
+      }
+      if (win.remaining !== "" && win.remaining != null) {
+        rows.push([`${label} remaining`, `${win.remaining}${unit}`, win.unit || ""]);
+      }
+      const reset = usageInstantParts(win.resets_at);
+      if (reset && win.resets_at) {
+        rows.push([`${label} resets`, reset.text, reset.title]);
+      }
+    });
+    if (rows.length) {
+      add(
+        "Allowance",
+        "A percentage of a plan window, or a dollar allowance that resets. It is not money you hold.",
+        rows,
+      );
+    }
+  }
+  if (balances.length) {
+    add(
+      "Balance and spend",
+      "Cash the provider reports. It does not reset with a window, and nothing here adds it to the allowance above.",
+      balances.map((balance) => [
+        balance.label || balance.id,
+        `${balance.amount}${balance.currency ? " " + balance.currency : ""}`,
+        balance.kind || "",
+      ]),
+    );
+  }
+  return holder.firstChild ? holder : null;
+}
+
+/** The declared table's one clause for a provider's figure source.
+ *
+ *  `source_for` lives in `usage_sources.py` and the page cannot import it, so
+ *  this is the SAME fact read from the payload: the route reports `detail` on
+ *  every row it builds from the table, and a row that arrives without one is a
+ *  provider whose figures came on its traffic. The four families below are the
+ *  page's own words for that, declared once.
+ *
+ *  A provider with no mechanism has nothing to name, and the caller's line
+ *  then says what the row's state says rather than inventing a source.
+ */
+function usageDeclaredSource(providerId) {
+  const declared = {
+    nous_portal: "Nous Portal's credits response headers",
+    open_router: "the x-ratelimit response headers",
+    deepseek: "the x-ratelimit response headers",
+    kimi: "the x-ratelimit response headers",
+    commandcode: "the x-ratelimit response headers",
+  };
+  return declared[providerId] || "";
+}
+
+/** The allow-listed response-header figures, grouped, or `null`.
+ *
+ *  `USAGE_HEADER_BLOCKS` is the declared table 8.4.0 shipped; this reads it
+ *  rather than restating it, so a name that table does not list is never
+ *  drawn. Each value is the provider's own string: nothing is reformatted, and
+ *  a name the host did not send is simply absent.
+ */
+function usageHeaderValuesBlock(row) {
+  const values = row.values || {};
+  const names = Object.keys(values);
+  if (!names.length) return null;
+  const holder = usageEl("div", "usage-header-groups");
+  USAGE_HEADER_BLOCKS.forEach((spec) => {
+    const present = spec.headers.filter((name) =>
+      Object.prototype.hasOwnProperty.call(values, name),
+    );
+    if (!present.length) return;
+    const block = usageEl("section", "usage-block");
+    block.appendChild(usageEl("h4", "usage-block-heading", spec.heading));
+    const list = usageEl("div", "usage-header-list");
+    present.forEach((name) => {
+      const line = usageEl("div", "usage-header-row");
+      line.appendChild(
+        usageEl("span", "usage-header-name", spec.labels[name] || name),
+      );
+      const raw = String(values[name] == null ? "" : values[name]);
+      const instant = spec.instant.includes(name)
+        ? usageInstantParts(raw)
+        : null;
+      const value = usageEl(
+        "span",
+        "usage-header-value",
+        instant ? instant.text : raw,
+      );
+      if (instant) value.title = instant.title;
+      line.appendChild(value);
+      list.appendChild(line);
+    });
+    block.appendChild(list);
+    holder.appendChild(block);
+  });
+  return holder.firstChild ? holder : null;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE FIVE LAYOUTS. Each renders EVERY row in `model.rows`.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+window.MCCUsageLayouts = (function () {
+  "use strict";
+
+  /* ─────────────────────────────────────────────────── 06 · one_screen ──── */
+  /* Preview 06. One row per provider, the worst window as a bar, the figure,
+     the state; the detail opens IN PLACE under the row and ONE ROW AT A TIME
+     (§8.3 — opening a provider closes the previously open one, which is what
+     keeps the page at 900 px and what the test pins: open A, open B, assert A
+     closed). */
+  function oneScreen(root, model) {
+    const host = usageEl("div", "usage-one-screen");
+    const list = usageEl("div", "usage-stack");
+    let openId = null;
+
+    model.rows.forEach((row) => {
+      // `usage-card` alongside the layout's own class: the page keeps ONE
+      // vocabulary for "one provider's block" across all five layouts, which
+      // is what lets a reader (and a test) ask a question about a provider
+      // without knowing which arrangement is in force. The layout classes are
+      // the new ones; these are the stable names every layout also carries.
+      const wrap = usageEl("div", "usage-srow usage-card");
+      wrap.dataset.provider = row.id;
+      wrap.dataset.state = row.state;
+
+      const button = usageEl("button", "usage-srow-button");
+      button.type = "button";
+      button.setAttribute("aria-expanded", "false");
+      const detailId = `usage-detail-${String(row.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+      button.setAttribute("aria-controls", detailId);
+
+      const nameCell = usageEl(
+        "span",
+        "usage-srow-name usage-card-title",
+        row.name,
+      );
+      // §UI-QUALITY A.3: a name too long for its column is ellipsised WITH its
+      // full value on `title`, never silently cut. The name column is a capped
+      // track, so a 60-character name cannot push the figure and the chip off
+      // the row.
+      if (row.name) nameCell.title = row.name;
+      button.appendChild(nameCell);
+
+      const barCell = usageEl("span", "usage-srow-bar");
+      const worst = usageWorstWindow(row);
+      if (worst) {
+        barCell.appendChild(
+          usageMeter(worst.percent, {
+            thin: true,
+            label: `${worst.window.label}: ${worst.figure.text}`,
+          }),
+        );
+      } else if (row.balances.length) {
+        // A balance-only provider puts its headline money here: the bar column
+        // says what it has instead of drawing a bar it has no ceiling for.
+        const headline = usageEl(
+          "span",
+          "usage-srow-none",
+          usageMoney(row.balances[0].amount, row.balances[0].currency),
+        );
+        if (
+          usageNumber(row.balances[0].amount) !== null &&
+          usageNumber(row.balances[0].amount) < 0
+        ) {
+          // An account in arrears is real data and is said in the theme's own
+          // error tone, never suppressed and never left to look like rounding.
+          headline.dataset.negative = "true";
+        }
+        barCell.appendChild(headline);
+      } else {
+        barCell.appendChild(usageEl("span", "usage-srow-none", "no figure to show"));
+      }
+      button.appendChild(barCell);
+
+      const figureCell = usageEl("span", "usage-srow-figure");
+      if (worst) {
+        figureCell.appendChild(document.createTextNode(worst.figure.text));
+        const note = usageEl("small", null, `worst · +${row.windows.length - 1}`);
+        if (row.windows.length > 1) figureCell.appendChild(note);
+        else figureCell.appendChild(usageEl("small", null, "worst"));
+      }
+      button.appendChild(figureCell);
+
+      const chipCell = usageEl("span", "usage-srow-chip");
+      chipCell.appendChild(usageStateChip(row.state));
+      button.appendChild(chipCell);
+
+      const chevron = usageEl("span", "usage-srow-chevron");
+      chevron.setAttribute("aria-hidden", "true");
+      button.appendChild(chevron);
+
+      wrap.appendChild(button);
+
+      const detail = usageEl("div", "usage-srow-detail");
+      detail.id = detailId;
+      detail.hidden = true;
+      wrap.appendChild(detail);
+
+  const toggle = () => {
+    const wasOpen = button.getAttribute("aria-expanded") === "true";
+    // ONE AT A TIME. Close every other open row before opening this one,
+    // which is the preview's own behaviour and §8.3's decision: open A, open
+    // B, and A is closed.
+    Array.from(list.querySelectorAll('.usage-srow[data-open="true"]')).forEach(
+      (open) => {
+        if (open === wrap) return;
+        open.dataset.open = "false";
+        const openButton = open.querySelector(".usage-srow-button");
+        const openDetail = open.querySelector(".usage-srow-detail");
+        if (openButton) openButton.setAttribute("aria-expanded", "false");
+        if (openDetail) openDetail.hidden = true;
+      },
+    );
+    if (wasOpen) {
+      wrap.dataset.open = "false";
+      button.setAttribute("aria-expanded", "false");
+      detail.hidden = true;
+      usageViewState.openRow = null;
+      return;
+    }
+    // Built on first open and kept: a re-render of the same provider must
+    // not lose what a reader had opened (`openRow` outlives the paint).
+    if (!detail.firstChild) detail.appendChild(usageDetailBody(row));
+    wrap.dataset.open = "true";
+    button.setAttribute("aria-expanded", "true");
+    detail.hidden = false;
+    usageViewState.openRow = row.id;
+  };
+
+      button.addEventListener("click", toggle);
+      wrap.dataset.open = "false";
+      list.appendChild(wrap);
+    });
+
+    host.appendChild(list);
+    // A re-render (a poll tick, a theme switch, a save elsewhere) must leave
+    // the row a reader opened open and in the same place —
+    // UI-QUALITY-RULE B.4, and the reason `openRow` outlives the paint.
+    if (usageViewState.openRow) {
+      const wanted = list.querySelector(
+        `.usage-srow[data-provider="${cssEscape(usageViewState.openRow)}"]`,
+      );
+      const wantedButton = wanted && wanted.querySelector(".usage-srow-button");
+      if (wantedButton) wantedButton.click();
+    }
+    root.appendChild(host);
+  }
+
+  /* ────────────────────────────────────────────────── 02 · ledger_rows ──── */
+  /* Preview 02. One table, one row per provider, four columns, 4 px micro-bars
+     in a fixed track and a sticky header. The densest layout and the one that
+     proves a phone is not a different page: a long row becomes a two-line
+     definition list rather than losing a column. */
+  function ledgerRows(root, model) {
+    const host = usageEl("div", "usage-ledger");
+    const table = usageEl("div", "usage-ledger-table");
+    table.setAttribute("role", "table");
+    const head = usageEl("div", "usage-ledger-head");
+    head.setAttribute("role", "row");
+    ["Provider", "Windows", "Balance · spend", "State"].forEach((label) => {
+      const cell = usageEl("span", "usage-ledger-th", label);
+      cell.setAttribute("role", "columnheader");
+      head.appendChild(cell);
+    });
+    table.appendChild(head);
+
+    model.rows.forEach((row) => {
+      const line = usageEl("div", "usage-ledger-row usage-card");
+      line.setAttribute("role", "row");
+      line.dataset.provider = row.id;
+      line.dataset.state = row.state;
+
+      const provider = usageEl("div", "usage-ledger-provider");
+      provider.appendChild(usageEl("p", "usage-ledger-name usage-card-title", row.name));
+      const meta = usageEl(
+        "p",
+        "usage-ledger-meta",
+        row.plan || (row.credentials ? `${row.credentials} credential${row.credentials === 1 ? "" : "s"}` : ""),
+      );
+      if (row.account) meta.title = row.account;
+      provider.appendChild(meta);
+      line.appendChild(provider);
+
+      const windows = usageEl("div", "usage-ledger-windows");
+      const withFigure = row.windows.filter((win) => usageWindowFigure(win));
+      if (withFigure.length) {
+        withFigure.forEach((win) => {
+          const figure = usageWindowFigure(win);
+          const fraction = usageFraction(win);
+          const windowLine = usageEl("div", "usage-ledger-window");
+          const name = usageEl("span", "usage-ledger-window-name", win.label || win.id);
+          name.title = win.label || win.id;
+          windowLine.appendChild(name);
+          windowLine.appendChild(
+            usageMeter(fraction ? fraction.percent : null, {
+              thin: true,
+              label: `${win.label}: ${figure.text}`,
+            }),
+          );
+          windowLine.appendChild(
+            usageEl("span", "usage-ledger-window-figure", figure.text),
+          );
+          // The consumed share, visible: a used/limit pair IS a percentage and
+          // the densest layout must still say it. `$34.93 of $35.00 · 99.8%`.
+          if (
+            figure.percent &&
+            figure.percent.text &&
+            figure.percent.source !== "provider-percent"
+          ) {
+            windowLine.appendChild(
+              usageEl("span", "usage-ledger-window-share", figure.percent.text),
+            );
+          }
+          const reset = usageResetNode(win.resets_at);
+          if (reset) windowLine.appendChild(reset);
+          windows.appendChild(windowLine);
+        });
+        const unmeasured = row.windows.filter((win) => !usageWindowFigure(win));
+        if (unmeasured.length) {
+          windows.appendChild(
+            usageEl(
+              "p",
+              "usage-ledger-quiet",
+              `${unmeasured.length} more field${unmeasured.length === 1 ? "" : "s"} not reported yet`,
+            ),
+          );
+        }
+      } else if (row.windows.length) {
+        // ONE sentence for a whole unmeasured block, not one per window.
+        windows.appendChild(
+          usageEl("p", "usage-ledger-quiet", "No allowance window reported yet."),
+        );
+        const disclosure = usageEl("details", "usage-ledger-disclosure");
+        disclosure.appendChild(
+          usageEl(
+            "summary",
+            "usage-ledger-quiet",
+            `${row.windows.length} it reports when it has data`,
+          ),
+        );
+        const names = usageEl("ul", "usage-unmeasured-names");
+        row.windows.forEach((win) =>
+          names.appendChild(usageEl("li", null, win.label || win.id)),
+        );
+        disclosure.appendChild(names);
+        windows.appendChild(disclosure);
+      } else {
+        windows.appendChild(
+          usageEl(
+            "p",
+            "usage-ledger-quiet",
+            usageShortReason(row),
+          ),
+        );
+      }
+      line.appendChild(windows);
+
+      const money = usageEl("div", "usage-ledger-money");
+      const shown = row.balances.slice(0, 3);
+      shown.forEach((balance) => {
+        const pair = usageEl("div", "usage-ledger-money-row");
+        pair.appendChild(
+          usageEl(
+            "span",
+            "usage-ledger-amount",
+            usageMoney(balance.amount, balance.currency),
+          ),
+        );
+        pair.appendChild(usageEl("span", "usage-ledger-kind", balance.label || balance.kind));
+        if (usageNumber(balance.amount) !== null && usageNumber(balance.amount) < 0) {
+          pair.dataset.negative = "true";
+        }
+        money.appendChild(pair);
+      });
+      if (row.balances.length > shown.length) {
+        money.appendChild(
+          usageEl(
+            "p",
+            "usage-ledger-quiet",
+            `+${row.balances.length - shown.length} more figure${row.balances.length - shown.length === 1 ? "" : "s"}`,
+          ),
+        );
+      }
+      // The provider's own notes belong on the row: they are the one place a
+      // provider says something no figure can ("Free tier: false"), and this
+      // layout has no expansion to put them behind.
+      const notes = usageNotesBlock(row);
+      if (notes) money.appendChild(notes);
+      line.appendChild(money);
+
+      const state = usageEl("div", "usage-ledger-state");
+      state.appendChild(usageStateChip(row.state));
+      line.appendChild(state);
+
+      table.appendChild(line);
+
+      // The state's own sentence, only where it adds something the chip cannot
+      // say: a failure's reason, an unavailable answer, a hypothesis. A
+      // measured row needs none.
+      if (
+        row.state === "failed" ||
+        row.state === "unavailable" ||
+        row.state === "needs_credential" ||
+        row.state === "possible_endpoint" ||
+        row.state === "unsupported"
+      ) {
+        const note = usageEl("p", "usage-ledger-note", usageStateSentence(row));
+        note.dataset.tone = row.state === "failed" ? "error" : "neutral";
+        line.appendChild(note);
+        note.classList.add("usage-ledger-note-full");
+      }
+    });
+
+    host.appendChild(table);
+    root.appendChild(host);
+  }
+
+  /* ────────────────────────────────────────────────── 01 · meter_board ──── */
+  /* Preview 01. Four counted headline figures over full-width bands, every
+     window a row in ONE shared meter column, so all bars share an edge and a
+     scale. The tiles are COUNTS, never a sum: there is no money total anywhere
+     because adding two providers' cash across currencies would be the defect
+     §4.3 exists to prevent. */
+  function meterBoard(root, model) {
+    const host = usageEl("div", "usage-meter-board");
+
+    const tiles = usageEl("div", "usage-tiles");
+    tiles.setAttribute("aria-label", "Headline figures");
+    const highest = usageHighestWindow(model);
+    const tileSpecs = [
+      {
+        label: "Providers measured",
+        value: String(model.measured),
+        of: `of ${model.configured}`,
+        sub: `${model.stale} stale · ${model.failed} failed · ${model.configured - model.measured - model.stale - model.failed} nothing to read`,
+      },
+      highest
+        ? {
+            label: "Highest window use",
+            value: highest.figure.text,
+            sub: `${highest.row.name} · ${highest.window.label}`,
+            tone: usageSeverity(highest.percent),
+          }
+        : {
+            label: "Highest window use",
+            value: "—",
+            sub: "No provider has sent a percentage or a cap yet.",
+          },
+      usageCashTile(model),
+      usageWaitTile(model),
+    ];
+    tileSpecs.forEach((spec) => {
+      const tile = usageEl("div", "usage-tile");
+      if (spec.tone) tile.dataset.tone = spec.tone;
+      const label = usageEl("p", "usage-tile-label", spec.label);
+      label.title = spec.label;
+      tile.appendChild(label);
+      const value = usageEl("p", "usage-tile-value", spec.value);
+      if (spec.of) value.appendChild(usageEl("small", null, ` ${spec.of}`));
+      tile.appendChild(value);
+      const sub = usageEl("p", "usage-tile-sub", spec.sub);
+      sub.title = spec.sub;
+      tile.appendChild(sub);
+      tiles.appendChild(tile);
+    });
+    host.appendChild(tiles);
+
+    // Three bands, in the order a reader asks the questions: subscription
+    // windows, then balances and USD allowances, then the absences.
+    const groups = [
+      {
+        title: "Allowance windows",
+        note: "A percentage of a plan window, or a dollar allowance that resets. It is not money you hold.",
+        rows: model.rows.filter((row) => row.windows.length),
+      },
+      {
+        title: "Balances and spend",
+        note: "Cash the provider reports. It does not reset with a window, and nothing here adds it to the windows above.",
+        rows: model.rows.filter((row) => !row.windows.length && row.balances.length),
+      },
+      {
+        title: "Nothing to show, and why",
+        note: "Four different facts, said differently on purpose.",
+        rows: model.rows.filter((row) => !row.windows.length && !row.balances.length),
+      },
+    ];
+    groups.forEach((group) => {
+      if (!group.rows.length) return;
+      const band = usageEl("section", "usage-band");
+      const head = usageEl("div", "usage-band-head");
+      head.appendChild(usageEl("h3", "usage-band-title", group.title));
+      head.appendChild(usageEl("p", "usage-band-note", group.note));
+      head.appendChild(
+        usageEl(
+          "span",
+          "usage-band-count",
+          `${group.rows.length} provider${group.rows.length === 1 ? "" : "s"}`,
+        ),
+      );
+      band.appendChild(head);
+      const body = usageEl("div", "usage-band-body");
+      group.rows.forEach((row) => body.appendChild(usageBoardRow(row)));
+      band.appendChild(body);
+      host.appendChild(band);
+    });
+    root.appendChild(host);
+  }
+
+  /** One board row: name and plan, windows in a shared column, cash at right. */
+  function usageBoardRow(row) {
+    const wrap = usageEl("div", "usage-board-row usage-card");
+    wrap.dataset.provider = row.id;
+    wrap.dataset.state = row.state;
+    // A ROW WITH NOTHING TO SHOW IS ONE SENTENCE, NOT THREE COLUMNS WITH TWO
+    // EMPTY ONES. The band is literally "Nothing to show, and why", so its rows
+    // get a single spanning sentence under the name rather than a duplicated
+    // clause in the meta line and again in the cash column — which is what the
+    // first real render of this layout showed.
+    const empty =
+      !row.windows.length && !row.balances.length && stateNeedsSentence(row.state);
+    if (empty) wrap.dataset.empty = "true";
+    const id = usageEl("div", "usage-board-id");
+    const nameCell = usageEl("p", "usage-board-name usage-card-title", row.name);
+    // §A.3: shortened WITH the whole value on `title`.
+    if (row.name) nameCell.title = row.name;
+    id.appendChild(nameCell);
+    if (!empty) {
+      const meta = usageEl(
+        "p",
+        "usage-board-meta",
+        row.plan || usageShortReason(row),
+      );
+      meta.title = row.account || meta.textContent;
+      id.appendChild(meta);
+    }
+    wrap.appendChild(id);
+    if (empty) {
+      const sentence = usageEl(
+        "p",
+        "usage-board-sentence",
+        usageStateSentence(row),
+      );
+      sentence.dataset.tone = row.state === "failed" ? "error" : "neutral";
+      wrap.appendChild(sentence);
+      wrap.appendChild(usageStateChip(row.state));
+      return wrap;
+    }
+
+    const windows = usageEl("div", "usage-board-windows");
+    if (row.windows.length) {
+      const withFigure = row.windows.filter((win) => usageWindowFigure(win));
+      if (withFigure.length) {
+        row.windows.forEach((win) => windows.appendChild(usageWindowRow(win)));
+      } else {
+        windows.appendChild(usageUnmeasuredBlock(row.windows, "any allowance window"));
+      }
+    } else {
+      windows.appendChild(
+        usageEl("p", "usage-board-quiet", usageShortReason(row)),
+      );
+    }
+    wrap.appendChild(windows);
+
+    const cash = usageEl("div", "usage-board-cash");
+    row.balances.slice(0, 4).forEach((balance) => {
+      const figure = usageEl("div", "usage-board-cash-figure");
+      const amount = usageEl(
+        "span",
+        "usage-board-amount",
+        usageMoney(balance.amount, balance.currency),
+      );
+      if (usageNumber(balance.amount) !== null && usageNumber(balance.amount) < 0) {
+        figure.dataset.negative = "true";
+      }
+      figure.appendChild(amount);
+      figure.appendChild(
+        usageEl("span", "usage-board-cash-meta", `${balance.label} · ${balance.kind}`),
+      );
+      cash.appendChild(figure);
+    });
+    if (row.balances.length > 4) {
+      cash.appendChild(
+        usageEl("p", "usage-board-quiet", `+${row.balances.length - 4} more`),
+      );
+    }
+    // The provider's own notes, which the two above blocks cannot carry: this
+    // is the layout's only place for "Free tier: false" and its siblings.
+    const notes = usageNotesBlock(row);
+    if (notes) windows.appendChild(notes);
+    const chip = usageStateChip(row.state);
+    cash.appendChild(chip);
+    if (stateNeedsSentence(row.state) && (row.windows.length || row.balances.length)) {
+      // A chip without a sentence names a state a reader cannot act on, and
+      // §5.4 is explicit that every absence says what it is — but a row in the
+      // "nothing to show" band has already said it above, and saying it again
+      // in the cash column is the duplication this release exists to remove.
+      const note = usageEl("p", "usage-board-note", usageStateSentence(row));
+      note.dataset.tone = row.state === "failed" ? "error" : "neutral";
+      cash.appendChild(note);
+    }
+    wrap.appendChild(cash);
+    return wrap;
+  }
+
+  /** Whether a row's state needs its own sentence under the chip.
+   *
+   *  Measured and stale rows do not: the figures and the provenance line
+   *  already say everything, and a sentence would be the eight-identical-lines
+   *  defect. Every other state says something a chip cannot. */
+  function stateNeedsSentence(state) {
+    return (
+      state === "failed" ||
+      state === "unavailable" ||
+      state === "unsupported" ||
+      state === "needs_credential" ||
+      state === "possible_endpoint" ||
+      state === "not_measured"
+    );
+  }
+
+  /** The cash tile: ONE currency named, never a sum across currencies.
+   *
+   *  §4.3.4 — "never sum across currencies". So the tile names the currency it
+   *  counted and how many other currencies it did not add in, which is the
+   *  honest form of a headline over multi-currency data.
+   */
+  function usageCashTile(model) {
+    const byCurrency = new Map();
+    model.rows.forEach((row) => {
+      row.balances.forEach((balance) => {
+        if (String(balance.kind || "available") === "spend") return;
+        const code = String(balance.currency || "USD").toUpperCase();
+        const value = usageNumber(balance.amount);
+        if (value === null) return;
+        byCurrency.set(code, (byCurrency.get(code) || 0) + value);
+      });
+    });
+    if (!byCurrency.size) {
+      return {
+        label: "Cash reported",
+        value: "—",
+        sub: "No provider has reported a balance yet.",
+      };
+    }
+    const codes = Array.from(byCurrency.keys());
+    const primary = codes.includes("USD") ? "USD" : codes[0];
+    const total = byCurrency.get(primary);
+    const others = codes.length - 1;
+    return {
+      label: `Cash reported, ${primary}`,
+      value: usageMoney(total, primary),
+      sub:
+        others > 0
+          ? `${others} other currenc${others === 1 ? "y is" : "ies are"} reported separately and not added to this figure.`
+          : "Balance figures only — spend is on Analytics, and a window is never added to a balance.",
+      tone: total < 0 ? "critical" : undefined,
+    };
+  }
+
+  /** The wait tile: the longest provider-imposed deadline, in words. */
+  function usageWaitTile(model) {
+    let longest = null;
+    model.rows.forEach((row) => {
+      const wait = Math.max(Number(row.retryInSeconds) || 0, 0);
+      if (wait > 0 && (longest === null || wait > longest.wait)) {
+        longest = { wait, row };
+      }
+    });
+    if (!longest) {
+      return {
+        label: "Longest wait",
+        value: "none",
+        sub: "No provider has asked MCC to wait before the next read.",
+      };
+    }
+    return {
+      label: "Longest wait",
+      value: usageWaitWords(longest.wait),
+      sub: `${longest.row.name} asked MCC to wait before reading its usage again. No retry before then.`,
+      tone: "warn",
+    };
+  }
+
+  /* ─────────────────────────────────────────────────── 03 · dial_cards ──── */
+  /* Preview 03. A card per provider, each leading with ONE large ring for its
+     most-pressured window, every other window as a bar beneath it, and money
+     as money. A card with no window at all has no ring — a balance's money is
+     its headline, and a dial over it would be an invented limit. */
+  function dialCards(root, model) {
+    const host = usageEl("div", "usage-dial-cards");
+    const groups = [
+      {
+        title: "Subscriptions",
+        note: "Windows are percentages of a plan, and a percentage always travels with its reset.",
+        rows: model.rows.filter((row) => row.kind === "subscription"),
+      },
+      {
+        title: "Providers and credit pools",
+        note: "Cash has no window, so it is never a dial. A cap that resets is a dial, and it shows both amounts.",
+        rows: model.rows.filter(
+          (row) => row.kind !== "subscription" && (row.windows.length || row.balances.length),
+        ),
+      },
+      {
+        title: "Nothing to show",
+        note: "Listed last, one sentence each, no retry.",
+        rows: model.rows.filter(
+          (row) => row.kind !== "subscription" && !row.windows.length && !row.balances.length,
+        ),
+      },
+    ];
+    groups.forEach((group) => {
+      if (!group.rows.length) return;
+      const section = usageEl("section", "usage-dial-group");
+      const head = usageEl("div", "usage-dial-head");
+      head.appendChild(usageEl("h3", "usage-band-title", group.title));
+      head.appendChild(usageEl("p", "usage-band-note", group.note));
+      section.appendChild(head);
+      const cards = usageEl("div", "usage-dial-grid");
+      group.rows.forEach((row) => cards.appendChild(usageDialCard(row)));
+      section.appendChild(cards);
+      host.appendChild(section);
+    });
+    root.appendChild(host);
+  }
+
+  function usageDialCard(row) {
+    const card = usageEl("article", "usage-dial-card usage-card");
+    card.dataset.state = row.state;
+    card.dataset.provider = row.id;
+
+    const top = usageEl("div", "usage-dial-top");
+    const title = usageEl("div", "usage-dial-title");
+    title.appendChild(usageEl("p", "usage-dial-name usage-card-title", row.name));
+    const plan = usageEl("p", "usage-dial-plan", row.plan || usageShortReason(row));
+    plan.title = row.account || plan.textContent;
+    title.appendChild(plan);
+    top.appendChild(title);
+    top.appendChild(usageStateChip(row.state));
+    card.appendChild(top);
+
+    const focal = usageFocalWindow(row);
+    if (focal) {
+      const block = usageEl("div", "usage-dial-focal");
+      // THE RING'S TEXT IS THE SHARE, NOT THE WHOLE PAIR. A money window's
+      // `$34.93 of $35.00` is wider than the ring and the first render drove it
+      // straight through the stroke; the ring's own value is the percentage the
+      // arc draws, and the two amounts are printed beside it (and again in the
+      // figure list). A percentage window keeps the provider's own string.
+      block.appendChild(
+        usageRing(
+          focal.percent,
+          focal.figure.percent ? focal.figure.percent.text : focal.figure.text,
+          {
+            size: 104,
+            stroke: 9,
+            label: `${focal.window.label}: ${focal.figure.text}`,
+          },
+        ),
+      );
+      const text = usageEl("div", "usage-dial-focal-text");
+      text.appendChild(usageEl("p", "usage-dial-focal-label", focal.window.label));
+      text.appendChild(usageEl("p", "usage-dial-focal-note", focal.figure.text));
+      // A money pair's consumed share, beside the pair: the ring shows it as an
+      // arc and this says it, so a reader who cannot see the arc still gets the
+      // percentage the provider's two numbers add up to.
+      if (
+        focal.figure.percent &&
+        focal.figure.percent.source !== "provider-percent"
+      ) {
+        text.appendChild(
+          usageEl(
+            "p",
+            "usage-dial-focal-note",
+            `${focal.figure.percent.text} of the cap`,
+          ),
+        );
+      }
+      const reset = usageResetNode(focal.window.resets_at);
+      if (reset) text.appendChild(reset);
+      block.appendChild(text);
+      card.appendChild(block);
+    } else if (row.balances.length) {
+      // The money IS the headline. A dial over a balance would be an invented
+      // limit (§4.3 rule 2).
+      //
+      // ── 8.7.0 note, and it is the one bug this layout had ──────────────
+      // The headline block used to be appended into a variable named `money`
+      // that was never attached to the card: the card drew its TITLE and its
+      // chip and nothing else, so DeepSeek's balance was measured as "gone"
+      // by the cross-layout proof and was, in fact, gone. A layout may hide a
+      // figure behind an expansion; it may not lose one.
+      const money = usageEl("div", "usage-dial-money");
+      const headline = usageEl(
+        "p",
+        "usage-dial-money-headline",
+        usageMoney(row.balances[0].amount, row.balances[0].currency),
+      );
+      if (usageNumber(row.balances[0].amount) !== null && usageNumber(row.balances[0].amount) < 0) {
+        money.dataset.negative = "true";
+      }
+      money.appendChild(headline);
+      money.appendChild(
+        usageEl(
+          "p",
+          "usage-dial-quiet",
+          `${row.balances[0].label} · ${row.balances[0].kind}`,
+        ),
+      );
+      // EVERY balance, not only the headline: a provider whose money is its
+      // only figure must not be a card with one number on it.
+      row.balances.slice(1).forEach((balance) => {
+        money.appendChild(usageBalanceRow(balance));
+      });
+      card.appendChild(money);
+    }
+
+    if (row.windows.length > 1) {
+      const rest = usageEl("div", "usage-dial-rest");
+      const focalWindow = focal ? focal.window : null;
+      row.windows
+        .filter((win) => win !== focalWindow)
+        .forEach((win) => {
+          const figure = usageWindowFigure(win);
+          const line = usageEl("div", "usage-dial-line");
+          line.appendChild(usageEl("span", "usage-dial-line-name", win.label || win.id));
+          if (figure) {
+            line.appendChild(usageEl("span", "usage-dial-line-figure", figure.text));
+            if (
+              figure.percent &&
+              figure.percent.text &&
+              figure.percent.source !== "provider-percent"
+            ) {
+              // TWO SEPARATE FIXES LIVED HERE. The share has to be visible (a
+              // used/limit pair IS a percentage), and it has to go in its OWN
+              // cell: appending it straight after the figure put a second child
+              // in the same `grid-area: f` cell, which is the overlap
+              // UI-QUALITY §A.5 forbids. `usage-dial-line` gives it a third row.
+              line.appendChild(
+                usageEl("span", "usage-dial-line-share", figure.percent.text),
+              );
+            }
+            const fraction = usageFraction(win);
+            line.appendChild(
+              usageMeter(fraction ? fraction.percent : null, {
+                thin: true,
+                label: `${win.label}: ${figure.text}`,
+              }),
+            );
+          } else {
+            line.appendChild(
+              usageEl("span", "usage-dial-line-figure usage-window-none", "not reported"),
+            );
+          }
+          rest.appendChild(line);
+        });
+      card.appendChild(rest);
+    } else if (row.windows.length === 0 && !row.balances.length) {
+      // ONLY when there is no balance either: a card with money has already
+      // drawn it as its headline above, and a sentence here would repeat the
+      // state a chip has just named.
+      card.appendChild(
+        usageEl("p", "usage-dial-quiet", usageStateSentence(row)),
+      );
+    }
+
+    if (row.balances.length && focal) {
+      const money = usageEl("div", "usage-dial-money");
+      row.balances.slice(0, 3).forEach((balance) => {
+        money.appendChild(usageBalanceRow(balance));
+      });
+      card.appendChild(money);
+    }
+
+    const notes = usageNotesBlock(row);
+    if (notes) card.appendChild(notes);
+
+    const foot = usageEl("div", "usage-dial-foot");
+    foot.appendChild(usageProvenanceLine(row, { showUnread: row.state !== "measured" }));
+    card.appendChild(foot);
+    return card;
+  }
+
+  /* ───────────────────────────────────────────────── 05 · master_detail ─── */
+  /* Preview 05. Two panes: a master list on the left carrying each provider's
+     worst window as a micro-bar, and the selected provider's full detail on
+     the right. The list is context and stays visible while a detail is read,
+     which is the only layout that admits "you usually want ONE provider in
+     full". It OPENS ON THE PROVIDER THAT NEEDS THE READER — the failed one —
+     because that is why a reader came. */
+  function masterDetail(root, model) {
+    const host = usageEl("div", "usage-master-detail");
+    const master = usageEl("div", "usage-master");
+    master.setAttribute("role", "list");
+    master.setAttribute("aria-label", "Providers");
+    const detailHost = usageEl("div", "usage-inspector");
+    detailHost.setAttribute("aria-live", "polite");
+
+    const byId = new Map(model.rows.map((row) => [row.id, row]));
+    const groups = [
+      ["Needs a look", (row) => row.state === "failed" || row.state === "stale" || row.state === "unavailable"],
+      ["Measured", (row) => row.state === "measured"],
+      [
+        "Nothing to read",
+        (row) =>
+          row.state === "not_measured" ||
+          row.state === "unsupported" ||
+          row.state === "needs_credential" ||
+          row.state === "possible_endpoint",
+      ],
+    ];
+    const placed = new Set();
+    groups.forEach(([label, test]) => {
+      const rows = model.rows.filter((row) => !placed.has(row.id) && test(row));
+      if (!rows.length) return;
+      master.appendChild(usageEl("p", "usage-master-group", label));
+      rows.forEach((row) => {
+        placed.add(row.id);
+        master.appendChild(usageMasterRow(row));
+      });
+    });
+    // Anything the three groups did not claim is still a row — the coverage
+    // rule does not allow a provider to fall through a gap between test
+    // predicates.
+    model.rows.forEach((row) => {
+      if (placed.has(row.id)) return;
+      placed.add(row.id);
+      master.appendChild(usageMasterRow(row));
+    });
+
+    host.appendChild(master);
+    host.appendChild(detailHost);
+    root.appendChild(host);
+
+    const preferred =
+      (usageViewState.selectedRow && byId.has(usageViewState.selectedRow)
+        ? usageViewState.selectedRow
+        : null) ||
+      (model.rows.find((row) => row.state === "failed") || model.rows[0] || {}).id;
+    if (preferred) {
+      usageSelectMasterRow(master, detailHost, byId, preferred);
+    }
+  }
+
+  function usageMasterRow(row) {
+    const button = usageEl("button", "usage-master-row usage-card");
+    button.type = "button";
+    button.setAttribute("role", "listitem");
+    button.dataset.provider = row.id;
+    button.appendChild(usageEl("span", "usage-master-name usage-card-title", row.name));
+    button.querySelector(".usage-master-name").title = row.name;
+    button.appendChild(usageStateChip(row.state));
+    const worst = usageWorstWindow(row);
+    if (worst) {
+      button.appendChild(
+        usageMeter(worst.percent, {
+          thin: true,
+          label: `${worst.window.label}: ${worst.figure.text}`,
+        }),
+      );
+      button.appendChild(usageEl("span", "usage-master-meta", worst.figure.text));
+    } else if (stateNeedsSentence(row.state)) {
+      // A master list has no expansion, so the state's SENTENCE has to be on
+      // the row itself: a chip alone names a state a reader cannot act on.
+      const note = usageEl("span", "usage-master-note", usageStateSentence(row));
+      note.title = note.textContent;
+      button.appendChild(note);
+    } else if (row.balances.length) {
+      const amount = usageEl(
+        "span",
+        "usage-master-meta",
+        usageMoney(row.balances[0].amount, row.balances[0].currency),
+      );
+      if (usageNumber(row.balances[0].amount) !== null && usageNumber(row.balances[0].amount) < 0) {
+        amount.dataset.negative = "true";
+      }
+      button.appendChild(amount);
+    }
+    if (row.state === "failed") button.title = row.readError;
+    if (row.state === "unsupported") button.title = usageStateSentence(row);
+    return button;
+  }
+
+  function usageSelectMasterRow(master, detailHost, byId, id) {
+    usageViewState.selectedRow = id;
+    Array.from(master.querySelectorAll(".usage-master-row")).forEach((node) => {
+      node.setAttribute("aria-current", String(node.dataset.provider === id));
+    });
+    const row = byId.get(id);
+    detailHost.replaceChildren();
+    if (!row) {
+      detailHost.appendChild(usageEl("p", "usage-inspector-empty", "Select a provider on the left."));
+      return;
+    }
+    const head = usageEl("div", "usage-inspector-head");
+    const title = usageEl("div", "usage-inspector-title");
+    title.appendChild(usageEl("p", "usage-inspector-name usage-card-title", row.name));
+    const plan = usageEl("p", "usage-inspector-plan", row.plan || usageShortReason(row));
+    title.appendChild(plan);
+    head.appendChild(title);
+    head.appendChild(usageStateChip(row.state));
+    detailHost.appendChild(head);
+    detailHost.appendChild(usageDetailBody(row));
+
+    // The list's own click handlers are bound once per paint, and a re-render
+    // rebuilds the list, so nothing is left pointing at a detached node —
+    // UI-QUALITY-RULE B.4.
+    Array.from(master.querySelectorAll(".usage-master-row")).forEach((node) => {
+      node.onclick = () =>
+        usageSelectMasterRow(master, detailHost, byId, node.dataset.provider);
+    });
+  }
+
+  /* ──────────────────────────────────────────────── shared row arithmetic ── */
+
+  /** The window a row is judged by: the one nearest its ceiling.
+   *
+   *  Ties break on order, so a provider's row never rearranges between two
+   *  reads, and a window with no measurable fraction never wins — a row must
+   *  not lead with a bar it cannot draw.
+   */
+  function usageWorstWindow(row) {
+    let best = null;
+    row.windows.forEach((win) => {
+      const figure = usageWindowFigure(win);
+      const fraction = usageFraction(win);
+      if (!figure || !fraction) return;
+      if (best === null || fraction.percent > best.percent) {
+        best = { window: win, figure, percent: fraction.percent, fraction };
+      }
+    });
+    return best;
+  }
+
+  function usageFocalWindow(row) {
+    return usageWorstWindow(row);
+  }
+
+  function usageHighestWindow(model) {
+    let best = null;
+    model.rows.forEach((row) => {
+      const worst = usageWorstWindow(row);
+      if (worst && (best === null || worst.percent > best.percent)) {
+        best = { ...worst, row };
+      }
+    });
+    return best;
+  }
+
+  /** The shortest honest reason a row has no figure — one clause, no period. */
+  function usageShortReason(row) {
+    switch (row.state) {
+      case "unsupported":
+        return "no usage endpoint MCC can read";
+      case "needs_credential":
+        return `needs ${row.needsCredential}, which this machine does not hold`;
+      case "possible_endpoint":
+        return "possible endpoint, unverified";
+      case "not_measured":
+        return row.readable ? "not read yet" : "no read in this release";
+      case "failed":
+        return "the last read failed";
+      case "unavailable":
+        return "nothing available on this account";
+      case "stale":
+        return "read a while ago";
+      case "measured":
+        return "no window reported";
+      default:
+        return "";
+    }
+  }
+
+  return {
+    oneScreen,
+    ledgerRows,
+    meterBoard,
+    dialCards,
+    masterDetail,
+    usageShortReason,
+  };
+})();
+
 function openUsageView() {
   paintUsageView();
   if (usageCaptured.state === "pending") {
@@ -20290,6 +22902,379 @@ function openUsageView() {
   // the first answer has not landed (it carries the interval), so the poller
   // starts on the refresh that `loadUsageCaptured` triggers a paint for.
   if (usageAutoRefreshEnabled()) usagePoller.restart();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   8.7.0 (USAGE-LAYOUTS) — THE PAGE SHELL: the layout registry's entry point,
+   the refresh picker, and the one paint every layout goes through.
+
+   `specs/PR-USAGE-LAYOUTS-SPEC.md` §3: **one renderer that switches on the
+   chosen id, and nothing about layout in the poller, the payload or the
+   routes.** So this block is the whole of the page's interest in layout: it
+   reads `USAGE_LAYOUT` from the payload the page already has, hands the model
+   to `usageLayoutFor(id).render(root, model)`, and does nothing else with it.
+
+   THE TWO CONTROLS the user asked for on 2026-11-02, in the Analytics
+   auto-refresh idiom:
+     * a **select** with exactly 30 seconds (the default), 1 minute, 5
+       minutes, 15 minutes and 30 minutes. It is a VIEW over
+       `USAGE_AUTO_REFRESH_SECONDS` — the stored value is SECONDS — and
+       changing it writes that same setting through the same apply path every
+       other control uses, then re-arms the poller without a reload;
+     * a page-level **Refresh now** that asks every configured provider the
+       read gate allows, each respecting its own deadline.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/** View state that must outlive a paint — never persisted, never in storage.
+ *
+ *  Which row a reader opened (`one_screen`) and which provider they selected
+ *  (`master_detail`) are VIEW state: a poll tick, a theme switch or a save
+ *  elsewhere re-renders this page, and losing the open row on every tick is
+ *  the "re-render safety" defect UI-QUALITY-RULE B.4 exists to catch. Nothing
+ *  here is written to `localStorage` or to the server: the LAYOUT is a machine
+ *  setting and the rest is this browser's transient position on a page.
+ */
+const usageViewState = {
+  openRow: null,
+  selectedRow: null,
+  //: Set while the page-level Refresh now is in flight, so a double press is
+  //: one walk rather than two.
+  refreshingAll: false,
+};
+
+/** The five interval choices the picker offers, in seconds.
+ *
+ *  EXACTLY these five (§S2 of the brief), 30 seconds the default. The setting
+ *  itself accepts anything from 10 to 3600, so a stored value outside this
+ *  list (an operator who set 45 in `.env`) is ADDED as its own marked option
+ *  rather than silently shown as the nearest choice — the same rule
+ *  `select_blank` applies to every other select on the dashboard.
+ */
+const USAGE_REFRESH_CHOICES = [
+  { seconds: 30, label: "30 seconds" },
+  { seconds: 60, label: "1 minute" },
+  { seconds: 300, label: "5 minutes" },
+  { seconds: 900, label: "15 minutes" },
+  { seconds: 1800, label: "30 minutes" },
+];
+
+/** The seconds the page last saw from the server, so the picker can follow a
+ *  save made on Limits & Resilience without a reload. */
+function usageStoredRefreshSeconds() {
+  return Number(usageCaptured.payload && usageCaptured.payload.auto_refresh_seconds) || 0;
+}
+
+/** The layout to draw, through the registry's own fallback.
+ *
+ *  TWO SOURCES, and the FIELD wins: `state.fields` is the live value, refreshed
+ *  by every `load()` and by every save, so changing `USAGE_LAYOUT` on Limits and
+ *  Resilience re-renders the Usage page the next time it is looked at WITHOUT a
+ *  reload or a second route. The route's `layout` is the fallback for a page
+ *  whose config has not arrived yet, and for a server that reports it in the
+ *  payload.
+ *
+ *  Both are folded to lower case and both go through `usageLayoutFor`, so an
+ *  unknown word draws `one_screen` here exactly as it does there.
+ */
+function usageActiveLayout() {
+  const field = state.fields && state.fields.get("USAGE_LAYOUT");
+  const fromField =
+    field && typeof field.value === "string" ? field.value.trim() : "";
+  const id =
+    fromField ||
+    (usageCaptured.payload && usageCaptured.payload.layout) ||
+    "";
+  return usageLayoutFor(id);
+}
+
+/** Paint the page: one shell, one model, one registry lookup. Fetches NOTHING.
+ *
+ *  Everything a layout needs is in `usageLayoutModel()` — including every
+ *  configured provider, in the order §5.2 fixes — so a renderer added later
+ *  cannot forget a provider or re-derive a state. This function's whole job is
+ *  the surrounding chrome: the count line, the picker, Refresh now, and the
+ *  one sentence a page-level failure needs.
+ */
+function paintUsageView() {
+  const root = byId("usageLayoutRoot");
+  if (!root) return;
+  const model = usageLayoutModel();
+  renderUsagePageChrome(model);
+  root.replaceChildren();
+  root.dataset.layout = usageActiveLayout().id;
+
+  if (!model.rows.length) {
+    root.appendChild(
+      usageEl(
+        "p",
+        "usage-empty",
+        "No provider on this machine holds a credential yet, so there is " +
+          "nothing to show. A provider you configure on the Providers page " +
+          "appears here on the next visit, including a custom one that " +
+          "publishes no usage route at all.",
+      ),
+    );
+    return;
+  }
+
+  // One call, one layout. A renderer that throws must not take the page with
+  // it: the catch draws the same list the `ledger_rows` fallback would, in
+  // words, so a reader still sees every provider.
+  try {
+    usageActiveLayout().render(root, model);
+  } catch (error) {
+    const note = usageEl(
+      "p",
+      "usage-failure",
+      `The ${usageActiveLayout().name} layout could not draw (${error.message}). Every provider is listed below instead.`,
+    );
+    root.replaceChildren(note);
+    try {
+      window.MCCUsageLayouts.ledgerRows(root, model);
+    } catch (_) {
+      model.rows.forEach((row) =>
+        root.appendChild(usageEl("p", "usage-state-note", `${row.name} — ${usageStateSentence(row)}`)),
+      );
+    }
+  }
+}
+
+/** The count line, the layout name, the refresh picker and Refresh now.
+ *
+ *  All four are the page's own chrome and live OUTSIDE every layout, so a
+ *  layout never owns a control: switching layout cannot change what the
+ *  controls do, and none of the five can forget to draw them.
+ */
+function renderUsagePageChrome(model) {
+  const count = byId("usageCount");
+  if (count) {
+    const parts = [`${model.configured} configured`, `${model.measured} measured`];
+    if (model.stale) parts.push(`${model.stale} stale`);
+    if (model.failed) parts.push(`${model.failed} failed`);
+    count.textContent = parts.join(" · ");
+  }
+  const layoutLabel = byId("usageLayoutName");
+  if (layoutLabel) layoutLabel.textContent = usageActiveLayout().name;
+
+  const lastRead = byId("usageLastRead");
+  if (lastRead) {
+    const age = usageAgo(model.lastReadAt);
+    lastRead.textContent = age ? `Last read ${age}` : "Nothing read yet this session";
+  }
+
+  renderUsageRefreshPicker();
+  renderUsageRefreshButton();
+
+  const banner = byId("usageStatus");
+  if (banner) {
+    const failed = model.pageState === "failed";
+    banner.hidden = !failed;
+    banner.textContent = failed
+      ? `Could not read what this server has already observed: ${model.pageError}. This is a fact about the read, not about any provider, and nothing will be retried on its own.`
+      : "";
+  }
+}
+
+/** The interval select. A VIEW over `USAGE_AUTO_REFRESH_SECONDS`, in seconds.
+ *
+ *  Three behaviours a reader would notice if they were missing:
+   * the stored value is matched to a choice, and a stored value that is not one
+ *   of the five is added as its own marked option rather than silently
+ *   rounded (a reader must see what is actually in force);
+   * `0` — the setting's "automatic refresh off" — is its own option, because
+ *   the picker is a view over the setting and hiding `off` would make the
+ *   setting unreachable from the page that obeys it;
+   * the select is rebuilt only when the stored value changes, so a poll tick
+   *   does not reset an open dropdown.
+ */
+function renderUsageRefreshPicker() {
+  const host = byId("usageRefreshPicker");
+  if (!host) return;
+  const stored = usageStoredRefreshSeconds();
+  if (host.dataset.stored === String(stored) && host.firstChild) return;
+  host.dataset.stored = String(stored);
+  host.replaceChildren();
+
+  const label = usageEl("label", "usage-picker-label", "Refresh every");
+  label.setAttribute("for", "usageRefreshSelect");
+  const select = usageEl("select", "usage-picker-select");
+  select.id = "usageRefreshSelect";
+  select.setAttribute("aria-label", "Usage refresh interval");
+  const choices = USAGE_REFRESH_CHOICES.slice();
+  if (stored > 0 && !choices.some((choice) => choice.seconds === stored)) {
+    choices.push({ seconds: stored, label: `${stored} seconds` });
+    choices.sort((a, b) => a.seconds - b.seconds);
+  }
+  let matched = false;
+  choices.forEach((choice) => {
+    const option = usageEl("option", null, choice.label);
+    option.value = String(choice.seconds);
+    if (choice.seconds === stored) {
+      option.selected = true;
+      matched = true;
+    }
+    select.appendChild(option);
+  });
+  if (stored === 0) {
+    const option = usageEl("option", null, "off (manual only)");
+    option.value = "0";
+    option.selected = true;
+    select.appendChild(option);
+  } else if (!matched) {
+    // A stored 0 with a positive `auto_refresh_seconds` cannot happen (the
+    // route maps 0 through), but a payload from an older server could carry
+    // nothing at all. Showing the default marked is the honest fallback.
+    const option = usageEl("option", null, "30 seconds (default)");
+    option.value = "30";
+    option.selected = true;
+    select.appendChild(option);
+  }
+  select.addEventListener("change", () => {
+    saveUsageRefreshChoice(Number(select.value), select);
+  });
+  host.append(label, select);
+}
+
+/** Write the picker's choice to `USAGE_AUTO_REFRESH_SECONDS`, then re-arm.
+ *
+ *  **The same apply path every other control uses** (`/admin/api/config/apply`
+ *  with one `values` entry), not a bespoke route: the setting has one writer,
+ *  the save is validated and refused the way any other is, and the poller reads
+ *  the server's own answer afterwards rather than what this function hoped.
+ *
+ *  No reload: `apply()` refreshes `state.fields` and `loadUsageCaptured()`
+ *  re-reads the route, whose `auto_refresh_seconds` is what
+ *  `usageAutoRefreshMs()` reads. `usagePoller.restart()` is called from
+ *  `rememberUsageCaptured` when that number changes.
+ */
+async function saveUsageRefreshChoice(seconds, select) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  select.disabled = true;
+  try {
+    const result = await api("/admin/api/config/apply", {
+      method: "POST",
+      body: JSON.stringify({ values: { USAGE_AUTO_REFRESH_SECONDS: String(value) } }),
+    });
+    if (!result.applied) {
+      showMessage((result.errors || []).join("; ") || "Not applied.", "error");
+      return;
+    }
+    showMessage(
+      value > 0
+        ? `Usage refresh set to every ${usageWaitWords(value)}.`
+        : "Automatic usage refresh is off; the page reads only when you press a button.",
+      "ok",
+    );
+    // Read the route back: the server's clamp (10 to 3600) may differ from
+    // what was asked for, and the picker must show what is in force.
+    await loadUsageCaptured();
+  } catch (error) {
+    showMessage(`Could not save the refresh interval: ${error.message}`, "error");
+  } finally {
+    select.disabled = false;
+  }
+}
+
+/** The page-level Refresh now, and the line that says what it did.
+ *
+ *  It asks every provider the read gate allows, one at a time, each behind its
+ *  own deadline — the server's `POST /admin/api/usage/read-all` does the walk
+ *  and this control only presses it. The button disables for the duration so a
+ *  double press is one walk, and it says how many providers were asked when the
+ *  answer lands.
+ */
+function renderUsageRefreshButton() {
+  const host = byId("usageRefreshNow");
+  if (!host) return;
+  let button = host.querySelector("button");
+  if (!button) {
+    host.replaceChildren();
+    button = usageEl("button", "secondary-button usage-refresh-now", "Refresh now");
+    button.type = "button";
+    button.id = "usageRefreshNowButton";
+    button.title =
+      "Ask every configured provider whose own deadline allows it, once. A " +
+      "provider inside its Retry-After wait or its read interval is skipped " +
+      "and says why.";
+    button.addEventListener("click", () => refreshAllUsage(button));
+    host.appendChild(button);
+  }
+  const busy = usageViewState.refreshingAll;
+  button.disabled = busy;
+  button.textContent = busy ? "Refreshing…" : "Refresh now";
+}
+
+/** The header that tells the server whether the tab is visible.
+ *
+ *  The third safety behaviour, in one place so it can be ASSERTED rather than
+ *  described: the server stops its walk the moment this says `hidden`, which is
+ *  what keeps "nothing reads while the tab is hidden" true for a button as
+ *  well as for the poller. Extracted here because a jsdom run records request
+ *  bodies and not headers, so a claim about the header needs a function a test
+ *  can call.
+ */
+function usageVisibilityHeader() {
+  const hidden =
+    typeof document !== "undefined" && document.visibilityState === "hidden";
+  return { "X-MCC-Visible": hidden ? "hidden" : "visible" };
+}
+
+/** Refresh every due provider, then repaint from the server's own answer. */
+async function refreshAllUsage(button) {
+  if (usageViewState.refreshingAll) return;
+  usageViewState.refreshingAll = true;
+  renderUsageRefreshButton();
+  try {
+    const answer = await api("/admin/api/usage/read-all", {
+      method: "POST",
+      body: "{}",
+      // The third safety behaviour, applied to a button: while the tab is
+      // hidden the server stops the walk, exactly as the poller does.
+      headers: usageVisibilityHeader(),
+    });
+    adoptUsageReadAllAnswer(answer);
+    const attempted = Array.isArray(answer.attempted) ? answer.attempted : [];
+    const asked = attempted.filter((entry) => entry.requested).length;
+    const refused = attempted.length - asked;
+    showMessage(
+      asked === 0
+        ? `Nothing was asked: all ${refused} provider${refused === 1 ? "" : "s"} are inside their own wait or have no read.`
+        : `Asked ${asked} provider${asked === 1 ? "" : "s"}${refused ? `; ${refused} were inside their own wait` : ""}.`,
+      asked === 0 && refused ? "warn" : "ok",
+    );
+  } catch (error) {
+    showMessage(`Could not refresh usage: ${error.message}`, "error");
+  } finally {
+    usageViewState.refreshingAll = false;
+    if (button) renderUsageRefreshButton();
+    paintUsageView();
+  }
+}
+
+/** Fold the read-all answer into the cached payload, then re-arm the poller.
+ *
+ *  The answer carries the route's own `providers` and `coverage`, which are
+ *  the two lists the page draws from — so this replaces them wholesale rather
+ *  than patching one provider. That is what makes the page's figures exactly
+ *  what the server just measured, with no browser-side arithmetic between the
+ *  reading and the number.
+ */
+function adoptUsageReadAllAnswer(answer) {
+  if (!answer || !Array.isArray(answer.providers)) return;
+  const payload = usageCaptured.payload;
+  if (!payload) {
+    rememberUsageCaptured(answer);
+    return;
+  }
+  const previous = Number(payload.auto_refresh_seconds) || 0;
+  payload.providers = answer.providers;
+  payload.coverage = Array.isArray(answer.coverage) ? answer.coverage : payload.coverage;
+  payload.layout = answer.layout || payload.layout;
+  payload.observed_at = Date.now() / 1000;
+  usageCaptured.state = "ready";
+  usageCaptured.error = "";
+  const next = Number(payload.auto_refresh_seconds) || 0;
+  if (next !== previous && state.activeView === "usage") usagePoller.restart();
 }
 
 async function importChatGPTOAuthCodexTokens(button) {
@@ -44487,6 +47472,15 @@ const SECTION_NAVIGATOR = {
     ["Visibility", "#section-model-visibility"],
     ["Catalogue", "#section-model-tree"],
     ["Media", "#section-media-models"],
+  ],
+  /* 8.7.0: the Usage page's strip. Five layouts draw five different DOMs, so
+     the two entries name the ELEMENT every layout shares (the page's own root)
+     rather than a heading one layout happens to own — a strip that pointed at
+     `.usage-ledger-head` would break the four other layouts. */
+  usage: [
+    ["Providers", "#usageLayoutRoot"],
+    ["Refresh", "#usageRefreshPicker"],
+    ["Refresh now", "#usageRefreshNow"],
   ],
   requests: [
     ["Summary", "#reqSummaryHeading"],
