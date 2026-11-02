@@ -1009,9 +1009,13 @@ function setActiveView(viewId, { scroll = false } = {}) {
   pollLeadership.announceNeed();
 
   if (activeView.id === "usage") {
-    // 8.3.0: paints from payloads already in memory. It makes NO request --
-    // see openUsageView() for why that is the release's whole contract.
+    // 8.3.0: paints from payloads already in memory; 8.4.0 adds the one local
+    // GET. 8.6.0 arms the automatic refresh -- and only here, so the poller
+    // exists only while this page is the one on screen. `createPoller` returns
+    // at once when the interval reads 0, which is what a hidden tab, a
+    // different view and a setting of 0 all produce.
     openUsageView();
+    usagePoller.restart();
   }
 
   if (activeView.id === "requests") {
@@ -11379,6 +11383,15 @@ function usageHarness() {
     usageReadStateLine,
     formatUsageWait,
     usageProvenanceFor,
+    /* 8.6.0: the automatic refresh. The scenario drives the PRODUCT's poll
+       rather than dispatching a timer's worth of clicks, and reads the two
+       decisions it makes -- which providers are due, and whether the poller
+       should run at all -- so "it polls every 30 seconds" is a measured claim
+       about those functions rather than about a number in the file. */
+    usageAutoRefreshEnabled,
+    usageAutoRefreshMs,
+    usageDueProviders,
+    pollUsageReads,
   };
 }
 
@@ -18808,9 +18821,16 @@ const usageCaptured = {
 
 /** Remember the answer to the one usage read this page makes. */
 function rememberUsageCaptured(payload) {
+  const hadInterval = Number(usageCaptured.payload?.auto_refresh_seconds) || 0;
   usageCaptured.state = "ready";
   usageCaptured.payload = payload;
   usageCaptured.error = "";
+  const interval = Number(payload?.auto_refresh_seconds) || 0;
+  // 8.6.0: the first answer is what tells the page whether to poll and how
+  // often, so a change in that number re-arms the poller. Without this the
+  // poller would never start on a fresh load: it reads 0 until an answer
+  // carrying the interval lands.
+  if (interval !== hadInterval && state.activeView === "usage") usagePoller.restart();
   if (state.activeView === "usage") paintUsageView();
 }
 
@@ -18849,6 +18869,114 @@ async function loadUsageCaptured() {
     usageCaptured.inFlight = false;
   }
 }
+
+/* 8.6.0: the automatic refresh. THE SAME POLLER THE REQUESTS PAGE USES, on
+   purpose -- `createPoller` already schedules its next tick only after its
+   answer (so a slow server cannot collect six more requests), stops entirely
+   while the tab is hidden, backs off exponentially on a failing run and
+   catches up at once on `visibilitychange`. A second polling mechanism would
+   be a second set of those behaviours to keep true.
+
+   THREE THINGS THIS ADDS ON TOP, and each is what makes a 30-second default
+   acceptable rather than reckless:
+
+     1. **Only configured providers are asked.** The candidate list comes from
+        the same `provider_status` the page already draws, filtered to rows
+        whose declared read this release can perform. A provider the user does
+        not have is never contacted; a provider with no readable route is never
+        contacted.
+     2. **Every provider has its own deadline.** The server answers
+        `next_read_in_seconds` per provider, computed from the interval, that
+        provider's own consecutive failures, and its own Retry-After. The
+        poller asks only the providers whose wait has elapsed -- so a host that
+        answered 429 sits out its stated wait while the others carry on, and a
+        host that keeps failing stretches ITS OWN interval and nobody else's.
+     3. **Nothing here can charge a key.** That is a property of the route it
+        calls (its own client, no rotation, no bench), and it holds however
+        often this runs.
+
+   The cadence is the SERVER's `auto_refresh_seconds`, not a number typed into
+   this file: `USAGE_AUTO_REFRESH_SECONDS` on Limits & Resilience is the one
+   source, and 0 turns this off entirely. */
+
+/** Whether the automatic refresh is on, per the last answer from the route. */
+function usageAutoRefreshEnabled() {
+  return Number(usageCaptured.payload?.auto_refresh_seconds) > 0;
+}
+
+/** Milliseconds between polls, or 0 when it is off. */
+function usageAutoRefreshMs() {
+  if (!usageAutoRefreshEnabled()) return 0;
+  if (state.activeView !== "usage") return 0;
+  return Math.max(1000, Number(usageCaptured.payload.auto_refresh_seconds) * 1000);
+}
+
+/** The providers this pass may ask: configured, readable, and past their wait.
+ *
+ *  Read from the payload the page already has, so the decision is the
+ *  server's -- `next_read_in_seconds` is the answer to "may I ask this one
+ *  now", and this function does not recompute it from the interval or from a
+ *  failure count.
+ */
+function usageDueProviders() {
+  const payload = usageCaptured.payload;
+  if (!payload || !Array.isArray(payload.providers)) return [];
+  const configured = new Set(usageConfiguredProviders().map((row) => row.provider_id));
+  return payload.providers
+    .filter((row) => row.readable === true)
+    .filter((row) => configured.has(row.provider_id))
+    .filter((row) => row.state !== "unsupported")
+    .filter((row) => !Number(row.next_read_in_seconds))
+    .map((row) => row.provider_id);
+}
+
+/** One poll: re-read the page's own view, then every provider that is due.
+ *
+ *  Returns `{ clean }` for `createPoller`, and the answer is deliberately NOT
+ *  "did any provider fail". A per-provider failure is already accounted for:
+ *  the server lengthens THAT provider's `next_read_in_seconds`, so the poller
+ *  simply does not select it next time. Reporting it as dirty here would make
+ *  `createPoller`'s own backoff slow down every provider on the page because
+ *  one of them was down -- which is exactly the global behaviour the operator
+ *  asked not to have. So `clean` is about the PASS itself: it is dirty only
+ *  when the page could not resync its own view, which is a fact about this
+ *  browser and its server rather than about any provider.
+ */
+async function pollUsageReads({ timeoutMs = 0 } = {}) {
+  if (!usageAutoRefreshEnabled()) return { clean: true };
+  if (state.activeView !== "usage") return { clean: true };
+  await loadUsageCaptured();
+  const synced = usageCaptured.state !== "failed";
+  const due = usageDueProviders();
+  for (const providerId of due) {
+    try {
+      const answer = await api("/admin/api/usage/read", {
+        method: "POST",
+        body: JSON.stringify({ provider_id: providerId }),
+      });
+      rememberUsageReadAnswer(providerId, answer);
+    } catch (_) {
+      // A provider that could not be asked at all is the server's to count on
+      // the next GET; the pass itself still succeeded.
+    }
+    if (document.visibilityState === "hidden") break;
+  }
+  if (state.activeView === "usage") paintUsageView();
+  return { clean: synced };
+}
+
+const usagePoller = createPoller(usageAutoRefreshMs, (timeoutMs) =>
+  pollUsageReads({ timeoutMs }),
+);
+
+document.addEventListener("visibilitychange", () => {
+  // Coming back to a visible tab refreshes once instead of waiting out the
+  // interval; leaving it stops the poller inside `createPoller`'s own tick.
+  if (document.visibilityState === "visible" && usageAutoRefreshEnabled()) {
+    usagePoller.restart();
+    if (state.activeView === "usage") usagePoller.now();
+  }
+});
 
 /** One provider's card: what its own endpoint said, and what its traffic carried.
  *
@@ -19028,6 +19156,7 @@ function renderUsageReadBlocks(provider) {
 function appendUsageWindow(list, window) {
   const used = usageValue(window.used);
   const limit = usageValue(window.limit);
+  const remaining = usageValue(window.remaining);
   const unit = window.unit === "percent" ? "%" : window.unit === "usd" ? " USD" : "";
   const label = window.label || window.id;
   // A pair in a two-column list reads as TWO rows, not one run-on value:
@@ -19035,6 +19164,11 @@ function appendUsageWindow(list, window) {
   // column and read as noise. Two rows, each half labelled with what it is,
   // is the same fact with the structure said out loud -- and each half still
   // shows the provider's own text, untouched.
+  //
+  // 8.6.0 adds `remaining`: a provider that reports what is LEFT (OpenRouter)
+  // is drawn as "N remaining", never as "N used". The two are different
+  // numbers and reading one as the other is the worst mistake this card can
+  // make.
   if (used.measured && limit.measured) {
     appendUsageDetail(list, `${label} used`, `${used.text}${unit}`, {
       measured: true,
@@ -19044,6 +19178,17 @@ function appendUsageWindow(list, window) {
       measured: true,
       title: window.id,
     });
+  } else if (remaining.measured) {
+    appendUsageDetail(list, `${label} remaining`, `${remaining.text}${unit}`, {
+      measured: true,
+      title: window.id,
+    });
+    if (limit.measured) {
+      appendUsageDetail(list, `${label} limit`, `${limit.text}${unit}`, {
+        measured: true,
+        title: window.id,
+      });
+    }
   } else if (used.measured) {
     appendUsageDetail(list, `${label} used`, `${used.text}${unit}`, {
       measured: true,
@@ -20141,6 +20286,10 @@ function openUsageView() {
   if (usageCaptured.state === "pending") {
     loadUsageCaptured();
   }
+  // 8.6.0: arm the automatic refresh. `usageAutoRefreshMs()` returns 0 while
+  // the first answer has not landed (it carries the interval), so the poller
+  // starts on the refresh that `loadUsageCaptured` triggers a paint for.
+  if (usageAutoRefreshEnabled()) usagePoller.restart();
 }
 
 async function importChatGPTOAuthCodexTokens(button) {

@@ -359,6 +359,29 @@ STREAM_KEEPALIVE_MODE_NAMES: frozenset[str] = frozenset({"ping", "frames"})
 STREAM_KEEPALIVE_MODE_DEFAULT = "ping"
 # Used only when a rate-limited provider sends no Retry-After to obey.
 RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT = 60.0
+# How often the Usage page re-reads the providers whose own usage route MCC can
+# read, while the page is open and the tab is visible. 30 s is the operator's
+# choice (2026-11-02: "read and updated every 30 seconds"): a balance or a
+# window that is half an hour old is a picture of a different moment.
+#
+# It is cheap for the reasons a naive timer would not be, and each one is
+# enforced rather than assumed: the poller stops while the tab is hidden
+# (visibilitychange, the same machinery Analytics uses), a provider's own
+# Retry-After is obeyed, a per-provider read is skipped when the page's own gate
+# says it was read recently enough, and repeated failures for one provider back
+# off exponentially on that provider alone. A read never enters the credential
+# pool, so no amount of polling can charge a key or bench a provider.
+#
+# 0 turns the auto-refresh off and leaves the page on-demand only.
+USAGE_AUTO_REFRESH_SECONDS_DEFAULT = 30.0
+# The floor on an operator-chosen interval. Below ten seconds an OAuth usage
+# route is being asked faster than any implementation this was researched
+# against does, and the two subscription routes are the ones third parties
+# report as "rate-limit aggressively" (INVESTIGATION-USAGE-AND-CREDITS §3.6).
+USAGE_AUTO_REFRESH_MIN_SECONDS = 10.0
+# The ceiling. Above an hour the feature is indistinguishable from "off" while
+# still spending requests, and the page's own stale bound is 30 minutes.
+USAGE_AUTO_REFRESH_MAX_SECONDS = 3600.0
 # The ceiling on a wait a provider published in a header. 3600 was hard-coded
 # as ``MAX_RATE_LIMIT_COOLDOWN_SECONDS`` until 7.22.0 and is the default here
 # so that an install that says nothing behaves exactly as it did: an hour is

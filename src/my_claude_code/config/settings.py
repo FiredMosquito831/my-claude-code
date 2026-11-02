@@ -242,6 +242,7 @@ from .constants import (
     TOOL_RESULT_TRIM_PROTECT_RECENT_DEFAULT,
     TOOL_RESULT_TRIM_THRESHOLD_CHARS_DEFAULT,
     TRIM_MODE_NAMES,
+    USAGE_AUTO_REFRESH_SECONDS_DEFAULT,
     VISION_ADAPTER_MODE_DEFAULT,
     VISION_ADAPTER_MODE_NAMES,
     WEB_FETCH_EXTRACTOR_DEFAULT,
@@ -1337,6 +1338,21 @@ class Settings(BaseSettings):
     rate_limit_cooldown_mode: str = Field(
         default=RATE_LIMIT_COOLDOWN_MODE_DEFAULT,
         validation_alias="RATE_LIMIT_COOLDOWN_MODE",
+    )
+    # 8.6.0: how often the Usage page re-reads the providers whose own usage
+    # route MCC can read, while the page is open and its tab is visible. 0
+    # leaves the page on demand only, which is how 8.5.0 shipped.
+    usage_auto_refresh_seconds: float = Field(
+        default=USAGE_AUTO_REFRESH_SECONDS_DEFAULT,
+        validation_alias="USAGE_AUTO_REFRESH_SECONDS",
+        description=(
+            "Seconds between automatic usage re-reads for the providers whose "
+            "own usage route MCC can read, while the Usage page is open and "
+            "its tab is visible. The poller stops while the tab is hidden, "
+            "obeys a provider's own Retry-After, and backs off per provider "
+            "on repeated failures. 0 turns it off and leaves the page on "
+            "demand only."
+        ),
     )
     # The escalating bench for a key the provider keeps rejecting with
     # 401/403. Comma-separated seconds, walked by consecutive auth failures

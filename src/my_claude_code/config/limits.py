@@ -110,6 +110,17 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "stream_commit_holdback_chars": LimitRange(
         0, 8_192, "0 uses the holdback clock alone"
     ),
+    # How often the Usage page re-reads a provider's own usage route. 0 is the
+    # only value that means something other than "this often": it turns the
+    # automatic refresh off and leaves the page on demand only, which is how
+    # 8.5.0 shipped. The floor is ten seconds because below it MCC would ask
+    # the two OAuth routes faster than any implementation this was researched
+    # against does, and the ceiling is an hour because above it the feature is
+    # indistinguishable from "off" while still spending requests -- the page's
+    # own stale bound is 30 minutes.
+    "usage_auto_refresh_seconds": LimitRange(
+        0.0, HOUR, "0 turns the automatic refresh off (Read now only)"
+    ),
     # An hour of silence before the first keepalive is already longer than any
     # client idle timer this was built for; above it the setting is "off" by
     # another name.
