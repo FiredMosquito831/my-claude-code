@@ -52,7 +52,11 @@ def test_the_scenario_runs_clean(reads: dict) -> None:
     assert reads["consoleErrors"] == []
     if ON_CI:
         # A payload that never started is not a pass.
-        assert reads["button"]["cards"] == 2
+        # Since 8.7.0 the page draws ONE list of every configured
+        # provider (the coverage rule), so the fixture's three -- a
+        # subscription, one readable provider and one with no read -- are
+        # three cards rather than 8.5.0's two grid cells.
+        assert reads["button"]["cards"] == 3
 
 
 # ------------------------------------------------------------------ the control
