@@ -1444,6 +1444,58 @@
             ></div>
           </section>
 
+          <!-- 8.3.0 USAGE PR 1: what the providers you configured say is left.
+               Every card is filled by renderUsageView() from payloads the
+               dashboard already asks for: /admin/api/anthropic-oauth/sources,
+               /admin/api/chatgpt-oauth/status, and the provider_status list
+               that arrives with /admin/api/config. Opening this page adds no
+               request of its own. -->
+          <section id="view-usage" class="admin-view" data-view="usage" hidden>
+            <p class="view-intro">
+              What each provider you configured says is left. A subscription
+              window and a cash balance are two different things and are never
+              added together. Every figure below is one a provider reported,
+              shown with the source it came from and when it was read &mdash;
+              a value nobody has measured says so rather than showing zero.
+            </p>
+            <nav id="usageJumpBar" class="jump-bar" aria-label="Usage sections">
+              <span class="jump-bar-label">On this page</span>
+              <a href="#usageSubscriptionsHeading">Subscriptions</a>
+              <a href="#usageOtherHeading">Other providers</a>
+            </nav>
+            <p id="usageStatus" class="models-status" role="status" aria-live="polite" hidden></p>
+
+            <section class="settings-section usage-section" id="usageSubscriptions">
+              <div class="section-heading">
+                <div>
+                  <h3 id="usageSubscriptionsHeading">Subscriptions</h3>
+                  <p>
+                    The two plans MCC already reads. Their windows arrive on the
+                    responses your own requests carry, so nothing here is fetched.
+                  </p>
+                </div>
+              </div>
+              <div id="usageSubscriptionsGrid" class="usage-grid"></div>
+              <p id="usageEmptyNote" class="section-help" hidden></p>
+            </section>
+
+            <section class="settings-section usage-section" id="usageOther">
+              <div class="section-heading">
+                <div>
+                  <h3 id="usageOtherHeading">Other configured providers</h3>
+                  <p>
+                    The rest of what you have set up. A provider appears here only
+                    if it holds a credential, and most of them publish no usage
+                    figure MCC can read at all &mdash; which is a fact about them,
+                    not a failure of this page.
+                  </p>
+                </div>
+              </div>
+              <ul id="usageOtherList" class="usage-other-list"></ul>
+              <p id="usageOtherEmpty" class="section-help" hidden></p>
+            </section>
+          </section>
+
           <section id="view-requests" class="admin-view" data-view="requests" hidden>
             <div class="observability-heading">
               <div>
@@ -2648,6 +2700,7 @@
                 <a href="#guide-advanced">Where the advanced settings went</a>
                 <a href="#guide-images">Images, and what they cost</a>
                 <a href="#guide-analytics">See what happened</a>
+                <a href="#guide-usage">See what is left</a>
                 <a href="#guide-cost">What a request cost</a>
                 <a href="#guide-attribution">Which agent sent this?</a>
                 <a href="#guide-deploy">Desktop &amp; RTK</a>
@@ -6199,6 +6252,66 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>WEBSEARCH_LOG_CAPTURE_CONTENT=false</code> withholds the payloads
                   <em>and</em> the query text, keeping only lengths and hashes. API keys are
                   never written to either store &mdash; only masked labels.
+                </p>
+
+                <h3 id="guide-usage">See what is left: the Usage page</h3>
+                <p>
+                  <em>Usage</em> is the first page in Observe, above Analytics,
+                  and it answers one question for the providers you configured:
+                  how much is left? It is a readout, not a settings page &mdash;
+                  there is nothing to apply here, and opening it changes nothing.
+                </p>
+                <p>
+                  Two providers already tell MCC where their subscription stands,
+                  on every response your own requests carry: Anthropic's
+                  rate-limit headers give the Claude card its 5-hour and weekly
+                  windows and reset times, and Codex's headers give the ChatGPT
+                  card its two windows and its credits balance. MCC has been
+                  capturing those since the OAuth cards shipped; this page puts
+                  them where you can read them instead of inside a disclosure
+                  triangle on Providers.
+                </p>
+                <p class="guide-note">
+                  <strong>Nothing here is fetched.</strong> The page draws from the
+                  two payloads the Providers page already asks for, so opening it
+                  makes no request, starts no timer and has no refresh button. What
+                  you read is what the provider last said on a real request.
+                </p>
+                <p class="guide-note">
+                  <strong>A window and a balance are never added together.</strong>
+                  A percentage of a plan resets and cannot be spent anywhere else;
+                  a credits balance is cash. Codex reports both on the same
+                  response, which is exactly why every card keeps them in two
+                  blocks with their own headings &mdash; and why no card anywhere
+                  prints a single "remaining" total.
+                </p>
+                <p class="guide-note">
+                  <strong>Four honest states, and a chip that names which one.</strong>
+                  <em>Measured</em> is a reading inside the last 30 minutes.
+                  <em>Stale</em> is a real reading that is older, shown with the
+                  time it was taken. <em>Not read yet</em> means no response has
+                  carried a usage header since the server started &mdash; every
+                  figure says <em>not measured by this provider</em> rather than
+                  showing a zero. <em>Read failed</em> is a read that did not
+                  happen, with the reason it did not. A missing value is never a
+                  zero, and "we could not read it" never looks like "this
+                  provider has nothing to read".
+                </p>
+                <p class="guide-note">
+                  <strong>Every other provider gets one sentence.</strong> DeepSeek,
+                  Novita, Cline and most of the catalogue publish no usage
+                  figure MCC can reach, so they are listed after the cards, once
+                  each, saying exactly that. There is no spinner and no retry,
+                  because there is nothing to wait for. A provider with no key
+                  does not appear on this page at all.
+                </p>
+                <p class="guide-note">
+                  <strong>Each card names its source and when it was read.</strong>
+                  A balance read four hours ago is not a live balance, and the
+                  line at the foot of the card is what says which one you are
+                  looking at. If a card says <em>Read failed</em>, the cause is on
+                  <a href="#guide-keys">Providers</a>: a refused credential, an
+                  expired sign-in, or a server that never answered.
                 </p>
 
                 <h3 id="guide-cost">What a request cost</h3>

@@ -276,6 +276,20 @@ const VIEW_GROUPS = [
     containerId: "messagingSections",
   },
   {
+    /* 8.3.0 (USAGE PR 1): what the providers you configured say is left, first
+       in OBSERVE because it is the question you ask before anything else on
+       the group. It claims no manifest section -- every card is drawn by
+       renderUsageView() from payloads the page already asks for -- so
+       `containerId` stays null and renderSections() skips it, the shape
+       `models` and `docs` already use. Its rail folds into the 8.1.0 strip. */
+    id: "usage",
+    label: "Usage",
+    title: "Usage",
+    sections: [],
+    containerId: null,
+    railIds: ["usageJumpBar"],
+  },
+  {
     id: "requests",
     label: "Analytics",
     // 7.122.3 (U19): the page says the name the sidebar says. It read
@@ -993,6 +1007,12 @@ function setActiveView(viewId, { scroll = false } = {}) {
   // interval beside it, so a change of view re-arms it on the new cadence.
   inflightPoller.restart();
   pollLeadership.announceNeed();
+
+  if (activeView.id === "usage") {
+    // 8.3.0: paints from payloads already in memory. It makes NO request --
+    // see openUsageView() for why that is the release's whole contract.
+    openUsageView();
+  }
 
   if (activeView.id === "requests") {
     loadRequestsView().catch((error) => showMessage(error.message, "error"));
@@ -11302,6 +11322,43 @@ function uxPassHarness() {
   };
 }
 
+/** A handle on 8.3.0's Usage page, for its jsdom scenario.
+ *
+ * Same shape and same purpose as ``uxPassHarness`` above: a function with no
+ * behaviour of its own, returning references the page already has, so a
+ * scenario can open the view and read what it painted without evaluating this
+ * file a second time. Nothing here is new state and nothing the page reads
+ * goes through it.
+ *
+ * ``usageSources`` is in the handle because a scenario has to be able to put a
+ * payload in front of the renderer at all — the harness's own fetch stub
+ * cannot reach a closure — and because writing it is the same operation
+ * ``refreshAnthropicOAuthSources`` performs when a real answer arrives.
+ */
+function usageHarness() {
+  return {
+    state,
+    usageSources,
+    rememberUsagePayload,
+    rememberUsageFailure,
+    paintUsageView,
+    openUsageView,
+    usageWindowState,
+    usageValue,
+    usageConfiguredProviders,
+    USAGE_STALE_AFTER_SECONDS,
+    USAGE_SUBSCRIPTIONS,
+    /* The registry itself, so a scenario can ask where the page sits without
+       reading a `const` an indirect eval cannot publish. */
+    VIEW_GROUPS,
+    /* The two renderers, so a scenario can build one card directly. A throw
+       inside the card builder would otherwise surface as "the grid is empty",
+       which names the symptom instead of the cause. */
+    renderUsageAnthropicCard,
+    renderUsageChatGPTCard,
+  };
+}
+
 /** A handle on 8.1.0's own machinery, for the design-system jsdom scenario.
  *
  * Same shape and same purpose as ``uxPassHarness`` above: a function with no
@@ -18070,6 +18127,9 @@ async function refreshAnthropicOAuthSources(
 ) {
   try {
     const sources = await api("/admin/api/anthropic-oauth/sources");
+    // 8.3.0: the Usage page draws its Claude card from THIS answer rather than
+    // asking a second time. One route, one read, two pages.
+    rememberUsagePayload("anthropic_oauth", sources);
     if (details) renderAnthropicOAuthDetails(details, sources, buttons);
     const accounts = Array.isArray(sources.accounts) ? sources.accounts : [];
     // Refresh and Disconnect only mean anything against MCC's own store:
@@ -18115,6 +18175,9 @@ async function refreshAnthropicOAuthSources(
         : "No credentials found. Sign in below, or log in to Claude Code first.";
     }
   } catch (error) {
+    // 8.3.0: the Usage page reports a failed read with this same reason rather
+    // than showing an empty card (§5.4, "Never").
+    rememberUsageFailure("anthropic_oauth", error);
     status.textContent = `Could not check credential sources: ${error.message}`;
   }
 }
@@ -18468,14 +18531,20 @@ async function chatgptOAuthAccountAction(accountId, action, button, details) {
 }
 
 async function refreshChatGPTOAuthStatus(details) {
-  if (!details) return;
+  // 8.3.0: the fetch happens even when there is no card to draw into,
+  // because the Usage page draws its Codex card from the same answer. One
+  // route, one read, two pages -- the alternative is a second request on
+  // every page load, which is exactly what this release must not add.
   let status;
   try {
     status = await api("/admin/api/chatgpt-oauth/status");
+    rememberUsagePayload("chatgpt_oauth", status);
   } catch (error) {
-    details.hidden = true;
+    rememberUsageFailure("chatgpt_oauth", error);
+    if (details) details.hidden = true;
     return;
   }
+  if (!details) return;
   details.replaceChildren();
   details.hidden = false;
   const accounts = Array.isArray(status.accounts) ? status.accounts : [];
@@ -18580,6 +18649,728 @@ async function refreshChatGPTOAuthStatus(details) {
   if (windows.limit_name && windows.limit_name !== "not yet observed") {
     appendOAuthDetail(details, "OpenAI says", windows.limit_name, { warn: true });
   }
+}
+
+/* =========================================================== the Usage page
+   8.3.0 (USAGE PR 1). What the providers you configured say is left, on one
+   page, first in OBSERVE.
+
+   THE ONE RULE, inherited from the two cards this page generalises
+   (`providers/anthropic_oauth/rate_limit_headers.py:3-6` and
+   `api/admin_routes.py:3659-3665`): every field is a string the provider sent,
+   or it says nobody has measured. Nothing here computes a window from a clock,
+   infers one from a 429, carries a value forward past the next response, or
+   renders a missing value as a zero.
+
+   ZERO NEW TRAFFIC is a property of the code, not a promise.
+   `openUsageView()` calls nothing: it paints from three payloads the dashboard
+   has already fetched for its own reasons --
+     - `/admin/api/anthropic-oauth/sources` and
+       `/admin/api/chatgpt-oauth/status`, the two the Providers page asks for
+       to draw its subscription cards, and
+     - `state.config.provider_status[]` from `/admin/api/config`, which
+       `load()` fetches once on every page load for the whole dashboard.
+   The two OAuth answers are remembered by `rememberUsagePayload()`, called
+   from the two refreshers the Providers page already runs, so opening this
+   page reuses an answer rather than asking again. There is no refresh button,
+   no timer and no second read path anywhere in this block.
+
+   SUBSCRIPTION ALLOWANCE AND CASH ARE TWO BLOCKS, never one total (§4.3, Q5).
+   Codex reports both on the same response, which is what forces the rule: a
+   percent of a window and a credits balance answer different questions, and
+   adding them would be the defect Part IV.9 exists to prevent. */
+
+/** The literal the server prints wherever there is no observed value
+ *  (`api/admin_routes.py:3434`). Kept, never folded into a dash: "nobody has
+ *  measured this" and "this provider sent nothing" are different facts, and
+ *  the payload deliberately spells them the same way so nothing downstream has
+ *  to guess whether a blank meant zero. */
+const USAGE_NOT_OBSERVED = "not yet observed";
+
+/** How old a reading may be before the page stops calling it current.
+ *
+ *  One number, declared once. §5.5.3 sets 30 minutes as the per-provider read
+ *  interval and 5 minutes as its floor; the header-derived readings this page
+ *  shows cost nothing and are exempt from polling because they arrive on the
+ *  user's own traffic (§5.5.4), so the same 30 minutes is the age at which a
+ *  percentage stops being a picture of now. */
+const USAGE_STALE_AFTER_SECONDS = 30 * 60;
+
+/** The two subscriptions MCC reads, and the route each answer arrives on. */
+const USAGE_SUBSCRIPTIONS = [
+  {
+    id: "anthropic_oauth",
+    label: "Claude subscription",
+    route: "/admin/api/anthropic-oauth/sources",
+    source: "Anthropic's unified rate-limit response headers",
+    noneSentence:
+      "Anthropic publishes no usage figure outside those headers, so this " +
+      "card can only show what a real request has already carried.",
+  },
+  {
+    id: "chatgpt_oauth",
+    label: "ChatGPT / Codex subscription",
+    route: "/admin/api/chatgpt-oauth/status",
+    source: "Codex's own response headers",
+    noneSentence:
+      "OpenAI publishes no usage figure outside those headers, so this card " +
+      "can only show what a real request has already carried.",
+  },
+];
+
+/** What a provider with no readable usage figure says, in one sentence.
+ *
+ *  §5.4 and Q7, in the words the user approved. It is a statement about the
+ *  provider, permanently true until a later release teaches MCC to read it --
+ *  never a spinner, never a retry, never a zero pretending to be a reading. */
+function usageUnavailableSentence(displayName) {
+  return `${displayName} publishes no usage endpoint MCC can read.`;
+}
+
+/** What the two subscription cards are drawn from, and how that went.
+ *
+ *  `state` is one of `pending` (nobody has asked yet), `ready` (a payload
+ *  arrived) or `failed` (an answer did not). It is written only by the two
+ *  refreshers the Providers page already runs, through
+ *  `rememberUsagePayload()` below; nothing on the Usage page writes it. */
+const usageSources = {
+  anthropic_oauth: { state: "pending", payload: null, error: "" },
+  chatgpt_oauth: { state: "pending", payload: null, error: "" },
+};
+
+/** Remember an answer already fetched for the Providers page. Fetches nothing. */
+function rememberUsagePayload(providerId, payload) {
+  if (!Object.prototype.hasOwnProperty.call(usageSources, providerId)) return;
+  usageSources[providerId] = { state: "ready", payload, error: "" };
+  // A card already on screen is a picture of the payload that just arrived.
+  // Repainting is a pure read: it is what makes a second account added on
+  // Providers appear here without a reload.
+  if (state.activeView === "usage") paintUsageView();
+}
+
+/** Remember that the answer did not arrive, and why. Fetches nothing. */
+function rememberUsageFailure(providerId, error) {
+  if (!Object.prototype.hasOwnProperty.call(usageSources, providerId)) return;
+  usageSources[providerId] = {
+    state: "failed",
+    payload: null,
+    error: (error && error.message) || String(error || "no reason given"),
+  };
+  if (state.activeView === "usage") paintUsageView();
+}
+
+/** One payload value as the page shows it: the provider's string, or why not.
+ *
+ *  Returns `{ text, measured }`. `measured` is false when the provider sent
+ *  nothing, which is what dims the value and says so -- the one thing a
+ *  percentage must never do is look measured when it is not. */
+function usageValue(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text || text === USAGE_NOT_OBSERVED) {
+    return { text: "not measured by this provider", measured: false };
+  }
+  return { text, measured: true };
+}
+
+/** A reset instant, short enough to sit in a two-column figure row.
+ *
+ *  `formatOAuthReset` prints the local time AND the raw epoch, which is the
+ *  right thing on the Providers card where it is a full-width line and the
+ *  wrong thing here: "11/2/2026, 8:13:20 AM (1793600000)" is 34 characters in
+ *  a value column that is roughly half a 390 px phone. The instant is still
+ *  the same fact and it is still in the reader's own clock; the raw header
+ *  value goes on `title`, so nothing is lost and nothing has to be guessed at.
+ *
+ *  Anything that is not a bare epoch is shown exactly as it arrived -- a
+ *  provider that sends "in 2 hours" gets its own words back. */
+function usageInstant(value) {
+  if (typeof value !== "string" || !/^\d{9,13}$/.test(value)) return null;
+  const seconds = value.length > 10 ? Number(value) / 1000 : Number(value);
+  const when = new Date(seconds * 1000);
+  if (Number.isNaN(when.getTime())) return null;
+  const short = when.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return { text: short, title: `${when.toLocaleString()} (${value})` };
+}
+
+/** When the provider said it, and how long ago that was.
+ *
+ *  `observed_at` is epoch SECONDS (the observers stamp `time.time()`), and the
+ *  answer is about when the provider's bytes arrived, not when this page drew
+ *  them. */
+function usageAge(observedAt) {
+  const seconds = Number(observedAt);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const ageSeconds = Math.max(0, (Date.now() - seconds * 1000) / 1000);
+  return {
+    seconds: ageSeconds,
+    text: formatUsageAge(ageSeconds),
+    at: new Date(seconds * 1000),
+  };
+}
+
+function formatUsageAge(seconds) {
+  if (seconds < 90) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** Which of §4's four states one windows block is in.
+ *
+ *  `measured`    — the provider answered inside the freshness bound
+ *  `stale`       — the provider answered at T, and nothing has been read since
+ *  `not_measured` — nothing has been observed yet (state 3's *reading* case:
+ *                  this provider HAS a point of capture, but no response has
+ *                  carried one since the server started)
+ *  `failed`      — decided by the caller, because the read itself did not
+ *                  happen; it always carries the reason.
+ *
+ *  State 3 proper ("this provider publishes no usage endpoint MCC can read")
+ *  is a DECLARED fact about a provider, so it is produced by the other-provider
+ *  list below and never here. State 3 and state 4 must never look alike: one
+ *  is a fact about the provider, the other is a fact about the read, and the
+ *  renderer gives them different words and different tones. */
+function usageWindowState(windows) {
+  if (!windows || !windows.observed) {
+    return {
+      kind: "not_measured",
+      sentence:
+        "Not read yet: no response from this provider has carried a usage " +
+        "header since the server started. It is read from your own traffic, " +
+        "so it fills in on the next request.",
+    };
+  }
+  const age = usageAge(windows.observed_at);
+  if (!age) {
+    return {
+      kind: "not_measured",
+      sentence: "Not read yet: the provider's answer carried no observation time.",
+    };
+  }
+  if (age.seconds > USAGE_STALE_AFTER_SECONDS) {
+    return {
+      kind: "stale",
+      age,
+      sentence:
+        `Read ${age.text}, which is older than 30 minutes. What follows is ` +
+        "what the provider said then, not what it says now.",
+    };
+  }
+  return { kind: "measured", age, sentence: `Read ${age.text}.` };
+}
+
+const USAGE_STATE_CHIPS = {
+  measured: { label: "Measured", tone: "ok" },
+  stale: { label: "Stale", tone: "warn" },
+  not_measured: { label: "Not read yet", tone: "neutral" },
+  failed: { label: "Read failed", tone: "error" },
+};
+
+function usageChip(stateKind) {
+  const entry = USAGE_STATE_CHIPS[stateKind] || USAGE_STATE_CHIPS.not_measured;
+  const chip = document.createElement("span");
+  chip.className = `usage-chip usage-chip-${entry.tone}`;
+  chip.dataset.state = stateKind;
+  chip.textContent = entry.label;
+  return chip;
+}
+
+/** One `<dt>/<dd>` pair inside a usage card's figure list.
+ *
+ *  `options.title` puts the full value on the element's `title` attribute, so
+ *  a shortened display is short and nothing is hidden without a way to read
+ *  it (UI-QUALITY-RULE A.3: ellipsised WITH a title, never silently cut). */
+function appendUsageDetail(list, term, value, options) {
+  const dt = document.createElement("dt");
+  dt.textContent = term;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  const classes = [];
+  if (options && options.measured === false) classes.push("usage-unmeasured");
+  if (options && options.warn) classes.push("value-expired");
+  if (classes.length) dd.className = classes.join(" ");
+  if (options && options.title) dd.title = options.title;
+  list.append(dt, dd);
+}
+
+/** A figure row for one window value, applying the instant formatting.
+ *
+ *  Three cases and no fourth: a measured epoch becomes a short local time with
+ *  the raw value on `title`; a measured non-epoch is shown exactly as it
+ *  arrived; an unmeasured one says nobody measured it. */
+function appendUsageFigure(list, term, raw, { instant = false, warn = false } = {}) {
+  const value = usageValue(raw);
+  if (!value.measured) {
+    appendUsageDetail(list, term, value.text, { measured: false });
+    return;
+  }
+  const short = instant ? usageInstant(value.text) : null;
+  appendUsageDetail(list, term, short ? short.text : value.text, {
+    measured: true,
+    warn,
+    ...(short ? { title: short.title } : {}),
+  });
+}
+
+/** One block of a card: own heading, own note, own figure list.
+ *
+ *  Two of these are how a subscription allowance and a cash balance stay
+ *  apart (§4.3). A block never merges with its sibling and nothing on the page
+ *  adds them together. */
+function usageBlock(title, note) {
+  const block = document.createElement("section");
+  block.className = "usage-block";
+  const heading = document.createElement("h4");
+  heading.className = "usage-block-heading";
+  heading.textContent = title;
+  block.appendChild(heading);
+  if (note) {
+    const para = document.createElement("p");
+    para.className = "usage-block-note";
+    para.textContent = note;
+    block.appendChild(para);
+  }
+  const list = document.createElement("dl");
+  list.className = "usage-figures";
+  block.appendChild(list);
+  return { block, list };
+}
+
+/** The card's provenance line: where the figures came from, and when.
+ *
+ *  The metadata ladder's convention in miniature -- a number with no source
+ *  and no age is a number a reader cannot check. A balance read four hours ago
+ *  is not a live balance, which is why the age is on every card and why the
+ *  two ages are what decide the `Measured` / `Stale` chip. */
+function appendUsageProvenance(card, source, stateInfo) {
+  const line = document.createElement("p");
+  line.className = "usage-provenance";
+  const parts = [`Source: ${source}`];
+  if (stateInfo && stateInfo.age) {
+    parts.push(`observed ${stateInfo.age.at.toLocaleString()} (${stateInfo.age.text})`);
+  } else if (stateInfo && stateInfo.failed) {
+    // A failed read never prints "nothing observed yet": the card above it has
+    // just said why nobody knows, and repeating the wrong reason here would
+    // make a broken read look like a provider with nothing to report.
+    parts.push("no reading this time");
+  } else {
+    parts.push("nothing observed yet");
+  }
+  line.textContent = parts.join(" · ");
+  card.appendChild(line);
+}
+
+function usageCardShell(displayName) {
+  const card = document.createElement("article");
+  card.className = "usage-card";
+  const heading = document.createElement("div");
+  heading.className = "usage-card-heading";
+  const title = document.createElement("strong");
+  title.className = "usage-card-title";
+  title.textContent = displayName;
+  heading.appendChild(title);
+  card.appendChild(heading);
+  return card;
+}
+
+/** The account/key count line, from the server's own `key_count`.
+ *
+ *  The same number serves both kinds of pool because the server derives it
+ *  from one resolver: an OAuth provider's count is its stored accounts, an
+ *  API-key provider's is its keys. The word changes; the source does not. */
+function usagePoolLine(pool) {
+  if (!pool) return "";
+  const count = Number(pool.count) || 0;
+  if (!count) return "";
+  return `${count} credential${count === 1 ? "" : "s"} in this pool`;
+}
+
+/** The failed state's body: the reason, the provider's words where it gave
+ *  any, and what the failure is not ("this page is broken" is never the
+ *  answer, and neither is "the provider has no usage API"). */
+function appendUsageFailure(card, spec, entry) {
+  const note = document.createElement("p");
+  note.className = "usage-failure";
+  note.textContent =
+    `Could not read usage: ${entry.error}. This is a fact about the read, not ` +
+    "about the provider -- its plan may well be fine.";
+  card.appendChild(note);
+  appendUsageProvenance(card, spec.source, { failed: true });
+}
+
+/** The not-yet-read body: which point of capture exists and why nothing has
+ *  come through it. */
+function appendUsageNotRead(card, spec) {
+  const note = document.createElement("p");
+  note.className = "usage-state-note";
+  note.textContent = spec.noneSentence;
+  card.appendChild(note);
+  appendUsageProvenance(card, spec.source, null);
+}
+
+/** One account's row inside a figure list.
+ *
+ *  A window belongs to the subscription that observed it (the argument
+ *  `rate_limit_headers.py:106-110` makes in the server), so two accounts are
+ *  two groups of figures, never one merged block. */
+function usageAccountHeading(list, account) {
+  const name = document.createElement("p");
+  name.className = "usage-account-name";
+  name.textContent = account.name || account.account_id || "account";
+  list.parentNode.insertBefore(name, list);
+}
+
+/** The Claude subscription card.
+ *
+ *  Field for field the payload the Providers card already reads
+ *  (`_AnthropicOAuthWindows`, api/admin_routes.py:3464-3481), drawn as two
+ *  blocks: the 5-hour and weekly windows are the SUBSCRIPTION ALLOWANCE; the
+ *  overage figures answer a different question about the same plan. There is
+ *  no cash block here because Anthropic sends none on these headers, and
+ *  saying nothing is the honest alternative to inventing one. */
+function renderUsageAnthropicCard(spec, displayName, entry, pool) {
+  const card = usageCardShell(displayName);
+  const poolLine = usagePoolLine(pool);
+  if (poolLine) {
+    const keys = document.createElement("p");
+    keys.className = "usage-card-keys";
+    keys.textContent = poolLine;
+    card.appendChild(keys);
+  }
+  if (entry.state === "failed") {
+    card.querySelector(".usage-card-heading").appendChild(usageChip("failed"));
+    appendUsageFailure(card, spec, entry);
+    return card;
+  }
+  if (entry.state !== "ready") {
+    card.querySelector(".usage-card-heading").appendChild(usageChip("not_measured"));
+    appendUsageNotRead(card, spec);
+    return card;
+  }
+
+  const payload = entry.payload || {};
+  const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  // With accounts, each one's own windows; without, the card-level block,
+  // which is the read-only view of the credential Claude Code owns.
+  const rows = accounts.length
+    ? accounts.map((account) => ({ account, windows: account.windows || {} }))
+    : [{ account: null, windows: payload.windows || {} }];
+  const first = rows[0].windows;
+  const stateInfo = usageWindowState(first);
+  card.querySelector(".usage-card-heading").appendChild(usageChip(stateInfo.kind));
+
+  const allowance = usageBlock(
+    "Subscription allowance",
+    "A percentage of a plan window. It resets, it is not money, and it cannot " +
+      "be spent anywhere else.",
+  );
+  rows.forEach((row) => {
+    if (row.account) usageAccountHeading(allowance.list, row.account);
+    const plan =
+      (row.account && row.account.subscription_type) || payload.plan || "";
+    if (plan) {
+      appendUsageDetail(allowance.list, "Plan", plan, { measured: true });
+    }
+    const rowsFor = [
+      ["5-hour window used", row.windows.five_hour_utilization, {}],
+      ["5-hour window resets", row.windows.five_hour_reset, { instant: true }],
+      ["Weekly window used", row.windows.weekly_utilization, {}],
+      ["Weekly window resets", row.windows.weekly_reset, { instant: true }],
+    ];
+    rowsFor.forEach(([term, raw, options]) => {
+      appendUsageFigure(allowance.list, term, raw, options);
+    });
+    const says = usageValue(row.windows.status);
+    if (says.measured) {
+      appendUsageDetail(allowance.list, "Anthropic says", says.text, {
+        measured: true,
+        warn: says.text.endsWith("-limit-reached"),
+      });
+    }
+  });
+  card.appendChild(allowance.block);
+
+  const overage = usageBlock(
+    "Overage",
+    "What the plan reports about going past its windows. This is not a cash " +
+      "balance and it is not added to the windows above.",
+  );
+  const overageFields = [
+    ["Overage status", first.overage_status, {}],
+    ["Overage resets", first.overage_reset, { instant: true }],
+    ["Usage limit", first.usage_limit, {}],
+    ["Unified reset", first.reset, { instant: true }],
+  ];
+  overageFields.forEach(([term, raw, options]) => {
+    appendUsageFigure(overage.list, term, raw, options);
+  });
+  card.appendChild(overage.block);
+
+  const stateNote = document.createElement("p");
+  stateNote.className = "usage-state-note";
+  stateNote.textContent = stateInfo.sentence;
+  card.appendChild(stateNote);
+  appendUsageProvenance(card, spec.source, stateInfo);
+  return card;
+}
+
+/** The ChatGPT / Codex subscription card -- the one that forces the split.
+ *
+ *  Codex reports a percent of each window AND a credits balance on the same
+ *  response (`_ChatGPTOAuthWindows`, api/admin_routes.py:3659-3680). The two
+ *  go in two blocks under two headings, and the page never prints a combined
+ *  "remaining": §4.3, Q5, decided by the user. */
+function renderUsageChatGPTCard(spec, displayName, entry, pool) {
+  const card = usageCardShell(displayName);
+  const poolLine = usagePoolLine(pool);
+  if (poolLine) {
+    const keys = document.createElement("p");
+    keys.className = "usage-card-keys";
+    keys.textContent = poolLine;
+    card.appendChild(keys);
+  }
+  if (entry.state === "failed") {
+    card.querySelector(".usage-card-heading").appendChild(usageChip("failed"));
+    appendUsageFailure(card, spec, entry);
+    return card;
+  }
+  if (entry.state !== "ready") {
+    card.querySelector(".usage-card-heading").appendChild(usageChip("not_measured"));
+    appendUsageNotRead(card, spec);
+    return card;
+  }
+
+  const payload = entry.payload || {};
+  if (payload.plan_type) {
+    const plan = document.createElement("p");
+    plan.className = "usage-card-keys";
+    plan.textContent = `Plan: ${payload.plan_type}`;
+    card.appendChild(plan);
+  }
+  const accounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+  const rows = accounts.length
+    ? accounts.map((account) => ({ account, windows: account.windows || {} }))
+    : [{ account: null, windows: payload.windows || {} }];
+  const first = rows[0].windows;
+  const stateInfo = usageWindowState(first);
+  card.querySelector(".usage-card-heading").appendChild(usageChip(stateInfo.kind));
+
+  const allowance = usageBlock(
+    "Subscription allowance",
+    "A percentage of a plan window. It resets, it is not money, and it cannot " +
+      "be spent anywhere else.",
+  );
+  rows.forEach((row) => {
+    if (row.account) usageAccountHeading(allowance.list, row.account);
+    const fields = [
+      ["Primary window used", row.windows.primary_used_percent, {}],
+      ["Primary window resets", row.windows.primary_reset_at, { instant: true }],
+      ["Secondary window used", row.windows.secondary_used_percent, {}],
+      ["Secondary window resets", row.windows.secondary_reset_at, { instant: true }],
+      ["Primary window length", row.windows.primary_window_minutes, {}],
+      ["Secondary window length", row.windows.secondary_window_minutes, {}],
+    ];
+    fields.forEach(([term, raw, options]) => {
+      appendUsageFigure(allowance.list, term, raw, options);
+    });
+    const reached = usageValue(row.windows.rate_limit_reached_type);
+    if (reached.measured) {
+      appendUsageDetail(allowance.list, "OpenAI says", reached.text, {
+        measured: true,
+        warn: true,
+      });
+    }
+  });
+  card.appendChild(allowance.block);
+
+  const cash = usageBlock(
+    "Credits",
+    "A balance, not a percentage. It does not reset with a window and it is " +
+      "not added to the windows above.",
+  );
+  [
+    ["Credits balance", first.credits_balance],
+    ["Unlimited credits", first.credits_unlimited],
+    ["Limit name", first.limit_name],
+  ].forEach(([term, raw]) => {
+    const value = usageValue(raw);
+    appendUsageDetail(cash.list, term, value.text, { measured: value.measured });
+  });
+  card.appendChild(cash.block);
+
+  const stateNote = document.createElement("p");
+  stateNote.className = "usage-state-note";
+  stateNote.textContent = stateInfo.sentence;
+  card.appendChild(stateNote);
+  appendUsageProvenance(card, spec.source, stateInfo);
+  return card;
+}
+
+/** Which configured providers the page lists, in the order §5.2 fixes.
+ *
+ *  1. providers with a reading (state 1 or 2), most recently observed first;
+ *  2. everything else configured, each with the state-3 sentence;
+ *  3. nothing for a provider with no credential -- it is not on the page.
+ *
+ *  The list is DERIVED, never declared: `provider_status[]` is the server's own
+ *  answer to "what does this install have", and it is the payload the Providers
+ *  page already draws its cards from. A provider that is not `configured`,
+ *  not `free_ready` (a host serving free models on its own anonymous
+ *  credential) and not a local runtime holds no credential and is skipped. */
+function usageConfiguredProviders() {
+  const status = Array.isArray(state.config?.provider_status)
+    ? state.config.provider_status
+    : [];
+  const seen = new Set();
+  const providers = [];
+  status.forEach((entry) => {
+    const id = entry.provider_id || "";
+    if (!id || seen.has(id)) return;
+    const configured =
+      entry.status === "configured" ||
+      entry.status === "free_ready" ||
+      entry.kind === "local";
+    if (!configured) return;
+    seen.add(id);
+    providers.push({
+      provider_id: id,
+      display_name: entry.display_name || id,
+      keys: Number(entry.key_count) || 0,
+      kind: entry.kind || "remote",
+    });
+  });
+  return providers;
+}
+
+/** Paint the page from what is already in memory. Fetches NOTHING. */
+function paintUsageView() {
+  const grid = byId("usageSubscriptionsGrid");
+  const otherList = byId("usageOtherList");
+  if (!grid || !otherList) return;
+  grid.replaceChildren();
+  otherList.replaceChildren();
+
+  const configured = usageConfiguredProviders();
+  const byProvider = new Map(configured.map((entry) => [entry.provider_id, entry]));
+  const knownToServer = new Map(
+    (Array.isArray(state.config?.provider_status)
+      ? state.config.provider_status
+      : []
+    ).map((entry) => [entry.provider_id, entry]),
+  );
+
+  /** The pool count for one card, from the server's own `key_count`.
+   *
+   *  One answer rather than two: `provider_status[].key_count` counts an
+   *  OAuth provider's ACCOUNTS as well as an API-key pool's keys (the server
+   *  derives it from the same resolver the request log and the Providers page
+   *  use), so this page does not have to guess from whichever payload happens
+   *  to be in memory -- which is exactly how a card read "1 account stored"
+   *  or "" depending on whether an answer had arrived yet. */
+  const poolFor = (providerId) => {
+    const count = Number(knownToServer.get(providerId)?.key_count) || 0;
+    return count ? { count } : null;
+  };
+
+  // ---- the two subscription cards, in the declared order
+  const subscriptionIds = new Set(USAGE_SUBSCRIPTIONS.map((spec) => spec.id));
+  let anySubscription = false;
+  USAGE_SUBSCRIPTIONS.forEach((spec) => {
+    const known = knownToServer.get(spec.id);
+    const entry = usageSources[spec.id];
+    // Configured means the server says this provider has a credential. A
+    // subscription with none is not on the page -- the same rule every other
+    // provider follows, and the reason a fresh install shows no card here.
+    const configuredHere =
+      (Number(known?.key_count) || 0) > 0 ||
+      known?.status === "configured" ||
+      known?.status === "free_ready";
+    if (!configuredHere) return;
+    anySubscription = true;
+    const displayName = known?.display_name || spec.label;
+    const render = spec.id === "anthropic_oauth"
+      ? renderUsageAnthropicCard
+      : renderUsageChatGPTCard;
+    grid.appendChild(render(spec, displayName, entry, poolFor(spec.id)));
+  });
+  const emptyNote = byId("usageEmptyNote");
+  if (emptyNote) {
+    emptyNote.hidden = anySubscription;
+    emptyNote.textContent = anySubscription
+      ? ""
+      : "No subscription credential is stored. MCC reads usage for Claude and " +
+        "ChatGPT only when you have signed in to one; the Providers page is " +
+        "where that happens.";
+  }
+
+  // ---- every other configured provider, one plain sentence each
+  const others = configured.filter((provider) => {
+    if (subscriptionIds.has(provider.provider_id)) return false;
+    // `openai` shares CHATGPT_OAUTH_ACCESS_TOKEN with `chatgpt_oauth`: it is
+    // the same subscription behind another name, so it is the same card, not
+    // a second row saying "no usage endpoint".
+    if (provider.provider_id === "openai") return false;
+    // The OpenCode pair share one account behind two gateways; naming it once
+    // is what the Providers page does and what a reader expects here.
+    return true;
+  });
+  others.forEach((provider) => {
+    const item = document.createElement("li");
+    item.className = "usage-other-item";
+    item.dataset.provider = provider.provider_id;
+    const name = document.createElement("strong");
+    name.className = "usage-other-name";
+    name.textContent = provider.display_name;
+    const sentence = document.createElement("span");
+    sentence.className = "usage-other-sentence";
+    sentence.textContent = ` — ${usageUnavailableSentence(provider.display_name)}`;
+    item.append(name, sentence);
+    const poolLine = usagePoolLine(provider.keys ? { count: provider.keys } : null);
+    if (poolLine) {
+      const pool = document.createElement("span");
+      pool.className = "usage-other-pool";
+      pool.textContent = ` ${poolLine.endsWith(".") ? poolLine : `${poolLine}.`}`;
+      item.appendChild(pool);
+    }
+    otherList.appendChild(item);
+  });
+  const otherEmpty = byId("usageOtherEmpty");
+  if (otherEmpty) {
+    otherEmpty.hidden = others.length > 0;
+    otherEmpty.textContent = others.length
+      ? ""
+      : "Nothing else is configured. A provider you add on the Providers page " +
+        "appears here once it holds a credential.";
+  }
+
+  const statusLine = byId("usageStatus");
+  if (statusLine) {
+    const failed = Object.values(usageSources).filter(
+      (entry) => entry.state === "failed",
+    ).length;
+    statusLine.hidden = failed === 0;
+    statusLine.textContent = failed
+      ? `${failed} reading${failed === 1 ? "" : "s"} could not be read; each ` +
+        "card names the reason above. Nothing will be retried on its own."
+      : "";
+  }
+}
+
+/** Open the Usage page: a read of what the dashboard already has.
+ *
+ *  THIS FUNCTION MAKES NO REQUEST -- that is the release's contract (§7 PR 1,
+ *  "zero new traffic"), and the jsdom scenario pins it by recording every URL
+ *  the fetch stub answers and asserting that opening this view adds none. */
+function openUsageView() {
+  paintUsageView();
 }
 
 async function importChatGPTOAuthCodexTokens(button) {

@@ -141,13 +141,20 @@ def test_with_both_features_off_every_view_is_the_base_tree(
     assert baseline["base_commit"] == "421d81f7"
     assert "421d81f7" in baseline["written_by"]
     #: Views this release DELIBERATELY changed after the baseline was taken.
-    #: Empty, because 8.2.0's one move (`requests`, the cost tile) was re-shot.
-    #: An entry here must be justified in a docstring AND in the fixture.
-    DECLARED_MOVES: set[str] = set()
+    #: `guide` is the one: this release's scope names "the Guide task section"
+    #: as part of shipping a new page (USAGE §7 PR 1), so the Guide gains one
+    #: section and nothing else moves. 8.2.0's own move (`requests`, the cost
+    #: tile) was re-shot into the fixture.
+    DECLARED_MOVES: set[str] = {"guide"}
     base = baseline["views"]
     mine = design_system_off["views"]
 
-    assert set(base) == set(mine)
+    # 8.3.0: one view is NEW and was not on the base tree to be compared. Every
+    # view the baseline names is still compared below, unchanged, which is the
+    # claim that matters; the addition is declared here by name and proved in
+    # tests/api/test_admin_usage_page_jsdom.py against its own base tree.
+    assert set(mine) - set(base) == {"usage"}
+    assert set(base) - set(mine) == set()
     moved = sorted(
         view
         for view in base
@@ -173,20 +180,24 @@ def test_the_baseline_is_not_vacuous(design_system_off) -> None:
 
 
 def test_the_two_features_change_exactly_the_declared_views(design_system) -> None:
-    """With them ON, only the pages they belong to move — and each is declared.
-
-    Twelve pages gain the strip; Get Started gains the Appearance card and its
+    """Twelve pages gain the strip; Get Started gains the Appearance card and its
     four machine-default controls. Nothing else moves.
 
     The comparison is of the FULL digest, because "with the features taken out"
     is by construction the same on both sides — that is what makes the equality
     half of the proof work. The full digest is what a reader actually gets.
+
+    8.3.0 adds a NEW page (``usage``). It did not exist when this release's
+    baseline was taken, so it is not one of the views the base tree drew and it
+    cannot be "a view outside the declared set" — it is declared here by name,
+    once, and `tests/api/test_admin_usage_page_jsdom.py` proves every view the
+    base tree HAD is byte-identical.
     """
 
     off = design_system["feature_off_views"]
     on = design_system["views"]
     moved = sorted(view for view in off if off[view]["sha256"] != on[view]["sha256"])
-    declared = sorted(set(EXPECTED_NAVIGATOR) | {"get_started"})
+    declared = sorted(set(EXPECTED_NAVIGATOR) | {"get_started", "usage"})
     assert sorted(set(moved) - set(declared)) == [], (
         "the two new features changed a view outside the declared set: "
         f"{sorted(set(moved) - set(declared))}"

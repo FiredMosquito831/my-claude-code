@@ -1,0 +1,113 @@
+{
+ "base_commit": "bb85fe79",
+ "nav": [
+  "get_started",
+  "providers",
+  "proxying",
+  "marketplaces",
+  "claude",
+  "coding_agents",
+  "model_config",
+  "models",
+  "messaging",
+  "requests",
+  "optimizer",
+  "web_search",
+  "limits",
+  "guide",
+  "docs"
+ ],
+ "views": {
+  "claude": {
+   "children": 6,
+   "length": 18949,
+   "sha256": "b242ea772e0c0aee350f6ab335a6f71297c01eeab50eaf6f8c062350977993b9",
+   "sha256Normalised": "c699af619ee65bc0530d962d25468f48ff647ff3f326071c6b146b1dd35a5c89"
+  },
+  "coding_agents": {
+   "children": 6,
+   "length": 59123,
+   "sha256": "26a10aed866f5e73305f1a75a0c9a9c315ced01fac5aa44c2883a43cfdd07e55",
+   "sha256Normalised": "ba6be95dcc9d99a242d8775af0b83a93d7f3b2cd4de6a6a2e17820687e6f00fb"
+  },
+  "docs": {
+   "children": 2,
+   "length": 2393,
+   "sha256": "4561a1b65c4da7847b9efd71ae470797121befdd847fdd70ebc52925f3b600a2",
+   "sha256Normalised": "b6d305a3ce3592db4a8aa0bb7b83b5fb51f1905497d3d35458be481fdb49c315"
+  },
+  "get_started": {
+   "children": 1,
+   "length": 70997,
+   "sha256": "7dbcbd49fe08836b0537aa30ac0675db1f6824204bfb3e3670dffda20957f592",
+   "sha256Normalised": "7dbcbd49fe08836b0537aa30ac0675db1f6824204bfb3e3670dffda20957f592"
+  },
+  "guide": {
+   "children": 2,
+   "length": 362773,
+   "sha256": "7e29de7fa0acd6880ebf18454654ce920d32a13f422eadeefce2b10aeb1b6ebc",
+   "sha256Normalised": "376c0590bc503335b31239fbecf447b8f3f6cb96b7fbe386a8fb30ddd5fcf26e"
+  },
+  "limits": {
+   "children": 2,
+   "length": 40307,
+   "sha256": "d9cdef72b5a85a7d619801be47c635a7d391dfadc31f741474cd05ffd5b6a2a1",
+   "sha256Normalised": "7b85f34b805c71e4cfa32b6cbf67589f74412308f28cf4a3eae2fbc2b587336d"
+  },
+  "marketplaces": {
+   "children": 12,
+   "length": 6505,
+   "sha256": "0d20459c0a4de35d3eb95f9e8ad507b7b902e9f7fbb89881026f913934abafb7",
+   "sha256Normalised": "f99688a5b820cb5adec3fb0a20311583cd72f69c1a71b16155e0721564d285a5"
+  },
+  "messaging": {
+   "children": 1,
+   "length": 117,
+   "sha256": "2759d6a4a439e1578a515a084f2c9f3a78e8f9bf8a1c056bff685d1cfb76edb1",
+   "sha256Normalised": "2759d6a4a439e1578a515a084f2c9f3a78e8f9bf8a1c056bff685d1cfb76edb1"
+  },
+  "model_config": {
+   "children": 3,
+   "length": 48368,
+   "sha256": "c3168196b67dd5dd515750d3c93a49e2a3ca9f2e1759307346d51adaa9f44d88",
+   "sha256Normalised": "a8938e98ac014e60cad3f85a67068bd61f56777f4a3c6dfd93ebf2f2d4331050"
+  },
+  "models": {
+   "children": 5,
+   "length": 8230,
+   "sha256": "52d00a72d16404bfed02698e823d86da963291fa8287ee6a51667adfbdea678a",
+   "sha256Normalised": "d615d391586d5e8ea299230b694656161ad10257cb3faf870d84e9e720bc5e70"
+  },
+  "optimizer": {
+   "children": 7,
+   "length": 13432,
+   "sha256": "24d116aca432d1b35716733f0691d6b222e53c3d8ea7e6b587d22b22b0357d69",
+   "sha256Normalised": "63ef183eeb81945d97726438cf8c9fa419034b89c3004b71cb8b178a0382e1b9"
+  },
+  "providers": {
+   "children": 7,
+   "length": 22689,
+   "sha256": "c3f4712a494c09e1f1aa13044216f7a66d105f59b64f283c1bae1726d34dccb1",
+   "sha256Normalised": "3251d504519ecd1d09fdff235f5dd07241f0ddcc215a27c28e8be416d0d64c61"
+  },
+  "proxying": {
+   "children": 14,
+   "length": 14581,
+   "sha256": "c5e6800b1efaab78f63a43b0563578b96b844df7b448f03dbcdf031086391767",
+   "sha256Normalised": "6694a7eb7cdcdcb67ac8f32003d0058626910b3d519303c99dcd625c7409f8e6"
+  },
+  "requests": {
+   "children": 29,
+   "length": 45692,
+   "sha256": "3563bea95086bf1330347dbf38991140496e83bfcf32ca6dc4edd1dcf9ac1946",
+   "sha256Normalised": "b7586f16830afe38306ada92dd0750536587ea220b6ebc8ffd8e1083caecabef"
+  },
+  "web_search": {
+   "children": 7,
+   "length": 7648,
+   "sha256": "cf0a7793cfb892a8518e69ca27a8df25095a2054cfab9c051ddc0b3f6bb5f6da",
+   "sha256Normalised": "93a97ed9c02300e607099bb4811b82a62275174591017b1a3ffeb25d48319941"
+  }
+ },
+ "written_by": "BASE tree bb85fe79 (v8.2.0), scenario usage_views through tests/api/admin_jsdom_harness.mjs, same fixture, same waits. Recorded 2026-11-02 for USAGE PR 1 (8.3.0)."
+}

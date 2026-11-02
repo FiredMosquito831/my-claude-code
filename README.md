@@ -195,6 +195,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 
 | Capability | What it gives you | Where it lives | More |
 | --- | --- | --- | --- |
+| Usage | What each provider you configured says is left: the Claude and ChatGPT subscription windows with their reset times, and one sentence for every other provider that publishes no usage figure MCC can read; a window and a cash balance are two blocks and never one total | **Usage** page | [Guide](docs/USAGE.md#usage-what-is-left-830) |
 | Request log | Every completed request stored locally, searchable across prompt, reply, reasoning and tool calls | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Search index | Search the request log without unpacking stored requests: an index of each distinct piece of text, in its own file beside the log; new requests indexed as they are written, older ones when you press **Build search index**; the same results as before, always | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |
 | Exit column | Which proxy exit answered each request (+N when more were tried), a filter by exit name, and every dial in the request detail | **Analytics** page | [Guide](docs/USAGE.md#11-analytics) |

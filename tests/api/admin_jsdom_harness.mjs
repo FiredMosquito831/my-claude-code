@@ -4948,6 +4948,35 @@ if (process.env.MCC_JSDOM_SCENARIO === "design_shell") {
   scenario = prepareDesignShellScenario({ window, ROUTES, staticDir: dir });
 }
 
+/* MCC_JSDOM_SCENARIO=usage_page (8.3.0): the Usage page -- where its nav entry
+   sits, that opening it adds NO request, the four honest states on both
+   subscription cards, who is on the page and who is not, the two blocks a card
+   keeps apart, and the longest realistic values. It is handed the two fetch
+   RECORDERS rather than a copy, because "opening this page asked for nothing"
+   is only worth asserting against the stub that answers every request. */
+/* MCC_JSDOM_SCENARIO=usage_views (8.3.0): every view's DOM, for the base-tree
+   equality of the Usage page -- the same scenario runs on the base tree and
+   here, so the proof that only one page was added is a comparison rather than
+   a claim (admin_jsdom_usage_views.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "usage_views") {
+  const { prepareUsageViewsScenario } = await import(
+    "./admin_jsdom_usage_views.mjs"
+  );
+  scenario = prepareUsageViewsScenario({ window, ROUTES });
+}
+if (process.env.MCC_JSDOM_SCENARIO === "usage_page") {
+  const { prepareUsagePageScenario } = await import(
+    "./admin_jsdom_usage_page.mjs"
+  );
+  scenario = prepareUsagePageScenario({
+    window,
+    ROUTES,
+    fetchCalls,
+    fetchUrls,
+    VIEW_GROUPS: window.VIEW_GROUPS,
+  });
+}
+
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
 window.addEventListener("unhandledrejection", (event) =>
