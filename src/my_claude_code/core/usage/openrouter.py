@@ -83,11 +83,13 @@ def parse(body: bytes) -> Reading:
             Window(
                 id="key-limit",
                 label="Key limit",
-                # ``used`` is the ceiling's complement only when BOTH numbers
-                # arrived; one number alone is left where it is rather than
-                # computed from the other, because a derived figure is exactly
-                # what §4.1 forbids.
-                used=remaining,
+                # ``limit_remaining`` is what the provider says is LEFT, so it
+                # is a `remaining`, not a `used`. Until 8.6.0 it was stored in
+                # `used` and rendered as "37.65 USD used", which is the one
+                # direction this feature must never get wrong: a figure read
+                # backwards. `used` is left empty because OpenRouter does not
+                # send it -- a derived complement would be an invented number.
+                remaining=remaining,
                 limit=limit,
                 unit="usd",
                 resets_at=reset,

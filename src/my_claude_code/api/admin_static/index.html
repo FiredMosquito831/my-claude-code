@@ -6312,31 +6312,45 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   figures cost no request.
                 </p>
                 <p class="guide-note">
-                  <strong>Read now (8.5.0).</strong> Seven providers publish a
-                  usage route MCC can read with a credential you already hold:
-                  the Claude and ChatGPT subscriptions, Command Code,
-                  OpenRouter's per-key route, DeepSeek, Kimi (Moonshot) and
-                  OpenCode Go. Their cards get a <em>Read now</em> button, and
-                  pressing it sends <strong>one</strong> request to that
-                  provider &mdash; the only thing on this page that ever
-                  contacts a provider. It works at most once every 30 minutes
-                  per provider, the button carries the countdown, and a
-                  provider that answers <code>429</code> sets its own deadline
-                  from <code>Retry-After</code>, which the button shows.
+                  <strong>Read now (8.5.0), and the automatic refresh
+                  (8.6.0).</strong> Seven providers publish a usage route MCC can read
+                  with a credential you already hold: the Claude and ChatGPT
+                  subscriptions, Command Code, OpenRouter's per-key route,
+                  DeepSeek, Kimi (Moonshot) and OpenCode Go. Their cards get a
+                  <em>Read now</em> button, and the page also refreshes them
+                  <strong>on its own, once every 30 seconds</strong>, while it
+                  is open. That interval is
+                  <code>USAGE_AUTO_REFRESH_SECONDS</code> on Limits and
+                  resilience: 30 by default, 10 at the lowest, 3600 at the
+                  highest, and <strong>0 turns it off</strong> so the page goes
+                  back to Read now only.
+                </p>
+                <p class="guide-note">
+                  <strong>Why 30 seconds is affordable.</strong> A hidden tab
+                  reads <em>nothing</em> and refreshes once when you come back,
+                  which is the difference between a few hundred requests a day
+                  and tens of thousands. A provider that answers
+                  <code>429</code> is skipped until the wait it asked for has
+                  passed — only that provider; the others keep refreshing. And
+                  a provider that keeps failing backs off on its own, doubling
+                  its own wait up to an hour, so a host that is down is not
+                  asked every 30 seconds for ever and never slows the others
+                  down.
                 </p>
                 <p class="guide-note">
                   <strong>A usage read can never cost you a key.</strong> The
                   read uses its own client and never enters the rotation,
                   rate-limit or benching machinery: a <code>401</code> shows
                   <em>Read failed</em> on the card and nothing else happens
-                  &mdash; no lockout, no bench, no rotation. A route MCC does
-                  not recognise reads as <em>Read failed</em> with a plain
-                  sentence rather than as a zero. OpenRouter's account-credits
-                  endpoint (it needs a management key), OpenCode's cookie-gated
-                  console, the organisation APIs (admin keys) and Z.ai,
-                  MiniMax, Copilot and Kimi Coding are deliberately not
-                  built: each needs a credential you do not have or must not be
-                  asked for.
+                  &mdash; no lockout, no bench, no rotation. That holds however
+                  often the automatic refresh runs, because it calls exactly
+                  the same route the button does. A route MCC does not
+                  recognise reads as <em>Read failed</em> with a plain sentence
+                  rather than as a zero. OpenRouter's account-credits endpoint
+                  (it needs a management key), OpenCode's cookie-gated console,
+                  the organisation APIs (admin keys) and Z.ai, MiniMax, Copilot
+                  and Kimi Coding are deliberately not built: each needs a
+                  credential you do not have or must not be asked for.
                 </p>
                 <p class="guide-note">
                   <strong>A provider whose answer is "nothing available"

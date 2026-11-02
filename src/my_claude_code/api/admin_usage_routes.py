@@ -69,9 +69,13 @@ first as *not measured by this provider*.
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from my_claude_code.config.constants import (
+    USAGE_AUTO_REFRESH_MAX_SECONDS,
+    USAGE_AUTO_REFRESH_MIN_SECONDS,
+)
 from my_claude_code.config.usage_sources import (
     PROVIDER_SOURCES,
     SOURCE_UNSUPPORTED,
@@ -81,6 +85,7 @@ from my_claude_code.core.usage.reading import (
     READINGS,
     Reading,
     ReadRecord,
+    backoff_seconds,
     freshest_observation,
     state_of,
 )
@@ -89,20 +94,33 @@ from my_claude_code.providers.runtime.usage_reads import perform_read
 
 from .admin_routes import require_loopback_admin
 from .dependencies import get_services
+from .ports import ApiServices
 
 router = APIRouter()
 
 #: How old a reading may be before it stops being a picture of now. The same
 #: 30 minutes the Usage page uses (``admin.js``'s ``USAGE_STALE_AFTER_SECONDS``)
-#: and the same interval §5.5 sets as the on-demand read interval: one number,
-#: so the chip and the sentence beside it cannot disagree.
+#: and 8.5.0's on-demand read interval: one number, so the chip and the
+#: sentence beside it cannot disagree. Since 8.6.0 this is the interval used
+#: when ``USAGE_AUTO_REFRESH_SECONDS`` is 0; a configured auto-refresh replaces
+#: it (see :func:`_interval_for`).
 STALE_AFTER_SECONDS = 30 * 60
 
-#: §5.5.3's floor. A row may declare a longer interval; nothing may go below
-#: this, because below it nothing in the research justified a read (§3.6) and
-#: the two OAuth routes are the ones third parties report as "rate-limit
-#: aggressively".
+#: The on-demand floor: what one provider's read interval is when the operator
+#: has turned the automatic refresh off. Below this nothing in the research
+#: justified a read (§3.6) and the two OAuth routes are the ones third parties
+#: report as "rate-limit aggressively".
 MINIMUM_INTERVAL_SECONDS = 30 * 60
+
+#: 8.6.0's bounds on a configured auto-refresh interval. They live in
+#: ``config/constants.py`` beside the default so Settings, the admin manifest
+#: and this route quote one source; imported here rather than restated.
+#: ``USAGE_AUTO_REFRESH_MIN_SECONDS`` is the floor a configured value is
+#: clamped to, and ``BACKOFF_CAP_SECONDS`` is the longest a repeatedly failing
+#: provider's interval is stretched to -- an hour, the ceiling on the setting
+#: itself, so one broken host can never be asked more rarely than the rarest
+#: legitimate configuration.
+BACKOFF_CAP_SECONDS = USAGE_AUTO_REFRESH_MAX_SECONDS
 
 
 class UsageReadRequest(BaseModel):
@@ -187,7 +205,7 @@ def _read_state(
     )
 
 
-def _provider_rows(now: float) -> list[dict[str, Any]]:
+def _provider_rows(now: float, interval: float) -> list[dict[str, Any]]:
     """One row per provider MCC has an opinion about, observed or not.
 
     The list is the **declared table**, not the observation store: a provider
@@ -237,8 +255,16 @@ def _provider_rows(now: float) -> list[dict[str, Any]]:
             "not_sent": bool(record is not None and record.not_sent),
             "retry_at": None if record is None else record.retry_at,
             "retry_in_seconds": _retry_in(record, now),
-            "interval_seconds": MINIMUM_INTERVAL_SECONDS,
-            "next_read_at": _next_read_at(record, now),
+            # The interval this process is on, and the wait this provider's own
+            # failures have stretched it to. Both are numbers the page can act
+            # on without recomputing anything: `next_read_in_seconds` is the
+            # answer, and `consecutive_failures` is why it is longer than the
+            # interval.
+            "interval_seconds": int(interval),
+            "consecutive_failures": 0
+            if record is None
+            else record.consecutive_failures,
+            "next_read_in_seconds": _next_read_at(record, now, interval),
         }
         rows.append(row)
     return rows
@@ -269,39 +295,86 @@ def _retry_in(record: ReadRecord | None, now: float) -> int | None:
     return int(remaining) if remaining > 0 else None
 
 
-def _next_read_at(record: ReadRecord | None, now: float) -> int | None:
-    """Seconds until the interval allows another read. ``None`` is "now".
+def _next_read_at(record: ReadRecord | None, now: float, interval: float) -> int | None:
+    """Seconds until this provider may be read again. ``None`` is "now".
 
-    The provider's own deadline wins when it is later: a 429 is a fact about
-    the host and its wait is not negotiable by our interval.
+    Three facts combine, and the latest wins:
+
+    * the **interval** the page polls at (``USAGE_AUTO_REFRESH_SECONDS``, or
+      the 30-minute on-demand floor when that setting is 0), lengthened by the
+      per-provider **backoff** while this provider keeps failing;
+    * the provider's own **``Retry-After``**, which is a fact about the host and
+      is not negotiable by either of the other two.
+
+    One arithmetic, on the server, so the button's countdown and the poller's
+    next tick cannot disagree about when a read may happen.
     """
 
     if record is None or not record.attempted_at:
         return None
-    earliest = record.attempted_at + MINIMUM_INTERVAL_SECONDS
+    wait = backoff_seconds(
+        interval, record.consecutive_failures, cap=BACKOFF_CAP_SECONDS
+    )
+    earliest = record.attempted_at + wait
     if record.retry_at is not None:
         earliest = max(earliest, record.retry_at)
     remaining = earliest - now
     return int(remaining) if remaining > 0 else None
 
 
+def _interval_for(settings: object) -> float:
+    """This process's per-provider read interval, in seconds.
+
+    **One setting, two behaviours.** Above zero, the operator's
+    ``USAGE_AUTO_REFRESH_SECONDS`` is both how often the page polls and how
+    often one provider may be re-read; below its floor it is clamped, because
+    below ten seconds MCC would ask the two OAuth routes faster than any
+    implementation this was researched against does. At zero the automatic
+    refresh is off and the gate reverts to 8.5.0's 30-minute on-demand floor --
+    which is what "on demand only" has to mean if a held-down button is not to
+    become a poll.
+    """
+
+    configured = getattr(settings, "usage_auto_refresh_seconds", None)
+    if not isinstance(configured, (int, float)):
+        return MINIMUM_INTERVAL_SECONDS
+    seconds = float(configured)
+    if seconds <= 0:
+        return MINIMUM_INTERVAL_SECONDS
+    return max(
+        USAGE_AUTO_REFRESH_MIN_SECONDS, min(seconds, USAGE_AUTO_REFRESH_MAX_SECONDS)
+    )
+
+
 @router.get("/admin/api/usage")
-async def usage_readings(request: Request) -> dict[str, Any]:
+async def usage_readings(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
     """Report every usage reading this process has already observed.
 
     Read-only in the strict sense: it touches two in-memory dictionaries and
-    nothing else. Nothing here can fail a page -- an observer store is always
-    a dict, and a provider with no row is a provider the page describes with
-    its own declared list.
+    the settings snapshot, and nothing else. Nothing here can fail a page -- an
+    observer store is always a dict, and a provider with no row is a provider
+    the page describes with its own declared list.
+
+    The auto-refresh interval is reported **here**, from the server's own
+    settings, rather than being typed into the page: one source, so the
+    poller's cadence and the interval the read gate enforces cannot drift.
     """
 
     require_loopback_admin(request)
     now = time.time()
+    interval = _interval_for(services.requests.current_settings())
     return {
         "observed_at": now,
         "stale_after_seconds": STALE_AFTER_SECONDS,
         "minimum_interval_seconds": MINIMUM_INTERVAL_SECONDS,
-        "providers": _provider_rows(now),
+        "auto_refresh_seconds": int(interval)
+        if interval != MINIMUM_INTERVAL_SECONDS
+        else 0,
+        "read_interval_seconds": int(interval),
+        "providers": _provider_rows(now, interval),
     }
 
 
@@ -334,18 +407,20 @@ async def read_one_provider(
         )
 
     now = time.time()
-    refusal = READINGS.claim(provider_id, now=now, interval=MINIMUM_INTERVAL_SECONDS)
+    settings = get_services(request).requests.current_settings()
+    interval = _interval_for(settings)
+    refusal = READINGS.claim(provider_id, now=now, interval=interval)
     if refusal:
-        return _refused_payload(provider_id, refusal, now)
+        return _refused_payload(provider_id, refusal, now, interval)
 
-    services = get_services(request)
-    settings = services.requests.current_settings()
     outcome = await perform_read(declared, settings=settings, now=now)
     READINGS.finish(provider_id, outcome.reading, outcome.record)
-    return _result_payload(declared, outcome.reading, outcome.record)
+    return _result_payload(declared, outcome.reading, outcome.record, interval)
 
 
-def _refused_payload(provider_id: str, refusal: str, now: float) -> dict[str, Any]:
+def _refused_payload(
+    provider_id: str, refusal: str, now: float, interval: float
+) -> dict[str, Any]:
     """The answer when the gate, not the provider, said no.
 
     It carries the same shape as a real answer so the page has one render path:
@@ -355,22 +430,26 @@ def _refused_payload(provider_id: str, refusal: str, now: float) -> dict[str, An
 
     record = READINGS.record_for(provider_id)
     reading = READINGS.reading_for(provider_id)
+    wait = _next_read_at(record, now, interval)
     sentences = {
         "in_flight": "A read for this provider is already running; this press "
         "waited rather than sending a second request.",
         "cooldown": "The provider asked MCC to wait before reading again.",
-        "interval": f"This provider was read less than "
-        f"{MINIMUM_INTERVAL_SECONDS // 60} minutes ago; nothing was sent.",
+        "interval": (
+            f"This provider was read less than {_human_wait(interval)} ago; "
+            "nothing was sent."
+        ),
     }
-    row = _row_for(provider_id, now)
+    row = _row_for(provider_id, now, interval)
     return {
         "provider_id": provider_id,
         "requested": False,
         "refusal": refusal,
         "message": sentences.get(refusal, "Nothing was sent."),
         "attempted_at": None if record is None else (record.attempted_at or None),
-        "next_read_in_seconds": _next_read_at(record, now),
+        "next_read_in_seconds": wait,
         "retry_in_seconds": _retry_in(record, now),
+        "consecutive_failures": 0 if record is None else record.consecutive_failures,
         "state": row["state"],
         "fetched_at": None if reading is None else reading.fetched_at,
         "reading": None if reading is None else reading.as_payload(),
@@ -379,8 +458,21 @@ def _refused_payload(provider_id: str, refusal: str, now: float) -> dict[str, An
     }
 
 
+def _human_wait(seconds: float) -> str:
+    """One wait, in the words a card would print. Never a bare number."""
+
+    total = max(0, round(seconds))
+    if total < 60:
+        return f"{total} second{'' if total == 1 else 's'}"
+    minutes = total // 60
+    if minutes < 60:
+        return f"{minutes} minute{'' if minutes == 1 else 's'}"
+    hours = minutes // 60
+    return f"{hours} hour{'' if hours == 1 else 's'}"
+
+
 def _result_payload(
-    declared: Any, reading: Reading | None, record: ReadRecord
+    declared: Any, reading: Reading | None, record: ReadRecord, interval: float
 ) -> dict[str, Any]:
     """The answer to a read that was actually performed.
 
@@ -393,15 +485,20 @@ def _result_payload(
     """
 
     kept = READINGS.reading_for(declared.provider_id)
-    row = _row_for(declared.provider_id, record.attempted_at)
+    # The row is built from the store's own record, which `finish` has already
+    # given this attempt's failure streak. Reading `record` here instead would
+    # report the count on the way in rather than the one that was stored.
+    stored = READINGS.record_for(declared.provider_id) or record
+    row = _row_for(declared.provider_id, time.time(), interval)
     return {
         "provider_id": declared.provider_id,
         "requested": True,
         "refusal": "",
         "message": "",
         "attempted_at": record.attempted_at,
-        "next_read_in_seconds": _next_read_at(record, time.time()),
-        "retry_in_seconds": _retry_in(record, time.time()),
+        "next_read_in_seconds": _next_read_at(stored, time.time(), interval),
+        "retry_in_seconds": _retry_in(stored, time.time()),
+        "consecutive_failures": stored.consecutive_failures,
         "status_code": record.status_code,
         "state": row["state"],
         "fetched_at": None if kept is None else kept.fetched_at,
@@ -411,10 +508,10 @@ def _result_payload(
     }
 
 
-def _row_for(provider_id: str, now: float) -> dict[str, Any]:
+def _row_for(provider_id: str, now: float, interval: float) -> dict[str, Any]:
     """One row, from the same builder the GET uses -- one answer, not two."""
 
-    for row in _provider_rows(now):
+    for row in _provider_rows(now, interval):
         if row["provider_id"] == provider_id:
             return row
     return {"provider_id": provider_id, "state": SOURCE_UNSUPPORTED}

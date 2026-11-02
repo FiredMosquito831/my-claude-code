@@ -3127,6 +3127,24 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "USAGE_AUTO_REFRESH_SECONDS",
+        "Usage page auto-refresh (seconds)",
+        "loop_health",
+        "number",
+        settings_attr="usage_auto_refresh_seconds",
+        default="30",
+        description=(
+            "Seconds between automatic re-reads of the providers whose own "
+            "usage route MCC can read, while the Usage page is open and its "
+            "tab is visible. Hidden tabs poll nothing and a tab that comes "
+            "back refreshes once. A provider that answers 429 is skipped "
+            "until its stated wait passes, and one that keeps failing backs "
+            "off on its own, so a broken host is not asked every 30 seconds. "
+            "0 turns the automatic refresh off and leaves the page on Read "
+            "now only."
+        ),
+    ),
+    ConfigFieldSpec(
         "CREDENTIAL_MODEL_BENCH_ESCALATION",
         "Models before a whole key is benched",
         "credential_health",

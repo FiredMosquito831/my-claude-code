@@ -4988,6 +4988,16 @@ if (process.env.MCC_JSDOM_SCENARIO === "usage_reads") {
   );
   scenario = prepareUsageReadsScenario({ window, ROUTES, fetchBodies });
 }
+/* MCC_JSDOM_SCENARIO=usage_refresh (8.6.0): the automatic refresh -- the
+   cadence the SERVER reports, which providers one pass may ask, one real pass
+   sending exactly one POST per due provider, a hidden tab asking nothing, and
+   the setting at 0 leaving the page on its Read now button alone. */
+if (process.env.MCC_JSDOM_SCENARIO === "usage_refresh") {
+  const { prepareUsageRefreshScenario } = await import(
+    "./admin_jsdom_usage_refresh.mjs"
+  );
+  scenario = prepareUsageRefreshScenario({ window, ROUTES, fetchBodies, fetchUrls });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));

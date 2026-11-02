@@ -4924,11 +4924,19 @@ Seven providers publish a usage route MCC can read with a credential **you alrea
 | **Kimi (Moonshot)** | available, voucher and cash balances | `KIMI_API_KEY` |
 | **OpenCode Go** | the rolling, weekly and monthly Go windows | `OPENCODE_API_KEY` |
 
-A card for one of those gets a **Read now** button. Pressing it sends **one** request to that provider and repaints its card — and it is the only thing on this page that ever contacts a provider. Opening the page still sends nothing upstream.
+A card for one of those gets a **Read now** button. Pressing it sends **one** request to that provider and repaints its card.
 
-**At most once every 30 minutes per provider.** Press it twice and the second press reads nothing; the button carries the countdown, so you can see when it will work. **A provider's own `Retry-After` is honoured too** — if it answers `429 Too Many Requests`, MCC waits exactly as long as it asked and the button says how long.
+*— since 8.6.0 —* it also refreshes **on its own**, once every 30 seconds, while the page is open. That interval is the setting `USAGE_AUTO_REFRESH_SECONDS` on [Limits and resilience](#13-limits-and-resilience) (default 30, floor 10, ceiling 3600; **0 turns the automatic refresh off** and leaves the Read now button alone). The `Read now` button still works, and inside the interval it says how long until the next automatic read.
 
-> **A usage read cannot cost you a key.** This is the property the release is built around, and it is structural rather than a promise: the read uses its own client, never touches the key-rotation pool, never benches a provider and never records a failure. A `401` on a usage read shows **Read failed** on the card and does nothing else — your key is not charged, locked out or rotated, and the provider is not benched. A `429` sets only this page's own deadline.
+**What a short interval costs, and why it is affordable.** Three behaviours, each enforced rather than assumed:
+
+- **A hidden tab reads nothing.** Switch tabs or minimise the window and the poller stops; come back and it refreshes once. This is the difference between a few hundred requests a day and tens of thousands.
+- **A provider's own `Retry-After` is honoured.** Answer `429 Too Many Requests` and MCC skips *that provider* until the wait it asked for has passed, while every other provider keeps refreshing.
+- **A provider that keeps failing backs off on its own.** One failure doubles its next wait, two quadruple it, up to an hour; one success puts it straight back on your interval. A host that is down is not asked every 30 seconds for ever, and **its failures never slow down any other provider**.
+
+At the default 30 seconds a page left open in a visible tab asks each configured provider about 120 times an hour — with 7 configured that is roughly 840 reads an hour and ~20,000 a day if you left it open all day; a tab that is mostly hidden, which is how a dashboard is normally used, costs a handful.
+
+> **A usage read cannot cost you a key.** This is the property the release is built around, and it is structural rather than a promise: the read uses its own client, never touches the key-rotation pool, never benches a provider and never records a failure. A `401` on a usage read shows **Read failed** on the card and does nothing else — your key is not charged, locked out or rotated, and the provider is not benched. A `429` sets only this page's own deadline. **This holds however often the poller runs**, because the poller calls exactly the same route the button does.
 
 **What is not built, deliberately.** OpenRouter's account-credits endpoint needs a *management* key MCC does not hold — the per-key route above answers the same question with the key you already have. OpenCode's browser-console balance needs a session cookie, the OpenAI and Anthropic *organisation* APIs need an admin key, and Z.ai, MiniMax, Copilot and Kimi *Coding* have no route MCC can read with what you hold. Those providers simply show the "Not read yet" or the "publishes no usage endpoint" sentence, which is the honest answer rather than a zero.
 

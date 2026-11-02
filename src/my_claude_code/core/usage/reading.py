@@ -47,10 +47,11 @@ a stray reading can never promote it.
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 __all__ = [
+    "MAX_BACKOFF_DOUBLINGS",
     "MAX_REASON_CHARS",
     "READINGS",
     "Balance",
@@ -61,6 +62,7 @@ __all__ = [
     "UsageRequest",
     "UsageUnreadable",
     "Window",
+    "backoff_seconds",
     "freshest_observation",
     "state_of",
 ]
@@ -88,6 +90,15 @@ class Window:
     A window never renders as money. ``unit`` is the provider's own measure --
     ``"percent"`` for a utilisation figure, ``"usd"`` for Command Code's 5-hour
     credit cap, which is an allowance that resets rather than a balance.
+
+    **``used`` and ``remaining`` are two different providers' words for the
+    same window**, and both are kept because a bar needs both: OpenRouter
+    reports ``limit_remaining`` and Anthropic reports ``utilization``. Neither
+    is ever computed from the other -- a provider that sends only one keeps
+    only that one, and the renderer draws what it was given (§4.1: never a
+    derived figure). ``remaining`` exists so a page that wants a percentage can
+    show ``used``/``limit`` as one, and a page that wants a bar can draw
+    ``remaining`` without inventing the complement of a number nobody sent.
     """
 
     id: str
@@ -96,6 +107,9 @@ class Window:
     limit: str = ""
     unit: str = ""
     resets_at: str = ""
+    #: What the provider said is LEFT, where it said it (OpenRouter's
+    #: ``limit_remaining``). Empty when it reported only utilisation.
+    remaining: str = ""
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -103,6 +117,7 @@ class Window:
             "label": self.label,
             "used": self.used,
             "limit": self.limit,
+            "remaining": self.remaining,
             "unit": self.unit,
             "resets_at": self.resets_at,
         }
@@ -213,6 +228,11 @@ class ReadRecord:
     questions: when did we last try, what did it say, and when may we try
     again. ``retry_at`` is the provider's own ``Retry-After`` translated into
     an instant -- never a guess, and ``None`` when the provider did not say.
+
+    ``consecutive_failures`` is 8.6.0's, and it is what makes a 30-second
+    automatic refresh safe: the poller backs off on THIS provider alone while
+    it keeps failing, and one success puts it back on the operator's interval.
+    A host that is down must not be asked every 30 seconds for ever.
     """
 
     attempted_at: float = 0.0
@@ -222,6 +242,10 @@ class ReadRecord:
     #: Set when the attempt never reached the host (no credential, no exit).
     #: Distinct from a failure the host answered, in the reader's words.
     not_sent: bool = False
+    #: Failures since the last success, for this provider alone. Reset to 0 by
+    #: a reading that arrived. The page turns it into a wait; the server keeps
+    #: the count so two tabs cannot disagree about how far back off it is.
+    consecutive_failures: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +439,7 @@ class UsageReadStore:
                 attempted_at=now,
                 status_code=record.status_code if record else None,
                 retry_at=None,
+                consecutive_failures=record.consecutive_failures if record else 0,
             )
             return ""
 
@@ -427,13 +452,21 @@ class UsageReadStore:
         this time" must not erase what it said forty minutes ago -- which is
         why ``reading=None`` leaves the previous one in place with its own
         ``fetched_at``.
+
+        **The failure streak is counted here, not by the caller.** One success
+        resets it to zero; every attempt that produced no reading extends it,
+        whichever way it failed. That is what the page's per-provider backoff
+        is computed from, and keeping the count in one place is what stops two
+        tabs from disagreeing about how far back off a broken host is.
         """
 
         with self._lock:
+            previous = self._records.get(provider_id)
+            streak = 0 if reading is not None else _streak_after(previous, record)
             self._in_flight.discard(provider_id)
             if reading is not None:
                 self._readings[provider_id] = reading
-            self._records[provider_id] = record
+            self._records[provider_id] = replace(record, consecutive_failures=streak)
 
     def reset(self) -> None:
         """Forget everything. Tests and a process restart only."""
@@ -448,6 +481,47 @@ class UsageReadStore:
 #: admin route reads it while the provider instances sit inside a generation
 #: the routes cannot reach. One process, one answer per provider.
 READINGS = UsageReadStore()
+
+#: The most consecutive failures the backoff arithmetic will consider. A
+#: provider down for a week has the same wait as one down for an hour; the cap
+#: is on the exponent, not on how long MCC keeps trying.
+MAX_BACKOFF_DOUBLINGS = 8
+
+
+def backoff_seconds(interval: float, consecutive_failures: int, *, cap: float) -> float:
+    """How long to wait before asking this provider again, after failures.
+
+    ``interval`` at zero failures -- the operator's own number, unmodified --
+    then doubled once per consecutive failure up to :data:`MAX_BACKOFF_DOUBLINGS`
+    and capped. One provider's failures never lengthen another's wait: the
+    count this reads is per provider, and the poller asks each provider for its
+    own answer.
+
+    A capped value rather than an unbounded one because the point is to stop a
+    broken host being asked every 30 seconds, not to give up on it: at the cap
+    MCC still tries, just rarely.
+    """
+
+    if consecutive_failures <= 0:
+        return interval
+    doublings = min(consecutive_failures, MAX_BACKOFF_DOUBLINGS)
+    return min(max(cap, interval), interval * 2**doublings)
+
+
+def _streak_after(previous: ReadRecord | None, record: ReadRecord) -> int:
+    """The failure count a finished attempt leaves behind.
+
+    A record that already carries a count (the route set one) wins; otherwise
+    yesterday's count plus one. The `not_sent` case counts too -- "no
+    credential" is a fact that does not fix itself on the next tick, and a
+    provider whose key was removed must not be pressed every 30 seconds
+    either.
+    """
+
+    if record.consecutive_failures:
+        return record.consecutive_failures
+    carried = previous.consecutive_failures if previous is not None else 0
+    return carried + 1
 
 
 def _now() -> float:

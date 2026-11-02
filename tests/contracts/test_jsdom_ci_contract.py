@@ -43,6 +43,9 @@ _SUITES = (
     # 8.5.0 (USAGE PR 3): the on-demand read -- the control, one press, one
     # POST, the countdown, the 429 deadline and the unavailable state.
     "tests/api/test_admin_usage_reads_jsdom.py",
+    # 8.6.0: the automatic refresh -- the server's cadence, which providers one
+    # pass may ask, one POST each, a hidden tab asking nothing, and 0 = off.
+    "tests/api/test_admin_usage_refresh_jsdom.py",
     "tests/contracts/test_admin_static_xss.py",
 )
 _JOB_ID = "jsdom"

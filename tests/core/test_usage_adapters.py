@@ -207,7 +207,10 @@ def test_openrouter_keeps_spend_and_the_remaining_allowance_apart() -> None:
     assert spend["usage_daily"] == "0.5"
     windows = {window.id: window for window in reading.windows}
     assert windows["key-limit"].limit == "50"
-    assert windows["key-limit"].used == "37.6544"
+    # `limit_remaining` is what is LEFT -- a `remaining`, never a `used`.
+    # Reading it the other way round would print a spend figure as a limit.
+    assert windows["key-limit"].remaining == "37.6544"
+    assert windows["key-limit"].used == ""
     assert windows["key-limit"].resets_at == "monthly"
     assert windows["free_model_daily_requests"].used == "12"
     assert windows["free_model_daily_requests"].limit == "50"
