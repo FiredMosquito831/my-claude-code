@@ -412,6 +412,18 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "by provider id on its own route -- the same read, through the same "
         "cached rotating provider, as the static pool's."
     ),
+    (
+        "my_claude_code.api.admin_usage_routes",
+        "my_claude_code.providers.runtime.usage_reads",
+    ): (
+        "Owner: the Usage page's on-demand read (8.5.0, USAGE PR 3). "
+        "Reason: the read's transport is a sibling of the two probe families "
+        "already in providers/runtime (reasoning_probe, capability_probes), so "
+        "it sits with them rather than in application/ or core/ -- core/ may "
+        "not import httpx at all, and application/ does not own a credential. "
+        "Read-only GET, its own client, and no import of the rotation, "
+        "rate-limit-cooldown or route-health machinery."
+    ),
 }
 
 FACADE_ONLY_BOUNDARIES = {

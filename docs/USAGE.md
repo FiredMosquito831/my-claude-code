@@ -50,7 +50,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Tutorial: manage many models](#tutorial-manage-many-models)
   - [Catalogue refresh, and what MCC learned](#catalogue-refresh-and-what-mcc-learned)
 - [10. Web search](#10-web-search)
-- [10b. Usage: what is left](#10b-usage-what-is-left-830)
+- [10b. Usage: what is left](#10b-usage-what-is-left-830-extended-in-840-and-850)
 - [11. Analytics](#11-analytics)
   - [Tutorial: read the request detail](#tutorial-read-the-request-detail)
   - [Tutorial: read a request's cost](#tutorial-read-a-requests-cost)
@@ -4880,7 +4880,7 @@ All **66** advanced options are editable from the Web Search tab's **Advanced op
 
 ---
 
-## 10b. Usage: what is left (8.3.0, extended in 8.4.0)
+## 10b. Usage: what is left (8.3.0, extended in 8.4.0 and 8.5.0)
 
 The **Usage** page answers one question — *how much is left?* — for the providers you actually configured. It is the first page in the dashboard's **Observe** group, above Analytics.
 
@@ -4906,13 +4906,35 @@ A provider appears in this block only if it is **configured** and sends one of t
 
 The observer runs inside the response path of the providers that opt in, and it can never fail a request: a callback that raised would cost that one observation and nothing else. Not one byte of any outbound request changes — these are response headers of requests you were already making.
 
-**How the page knows.** Opening the Usage page makes exactly **one** request, and it is to your own server: `GET /admin/api/usage`. That route is loopback-only and read-only — it reports what the server's memory already holds, opens no connection upstream, reads no credential and starts no timer. There is no **Read now** button, no polling and no background refresh; the readings fill in from your traffic, which is why they cost nothing.
+**How the page knows.** Opening the Usage page makes exactly **one** request, and it is to your own server: `GET /admin/api/usage`. That route is loopback-only and read-only — it reports what the server's memory already holds, opens no connection upstream, reads no credential and starts no timer. There is no polling and no background refresh; the header-derived readings fill in from your traffic, which is why they cost nothing.
 
 Every other configured provider gets **one sentence** — *"<Provider> publishes no usage endpoint MCC can read."* That is a fact about the provider, not a failure of the page: most of the catalogue publishes no usage figure at all. A provider you have not configured does not appear, in any form.
 
-An on-demand read of a *provider's own* usage endpoints (DeepSeek's balance route, OpenRouter's per-key route, and the others that need a request of their own) is not part of this release. A provider whose only mechanism is one of those shows `Not read yet` rather than the "publishes no endpoint" sentence, because those are different facts.
+### Read now: asking a provider directly (8.5.0)
 
-### The four states, and what each one looks like
+Seven providers publish a usage route MCC can read with a credential **you already have** — nothing new to sign up for, nothing pasted in:
+
+| Provider | What it reads | Carried by |
+| --- | --- | --- |
+| **Claude subscription** | the 5-hour and weekly windows, the per-model weekly windows, and extra-usage dollars | the Claude sign-in on the Providers page |
+| **ChatGPT / Codex** | the plan's primary and secondary windows, its credits, and any per-model limit | the ChatGPT sign-in on the Providers page |
+| **Command Code** | the credit pool, its 5-hour and weekly slices, and the plan | `COMMANDCODE_API_KEY` |
+| **OpenRouter** | this key's spend and its remaining limit | `OPENROUTER_API_KEY` |
+| **DeepSeek** | the account balance, per currency | `DEEPSEEK_API_KEY` |
+| **Kimi (Moonshot)** | available, voucher and cash balances | `KIMI_API_KEY` |
+| **OpenCode Go** | the rolling, weekly and monthly Go windows | `OPENCODE_API_KEY` |
+
+A card for one of those gets a **Read now** button. Pressing it sends **one** request to that provider and repaints its card — and it is the only thing on this page that ever contacts a provider. Opening the page still sends nothing upstream.
+
+**At most once every 30 minutes per provider.** Press it twice and the second press reads nothing; the button carries the countdown, so you can see when it will work. **A provider's own `Retry-After` is honoured too** — if it answers `429 Too Many Requests`, MCC waits exactly as long as it asked and the button says how long.
+
+> **A usage read cannot cost you a key.** This is the property the release is built around, and it is structural rather than a promise: the read uses its own client, never touches the key-rotation pool, never benches a provider and never records a failure. A `401` on a usage read shows **Read failed** on the card and does nothing else — your key is not charged, locked out or rotated, and the provider is not benched. A `429` sets only this page's own deadline.
+
+**What is not built, deliberately.** OpenRouter's account-credits endpoint needs a *management* key MCC does not hold — the per-key route above answers the same question with the key you already have. OpenCode's browser-console balance needs a session cookie, the OpenAI and Anthropic *organisation* APIs need an admin key, and Z.ai, MiniMax, Copilot and Kimi *Coding* have no route MCC can read with what you hold. Those providers simply show the "Not read yet" or the "publishes no usage endpoint" sentence, which is the honest answer rather than a zero.
+
+> **Where every figure comes from.** Each route is declared in `config/usage_sources.py` with the host it goes to, the credential kind that carries it, and the evidence behind it — *vendor-doc* (the provider published it), *vendor-binary* (read out of the provider's own installed client), or *third-party* (four independent open-source implementations agree; this is OpenCode Go, and its card says so). A route that answers with a shape MCC does not recognise reads as **Read failed** with a plain sentence, never as a zero.
+
+### The five states, and what each one looks like
 
 Every number on the page is in exactly one of these, and the chip at the top of a card says which:
 
@@ -4920,17 +4942,20 @@ Every number on the page is in exactly one of these, and the chip at the top of 
 | --- | --- | --- |
 | **Measured now** | `Measured` | the number, plus *"Read 3 minutes ago"* |
 | **Measured at T** | `Stale` | the number, the observation time, and *"Read 4 hours ago, which is older than 30 minutes. What follows is what the provider said then, not what it says now."* |
-| **Not available from this provider** | `Not read yet` | *"no response from this provider has carried a usage header since the server started"*, and every figure reads *"not measured by this provider"* |
-| **The read failed** | `Read failed` | *"Could not read usage: \<the reason\>"* — and the page says it is a fact about the read, not about the provider |
+| **Nothing available** | `Not available` | the provider answered and said there is nothing left for this account — an expired plan, an account that cannot serve. Its own reason is on the card. **Not an error**: the call worked |
+| **Not read yet** | `Not read yet` | no response has carried a figure yet, or MCC has no read for this provider in this release. Never a zero, never a spinner |
+| **The read failed** | `Read failed` | *"Could not read usage: \<the reason\>"* — plus, when there is one, the last good reading with its own age. A fact about the read, not about the provider |
 
-A missing value is **never** a zero and never an empty box. The stale bound is 30 minutes, the same interval an on-demand read would use: the header-derived readings cost nothing, so they update with your traffic, and 30 minutes is when a percentage stops being a picture of now.
+A missing value is **never** a zero and never an empty box. The stale bound is 30 minutes — the same interval a read uses, so the chip and the sentence beside it cannot disagree about what "current" means.
+
+`Not available` and `Read failed` are deliberately different in words, in tone and in what they mean: *"this account has nothing left"* is not *"we could not ask"*. Collapsing them would be the "unknown is not unsupported" mistake at a new layer.
 
 ### Two blocks on every card, never one total
 
 A subscription window is a **percentage of an allowance that resets**. A credits balance is **cash**. Codex reports both on the same response, so the page keeps them apart on purpose:
 
-- **Subscription allowance** — the windows, with a reset time on each.
-- **Credits** / **Overage** — the cash or the overage figures, under their own heading.
+- **Subscription allowance** (the two subscriptions' own header-derived windows) or **Allowance** (a declared read's windows — a percentage of a plan, or a dollar cap that resets) — the windows, each with a reset time. "Allowance" rather than "subscription" on a card whose provider never said the word.
+- **Credits** / **Balance and spend** / **Overage** — the cash or the overage figures, under their own heading.
 
 There is no element anywhere on the page that adds the two together, and no "remaining" total. Adding a percentage of a plan to a dollars balance would be a wrong number that looks like a right one.
 

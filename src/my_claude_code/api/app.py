@@ -136,9 +136,10 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_desktop_app_router)
     app.include_router(admin_agent_install_router)
     app.include_router(admin_server_router)
-    # 8.4.0: read-only. After ``admin_router`` on purpose, so its own paths are
-    # never shadowed by an earlier ``/admin/api/{something}`` wildcard, and
-    # before the web-search routes, which share no prefix.
+    # 8.4.0: read-only, plus 8.5.0's one on-demand read. After ``admin_router``
+    # on purpose, so its own paths are never shadowed by an earlier
+    # ``/admin/api/{something}`` wildcard, and before the web-search routes,
+    # which share no prefix.
     app.include_router(admin_usage_router)
     app.include_router(admin_websearch_router)
     app.include_router(admin_export_router)

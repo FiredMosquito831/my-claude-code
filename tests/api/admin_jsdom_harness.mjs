@@ -4976,6 +4976,18 @@ if (process.env.MCC_JSDOM_SCENARIO === "usage_page") {
     VIEW_GROUPS: window.VIEW_GROUPS,
   });
 }
+/* MCC_JSDOM_SCENARIO=usage_reads (8.5.0): the on-demand read -- the button and
+   its countdown, one press sending exactly one POST with exactly one provider
+   id, a second press inside the interval asking for nothing, the deadline a 429
+   produces, the two blocks a reading is drawn in, and the states it can be in.
+   It is handed the fetch BODY recorder because "which provider id went out" is
+   a question about the body, not about the URL. */
+if (process.env.MCC_JSDOM_SCENARIO === "usage_reads") {
+  const { prepareUsageReadsScenario } = await import(
+    "./admin_jsdom_usage_reads.mjs"
+  );
+  scenario = prepareUsageReadsScenario({ window, ROUTES, fetchBodies });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
