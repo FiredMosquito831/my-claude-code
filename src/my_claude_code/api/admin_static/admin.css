@@ -14566,10 +14566,14 @@ audio.req-media-preview {
 
 .usage-board-row {
   display: grid;
+  /* THE CASH COLUMN HAS A FLOOR. At 0.7fr it collapsed to ~110 px beside a
+     five-window provider, and the "nothing available" sentence stacked one
+     word per line — measured on the first real render. 190 px holds the
+     sentence and the money rows at their own size. */
   grid-template-columns:
     minmax(150px, 0.8fr)
     minmax(200px, 1.5fr)
-    minmax(120px, 0.7fr);
+    minmax(190px, 0.8fr);
   gap: 8px 18px;
   align-items: start;
   padding: 11px 0;
@@ -14634,6 +14638,10 @@ audio.req-media-preview {
   gap: 4px;
   align-items: flex-start;
 }
+
+/* The cash column's own sentence is prose, not a figure: it takes the full
+   column width and wraps at word boundaries. */
+.usage-board-note { max-width: 34ch; }
 .usage-board-cash-figure { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .usage-board-amount {
   font-size: 14px;
