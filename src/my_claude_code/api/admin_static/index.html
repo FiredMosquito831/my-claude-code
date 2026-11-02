@@ -1461,6 +1461,7 @@
             <nav id="usageJumpBar" class="jump-bar" aria-label="Usage sections">
               <span class="jump-bar-label">On this page</span>
               <a href="#usageSubscriptionsHeading">Subscriptions</a>
+              <a href="#usageCapturedHeading">From your own traffic</a>
               <a href="#usageOtherHeading">Other providers</a>
             </nav>
             <p id="usageStatus" class="models-status" role="status" aria-live="polite" hidden></p>
@@ -1477,6 +1478,23 @@
               </div>
               <div id="usageSubscriptionsGrid" class="usage-grid"></div>
               <p id="usageEmptyNote" class="section-help" hidden></p>
+            </section>
+
+            <section class="settings-section usage-section" id="usageCaptured">
+              <div class="section-heading">
+                <div>
+                  <h3 id="usageCapturedHeading">From your own traffic</h3>
+                  <p>
+                    Providers that send a credits or rate-limit figure on the
+                    responses they already return. Nothing on this page asks for
+                    one: a figure appears here once a real request has carried it,
+                    and a provider that has sent nothing says
+                    <em>not read yet</em> rather than showing a zero.
+                  </p>
+                </div>
+              </div>
+              <div id="usageCapturedGrid" class="usage-grid"></div>
+              <p id="usageCapturedEmpty" class="section-help" hidden></p>
             </section>
 
             <section class="settings-section usage-section" id="usageOther">
@@ -6272,10 +6290,29 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   triangle on Providers.
                 </p>
                 <p class="guide-note">
-                  <strong>Nothing here is fetched.</strong> The page draws from the
-                  two payloads the Providers page already asks for, so opening it
-                  makes no request, starts no timer and has no refresh button. What
-                  you read is what the provider last said on a real request.
+                  <strong>Nothing here is fetched from a provider.</strong> The
+                  subscription cards draw from the two payloads the Providers
+                  page already asks for, so opening the page makes no upstream
+                  request, starts no timer and has no refresh button. What you
+                  read is what the provider last said on a real request.
+                </p>
+                <p class="guide-note">
+                  <strong>From your own traffic (8.4.0).</strong> Two more
+                  header families arrive on responses you were already getting,
+                  and MCC now keeps them: Nous Portal's
+                  <code>x-nous-credits-*</code> (remaining, subscription,
+                  rollover, purchased, paid access) and the
+                  <code>x-ratelimit-*</code> family that DeepSeek, OpenRouter,
+                  Kimi and Command Code send. Only an allow-listed name is
+                  stored, and its value is kept exactly as the provider spelled
+                  it &mdash; nothing is computed, and a name nobody listed is
+                  not stored at all. Opening this page reads your own server's
+                  memory at <code>GET /admin/api/usage</code> and nothing else;
+                  there is no polling and no "Read now", because these figures
+                  cost no request. A provider whose only usage route needs a
+                  read of its own says <em>not read yet</em> rather than
+                  claiming it publishes nothing &mdash; those reads are a later
+                  release.
                 </p>
                 <p class="guide-note">
                   <strong>A window and a balance are never added together.</strong>
@@ -6303,7 +6340,10 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   figure MCC can reach, so they are listed after the cards, once
                   each, saying exactly that. There is no spinner and no retry,
                   because there is nothing to wait for. A provider with no key
-                  does not appear on this page at all.
+                  does not appear on this page at all &mdash; and since 8.4.0 a
+                  configured provider that <em>does</em> send a header is a card
+                  in the block above rather than a sentence here, one row per
+                  provider either way.
                 </p>
                 <p class="guide-note">
                   <strong>Each card names its source and when it was read.</strong>

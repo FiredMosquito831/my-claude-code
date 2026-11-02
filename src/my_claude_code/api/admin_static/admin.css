@@ -13486,6 +13486,39 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
+/* 8.4.0: the header-derived block's cards. They reuse `.usage-card` and
+   `.usage-grid` wholesale -- same border, same padding, same min-width: 0 --
+   so a third kind of card cannot invent a fourth kind of spacing. The only
+   additions here are the two things this block does that the two subscription
+   cards do not: a value that is a provider's serialised structure can be
+   arbitrarily long, and a long `as-of` epoch is drawn on one line.
+
+   Everything that must hold for the standing UI rule (A.1-A.6) is inherited
+   from the `.usage-*` rules above rather than restated, because a second copy
+   of `overflow-wrap: anywhere` is a second place to forget it. */
+
+/* A gauges header is a JSON object. `pre-wrap` keeps its commas and braces
+   where the provider put them while still wrapping at any character, which
+   `overflow-wrap: anywhere` alone does not do for a run of punctuation.
+   Scoped to `#usageCapturedGrid` rather than to `.usage-card`, because the two
+   subscription cards beside it must render exactly as 8.3.0 drew them -- a
+   rule that changes `white-space` on every card is a change nobody asked for,
+   and the DOM baseline compares markup, not computed style, so it would not
+   catch one. */
+#usageCapturedGrid .usage-figures dd {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A value that carries a `title` (a shortened reset instant, whose raw value is
+   on the attribute) is marked so a reader knows there is more behind it. A.3:
+   never clipped without a way to read the whole thing. Scoped for the same
+   reason as the rule above. */
+#usageCapturedGrid .usage-figures dd[title] {
+  border-bottom: 1px dotted var(--line);
+  cursor: help;
+}
+
 /* Below 760 px a two-column term/value row squeezes both sides; one column
    under the other is the phone layout the foundation's 4/3/2/1 rule asks for. */
 @media (max-width: 759px) {

@@ -360,6 +360,21 @@ class OpenAIChatProvider(BaseProvider):
             )
         )
         self._rate_limiter = rate_limiter
+        # The mirror of ``AnthropicMessagesProvider._response_observer``, at the
+        # same point in a request and with the same contract: it sees the
+        # *response* headers of every upstream call this provider makes, on
+        # every surface it can speak, and it is ``None`` until somebody
+        # installs one. ``None`` is what every provider in this family is on a
+        # stock install, which is why nothing about their requests or their
+        # behaviour changes: a seam nobody installs is not on the path at all.
+        #
+        # The reason it exists: quota headers (Nous Portal's
+        # ``x-nous-credits-*``, the ``x-ratelimit-*`` family) arrive on
+        # inference traffic MCC already sends, and this family -- which reaches
+        # DeepSeek, OpenRouter, Nous, Z.ai, Kimi, MiniMax and OpenCode, i.e.
+        # every host the Anthropic-Messages seam does not -- had no way to see
+        # one. See ``specs/INVESTIGATION-USAGE-AND-CREDITS.md`` §2.3.
+        self._response_observer: Callable[[Mapping[str, str], int], None] | None = None
         request_timeout = httpx.Timeout(
             config.http_read_timeout,
             connect=config.http_connect_timeout,
@@ -486,6 +501,54 @@ class OpenAIChatProvider(BaseProvider):
             )
             self._messages_transport = transport
         return transport
+
+    def set_response_observer(
+        self, observer: Callable[[Mapping[str, str], int], None] | None
+    ) -> None:
+        """Watch every upstream response's headers. See ``__init__``.
+
+        The mirror of the Anthropic-Messages family's setter, added in 8.4.0 so
+        one installer can cover a host on either protocol. Installed on a
+        transport that is already built, the observer is put there too, so the
+        order of "construct the provider" and "install the observer" cannot
+        decide whether it works.
+        """
+
+        self._response_observer = observer
+        transports = (self._responses_transport, self._messages_transport)
+        for transport in transports:
+            if transport is not None:
+                transport.set_response_observer(observer)
+
+    def _observe_response(
+        self, headers: Mapping[str, str] | None, status_code: int
+    ) -> None:
+        """Hand one response's headers to the observer, if one is installed.
+
+        A no-op -- and therefore not on the path in any measurable sense --
+        when nothing is installed, which is every provider on a stock install.
+
+        The observer is called inside its own guard on purpose (8.4.0). It runs
+        in the read path of a live request, and a usage figure is never a
+        reason to fail one: a callback that raises costs this observation and
+        nothing else.
+        """
+
+        observer = self._response_observer
+        if observer is None:
+            return
+        if headers is None:
+            # A stream without a response carries no headers to read. Recording
+            # "absence" would be recording a fact about the double, not the
+            # host, so this says nothing at all.
+            return
+        try:
+            observer(headers, status_code)
+        except Exception:
+            # Deliberately swallowed. Broad because ``BaseException`` would
+            # swallow a cancellation, and narrow because a TypeError from a
+            # misspelled observer is exactly the case this exists for.
+            return
 
     async def list_models_payload(self) -> Any:
         """Return the raw OpenAI-compatible model-list payload."""
@@ -892,6 +955,19 @@ class OpenAIChatProvider(BaseProvider):
                     response = getattr(stream, "response", None)
                     record_marketplace_headers(
                         self._profile.marketplace, getattr(response, "headers", None)
+                    )
+                # 8.4.0: the mirror of the Anthropic-Messages seam. Read off the
+                # stream's own response -- the SDK exposes it as
+                # ``AsyncStream.response`` and ``adopt_chat_stream`` hands back a
+                # stream that keeps it -- and handed on only when somebody
+                # installed an observer. A host that installed none reaches this
+                # line and does nothing, exactly as before this existed.
+                if self._response_observer is not None:
+                    response = getattr(stream, "response", None)
+                    status = getattr(response, "status_code", 0)
+                    self._observe_response(
+                        getattr(response, "headers", None),
+                        0 if status is None else status,
                     )
                 if stripped_reasoning is not None:
                     self._remember_reasoning_rejection(

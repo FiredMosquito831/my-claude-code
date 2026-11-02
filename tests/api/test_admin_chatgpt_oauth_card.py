@@ -109,6 +109,11 @@ def test_the_windows_are_only_what_a_real_response_carried(monkeypatch, tmp_path
             "x-codex-primary-used-percent": "41.7",
             "x-codex-primary-reset-at": "2026-09-05T22:00:00Z",
             "x-codex-credits-balance": "0",
+            # 8.4.0 (D3): allow-listed since this observer was written and
+            # dropped by the payload until now. An account can say it has no
+            # credits AND report a balance of zero, and the two are different
+            # answers about different things.
+            "x-codex-credits-has-credits": "false",
             "set-cookie": "session=secret",
         },
         status_code=200,
@@ -122,6 +127,7 @@ def test_the_windows_are_only_what_a_real_response_carried(monkeypatch, tmp_path
     assert windows["primary_reset_at"] == "2026-09-05T22:00:00Z"
     # A balance of "0" is a value OpenAI sent, not an absence.
     assert windows["credits_balance"] == "0"
+    assert windows["credits_has_credits"] == "false"
     # Nothing OpenAI did not send: the secondary window was never observed.
     assert windows["secondary_used_percent"] == NOT_YET_OBSERVED
     assert "session=secret" not in json.dumps(windows)

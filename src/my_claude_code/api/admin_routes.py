@@ -3674,6 +3674,13 @@ class _ChatGPTOAuthWindows(BaseModel):
     secondary_reset_at: str = NOT_YET_OBSERVED
     credits_balance: str = NOT_YET_OBSERVED
     credits_unlimited: str = NOT_YET_OBSERVED
+    #: OpenAI's own boolean for "this account has credits at all", which the
+    #: observer has allow-listed since it was written and this payload dropped
+    #: until 8.4.0 (D3 in ``specs/INVESTIGATION-USAGE-AND-CREDITS.md`` §2.2).
+    #: Separate from ``credits_balance`` on purpose: an account can have
+    #: ``has_credits: false`` and a balance string of ``"0"``, and "nothing
+    #: left" and "this plan never has credits" are different answers.
+    credits_has_credits: str = NOT_YET_OBSERVED
     limit_name: str = NOT_YET_OBSERVED
     rate_limit_reached_type: str = NOT_YET_OBSERVED
     upstream_model: str = NOT_YET_OBSERVED
@@ -3806,6 +3813,7 @@ def _chatgpt_oauth_windows(account_id: str = "") -> _ChatGPTOAuthWindows:
         secondary_reset_at=read("x-codex-secondary-reset-at"),
         credits_balance=read("x-codex-credits-balance"),
         credits_unlimited=read("x-codex-credits-unlimited"),
+        credits_has_credits=read("x-codex-credits-has-credits"),
         limit_name=read("x-codex-limit-name"),
         rate_limit_reached_type=read("x-codex-rate-limit-reached-type"),
         upstream_model=read("openai-model"),

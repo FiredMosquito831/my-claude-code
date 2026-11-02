@@ -44,6 +44,7 @@ from .admin_proxy_source_routes import router as admin_proxy_source_router
 from .admin_raw_routes import router as admin_raw_router
 from .admin_routes import router as admin_router
 from .admin_server_routes import router as admin_server_router
+from .admin_usage_routes import router as admin_usage_router
 from .admin_websearch_routes import router as admin_websearch_router
 from .gemini_media_routes import router as gemini_media_router
 from .gemini_routes import gemini_router
@@ -135,6 +136,10 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_desktop_app_router)
     app.include_router(admin_agent_install_router)
     app.include_router(admin_server_router)
+    # 8.4.0: read-only. After ``admin_router`` on purpose, so its own paths are
+    # never shadowed by an earlier ``/admin/api/{something}`` wildcard, and
+    # before the web-search routes, which share no prefix.
+    app.include_router(admin_usage_router)
     app.include_router(admin_websearch_router)
     app.include_router(admin_export_router)
     app.include_router(admin_media_router)

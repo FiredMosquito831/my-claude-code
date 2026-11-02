@@ -276,6 +276,13 @@ class ResponsesTransport:
         # own tool names; and since 7.49.1 which client's spellings apply is
         # read off the request's own tool names.
         self._tool_catalogue_for_request = tool_catalogue_for_request
+        # The third door's copy of the response-header seam (8.4.0). Same
+        # contract as the Anthropic-Messages family's and as this family's Chat
+        # Completions side: it sees the response headers of every upstream call
+        # made here, and it is ``None`` until somebody installs one -- which is
+        # every provider on a stock install, so nothing about a Responses send
+        # changes.
+        self._response_observer: Callable[[Mapping[str, str], int], None] | None = None
         # What this host has taught MCC about its own Responses validator.
         # A bare transport (a unit test, an embedded use) gets an unpersisted
         # memory and behaves exactly as one built before 7.23.0 did: nothing
@@ -508,6 +515,33 @@ class ResponsesTransport:
             )
         }
 
+    def set_response_observer(
+        self, observer: Callable[[Mapping[str, str], int], None] | None
+    ) -> None:
+        """Watch every upstream response's headers. See ``__init__``."""
+
+        self._response_observer = observer
+
+    def _observe_response(
+        self, headers: Mapping[str, str] | None, status_code: int
+    ) -> None:
+        """Hand one response's headers to the observer, if one is installed.
+
+        Guarded for the same reason its Chat Completions twin is: this runs in
+        the read path of a live request, and a callback that raises must cost
+        the observation and nothing else.
+        """
+
+        observer = self._response_observer
+        if observer is None:
+            return
+        if headers is None:
+            return
+        try:
+            observer(headers, status_code)
+        except Exception:
+            return
+
     async def send(
         self, body: Mapping[str, Any], headers: Mapping[str, str]
     ) -> httpx.Response:
@@ -527,6 +561,13 @@ class ResponsesTransport:
             "POST", self.url, headers=sent, json=dict(body)
         )
         response = await self._client.send(request, stream=streaming)
+        # 8.4.0: the same point as ``AnthropicMessagesProvider._open_stream``'s
+        # seam -- the response has landed and nothing has read it yet -- and
+        # only when somebody installed an observer, so a host with none sends
+        # and reads exactly what it always did. A refusal is handed over too:
+        # a 429's headers carry a rate-limit reading like any other's.
+        if self._response_observer is not None:
+            self._observe_response(response.headers, response.status_code)
         if response.status_code >= 400:
             # Raw first, decoded second, and the status raised whatever the
             # decode did. See ``providers/http.read_error_body``: an edge that
