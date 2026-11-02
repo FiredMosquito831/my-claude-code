@@ -409,7 +409,18 @@ export function prepareUxPassScenario({ window, ROUTES }) {
     ROUTES["/admin/api/requests/cost"] = {
       enabled: true,
       cost_estimation_enabled: true,
-      totals: { reported_usd: 1.5, estimated_usd: 0.25, priced: 7, requests: 7 },
+      // The whole window's cost is its own field, summed by the server beside
+      // the two halves (SPEC ADDENDUM ROUND 4 §4). The tile prints this one,
+      // so a payload without it could not be rendered -- and a payload whose
+      // halves do not add up to it would be the very disagreement the field
+      // exists to make impossible.
+      totals: {
+        reported_usd: 1.5,
+        estimated_usd: 0.25,
+        total_usd: 1.75,
+        priced: 7,
+        requests: 7,
+      },
       by_day: [
         { key: "2026-10-30", reported_usd: 0.5, estimated_usd: 0.1, priced: 3, requests: 3 },
         { key: "2026-10-31", reported_usd: 1.0, estimated_usd: 0.15, priced: 4, requests: 4 },

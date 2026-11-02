@@ -171,6 +171,11 @@ const state = {
   // came from. Written by `applyAppearance`; read by the Appearance card and
   // by the registry loader. Null until the first resolve.
   appearance: null,
+  // 8.2.0: one honest sentence when a design's SHELL could not start, or null.
+  // Written by the shell loader's failure path and by `report()` on the shell's
+  // own surface; read only by the Appearance card, which is where a reader
+  // finds out that the design they picked is drawing Today's layout and why.
+  shellFailure: null,
 };
 
 const MASKED_SECRET = "********";
@@ -932,6 +937,27 @@ function setActiveView(viewId, { scroll = false } = {}) {
     view.classList.toggle("active", selected);
     view.hidden = !selected;
   });
+
+  /* 8.2.0: tell the running design's shell which page is on screen.
+   *
+   * Dispatched AFTER the hide/show pass above, so a shell that reads the DOM in
+   * its handler — a rail that marks the current item, a drawer that closes on a
+   * page change — sees the page a reader sees rather than the one that was
+   * visible a tick ago. Before the lazy loads below on purpose: those are async
+   * and a shell must not have to wait for somebody's fetch to learn where it
+   * is. `cancelable: false` and no `bubbles`: this is an announcement, and a
+   * design cannot suppress it for another design.
+   *
+   * It fires for EVERY view change, including the first paint from `renderNav`
+   * and the ones a shell's own palette triggers — a shell's `setActiveView` goes
+   * through this same function, so there is one path, not two. */
+  document.dispatchEvent(
+    new CustomEvent(DESIGN_VIEW_EVENT, {
+      detail: { view: activeView.id, entry: activeView },
+      bubbles: false,
+      cancelable: false,
+    }),
+  );
 
   if (activeView.id === "get_started") {
     loadOnboarding().catch((error) => showMessage(error.message, "error"));
@@ -11298,6 +11324,34 @@ function designSystemHarness() {
     ADMIN_DENSITIES,
     LEGACY_THEME_MAP,
     APPEARANCE_KEYS,
+    /* 8.2.0: the shell loader. A scenario drives a REAL design switch through
+       `applyAppearance`, so it needs the same three functions the page uses and
+       the promise the loader serialises on — `designShellIdle()` is what lets a
+       test await the teardown/start chain instead of sleeping and hoping. */
+    loadDesignShell,
+    loadDesignStylesheet,
+    designShellState: () => ({
+      running: activeDesignShell ? { ...activeDesignShell } : null,
+      failure: state.shellFailure,
+    }),
+    designShellIdle: () => designShellChain,
+    /* The URL each half of a design asks for, from the same expression the
+       loaders use — so the contract test asserts the CODE's answer rather than
+       a copy of it. */
+    designAssetUrls: (design) => ({
+      css: design && design.css ? `/admin/${design.css}` : null,
+      shell: design && design.shell ? `/admin/${design.shell}` : null,
+    }),
+    /* The module seam. A jsdom run cannot fetch and evaluate an ES module from
+       `/admin/designs/*`, so the shell scenario replaces the transport and
+       drives the REAL loader — see `importDesignShellModule`. */
+    setDesignShellTransport: (fn) => {
+      importDesignShellModule = fn;
+    },
+    /* Which design the running shell belongs to, and how many shells are
+       attached right now. A leak is a number above one. */
+    designShellCount: () =>
+      document.querySelectorAll(".hy-masthead, [data-mcc-shell]").length,
   };
 }
 
@@ -28368,6 +28422,27 @@ function renderRequestCost(cost) {
  * log), so the tile is the one card that fills in after the band is painted.
  * "Counting…" is not used here: the number is not late, the panel is simply
  * still being computed, and it says which.
+ *
+ * **THE HEADLINE IS THE WINDOW'S WHOLE COST (SPEC ADDENDUM ROUND 4 §4).**
+ * Until 8.2.0 it read ``Cost (reported)`` = ``reported_usd`` only, with the
+ * estimated half mentioned underneath. On a real log that is the smallest
+ * possible slice of the traffic: the owner's own dashboard showed
+ * ``$0.7097`` against ``465,391 of 683,928 priced · estimated $4,050.2926``,
+ * so the first number on the page understated the window by roughly 5,700x --
+ * exactly the arithmetic a reader would do wrong, since most hosts report no
+ * price at all and every one of those rows lands in the estimated half.
+ *
+ * It now prints ``total_usd``, which the server sums in SQL beside the two
+ * halves, and names both of them in the small print:
+ *
+ *     $4.28  ·  116 of 127 priced · $3.90 reported + $0.38 est.
+ *
+ * The two halves are DISJOINT SETS OF ROWS, so this is a total and not a
+ * guess folded into a fact (``core/request_log.py::_COST_TOTAL_SQL``). Nothing
+ * else moves: the cost panel keeps its Reported / Estimated / Priced cards, the
+ * per-provider, model, harness and day tables keep their two columns, the
+ * cost-over-time chart keeps its two series, and every "est." label stays.
+ * The estimate is still labelled as one, in the same breath as the total.
  */
 function paintRequestCostTile() {
   const container = byId("reqStatsCards");
@@ -28383,7 +28458,7 @@ function paintRequestCostTile() {
   const value = document.createElement("strong");
   value.id = "reqCostTileValue";
   const label = document.createElement("span");
-  label.textContent = "Cost (reported)";
+  label.textContent = "Cost";
   const note = document.createElement("small");
   const cost = reqState.cost;
   if (!cost) {
@@ -28394,10 +28469,15 @@ function paintRequestCostTile() {
     note.textContent = "the request log is off, so nothing is being priced";
   } else {
     const totals = cost.totals || {};
-    value.textContent = formatCostAmount(totals.reported_usd);
+    value.textContent = formatCostAmount(totals.total_usd);
+    // Both halves, named, in the same line as the share: a reader who wants to
+    // know how much of this was a guess reads the answer without leaving the
+    // tile. A half that is NULL means nothing was priced that way, which the
+    // formatter renders as "—" rather than as "$0.00".
     note.textContent =
       `${formatPricedShare(totals.priced, totals.requests)} · ` +
-      `estimated ${formatCostAmount(totals.estimated_usd)} shown separately`;
+      `${formatCostAmount(totals.reported_usd)} reported + ` +
+      `${formatCostAmount(totals.estimated_usd)} est.`;
   }
   tile.append(value, label, note);
 }
@@ -30330,6 +30410,16 @@ function resolveAppearance() {
  *                    "Design default" and the design's default is
  *                    `comfortable`, because comfortable IS today's rhythm and
  *                    writing the attribute would be a change for no reason.
+ *
+ * plus, 8.2.0, every attribute the SELECTED ROW DECLARES (`row.attrs`, e.g.
+ * `{ sections: "ruled", fields: "rows" }` → `data-sections`, `data-fields`).
+ * They are written only while a design that declares them is selected, and
+ * removed when it is not, so a page with `today` selected carries exactly the
+ * attributes the base tree carried. See `syncDesignAttributes()`.
+ *
+ * THE SHELL IS LOADED AFTER THE STYLESHEET, never instead of it, and the order
+ * is deliberate: a design may draw all of its chrome from JS and still needs
+ * its CSS rules for the nodes that JS creates.
  */
 function applyAppearance(appearance) {
   const root = document.documentElement;
@@ -30337,7 +30427,23 @@ function applyAppearance(appearance) {
   root.dataset.mccTheme = values.theme;
   root.dataset.mccMode = values.mode;
   root.dataset.design = values.design;
-  const design = currentDesign();
+  /* THE ROW IS THE ONE THIS CALL RESOLVED, never `currentDesign()`.
+   *
+   * `currentDesign()` reads `state.appearance`, which is the LAST thing this
+   * function wrote — so on a switch it answers for the design the reader just
+   * left, and its `defaultDensity`, `css` and `shell` would all be the previous
+   * row's. With 8.1.0's single row that was invisible: `today`'s default
+   * density is `comfortable`, which is also the absence of the attribute. With
+   * two rows it is the whole design switch: picking Hybrid would apply
+   * Today's density, load Today's (null) stylesheet and never start a shell.
+   *
+   * Reading it from `values.design` — the value that was just resolved — is
+   * also what makes `applyAppearance(appearance)` honest as a pure "paint
+   * this" call, which is how the Appearance card and the harness both use it. */
+  const design =
+    ADMIN_DESIGNS.find((row) => row.id === values.design) ||
+    ADMIN_DESIGNS.find((row) => row.defaultFor === "fallback") ||
+    ADMIN_DESIGNS[0];
   const density =
     values.density === "design" ? design.defaultDensity || "comfortable" : values.density;
   if (density === "comfortable") delete root.dataset.density;
@@ -30355,6 +30461,8 @@ function applyAppearance(appearance) {
     root.dataset.theme = legacyWord;
   }
   loadDesignStylesheet(design);
+  syncDesignAttributes(design);
+  loadDesignShell(design);
   chartRedrawers.forEach((fn) => { try { fn(); } catch (_) {} });
 }
 
@@ -30389,6 +30497,428 @@ function loadDesignStylesheet(design) {
   link.id = "designStylesheet";
   link.href = href;
   document.head.appendChild(link);
+}
+
+/* ═════════════════════ 8.2.0 — the design SHELL loader ═════════════════════
+   specs/DESIGN-REVAMP-OPTIONS.md §13.2.2 ("A design is data + CSS + an
+   optional shell module, never a fork of admin.js"), §13.2.5 item 3 (a design
+   switch must leave `today` byte-identical), and PR B's own requirement.
+
+   8.1.0 shipped `loadDesignStylesheet` and NOTHING ELSE. The registry declared
+   a `shell` field and no code read it, so a design's own chrome — a masthead, a
+   numbered rail, a command palette — could not run at all. That is the gap this
+   section closes, and it closes it ONCE: the next three designs (Ledger,
+   Console, Palette) each add a `designs/<id>.js` and a registry row and touch
+   nothing here.
+
+   THE CONTRACT, AND WHY EACH CLAUSE EXISTS:
+
+   1. **One shell at a time, and the old one is gone before the new one starts.**
+      `loadDesignShell` is async and serialised through `shellChain`: a reader
+      clicking Hybrid then Today then Hybrid cannot end up with two mastheads,
+      because every call awaits the previous call's teardown. A design switch is
+      a destructive operation performed on the whole document; the only safe
+      order is teardown, await, start.
+
+   2. **Every node, listener and class the shell added is removed on teardown.**
+      The shell cannot be trusted to do that for itself — it may have thrown
+      halfway through, and a design that leaked a masthead would leave it on
+      screen after switching to `today`. So the loader hands the shell a
+      SCOPED surface (below) that records what it creates and unsubscribes, and
+      teardown also sweeps the DOM for anything left in the design's namespace
+      (`[data-mcc-shell]`). The proof is `test_design_shell_round_trip`: the
+      digest of every view, plus the page's own markup, is identical before
+      Hybrid and after switching back to Today.
+
+   3. **The surface is minimal on purpose.** A shell gets:
+        `getView()`             the current view id
+        `setActiveView(id)`     the product's own navigation, with the same
+                                persistence and lazy loads a nav click gets
+        `onViewChange(fn)`      a subscription; returns an unsubscribe
+        `attrs`                 the design's declared `attrs`, read-only copy
+        `root`                  a DocumentFragment? no — see `mount()` below
+        `mount(node)`           append a node to `document.body` and register it
+        `listen(target, type, fn, opts)`  add a listener and register removal
+        `classes`               { add(el, name), onBody(name) } — registered
+        `onTeardown(fn)`        work that must happen when the shell is swapped
+        `report(message)`       one honest line into the status region, for a
+                                shell that half-started and wants to say so
+      It gets NO access to `state`, `byId`, `api` or any other admin.js
+      internal. A shell that needs a new capability is asking for a loader
+      change, which is exactly the review gate this listing is meant to be.
+
+   4. **A throwing shell cannot break the dashboard.** `start()` runs inside a
+      try/catch; a throw is logged ONCE (`console.error` with the design id),
+      the shell's own partial work is torn down, and — because the design's
+      attributes were already written — those are cleared too, so the page is
+      `today`'s rendering with one honest sentence in the Appearance card
+      (`state.shellFailure`). Nothing is retried, and the design stays
+      selectable: a reader can switch away and back.
+
+   5. **No new network path.** A shell is a MODULE SCRIPT from the same route
+      the stylesheet uses (`/admin/${design.shell}` → `/admin/designs/*`), so
+      the 8.1.1 lesson applies to both halves: assert the URL asked for AND the
+      route that answers it. A shell whose import fails is the same failure as a
+      shell that throws, and is handled by the same one-line path.
+
+   THE MODULE AND THE PAGE. A `<script type="module">` does not see classic-script
+   globals (`state`, `setActiveView`), which is the point — but it also means the
+   loader cannot read a module's exports after adding a tag. So the contract is
+   a module that publishes ONE factory on `window` under a name derived from its
+   own path: `designs/hybrid.js` exports `start(api)` and the loader calls
+   `window.MCCDesignShells["designs/hybrid.js"].start(api)`. A design that
+   exports the wrong thing, or nothing, is a shell that failed to start, which
+   is clause 4. `import()` is used rather than a script tag so the loader can
+   await the module's evaluation and catch its throw; the URL is identical
+   either way, and `import()` from the page's own origin needs no new route. */
+
+/** The name a shell module must publish its factory under. */
+function designShellRegistryKey(path) {
+  return path;
+}
+
+/** How a shell module is fetched and evaluated. One seam, on purpose.
+ *
+ * The default is a dynamic `import()` of the page's own origin, which is the
+ * only way to load an ES module AND await it AND catch its throw — a plain
+ * `<script type="module">` tag reports a syntax error to the window and
+ * nothing to this loader, so a design that failed to parse would leave the
+ * page silently on Today with no sentence explaining it.
+ *
+ * It is a named function rather than an inline `import()` for one reason: a
+ * jsdom run cannot fetch and evaluate a module from `/admin/designs/*` (the
+ * harness hands the page its scripts by string, and there is no server behind
+ * it), so the shell scenario replaces THIS function and drives the real
+ * loader — same serialisation, same generation checks, same teardown, same
+ * failure path — with the real `designs/hybrid.js` evaluated in the page's own
+ * context. Testing the loader through a stub of the network rather than of the
+ * loader is the difference between proving the switch and proving a mock of it.
+ */
+let importDesignShellModule = (url) => import(/* @vite-ignore */ url);
+
+/** The event a shell subscribes to for view changes.
+ *
+ * Dispatched by `setActiveView`, so a shell sees the same sequence a nav click
+ * produces — including the lazy loads the view kicks off — rather than polling
+ * for it. It carries the view id and the VIEW_GROUPS entry as `detail`.
+ *
+ * Declared before the loader because the API object closes over it, and this
+ * file's `const`s are hoisted-but-uninitialised: a `const` read from a function
+ * body is fine in either order, but reading one from a MODULE TOP LEVEL before
+ * its declaration is a temporal-dead-zone throw, and the harness evaluates this
+ * script as one unit.
+ */
+const DESIGN_VIEW_EVENT = "mcc:view";
+
+/** The shell currently running, or null. One at a time (clause 1). */
+let activeDesignShell = null;
+/** Everything the running shell owns: nodes, listeners, body classes, teardown fns. */
+let activeDesignShellScope = null;
+/** Serialises start/stop so two switches can never interleave (clause 1). */
+let designShellChain = Promise.resolve();
+/** Bumped on every start so a shell that resolves late cannot mount into a
+ *  page that has already moved on. */
+let designShellGeneration = 0;
+
+/** Remove every attribute a previous design declared, then write this one's.
+ *
+ * The `data-*` names a design may claim are a closed set: these are the variant
+ * attributes the foundation's CSS implements (`data-density` is the loader's
+ * own and is written by `applyAppearance`). Anything else a design wants goes
+ * on `data-mcc-shell`'s own subtree, not on `<html>`, so a design cannot invent
+ * a document-wide selector the next design would inherit by accident.
+ */
+const DESIGN_ATTRIBUTE_ALLOWLIST = new Set(["sections", "fields", "detail", "analytics", "shell"]);
+function syncDesignAttributes(design) {
+  const root = document.documentElement;
+  DESIGN_ATTRIBUTE_ALLOWLIST.forEach((name) => {
+    delete root.dataset[name];
+  });
+  const attrs = (design && design.attrs) || {};
+  Object.keys(attrs).forEach((name) => {
+    if (!DESIGN_ATTRIBUTE_ALLOWLIST.has(name)) return;
+    const value = attrs[name];
+    if (value === undefined || value === null || value === "") return;
+    root.dataset[name] = String(value);
+  });
+}
+
+/** The surface handed to a shell. Nothing else is reachable from it. */
+function createDesignShellApi(design, scope, genernation) {
+  const api = {
+    /** The design's id — a shell may want it for its own attribute. */
+    id: design.id,
+    name: design.name,
+    /** A copy: a shell that mutates this would be editing the registry. */
+    attrs: { ...(design.attrs || {}) },
+    /** The view the page is showing now. */
+    getView: () => state.activeView,
+    /** Go to a view exactly as a nav click does (scroll, lazy loads, persist). */
+    setActiveView: (viewId) => {
+      if (genernation !== designShellGeneration) return;
+      setActiveView(viewId, { scroll: true });
+    },
+    /** Subscribe to view changes. Returns the unsubscribe. */
+    onViewChange: (fn) => {
+      if (typeof fn !== "function") return () => {};
+      const wrapped = (event) => {
+        try {
+          fn(event.detail && event.detail.view, event.detail && event.detail.entry);
+        } catch (error) {
+          console.error(`[design:${design.id}] view handler threw`, error);
+        }
+      };
+      document.addEventListener(DESIGN_VIEW_EVENT, wrapped);
+      scope.listeners.push([document, DESIGN_VIEW_EVENT, wrapped, undefined]);
+      return () => {
+        document.removeEventListener(DESIGN_VIEW_EVENT, wrapped);
+        scope.listeners = scope.listeners.filter((entry) => entry[2] !== wrapped);
+      };
+    },
+    /** Append a node to the page and own its removal. */
+    mount: (node, parent) => {
+      if (!node) return node;
+      if (genernation !== designShellGeneration) return node;
+      node.setAttribute("data-mcc-shell", design.id);
+      (parent || document.body).appendChild(node);
+      scope.nodes.push(node);
+      return node;
+    },
+    /** Listen, and own the removal. */
+    listen: (target, type, fn, options) => {
+      if (!target || typeof target.addEventListener !== "function") return () => {};
+      const wrapped = (event) => {
+        try {
+          fn(event);
+        } catch (error) {
+          console.error(`[design:${design.id}] ${type} handler threw`, error);
+        }
+      };
+      target.addEventListener(type, wrapped, options);
+      scope.listeners.push([target, type, wrapped, options]);
+      return () => {
+        target.removeEventListener(type, wrapped, options);
+        scope.listeners = scope.listeners.filter((entry) => entry[2] !== wrapped);
+      };
+    },
+    /** Classes on <html>/<body>, owned in the same way as nodes. */
+    classes: {
+      add: (element, name) => {
+        if (!element || !name) return;
+        element.classList.add(name);
+        scope.classes.push([element, name]);
+      },
+      onBody: (name) => api.classes.add(document.body, name),
+    },
+    /** Work to run when this shell is swapped out (before listeners go, after
+     *  nodes are removed — see `stopDesignShell`). */
+    onTeardown: (fn) => {
+      if (typeof fn === "function") scope.teardown.push(fn);
+    },
+    /** One honest line, shown in the Appearance card, for a partial start. */
+    report: (message) => {
+      state.shellFailure = message ? String(message) : null;
+      renderAppearanceCard();
+    },
+  };
+  return api;
+}
+
+/** The DOM-level teardown. Runs even when the shell's own `start()` threw. */
+function stopDesignShell(reason) {
+  const scope = activeDesignShellScope;
+  const shell = activeDesignShell;
+  activeDesignShellScope = null;
+  activeDesignShell = null;
+  if (!scope) return;
+  // 1. The shell's own teardown hooks, outermost last. Each is isolated: one
+  //    that throws must not leave the rest of the cleanup undone, because the
+  //    thing after it is the sweep that makes `today` byte-identical.
+  for (let index = scope.teardown.length - 1; index >= 0; index -= 1) {
+    try {
+      scope.teardown[index]();
+    } catch (error) {
+      console.error(`[design:${shell ? shell.id : "?"}] teardown threw (${reason})`, error);
+    }
+  }
+  // 2. Listeners.
+  scope.listeners.forEach(([target, type, fn, options]) => {
+    try {
+      target.removeEventListener(type, fn, options);
+    } catch (_) {
+      /* a target removed from the document is already harmless */
+    }
+  });
+  scope.listeners = [];
+  // 3. Classes.
+  scope.classes.forEach(([element, name]) => {
+    try {
+      element.classList.remove(name);
+    } catch (_) {
+      /* detached node */
+    }
+  });
+  scope.classes = [];
+  // 4. Nodes.
+  scope.nodes.forEach((node) => {
+    try {
+      node.remove();
+    } catch (_) {
+      /* already gone */
+    }
+  });
+  scope.nodes = [];
+  // 5. The sweep. Anything the shell attached and did not register — the case
+  //    a throw mid-start produces — carries its design's `data-mcc-shell`, so
+  //    it goes here. The stylesheet and the module itself are removed by
+  //    `loadDesignStylesheet`/the loader respectively, not by this.
+  document.querySelectorAll("[data-mcc-shell]").forEach((node) => node.remove());
+  /* 6. THE DESIGN ATTRIBUTES ARE **NOT** TOUCHED HERE, and that is a
+   *    correction rather than an omission.
+   *
+   *    `applyAppearance` decides the whole `data-*` set for the design it just
+   *    resolved, before this runs: `syncDesignAttributes(design)` writes that
+   *    row's declarations (or, for `today`, clears them all, because `today`
+   *    declares none). Teardown happens on a LATER tick, inside the chain, so
+   *    clearing here would wipe the attributes the switch had already written —
+   *    which is exactly what happened: Hybrid's masthead and rail appeared and
+   *    its `data-detail="drawer"` did not, so the request opened as a centred
+   *    modal inside a design that declares a right-hand drawer.
+   *
+   *    One owner for one thing: `applyAppearance` owns the attributes, this
+   *    owns the nodes, listeners and classes. */
+}
+
+/** Start `design`'s shell, after every previous one has been torn down.
+ *
+ * Resolves when the shell is running (or has failed). Never rejects: a shell is
+ * chrome, and chrome does not get to take down a dashboard (clause 4).
+ *
+ * ── WHY IT RE-READS STATE INSTEAD OF TRUSTING ITS ARGUMENT ─────────────────
+ *
+ * `applyAppearance` runs synchronously on every switch, so three clicks in one
+ * tick call this three times before any of them has drained. Each call queues a
+ * step; each step, when it runs, asks the PAGE which design it should be
+ * showing (`state.appearance.design`, written by `applyAppearance` before the
+ * call) and whether a shell for that path is already attached. A step that finds
+ * its own argument stale does nothing — which is what makes a burst of switches
+ * end with exactly ONE shell, the last one asked for, and never with a shell
+ * for a design the page has left.
+ *
+ * The alternative — deciding at CALL time whether to start — cannot work: at
+ * call time the answer is always "yes, this is the newest thing", because the
+ * burst has not happened yet.
+ *
+ * `generation` only exists to make "the argument is stale" expressible: it is
+ * stamped at call time, so a step can tell whether a LATER call has been made
+ * since. It is not a lock and it is not the correctness argument.
+ */
+function loadDesignShell(design) {
+  const path = (design && design.shell) || null;
+  const generation = (designShellGeneration += 1);
+  designShellChain = designShellChain.then(async () => {
+    /* Overtaken while queued: a later call owns the page now. Nothing to do —
+       and nothing to tear down either, because the step that owns it will. */
+    if (generation < designShellGeneration) return;
+    stopDesignShell("swap");
+    state.shellFailure = null;
+    const wanted = state.appearance && state.appearance.design;
+    const wantedRow =
+      ADMIN_DESIGNS.find((row) => row.id === wanted) || design;
+    const wantedPath = wantedRow.shell || null;
+    if (!wantedPath) {
+      renderAppearanceCard();
+      return;
+    }
+    if (
+      activeDesignShell &&
+      activeDesignShell.shell === wantedPath &&
+      activeDesignShell.started &&
+      activeDesignShell.id === wantedRow.id
+    ) {
+      renderAppearanceCard();
+      return;
+    }
+    const scope = {
+      listeners: [],
+      nodes: [],
+      classes: [],
+      teardown: [],
+    };
+    const api = createDesignShellApi({ ...wantedRow }, scope, generation);
+    const rowName = wantedRow.name;
+    const rowId = wantedRow.id;
+    try {
+      // The URL is `/admin/<the registry's own relative path>` — identical in
+      // shape to the stylesheet's, so `admin_design_asset` answers it and the
+      // contract that pins one pins both (see the 8.1.1 lesson: assert the URL
+      // ASKED FOR and the route that ANSWERS it).
+      const url = `/admin/${wantedPath}`;
+      /* `import()` caches per URL for the life of the document, which is what a
+         design switch wants: a reader going Today → Hybrid → Today → Hybrid
+         must not re-fetch, and must not re-evaluate a module whose top-level
+         side effects have already run. It is also what lets this function AWAIT
+         the module and catch its throw — a plain `<script type="module">` tag
+         would report a syntax error to the window and nothing to this loader.
+         See `importDesignShellModule` for why the call goes through a seam. */
+      await importDesignShellModule(url);
+      if (generation < designShellGeneration) return;
+      const registry = window.MCCDesignShells || {};
+      const factory = registry[designShellRegistryKey(wantedPath)];
+      if (!factory || typeof factory.start !== "function") {
+        throw new Error(
+          `the module did not publish a shell factory at window.MCCDesignShells["${wantedPath}"]`,
+        );
+      }
+      activeDesignShellScope = scope;
+      activeDesignShell = { id: rowId, shell: wantedPath, generation, started: false };
+      await Promise.resolve(factory.start(api));
+      /* A shell that took a moment to start (an `await` of its own) may have
+         been overtaken while it did. The check is what stops a late shell
+         mounting into a page that has already moved on, and the teardown is
+         what removes whatever it managed to attach first. */
+      if (generation < designShellGeneration) {
+        stopDesignShell("superseded");
+        return;
+      }
+      activeDesignShell.started = true;
+      renderAppearanceCard();
+    } catch (error) {
+      // ONE line, and the page keeps working. `stopDesignShell` is what makes
+      // that true even when the throw came halfway through `start()`.
+      console.error(`[design:${rowId}] the shell failed to start`, error);
+      activeDesignShellScope = scope;
+      activeDesignShell = { id: rowId, shell: wantedPath, generation, started: false };
+      stopDesignShell("failure");
+      /* The one honest line. §13.2.5 and this PR's proof item 3: a shell that
+         throws leaves a WORKING dashboard with ONE line saying so — not a
+         broken page, not a silent fallback. It names the design, says what is
+         being used instead, and says the rest cooperates.
+
+         It is set only when the failed shell is still the design the page is
+         on. A switch away while an import was in flight must not leave a
+         sentence about Hybrid on the Today card. */
+      if (state.appearance && state.appearance.design === rowId) {
+        /* ONE SENTENCE, AND IT HAS TO BE TRUE.
+         *
+         * The design's STYLESHEET still applies — `applyAppearance` loaded it
+         * before this ran, and the `data-sections` / `data-detail` attributes
+         * are written by `applyAppearance` too. What failed is the design's own
+         * CHROME: the masthead, the palette, the rail's numbering. Saying "the
+         * dashboard is using Today's layout" would therefore be a lie a reader
+         * could see through at a glance, and a first version said exactly that.
+         * What it says instead is what happened: everything a design loads from
+         * CSS is still on, the chrome that comes from the module is not, and
+         * nothing about the dashboard's function is affected. */
+        state.shellFailure =
+          `${rowName}'s own chrome could not start, so its menu, palette and ` +
+          `shortcuts are not shown. Every page, control and setting still ` +
+          `works, and its layout and colours are unchanged.`;
+      }
+      renderAppearanceCard();
+    }
+  });
+  return designShellChain;
 }
 
 /** Store one axis for this viewer. An empty value means "follow the machine". */
@@ -30680,6 +31210,26 @@ function renderAppearanceCard() {
   note.append(designKey, ", ", themeKey, ", ", modeKey, " and ", densityKey);
   note.append(". Switching anything here never saves a setting.");
   host.appendChild(note);
+
+  /* ---- 8.2.0: the design's own chrome, and one honest line if it failed ----
+   * A design is CSS plus an optional shell module. When the shell cannot start
+   * — it threw, its module did not load, or it published no factory — the page
+   * keeps working in Today's layout, and this is the sentence that says so.
+   * It is deliberately in the CARD and not a toast: a message that scrolls
+   * away is how a reader ends up believing they are looking at Hybrid.
+   *
+   * The line names both facts the requirement asks for: what is being used
+   * instead, and that everything else works. `role="status"` rather than
+   * `alert` because nothing is broken that a reader must act on this second.
+   */
+  if (state.shellFailure) {
+    const failure = document.createElement("p");
+    failure.className = "appearance-note appearance-note-error";
+    failure.id = "appearanceShellFailure";
+    failure.setAttribute("role", "status");
+    failure.textContent = state.shellFailure;
+    host.appendChild(failure);
+  }
 
   /* ---- Follow the machine / set the machine ---------------------------- */
   const actions = document.createElement("div");
@@ -42348,7 +42898,32 @@ function buildSectionNavigator(viewId, entries) {  const host = document.querySe
      The `<nav>` elements themselves stay in the DOM (inside the strip), so a
      test — or a later design — can still find them; only their duplicate
      links are hidden. */
+  /* A rail link is dropped when the strip ALREADY NAMES ITS DESTINATION — not
+     only when the selectors are byte-identical.
+     §"PER-PAGE SECTION NAVIGATOR" item 3 requires the three 7.122.3 topbar
+     rails to fold in with "one mechanism, not two, and no page may show both".
+     An exact-selector match does not deliver that on Analytics, and shipped
+     that way in 8.1.0: the table's entry is `["In flight", "#reqInflightPanel"]`
+     (the panel, which is what can be scrolled to) while the rail's own link is
+     `href="#reqInflightHeading"` (the heading inside it). Neither contains the
+     other, so the link stayed — and the strip read "In flight" twice. Found by
+     looking at a screenshot of the design that made the duplication visible,
+     which no test was asking about.
+     The rule is therefore: same destination (identical, or one contains the
+     other), OR same words. Matching on the label as well is what covers a rail
+     that names a target by an id the table does not use at all; a label can
+     never be a false positive here, because the strip's labels ARE this page's
+     section names. */
   const covered = new Set(entries.map(([, selector]) => selector));
+  const coveredLabels = new Set(entries.map(([label]) => String(label).toLowerCase()));
+  const isCovered = (link) => {
+    const href = link.getAttribute("href") || "";
+    if (covered.has(href)) return true;
+    for (const selector of covered) {
+      if (selector.startsWith(href) || href.startsWith(selector)) return true;
+    }
+    return coveredLabels.has((link.textContent || "").trim().toLowerCase());
+  };
   const moved = [];
   ((VIEW_GROUPS.find((entry) => entry.id === viewId) || {}).railIds || []).forEach(
     (railId) => {
@@ -42357,7 +42932,7 @@ function buildSectionNavigator(viewId, entries) {  const host = document.querySe
       rail.hidden = false;
       nav.appendChild(rail);
       rail.querySelectorAll("a[href^='#']").forEach((link) => {
-        if (covered.has(link.getAttribute("href"))) link.remove();
+        if (isCovered(link)) link.remove();
       });
       moved.push(railId);
     },

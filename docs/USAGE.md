@@ -5732,11 +5732,18 @@ The web search log lives in its own file, `~/.mcc/logs/websearch.db`, and almost
 
 ---
 
-## 11a. Appearance: design, theme, mode and density (8.1.0)
+## 11a. Appearance: design, theme, mode and density (8.1.0; Hybrid added in 8.2.0)
 
 The dashboard's own look is a feature with three independent choices, on **Get Started → Appearance**. Nothing here touches a request, a provider or a model.
 
-**Design** — which structure the dashboard draws. 8.1.0 ships one: **Today**, the dashboard as it already is — one page at a time, a grouped sidebar, every setting on the page that owns it. It is labelled *Classic* and stays selectable for good. Further designs arrive as new choices on this same card in later releases.
+**Design** — which structure the dashboard draws, and how you move through it. Two ship:
+
+- **Today** — the dashboard as it already is: one page at a time, a grouped sidebar, every setting on the page that owns it. Labelled *Classic*; it stays selectable for good.
+- **Hybrid** (8.2.0) — Ledger's structure with Console's operation: a **masthead** across the top with the server's version, a **numbered, grouped rail** (Setup · Agents · Routing · Observe · System), **ruled sections** instead of boxes, **compact density**, a **right-hand drawer** for a request's detail, **Ctrl/⌘K** to jump to any page, any section of a page or any setting, and **`g`-key** shortcuts (`g r` for Analytics, `g l` for Limits; `?` lists them, `/` focuses the page's own search).
+
+  It is the same dashboard underneath — the same fifteen pages, the same controls, the same settings. Every page's own **section navigator** (the strip of section names under the title) is the product's and is unchanged: Hybrid neither hides it nor adds a second one.
+
+  If Hybrid's own chrome cannot start — its script failed to load, say — the dashboard keeps working in Today's layout and the **Appearance** card says so in one line. Nothing else changes, and you can switch away and back.
 
 **Theme** — a colour family, each drawn in both light and dark: **Today** (the colours the dashboard shipped with), **Midnight**, **Paper**, **High Contrast**, **Velvet**, **Navy**, and a design's own palette where it declares one. **Mode** — light or dark — is a separate button, and neither choice ever resets the other.
 
@@ -5747,7 +5754,7 @@ The dashboard's own look is a feature with three independent choices, on **Get S
 Every control on the card writes **this browser** and nothing else. That is what makes switching a theme instant and what keeps it from changing anybody else's dashboard. The four settings below the card are the **machine defaults**:
 
 ```bash
-ADMIN_DESIGN=today      # the design a fresh browser opens on
+ADMIN_DESIGN=today      # today | hybrid — the design a fresh browser opens on
 ADMIN_THEME=velvet      # the colour family: today | midnight | paper | hc | velvet | navy | own
 ADMIN_MODE=dark         # dark | light, and never changes the family
 ADMIN_DENSITY=design    # design | compact | comfortable

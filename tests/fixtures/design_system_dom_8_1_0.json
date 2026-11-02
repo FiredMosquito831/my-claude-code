@@ -394,10 +394,10 @@
   },
   "requests": {
    "children": 28,
-   "length": 70024,
-   "sha256": "2b7d33c3e2b11ccd71c9fc97f319939dbfc82be98043cb1add8c5feda792a1bd",
-   "stripFreeLength": 67151,
-   "stripFreeSha256": "0fecc0168e31c1201648fd2f15c8ad9e41f8799572b16420ebc98fbf93a6574a"
+   "length": 70159,
+   "sha256": "42374f14c0c7f739a74411241a60561417e2ccc7239aa9a86f6be1a958acc0a6",
+   "stripFreeLength": 67139,
+   "stripFreeSha256": "0af85a86e9e0ee19472047407e35755aa88fd5db31bf58fee7dfa3ff6328c31f"
   },
   "web_search": {
    "children": 6,
@@ -407,5 +407,5 @@
    "stripFreeSha256": "1eff1b6b156b1b7287c33e009bafebfcd64820bcc0df1b07ffb803dcdf1f94f1"
   }
  },
- "written_by": "tests/api/admin_jsdom_design_system.mjs (MCC_JSDOM_SCENARIO=design_system), run against the BASE tree 421d81f7 (v8.0.2) with MCC_JSDOM_DS_FEATURE=disabled, and against this tree with the same scenario at both settings. `disabled` is the equality baseline: with the per-page section navigator and the Appearance card not built, every view's strip-free DOM is the base tree's. `enabled_deltas` names the views the two features change on purpose, view by view."
+ "written_by": "tests/api/admin_jsdom_design_system.mjs (MCC_JSDOM_SCENARIO=design_system), run against the BASE tree 421d81f7 (v8.0.2) with MCC_JSDOM_DS_FEATURE=disabled, and against this tree with the same scenario at both settings. `disabled` is the equality baseline: with the per-page section navigator and the Appearance card not built, every view's strip-free DOM is the base tree's. `enabled_deltas` names the views the two features change on purpose, view by view. RE-SHOT 2026-11-02 for 8.2.0: `views.requests` only. The Analytics cost tile's headline became `Cost` = totals.total_usd with both halves named in the small print (SPEC ADDENDUM ROUND 4 §4), which changes one rendered line on that page. No other view moved; the scenario, the scenario file and the normalisation are unchanged, and the value was taken by running the same scenario against the same base tree."
 }

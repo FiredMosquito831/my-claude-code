@@ -2910,9 +2910,13 @@ const ROUTES = {
     cost_estimation_mode: "auto",
     cost_source_litellm_enabled: false,
     // Every sum ships its denominator: 179,897 of 333,838 priced.
+    // `total_usd` is the window's whole cost, summed by the server beside the
+    // two halves (SPEC ADDENDUM ROUND 4 §4); the Analytics tile prints it, so a
+    // fixture without it could not be rendered.
     totals: {
       reported_usd: 1.5,
       estimated_usd: 240.25,
+      total_usd: 241.75,
       priced: 179897,
       requests: 333838,
     },
@@ -4927,6 +4931,21 @@ if (process.env.MCC_JSDOM_SCENARIO === "design_system") {
     "./admin_jsdom_design_system.mjs"
   );
   scenario = prepareDesignSystemScenario({ window, ROUTES });
+}
+
+/* MCC_JSDOM_SCENARIO=design_shell (8.2.0): the design SHELL loader — the
+   today -> hybrid -> today round trip, the palette and the g-keys, two switches
+   under load, and the one-line failure path. It needs the admin_static
+   directory because it evaluates the REAL designs/hybrid.js: jsdom cannot
+   import an ES module from a path with no server behind it, so the loader's
+   module transport is replaced and the real module source is evaluated in the
+   page. Everything the loader does around that — serialisation, generations,
+   teardown, the failure path — is the product's own code. */
+if (process.env.MCC_JSDOM_SCENARIO === "design_shell") {
+  const { prepareDesignShellScenario } = await import(
+    "./admin_jsdom_design_shell.mjs"
+  );
+  scenario = prepareDesignShellScenario({ window, ROUTES, staticDir: dir });
 }
 
 const scriptErrors = [];

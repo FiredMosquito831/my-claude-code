@@ -312,6 +312,83 @@ body:has(.admin-view:not([hidden]) > .section-navigator) .topbar {
   scroll-margin-top: 64px;
 }
 
+/* ────────────────────────────────────────── 3b. the variant systems ────────
+   §13.2.1 rule 2: "A structural variant (ruled sections, row fields, inset
+   groups, panels) is implemented once in the foundation and switched with
+   `data-sections` / `data-fields` / `data-detail` / `data-density`." 8.1.0
+   implemented `data-density` and no design existed to declare the other three,
+   so the paragraph stopped at the one attribute something used. 8.2.0 is the
+   first design with sections/fields/detail/analytics to declare, so the
+   remaining variants land here — ONCE, for every design that follows.
+
+   Each block is a NO-OP unless the attribute is present, which is what keeps
+   `today` byte-identical: a page with no `data-*` matches none of these
+   selectors, so nothing here can move a byte of it. */
+
+/* ---- sections: ruled -----------------------------------------------------
+   A document, not a set of boxes: the plate, the radius, the shadow and the
+   border go; a hairline above the section stays, because that is what makes a
+   run of sections read as a list of entries rather than as one long column. */
+html[data-sections="ruled"] .settings-section,
+html[data-sections="ruled"] .analytics-panel,
+html[data-sections="ruled"] .provider-strip {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  border-radius: 0;
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The first section on a page sits under the title's own rule; a second rule
+   directly beneath it would read as a mistake. */
+html[data-sections="ruled"] .admin-view > .settings-section:first-of-type,
+html[data-sections="ruled"] .admin-view > .section-navigator + .settings-section {
+  border-top: 0;
+}
+
+/* ---- fields: rows --------------------------------------------------------
+   Label, help and provenance above the control, in a column — still 2–4 cells
+   per row, because the 4/3/2/1 rule above is unchanged and this variant only
+   changes how ONE cell is drawn (spec §14.1). */
+html[data-fields="rows"] .field-grid > .field:not(.field-pooled):not(.route-rail) {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* ---- detail: drawer ------------------------------------------------------ */
+/* The request detail opens at the right edge, at the window's height, so the
+   table it came from stays readable beside it — NN/g's "side panels over
+   modals". The backdrop loses its dark scrim to a thin one: a drawer is not
+   modal in the ways a centred dialog is, and dimming the whole page would
+   suggest it is. */
+html[data-detail="drawer"] .requests-modal {
+  justify-content: flex-end;
+  align-items: stretch;
+  background: color-mix(in srgb, var(--scrim) 45%, transparent);
+}
+
+html[data-detail="drawer"] .requests-modal-card {
+  width: min(760px, 100vw);
+  max-height: none;
+  height: 100vh;
+  border-radius: 0;
+  border-top: 0;
+  border-bottom: 0;
+  border-right: 0;
+  box-shadow: var(--shadow);
+}
+
+/* ---- analytics: list-first ----------------------------------------------
+   The summary band, the in-flight panel and the request list come FIRST, and
+   the charts sit below them. That order is the product's own since 7.122.3, so
+   this variant is a declaration with nothing to do yet — it exists so a design
+   can say what it wants and so a later reordering has one place to hook into.
+   Deliberately empty: an attribute whose only rule was `display: block` would
+   be a rule that lies about what it does. */
+
 /* ──────────────────────────────────────────────────── 4. left rail floor ──
    specs/DESIGN-REVAMP-OPTIONS.md, "LEFT RAIL", binding: the grouped structure
    (SETUP · AGENTS · ROUTING · OBSERVE · SYSTEM, numbered items, accent mark on
@@ -537,6 +614,18 @@ body:has(.admin-view:not([hidden]) > .section-navigator) .topbar {
 .appearance-note code {
   font-family: var(--font-mono);
   font-size: 0.95em;
+}
+
+/* 8.2.0: the one honest line a design's shell failure leaves behind.
+ *
+ * It is a note, not an alarm: the page works, and a banner would say something
+ * worse than the truth. It sits in the escaped type-scale but in the error
+ * colour, because a reader who picked Hybrid and got Today needs to find the
+ * sentence that explains why. `--error` on the card's own surface is an
+ * existing, measured pair in every theme set (the status-chip rows of the
+ * 8.1.0 contrast table), so nothing new is introduced here. */
+.appearance-note-error {
+  color: var(--error);
 }
 
 /* The tile's preview is a miniature of the page it selects, drawn from the

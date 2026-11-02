@@ -5087,9 +5087,13 @@ async def request_log_cost(
     installation for a number that is read on a page rather than on the hot
     path.
 
-    Reported and estimated amounts arrive as two numbers and are never added
-    together, and every sum ships with the count of rows that were actually
-    priced -- a partial total has to be readable as one.
+    Reported and estimated amounts arrive as two numbers and are never merged
+    into one column inside a table row, and every sum ships with the count of
+    rows that were actually priced -- a partial total has to be readable as
+    one. ``totals`` additionally carries ``total_usd``, the window's whole cost
+    with both halves still named beside it: the two halves are disjoint sets of
+    rows, so the total counts no row twice, and every consumer prints the same
+    number because it is summed in SQL rather than added by a caller.
     """
     require_loopback_admin(request)
     store = _request_log_store_or_none(settings)
