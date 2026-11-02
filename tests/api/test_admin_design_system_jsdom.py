@@ -59,6 +59,11 @@ EXPECTED_NAVIGATOR = {
     "limits": 8,
     "guide": 41,
     "docs": 3,
+    # 8.7.0 (USAGE-LAYOUTS): the Usage page's strip. THREE entries, not five:
+    # the five layouts draw five different DOMs, so the strip names the
+    # elements every layout shares — the page's own root, the picker and the
+    # Refresh now button — rather than a heading one layout happens to own.
+    "usage": 3,
 }
 
 #: Every label is one or two words and under 18 characters, because the strip

@@ -65,6 +65,7 @@ from dataclasses import dataclass
 __all__ = [
     "CREDENTIAL_API_KEY",
     "CREDENTIAL_OAUTH_STORE",
+    "GATEWAY_FAMILIES",
     "MECHANISM_ENDPOINT",
     "MECHANISM_HEADER",
     "PROVENANCE_THIRD_PARTY",
@@ -72,7 +73,10 @@ __all__ = [
     "PROVENANCE_VENDOR_DOC",
     "PROVIDER_SOURCES",
     "SOURCE_UNSUPPORTED",
+    "STAGE_DISCOVERY",
+    "STAGE_READ",
     "UsageEndpoint",
+    "UsageFamily",
     "UsageSource",
     "endpoint_providers",
     "header_capture_providers",
@@ -165,6 +169,16 @@ class UsageSource:
     detail: str = ""
     #: The declared read, when this provider has one MCC builds.
     endpoint: UsageEndpoint | None = None
+    #: 8.7.0: the route this provider publishes but MCC cannot read, and WHY.
+    #: Empty for a provider that publishes nothing at all (`unsupported`) and
+    #: for one whose read is built (`readable`). The value is the credential
+    #: the route needs and the user does not have, in a reader's words --
+    #: "a management key", "a browser session cookie", "an admin key". It is
+    #: the SEVENTH of §2's eight states: *needs a credential MCC does not
+    #: hold*. Named on the row rather than branched on in the renderer, so a
+    #: later release that holds one of these credentials changes one string
+    #: and a row moves from that state to `readable`.
+    needs_credential: str = ""
 
     @property
     def supported(self) -> bool:
@@ -181,6 +195,19 @@ class UsageSource:
         """Whether this row's read exists in this release (an adapter, not a plan)."""
 
         return self.endpoint is not None
+
+    @property
+    def credential_bound(self) -> bool:
+        """Whether the provider publishes a route MCC cannot use without a new secret.
+
+        §2's seventh state. It is checked BEFORE `unsupported`, so a provider
+        whose route exists and needs a management key reads as *needs a
+        credential MCC does not hold* rather than as "publishes nothing" --
+        which is the difference between a fact about the user's keyring and a
+        fact about the provider (IV.16).
+        """
+
+        return bool(self.needs_credential) and not self.readable
 
 
 #: Every provider MCC has an opinion about. A provider that is not here is
@@ -344,6 +371,40 @@ PROVIDER_SOURCES: tuple[UsageSource, ...] = (
         mechanisms=(MECHANISM_ENDPOINT,),
         detail="the route is third-party evidence only; MCC does not read it yet",
     ),
+    # ── §2's seventh state, declared rather than branched on ──────────────
+    # Three routes exist and MCC must NOT use them: each needs a credential the
+    # user does not have and must never be asked for
+    # (`INVESTIGATION-USAGE-AND-CREDITS.md` §6.1.2, §6.4). Naming them here is
+    # what turns "we show nothing" into "this provider publishes a route that
+    # needs a management key MCC does not hold" -- a fact about the keyring
+    # rather than about the provider.
+    #
+    # `needs_credential` is the reason in a reader's words. It is never rendered
+    # as an error, never retried, and never carries a figure.
+    UsageSource(
+        provider_id="open_router_credits",
+        display_name="OpenRouter account credits",
+        needs_credential="a management key",
+        detail="the account-credits route answers an ordinary key with 403",
+    ),
+    UsageSource(
+        provider_id="opencode_zen",
+        display_name="OpenCode Zen balance",
+        needs_credential="a browser session cookie",
+        detail="the balance sits behind the console's own browser session",
+    ),
+    UsageSource(
+        provider_id="copilot",
+        display_name="GitHub Copilot",
+        needs_credential="a Copilot OAuth token MCC does not hold",
+        detail="the usage route needs a different credential from the one MCC routes",
+    ),
+    UsageSource(
+        provider_id="zai",
+        display_name="Z.ai",
+        mechanisms=(MECHANISM_ENDPOINT,),
+        detail="the route is third-party evidence only; MCC does not read it yet",
+    ),
     # Named because they are in the user's own list and are the reference cases
     # for the state-3 sentence. Absence from this table would give the same
     # answer; naming them makes the answer checkable in one place.
@@ -396,3 +457,109 @@ def endpoint_providers() -> tuple[str, ...]:
     """
 
     return tuple(row.provider_id for row in PROVIDER_SOURCES if row.readable)
+
+
+# ─────────────────────────── 8.7.0 (USAGE-LAYOUTS): the eighth state ─────────
+#
+# `specs/PR-USAGE-LAYOUTS-SPEC.md` §2 gives the page EIGHT honest states. Six of
+# them describe what MCC has already learnt; the seventh is `unsupported`
+# ("Not published") and the eighth is:
+#
+#     possible endpoint, unverified -- discovery found a candidate that has
+#     not been verified. WORDS ONLY, NEVER A NUMBER.
+#
+# That state exists because a CUSTOM provider is a host somebody typed. There is
+# no catalogue row to read a mechanism from, so MCC asks the two offline
+# recognisers `specs/RESEARCH-BILLING-ENDPOINT-DISCOVERY.md`'s USER DECISIONS Q7
+# approved:
+#
+#   * models.dev's `api` host match (208 distinct hosts in the local cache, 184
+#     of 235 providers resolved unambiguously when the dossier measured);
+#   * the three GATEWAY FAMILIES below, recognised from the inference base URL.
+#
+# BOTH ARE HYPOTHESES, NOT READINGS. A recognised host says only "this looks
+# like provider X, which publishes a route MCC could read", and the page prints
+# exactly that, with no figure, no bar, no percentage and no retry. It is kept
+# apart from `unsupported` because "we believe this one publishes something" and
+# "this one publishes nothing" are two different facts (IV.16), and it is kept
+# apart from every measured state because recognising a host is not having read
+# it.
+STAGE_READ = "read"
+STAGE_DISCOVERY = "discovery"
+
+
+@dataclass(frozen=True, slots=True)
+class UsageFamily:
+    """One gateway family a custom provider's base URL can identify.
+
+    Recognising the family is the only claim made: the family's own route is a
+    DECLARED fact about the family (both implementations the dossier surveyed
+    treat it that way), and nothing here reads it. ``routes`` is for the
+    sentence a reader sees, so a possible endpoint names what it might be
+    rather than landing behind an unnamed shrug.
+    """
+
+    id: str
+    name: str
+    #: Lower-case fragments in the base URL that identify the family anywhere in
+    #: the path or host. Order inside a family does not matter; order between
+    #: families is the tie-break, so the most specific family is declared first.
+    markers: tuple[str, ...]
+    #: The route the family serves its own usage on, for the sentence only.
+    routes: tuple[str, ...]
+    #: One clause: what this family answers with when it answers.
+    reads: str
+
+
+#: §4.3 of the dossier, as three rows. Each is the family's own name for
+#: itself -- never a provider's -- which is why one row serves every deployment
+#: of that family.
+#:
+#: `key/info` is LiteLLM's own information route; the two "families" that
+#: precede it are whole deployments (LiteLLM self-hosted, New API / one-api and
+#: its fork lineage), recognised by the fragments their own containers and
+#: documentation use. A user's own deployment is frequently at a bare host, so
+#: matching is by FRAGMENT anywhere in the base URL -- and an ambiguity (two
+#: families claiming one URL) resolves to nothing, the same refusal as a shared
+#: models.dev host.
+GATEWAY_FAMILIES: tuple[UsageFamily, ...] = (
+    UsageFamily(
+        id="new-api",
+        name="New API",
+        markers=("/new-api", "newapi", "one-api", "oneapi"),
+        routes=("/api/user/self",),
+        reads="the signed-in account's quota",
+    ),
+    UsageFamily(
+        id="litellm",
+        name="LiteLLM",
+        markers=("/litellm", "litellm"),
+        routes=("/key/info",),
+        reads="the key's spend and its remaining budget",
+    ),
+    UsageFamily(
+        id="key-info",
+        name="a key/info gateway",
+        markers=("key/info",),
+        routes=("/key/info",),
+        reads="the key's spend and its remaining budget",
+    ),
+)
+
+
+def families_for_base_url(base_url: str) -> tuple[UsageFamily, ...]:
+    """Every gateway family whose markers this base URL carries.
+
+    An empty tuple means no family claimed it -- which the caller renders as
+    "not published" rather than as a guess. TWO OR MORE is also an empty-ish
+    answer to the caller (it refuses), so this returns all of them and lets the
+    caller say why: a URL that names two families is one MCC should not guess
+    about, and silence there would lose the reason.
+    """
+
+    text = (base_url or "").strip().lower()
+    if not text:
+        return ()
+    return tuple(
+        family for family in GATEWAY_FAMILIES if any(m in text for m in family.markers)
+    )

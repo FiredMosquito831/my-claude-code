@@ -12,6 +12,7 @@ from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_INHERIT,
     PROMPT_CACHE_TTL_MAX_MINUTES,
     PROMPT_CACHE_TTL_MIN_MINUTES,
+    USAGE_LAYOUT_DEFAULT,
 )
 from my_claude_code.config.limits import describe_range, range_for
 from my_claude_code.config.reasoning import (
@@ -3142,6 +3143,63 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "off on its own, so a broken host is not asked every 30 seconds. "
             "0 turns the automatic refresh off and leaves the page on Read "
             "now only."
+        ),
+    ),
+    ConfigFieldSpec(
+        "USAGE_LAYOUT",
+        "Usage page layout",
+        "loop_health",
+        "select",
+        settings_attr="usage_layout",
+        default=USAGE_LAYOUT_DEFAULT,
+        # A view over one payload: no provider client, no catalogue and no
+        # discovery reads this word, so saving it must not rebuild a provider
+        # generation (III.6: "listing-only settings declare
+        # affects_providers=False").
+        affects_providers=False,
+        # The value reaches the page through the same `/admin/api/config`
+        # payload every other field rides in, and the page re-renders on the
+        # save. Declaring the restart explicit-and-not-required keeps the
+        # apply path from asking for one.
+        options=(
+            ConfigOptionSpec(
+                "one_screen",
+                "One screen — one compact row per provider, expanding in place",
+            ),
+            ConfigOptionSpec(
+                "ledger_rows",
+                "Ledger rows — one table row per provider, a micro-bar per window",
+            ),
+            ConfigOptionSpec(
+                "meter_board",
+                "Meter board — headline figures over full-width bands of meters",
+            ),
+            ConfigOptionSpec(
+                "dial_cards",
+                "Dial cards — a card per provider leading with one ring",
+            ),
+            ConfigOptionSpec(
+                "master_detail",
+                "Master and detail — a provider list beside a full inspector",
+            ),
+        ),
+        description=(
+            "How the Usage page arranges what it already knows. One screen "
+            "(the default) puts every configured provider on a single compact "
+            "row that opens in place, one row at a time, and is the shortest of "
+            "the five. Ledger rows is one table row per provider with a "
+            "micro-bar beside each window. Meter board leads with four counted "
+            "headline figures over full-width bands, so every bar shares one "
+            "column and one scale. Dial cards is a card per provider leading "
+            "with one large ring for its most-pressured window. Master and "
+            "detail is a provider list beside a full inspector for the one you "
+            "select. All five show every configured provider and exactly the "
+            "same figures, a bar only where the provider sent a percentage or a "
+            "cap, money as money, and never a zero standing in for something "
+            "nobody measured; they differ in arrangement, never in content. "
+            "This is a machine setting on this server: there is no per-browser "
+            "override, and a change applies as soon as the page re-reads its "
+            "configuration."
         ),
     ),
     ConfigFieldSpec(

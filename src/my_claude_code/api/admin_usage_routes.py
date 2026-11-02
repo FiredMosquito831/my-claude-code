@@ -1,8 +1,11 @@
 """Read-only admin API for the providers whose usage rides on their responses.
 
-**One GET and one POST, and no write of any kind.** ``GET /admin/api/usage``
+**One GET and two POSTs, and no write of any kind.** ``GET /admin/api/usage``
 reports what this process has already observed; ``POST /admin/api/usage/read``
-asks ONE named provider for its own figure, once.
+asks ONE named provider for its own figure, once; and 8.7.0's
+``POST /admin/api/usage/read-all`` is the page-level **Refresh now**, which
+asks every provider whose own deadline allows it, one at a time, through the
+same gate.
 
 ``GET /admin/api/usage``
     The allow-listed usage headers of every upstream response an opted-in
@@ -60,10 +63,35 @@ because the decision needs facts the page does not have:
 ``failed``
     The read did not happen, for the reason carried in ``error``.
 
-``values`` are the provider's own strings, verbatim, and a field it did not send
+`values` are the provider's own strings, verbatim, and a field it did not send
 is **absent from the mapping** rather than ``""``: "the host did not send this"
 and "the host sent an empty string" are different, and the page renders the
 first as *not measured by this provider*.
+
+8.7.0 (USAGE-LAYOUTS) adds three things to this route and **no fourth**:
+
+``layout``
+    Which of the five Usage layouts the page draws, from the machine setting.
+    The route reports the word; it never acts on it. ``specs/PR-USAGE-LAYOUTS-
+    SPEC.md`` §3: "nothing about layout in the poller, the payload or the
+    routes" -- so this is one key in the answer, and the page's registry
+    decides what to draw.
+
+``coverage``
+    **One row per configured provider, including every custom one** -- §2's
+    rule, derived from configuration and never a hard-coded list. A catalogue
+    id in ``PROVIDER_SOURCES`` was always reported; the gap 8.7.0 closes is
+    every configured provider MCC has no row for (a custom provider, a
+    catalogue id whose row is absent). Each carries the state
+    :func:`_coverage_state` decides and, where the state is *possible endpoint,
+    unverified*, the recogniser's own words -- **never a number**.
+
+``POST /admin/api/usage/read-all``
+    The page-level **Refresh now** button: every configured, readable provider
+    whose own deadline has elapsed, one at a time, each behind the same gate
+    the single read uses. It is not a second mechanism -- it calls
+    :func:`read_one_provider`'s helpers, honours every per-provider deadline,
+    and stops the walk the moment the tab goes hidden.
 """
 
 import time
@@ -75,10 +103,16 @@ from pydantic import BaseModel
 from my_claude_code.config.constants import (
     USAGE_AUTO_REFRESH_MAX_SECONDS,
     USAGE_AUTO_REFRESH_MIN_SECONDS,
+    USAGE_LAYOUT_DEFAULT,
+    USAGE_LAYOUT_VALUES,
 )
 from my_claude_code.config.usage_sources import (
     PROVIDER_SOURCES,
     SOURCE_UNSUPPORTED,
+    STAGE_DISCOVERY,
+    STAGE_READ,
+    UsageSource,
+    families_for_base_url,
     source_for,
 )
 from my_claude_code.core.usage.reading import (
@@ -93,6 +127,7 @@ from my_claude_code.core.usage_capture import OBSERVER
 from my_claude_code.providers.runtime.usage_reads import perform_read
 
 from .admin_routes import require_loopback_admin
+from .credential_display import configured_oauth_pools, configured_pools
 from .dependencies import get_services
 from .ports import ApiServices
 
@@ -322,6 +357,260 @@ def _next_read_at(record: ReadRecord | None, now: float, interval: float) -> int
     return int(remaining) if remaining > 0 else None
 
 
+#: 8.7.0 (§2's eight states, as the ROUTE decides them). Six of these are
+#: `core.usage.reading.state_of`'s words and are not restated here; the two that
+#: only the page's coverage list can produce are named so the vocabulary is in
+#: one place:
+#:
+#: ``possible_endpoint``
+#:     A custom provider whose host or gateway family MCC recognises. WORDS
+#:     ONLY -- never a number, never a bar, never a retry. It is a hypothesis
+#:     about a route, which is a different fact from having read one.
+#: ``needs_credential``
+#:     The provider publishes a route and MCC will not use it, because it needs
+#:     a secret the user does not have and must not be asked for (§6.1.2).
+#:     A fact about the keyring, not about the provider -- which is why it is
+#:     kept apart from ``unsupported``.
+STATE_POSSIBLE_ENDPOINT = "possible_endpoint"
+STATE_NEEDS_CREDENTIAL = "needs_credential"
+
+#: The eight states, in the order the page lists them: the ones with figures
+#: first, then the ones a reader has to act on, then the honest absences. The
+#: page's layouts sort by this and none of them may invent a ninth.
+USAGE_STATE_ORDER = {
+    "measured": 0,
+    "stale": 1,
+    "failed": 2,
+    "unavailable": 3,
+    "needs_credential": 4,
+    STATE_POSSIBLE_ENDPOINT: 5,
+    "not_measured": 6,
+    "unsupported": 7,
+}
+
+
+def _configured_provider_ids() -> list[tuple[str, str, int]]:
+    """Every configured provider, as ``(id, display name, credential count)``.
+
+    **Derived from configuration, never a list.** Between them
+    :func:`~my_claude_code.api.credential_display.configured_pools` and
+    :func:`~my_claude_code.api.credential_display.configured_oauth_pools` cover
+    every API-key pool, every custom provider's key list and both OAuth account
+    stores -- so a provider the user added a minute ago appears with no code
+    change, which is §2's whole rule.
+
+    The display name is the id for a provider the catalogue does not describe
+    (a custom one whose name the page already knows), and the count is what the
+    card's "N credentials in this pool" line prints. Both are names and counts:
+    no secret, at any point, ever.
+    """
+
+    rows: list[tuple[str, str, int]] = []
+    seen: set[str] = set()
+    for pool_id, secrets in configured_pools():
+        provider_id = _provider_id_from_pool(pool_id)
+        if provider_id is None or provider_id in seen:
+            continue
+        seen.add(provider_id)
+        rows.append((provider_id, _display_name_for(provider_id), len(list(secrets))))
+    for pool_id, accounts in configured_oauth_pools():
+        provider_id = _provider_id_from_pool(pool_id)
+        if provider_id is None or provider_id in seen:
+            continue
+        seen.add(provider_id)
+        rows.append((provider_id, _display_name_for(provider_id), len(list(accounts))))
+    return rows
+
+
+#: The prefix each pool id family carries, from ``config.credential_names``.
+#: Spelled here rather than imported because this route only needs to STRIP
+#: them, and a pool id that carries none of them belongs to a family this route
+#: does not serve (the web-search pools).
+_POOL_PREFIXES = ("env:", "custom:", "oauth:", "websearch:")
+
+
+def _provider_id_from_pool(pool_id: str) -> str | None:
+    """The provider id behind one pool id, or ``None`` for a family we skip.
+
+    ``env:OPENROUTER_API_KEY`` names a credential, not a provider: the mapping
+    from an env key to its owning provider is the catalogue's (one provider owns
+    each shared credential, ``credential_env_owner``), so it is read there
+    rather than guessed at.
+    """
+
+    text = str(pool_id or "")
+    for prefix in _POOL_PREFIXES:
+        if not text.startswith(prefix):
+            continue
+        rest = text[len(prefix) :]
+        if prefix == "custom:" or prefix == "oauth:":
+            return rest or None
+        if prefix == "env:":
+            return _provider_for_env_key(rest)
+        return None
+    return None
+
+
+def _provider_for_env_key(env_key: str) -> str | None:
+    """The catalogue provider that OWNS one credential env var, or ``None``.
+
+    The owner is the provider whose card edits the field; every other provider
+    drawing on the same key is the same credential's sharer
+    (``credential_env_owner``). Using the owner means
+    ``env:CHATGPT_OAUTH_ACCESS_TOKEN`` reports as ``chatgpt_oauth`` rather than
+    as whichever catalogue entry happens to be declared first.
+    """
+
+    from my_claude_code.config.admin.provider_manifest import credential_env_owner
+
+    return credential_env_owner(env_key)
+
+
+def _display_name_for(provider_id: str) -> str:
+    """The provider's own name where the catalogue or the table has one."""
+
+    from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
+
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    if descriptor is not None:
+        return descriptor.display_name
+    declared = source_for(provider_id)
+    return declared.display_name or provider_id
+
+
+def _base_url_for(provider_id: str) -> str:
+    """A custom provider's configured base URL, or ``""``.
+
+    Read from the registry rather than from settings: a custom provider's host
+    is its own record, and this is the one field the recognisers need. **Never
+    a key**: the record carries ``api_keys`` and this function touches
+    ``base_url`` only.
+    """
+
+    from my_claude_code.config.provider_registry import get_provider_registry
+
+    try:
+        entry = get_provider_registry().get(provider_id)
+    except Exception:  # pragma: no cover - a registry that cannot be read
+        return ""
+    return "" if entry is None else str(entry.base_url or "")
+
+
+def _coverage_state(
+    provider_id: str,
+    declared: UsageSource,
+    state: str,
+    *,
+    readable: bool,
+) -> tuple[str, str, str]:
+    """One coverage row's state, plus the two clauses the page may print.
+
+    Returns ``(state, sentence, recognised)`` where ``recognised`` names WHAT
+    was recognised (a models.dev provider or a gateway family) and is empty for
+    every state that is not a hypothesis.
+
+    The order is the argument, and it mirrors :func:`_read_state`'s:
+
+    1. **A row the table declares** keeps whatever the read state says -- but
+       a *credential-bound* row is promoted out of ``unsupported`` first, so
+       "needs a management key" never reads as "publishes nothing".
+    2. **A custom provider** (or any configured id with no row) is recognised
+       by host or gateway family. A recogniser's answer is a hypothesis and
+       never a number, so this branch can only produce
+       ``possible_endpoint``.
+    3. **Nothing recognised** is ``unsupported`` -- honest, and still one row,
+       which is exactly what §2 asks: a custom provider that matches nothing
+       lands in *Not published* and still appears.
+    """
+
+    if declared.supported or declared.endpoint is not None:
+        if state == SOURCE_UNSUPPORTED and declared.credential_bound:
+            return STATE_NEEDS_CREDENTIAL, "", ""
+        return state, "", ""
+    if declared.credential_bound and declared.readable is False:
+        # Declared, route known, credential absent: never `unsupported`.
+        return STATE_NEEDS_CREDENTIAL, "", ""
+    recognised = _recognise(provider_id, _base_url_for(provider_id))
+    if recognised is not None:
+        return STATE_POSSIBLE_ENDPOINT, recognised[0], recognised[1]
+    return SOURCE_UNSUPPORTED, "", ""
+
+
+def _recognise(provider_id: str, base_url: str) -> tuple[str, str] | None:
+    """What an unrecognised provider's address says about it, in words.
+
+    Two declarers, in the order the dossier ranks them:
+
+    1. **models.dev's ``api`` host match** -- the stronger rung, because it
+       names a provider that is in a published catalogue. A host two providers
+       claim is AMBIGUOUS and resolves to nothing (the Q7 refusal).
+    2. **A gateway family** from the inference base URL. Two families claiming
+       one URL is the same refusal.
+
+    ``None`` means neither claim it, and the caller renders *Not published*.
+
+    **This never produces a route MCC will call and never a figure.** It
+    answers "would it be worth a later release's probe", which is the only
+    question a hypothesis is entitled to answer.
+    """
+
+    host = _host_of(base_url)
+    if host:
+        from my_claude_code.providers.runtime.models_dev import (
+            models_dev_api_hosts,
+        )
+
+        claimants = models_dev_api_hosts().get(host)
+        if claimants is not None and len(claimants) == 1:
+            name = next(iter(claimants))
+            return (
+                f"its host is the one models.dev names for {name}",
+                f"models.dev api host · {name}",
+            )
+
+    families = families_for_base_url(base_url)
+    if len(families) == 1:
+        family = families[0]
+        route = family.routes[0] if family.routes else ""
+        return (
+            f"its address identifies a {family.name} gateway"
+            + (f", which serves {route} ({family.reads})" if route else ""),
+            f"gateway family · {family.id}",
+        )
+    return None
+
+
+def _host_of(base_url: str) -> str:
+    """The bare host of a base URL, or ``""``. Never raises on a bad URL."""
+
+    if not base_url:
+        return ""
+    from urllib.parse import urlsplit
+
+    text = base_url.strip()
+    try:
+        parts = urlsplit(text if "//" in text else f"https://{text}")
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host if "." in host else ""
+
+
+def _layout_for(settings: object) -> str:
+    """Which Usage layout the page should draw, from the machine setting.
+
+    One word, and it is the whole of this route's interest in layout: the page's
+    registry renders from it, and nothing here branches on it
+    (`specs/PR-USAGE-LAYOUTS-SPEC.md` §3). An unknown word is the fallback --
+    the settings layer has already logged the one line, so this stays pure.
+    """
+
+    value = str(getattr(settings, "usage_layout", "") or "").strip().lower()
+    return value if value in USAGE_LAYOUT_VALUES else USAGE_LAYOUT_DEFAULT
+
+
 def _interval_for(settings: object) -> float:
     """This process's per-provider read interval, in seconds.
 
@@ -365,7 +654,8 @@ async def usage_readings(
 
     require_loopback_admin(request)
     now = time.time()
-    interval = _interval_for(services.requests.current_settings())
+    settings = services.requests.current_settings()
+    interval = _interval_for(settings)
     return {
         "observed_at": now,
         "stale_after_seconds": STALE_AFTER_SECONDS,
@@ -374,8 +664,111 @@ async def usage_readings(
         if interval != MINIMUM_INTERVAL_SECONDS
         else 0,
         "read_interval_seconds": int(interval),
+        # 8.7.0: the machine setting's word, and the ONE row per configured
+        # provider the page's coverage rule needs. Both are additive: a page
+        # from an older release ignores them, and nothing below changed shape.
+        "layout": _layout_for(settings),
         "providers": _provider_rows(now, interval),
+        "coverage": _coverage_rows(now, interval),
     }
+
+
+def _coverage_rows(now: float, interval: float) -> list[dict[str, Any]]:
+    """One row per CONFIGURED provider, including every custom one.
+
+    §2's rule in one function, and the reason it is on the ROUTE rather than in
+    the page: the decision needs the declared table, the recognisers and the
+    read store at once, and a browser holding only some of them would be a
+    second answer to the same question.
+
+    A provider configured on this machine gets a row whether or not anything
+    was ever read from it -- **that is the coverage rule** -- and a configured
+    provider MCC has never heard of gets ``possible_endpoint`` or
+    ``unsupported``, never silence.
+
+    Two providers MCC knows about but which are not separately configurable
+    are folded into the provider they belong to:
+
+    * ``openai`` shares ChatGPT's OAuth token (the same subscription behind
+      another name), so reporting it separately would print the same accounts
+      twice with two different answers;
+    * a catalogue id whose ``credential_env`` is owned by another provider is
+      already covered by the owner's row.
+
+    Their absence from this list is not a dropped provider -- it is the same
+    pool under one name, which the ``shares_credential_with`` key states.
+    """
+
+    declared_rows = {row["provider_id"]: row for row in _provider_rows(now, interval)}
+    out: list[dict[str, Any]] = []
+    for provider_id, display_name, credential_count in _configured_provider_ids():
+        declared = source_for(provider_id)
+        row = declared_rows.get(provider_id)
+        state = SOURCE_UNSUPPORTED if row is None else str(row["state"])
+        coverage_state, sentence, recognised = _coverage_state(
+            provider_id,
+            declared,
+            state,
+            readable=declared.readable,
+        )
+        entry: dict[str, Any] = {
+            "provider_id": provider_id,
+            "display_name": display_name,
+            "credentials": credential_count,
+            "state": coverage_state,
+            #: Which of the two stages produced this state. ``read`` means the
+            #: state came from a mechanism MCC actually has; ``discovery``
+            #: means it is a HYPOTHESIS and the page must print words only.
+            "stage": STAGE_DISCOVERY
+            if coverage_state == STATE_POSSIBLE_ENDPOINT
+            else STAGE_READ,
+            "recognised": recognised,
+            "sentence": sentence,
+            # Carried through from the declared read so a layout never has to
+            # look a provider up a second way.
+            "readable": declared.readable,
+            "mechanisms": list(declared.mechanisms),
+            "detail": declared.detail,
+            "needs_credential": declared.needs_credential,
+        }
+        if row is not None:
+            for key in (
+                "reading",
+                "fetched_at",
+                "observed_at",
+                "attempted_at",
+                "read_error",
+                "not_sent",
+                "retry_in_seconds",
+                "next_read_in_seconds",
+                "consecutive_failures",
+                "interval_seconds",
+                "values",
+                "endpoint",
+            ):
+                entry[key] = row.get(key)
+        else:
+            # Every layout reads the same keys. A provider with no declared row
+            # reports absence explicitly instead of omitting them, so a
+            # renderer cannot tell a missing key from a missing figure.
+            entry.update(
+                {
+                    "reading": None,
+                    "fetched_at": None,
+                    "observed_at": None,
+                    "attempted_at": None,
+                    "read_error": "",
+                    "not_sent": False,
+                    "retry_in_seconds": None,
+                    "next_read_in_seconds": None,
+                    "consecutive_failures": 0,
+                    "interval_seconds": int(interval),
+                    "values": {},
+                    "endpoint": None,
+                }
+            )
+        out.append(entry)
+    return out
 
 
 @router.post("/admin/api/usage/read")
@@ -435,6 +828,7 @@ def _refused_payload(
         "in_flight": "A read for this provider is already running; this press "
         "waited rather than sending a second request.",
         "cooldown": "The provider asked MCC to wait before reading again.",
+        "hidden": "The tab went hidden; nothing further was asked.",
         "interval": (
             f"This provider was read less than {_human_wait(interval)} ago; "
             "nothing was sent."
@@ -515,3 +909,93 @@ def _row_for(provider_id: str, now: float, interval: float) -> dict[str, Any]:
         if row["provider_id"] == provider_id:
             return row
     return {"provider_id": provider_id, "state": SOURCE_UNSUPPORTED}
+
+
+class UsageReadAllRequest(BaseModel):
+    """The page-level Refresh now's body. No id, no options, no credentials.
+
+    An empty body is accepted on purpose: the route's own job is to work out
+    WHICH providers are due, from the same gate the single read uses, so a page
+    cannot ask for a provider it has no business asking for by naming it.
+    """
+
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/admin/api/usage/read-all")
+async def read_all_providers(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+) -> dict[str, Any]:
+    """The page's **Refresh now**: every due provider, one at a time.
+
+    This is NOT a second read mechanism. It walks the providers the single
+    read would accept -- declared, readable, configured -- and asks each one
+    through exactly the path :func:`read_one_provider` uses, including
+    :meth:`UsageReadStore.claim`, so:
+
+    * a provider inside its own ``Retry-After`` deadline is skipped and says so;
+    * a provider read less than the interval ago is skipped and says so;
+    * one provider's failure cannot stop the walk or shorten another's wait;
+    * **nothing here can charge a key**, because the read path it calls cannot
+      (``application/usage_reads.py`` imports no rotation engine, constructs no
+      ``FailureKind`` and touches no route health).
+
+    Three refusals are the request's own, as on the single read: a remote
+    client (403), a foreign or missing ``Origin`` (403). A provider the walk
+    skips is a 200 with the same shape the single read's refusal carries, so
+    the page has one render path.
+
+    **The walk stops when the tab goes hidden.** That is the third safety
+    behaviour 8.6.0 shipped for the poller, applied to a button: a reader who
+    switches away mid-refresh should not have the remaining providers asked in
+    the background, because "nothing reads while the tab is hidden" is what
+    makes a short interval affordable at all. The browser signals it with the
+    ``X-MCC-Visible`` request header -- a header a page on another origin
+    cannot set on a cross-origin request without a preflight, and this route is
+    loopback-and-Origin-guarded besides.
+
+    The answer carries one entry per provider ATTEMPTED plus the current
+    coverage list, so the page repaints from the server's own words rather than
+    from what it hoped happened.
+    """
+
+    require_loopback_admin(request)
+    require_local_origin(request)
+
+    settings = services.requests.current_settings()
+    interval = _interval_for(settings)
+    attempts: list[dict[str, Any]] = []
+    for provider_id, _name, _count in _configured_provider_ids():
+        declared = source_for(provider_id)
+        if declared.endpoint is None or not declared.readable:
+            # Not "skipped": this provider has no read, so asking it is not a
+            # question anybody refused. It is simply not a candidate, and the
+            # coverage list says why in its own words.
+            continue
+        if request.headers.get("x-mcc-visible", "").strip().lower() == "hidden":
+            attempts.append(
+                {
+                    "provider_id": provider_id,
+                    "requested": False,
+                    "refusal": "hidden",
+                    "message": "The tab went hidden; nothing further was asked.",
+                }
+            )
+            break
+        claim_now = time.time()
+        refusal = READINGS.claim(provider_id, now=claim_now, interval=interval)
+        if refusal:
+            attempts.append(_refused_payload(provider_id, refusal, claim_now, interval))
+            continue
+        outcome = await perform_read(declared, settings=settings, now=claim_now)
+        READINGS.finish(provider_id, outcome.reading, outcome.record)
+        attempts.append(
+            _result_payload(declared, outcome.reading, outcome.record, interval)
+        )
+    return {
+        "attempted": attempts,
+        "layout": _layout_for(settings),
+        "providers": _provider_rows(time.time(), interval),
+        "coverage": _coverage_rows(time.time(), interval),
+    }

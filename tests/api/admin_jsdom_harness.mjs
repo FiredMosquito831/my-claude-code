@@ -103,7 +103,17 @@ const script = readFileSync(join(dir, "admin.js"), "utf8");
 const designsScript = existsSync(join(dir, "designs.js"))
   ? readFileSync(join(dir, "designs.js"), "utf8")
   : "";
-const scriptSource = designsScript ? `${designsScript}\n${script}` : script;
+/* 8.7.0: the Usage layout registry, loaded the same way and for the same
+   reason. index.html declares it as its own <script> BEFORE admin.js, so a
+   tree that has it hands it over in the same one eval — a tree without it (the
+   BASE tree) contributes nothing, which keeps the base-written DOM baseline
+   comparable. */
+const usageLayoutsScript = existsSync(join(dir, "usage_layouts.js"))
+  ? readFileSync(join(dir, "usage_layouts.js"), "utf8")
+  : "";
+const scriptSource = [usageLayoutsScript, designsScript, script]
+  .filter(Boolean)
+  .join("\n");
 
 /* ------------------------------------------------------------------ payload
    Shaped like the real API, including the awkward cases: a provider that
@@ -4987,6 +4997,21 @@ if (process.env.MCC_JSDOM_SCENARIO === "usage_reads") {
     "./admin_jsdom_usage_reads.mjs"
   );
   scenario = prepareUsageReadsScenario({ window, ROUTES, fetchBodies });
+}
+/* MCC_JSDOM_SCENARIO=usage_layouts (8.7.0): the five Usage page layouts over
+   ONE payload (PR-USAGE-LAYOUTS-SPEC §5) — the registry and its five rows,
+   every provider and every fixture figure present in all five, one_screen's
+   one-row-at-a-time expansion, the no-cap fixture rendering no percentage
+   anywhere, the eight coverage states, the formatters the compaction depends
+   on (read from the product), the refresh picker and its one apply value, and
+   the page-level Refresh now (admin_jsdom_usage_layouts.mjs). It is handed the
+   fetch BODY recorder because the picker's proof is "one apply with this one
+   key", which is a question about the body. */
+if (process.env.MCC_JSDOM_SCENARIO === "usage_layouts") {
+  const { prepareUsageLayoutsScenario } = await import(
+    "./admin_jsdom_usage_layouts.mjs"
+  );
+  scenario = prepareUsageLayoutsScenario({ window, ROUTES, fetchBodies });
 }
 /* MCC_JSDOM_SCENARIO=usage_refresh (8.6.0): the automatic refresh -- the
    cadence the SERVER reports, which providers one pass may ask, one real pass

@@ -114,19 +114,24 @@ def test_the_answer_repaints_the_card_with_the_readings_own_figures(
     reads: dict,
 ) -> None:
     after = reads["press"]["stateAfter"]
-    assert after, "the grid was empty after the press"
-    deepseek = after[0]
+    assert after, "the page was empty after the press"
+    # By NAME rather than by position: 8.7.0 orders the provider list by state,
+    # so "the first card" is not a stable way to name the provider that was
+    # read.
+    deepseek = next(card for card in after if card["title"] == "DeepSeek")
     assert deepseek["chipState"] == "measured"
     headings = [block["heading"] for block in deepseek["blocks"]]
     assert headings == ["Allowance", "Balance and spend"]
     allowance = deepseek["blocks"][0]["figures"]
-    # A used/limit pair is TWO rows, each labelled with which half it is: one
-    # run-on "2.5 USD of 8 USD" wrapped in a 140 px column and read as noise,
-    # which a screenshot caught. Each half is still the provider's own text.
-    assert allowance[0] == ["5-hour window used", "2.5 USD"]
-    assert allowance[1] == ["5-hour window limit", "8 USD"]
+    # A used/limit pair is drawn as the two amounts the provider sent, in ONE
+    # readable clause with its consumed share beside it — `$2.50 of $8.00`,
+    # 31.3 % — rather than as two rows of raw numbers. That is the compaction
+    # the user asked for, and both halves are still the provider's own text.
+    assert allowance[0][0] == "5-hour window"
+    assert allowance[0][1] == "$2.50 of $8.00"
+    assert allowance[1][0] == "5-hour window resets"
     balance = deepseek["blocks"][1]["figures"]
-    assert balance[0] == ["Balance (USD)", "12.34"]
+    assert balance[0] == ["Balance (USD)", "$12.34"]
 
 
 def test_a_window_and_a_balance_are_never_one_total(reads: dict) -> None:

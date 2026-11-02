@@ -2048,6 +2048,10 @@
       "control": "field-USAGE_AUTO_REFRESH_SECONDS",
       "page": "limits"
     },
+    "USAGE_LAYOUT": {
+      "control": "field-USAGE_LAYOUT",
+      "page": "limits"
+    },
     "VERCEL_AI_GATEWAY_PROXY": {
       "control": "field-VERCEL_AI_GATEWAY_PROXY",
       "page": "providers"

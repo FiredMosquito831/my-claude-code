@@ -13599,3 +13599,1427 @@ audio.req-media-preview {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+/* ══════════════════════════════════════════════════════════════════════════
+   8.7.0 (USAGE-LAYOUTS) — the five layouts' CSS, and the page chrome.
+
+   specs/PR-USAGE-LAYOUTS-SPEC.md §1: the previews are the visual source of
+   truth, and these rules PORT their structure and their measurement
+   discipline rather than their scaffolding. Every token is one the shipped
+   `themes.css` already defines (`--ok`, `--warn`, `--error`, `--neutral`,
+   `--accent`, `--card`, `--panel`, `--line`, `--text`, `--muted`), so a
+   palette added to one theme family is legible here in every family and both
+   modes with no rule of its own.
+
+   THE MEASUREMENT DISCIPLINE, which is the part that matters (§UI-QUALITY-§A):
+     * `min-width: 0` on every grid item and every flex child that holds a
+       provider-supplied string. A grid item's automatic minimum is its
+       content's, so one unbreakable provider id widens the whole track and
+       spills the page;
+     * `overflow-wrap: anywhere` on every value a provider wrote. It is the
+       ONLY value that breaks a string with no spaces in it, and
+       `34.9300790367` in a fixed column is exactly where it breaks;
+     * a figure column is a CAPPED track, never `auto`/`max-content`. An `auto`
+       track takes its longest token's width, and under the 3x text mutation
+       that is the whole row;
+     * money in a `nowrap` span is allowed to become `normal` at the widths
+       where the pair cannot fit — a wrapped pair is readable, a clipped one is
+       not;
+     * below 300 px (200 % zoom on a 390 px window) every layout collapses to
+       ONE column and puts the figure UNDER the name.
+
+   NOTHING HERE NAMES A COLOUR. The three severity tones are the theme's own
+   `--ok` / `--warn` / `--error`; the track is a tint of the fill's family, so
+   the unfilled part reads as the same ramp (dataviz's rule) and clears 1.5:1
+   against the card in every family.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ───────────────────────────────────────────────────── 1. the page chrome ── */
+
+.usage-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 18px;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  min-width: 0;
+}
+
+.usage-toolbar-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-toolbar-status > * { min-width: 0; }
+
+.usage-count { color: var(--text); font-weight: 600; }
+.usage-toolbar-sep { color: var(--muted); opacity: 0.7; }
+.usage-layout-name strong { color: var(--text); font-weight: 650; }
+
+.usage-toolbar-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.usage-toolbar-hint {
+  margin: 0 0 14px;
+  max-width: 92ch;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* THE PICKER, in the Analytics auto-refresh idiom: a label and a bare select
+   with the same height and border as every other control on the dashboard. */
+.usage-refresh-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.usage-picker-label {
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.usage-picker-select {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--input);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 7px;
+  min-height: 30px;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+.usage-refresh-now { display: inline-flex; min-width: 0; }
+
+.usage-refresh-now .usage-refresh-now,
+.usage-refresh-now button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.usage-empty {
+  margin: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.usage-layout-root { min-width: 0; }
+
+/* ───────────────────────────────────────── 2. the shared window/money pieces ── */
+
+.usage-windows { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+
+.usage-window {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 42%);
+  grid-template-areas:
+    "title figure"
+    "bar bar"
+    "meta reset";
+  gap: 3px 10px;
+  min-width: 0;
+  align-items: baseline;
+}
+
+.usage-window-title {
+  grid-area: title;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.usage-window-figure {
+  grid-area: figure;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-strong);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* A money pair is two amounts and a connector: it may not be a single nowrap
+   run when its column is capped. A percentage stays on one line — it is four
+   characters and the figure IS the value. */
+.usage-window-figure[data-share="computed"] { white-space: normal; }
+
+.usage-window .usage-meter { grid-area: bar; }
+
+.usage-window-none {
+  font-weight: 500;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.usage-reset {
+  grid-area: reset;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The consumed share of a used/limit pair ("99.8% of the cap"), visible beside
+   the two amounts rather than only in the bar's aria label. It shares the
+   meta row, which is where the reset already sits on the other side. */
+.usage-window-share {
+  grid-area: meta;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-window-note {
+  grid-area: meta;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-window:not(:has(.usage-reset)) .usage-window-note { text-align: left; }
+
+/* ───────────────────────────────────────────────────────── 3. the meter ─── */
+
+.usage-meter {
+  --usage-tone: var(--ok);
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.usage-meter-track {
+  position: relative;
+  height: 8px;
+  width: 100%;
+  border-radius: var(--radius-full);
+  /* 40 %, not 16 %: at 16 % the track measured ~1.2:1 against the card in
+     several families — visibly too faint to show the bar's extent. 40 %
+     measures 1.61 at worst in the previews' own table. */
+  background: color-mix(in srgb, var(--usage-tone) 40%, var(--card));
+  overflow: hidden;
+}
+
+.usage-meter-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--usage-tone);
+  transition: width var(--transition-fast);
+}
+
+.usage-meter[data-severity="warn"] { --usage-tone: var(--warn); }
+.usage-meter[data-severity="critical"] { --usage-tone: var(--error); }
+.usage-meter[data-severity="none"] { --usage-tone: var(--neutral); }
+
+.usage-meter-thin .usage-meter-track { height: 4px; }
+
+/* NOT MEASURED IS NEVER A ZERO BAR. A hatched, empty track with no fill at
+   all: the hatch means "nobody measured this", which is what the eight-state
+   model asks for, and a real measured zero keeps a 1.2 % nub so the two are
+   visibly different. */
+.usage-meter-unmeasured .usage-meter-track {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--neutral) 55%, var(--card)) 0 4px,
+      transparent 4px 9px
+    ),
+    color-mix(in srgb, var(--neutral) 22%, var(--card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--neutral) 55%, var(--card));
+}
+
+.usage-meter-unmeasured .usage-meter-fill { background: none; }
+
+/* ────────────────────────────────────────────────────────── 4. the ring ──── */
+
+.usage-ring-box {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.usage-ring { display: block; }
+
+.usage-ring-track { stroke: color-mix(in srgb, var(--usage-tone, var(--ok)) 16%, var(--card)); }
+.usage-ring-arc { stroke: var(--usage-tone, var(--ok)); }
+.usage-ring[data-severity="warn"] { --usage-tone: var(--warn); }
+.usage-ring[data-severity="critical"] { --usage-tone: var(--error); }
+.usage-ring[data-severity="none"] { --usage-tone: var(--neutral); }
+.usage-ring[data-severity="none"] .usage-ring-track {
+  stroke: color-mix(in srgb, var(--neutral) 14%, var(--card));
+  stroke-dasharray: 3 5;
+}
+
+.usage-ring-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  /* INSIDE THE ARC, not across it. A money pair (`$34.93 of $35.00`) is far
+     wider than the 104 px ring, and the first render put it straight through
+     the stroke. The box is inset by the stroke's own width so the text sits
+     inside the circle, and a value too wide for it shrinks toward the centre
+     rather than overflowing — the full figure is beside the ring in
+     `.usage-dial-focal-note` and in the card's own figures. */
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.05;
+  color: var(--text-strong);
+  font-variant-numeric: proportional-nums;
+  pointer-events: none;
+  padding: 0 18px;
+  text-align: center;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ──────────────────────────────────────────────────── 5. blocks and money ─── */
+
+.usage-block {
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.usage-block-heading {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.usage-money-list { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+
+.usage-money-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.usage-money-label {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-money-amount {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A NEGATIVE balance is real data — an account in arrears — and the user's own
+   PDF had DeepSeek's `-0.01` read as "no data". The tone is the theme's error
+   colour, and the WORD beside it stays the provider's own kind. */
+.usage-money-row[data-negative="true"] .usage-money-amount,
+.usage-board-cash-figure[data-negative="true"] .usage-board-amount,
+.usage-dial-money[data-negative="true"] .usage-dial-money-headline,
+.usage-ledger-money-row[data-negative="true"] .usage-ledger-amount {
+  color: var(--error);
+}
+
+.usage-notes { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+.usage-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.usage-note-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-note-text {
+  color: var(--text);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-note-more { margin: 2px 0 0; color: var(--muted); font-size: 11.5px; }
+
+/* The complete figure list, behind its own disclosure — the same two facts as
+   the human blocks above, in the provider's own units. Its own class names,
+   because it is not a third allowance block: a card has two. */
+.usage-figures-disclosure {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  padding: 8px 12px 10px;
+  min-width: 0;
+}
+
+.usage-figures-summary {
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.usage-read-blocks { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+.usage-figures-block { min-width: 0; }
+
+.usage-figures-heading {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.usage-figures-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  max-width: 60ch;
+  overflow-wrap: anywhere;
+}
+
+.usage-figures {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.usage-figures dt {
+  margin: 0;
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-figures dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-notes-block { min-width: 0; }
+
+.usage-notes-heading {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+@media (max-width: 760px) {
+  .usage-figures { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+  .usage-figures dd { text-align: left; padding-bottom: 4px; }
+}
+
+/* One sentence for a whole unmeasured block, plus the disclosure that lists
+   the fields anyway. Never eight identical rows. */
+.usage-unmeasured { min-width: 0; }
+
+.usage-unmeasured-line {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.usage-unmeasured-summary {
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.usage-unmeasured-names {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ──────────────────────────────────────────── 6. the shared detail body ───── */
+
+.usage-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.usage-detail-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+}
+
+.usage-state-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.usage-state-note[data-tone="error"] { color: var(--error); }
+.usage-state-note[data-tone="warn"] { color: var(--warn); }
+
+.usage-detail-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
+  min-width: 0;
+}
+
+.usage-plan {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.usage-detail-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.usage-account,
+.usage-pool { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+
+.usage-provenance {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.usage-header-groups { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.usage-header-list { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
+.usage-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 2px 12px;
+  min-width: 0;
+}
+
+.usage-header-name { color: var(--muted); font-size: 11.5px; min-width: 0; overflow-wrap: anywhere; }
+.usage-header-value {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.usage-read-now { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.usage-read-now:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ────────────────────────────────────────────── 7. layout 06 · one_screen ── */
+
+.usage-stack {
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--panel);
+  min-width: 0;
+}
+
+.usage-srow { border-top: 1px solid var(--line); min-width: 0; }
+.usage-srow:first-child { border-top: 0; }
+
+.usage-srow-button {
+  display: grid;
+  /* TWO CAPPED TRACKS and two `auto` ones. The name and the figure are the
+     only cells whose content a provider controls, so they are the only two
+     that need a ceiling: an `auto` name track takes its longest token, and a
+     60-character display name then squeezed the chip and the figure into
+     nothing — which the screenshot of the first real render showed. */
+  grid-template-columns:
+    minmax(120px, 1fr)
+    minmax(110px, 1.35fr)
+    minmax(0, 190px)
+    minmax(0, auto)
+    10px;
+  gap: 0 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 13px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.usage-srow-button:hover { background: var(--card-hover); }
+
+/* The OPEN row is marked by the accent edge, not a 1.69:1 hairline border:
+   WCAG 1.4.11 wants a 3:1 indicator and `--accent` measures 5.48:1 at worst. */
+.usage-srow[data-open="true"] > .usage-srow-button {
+  background: var(--accent-muted);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.usage-srow-name {
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.usage-srow-bar { min-width: 0; }
+.usage-srow-figure {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.usage-srow-figure small { font-size: 9.5px; font-weight: 650; color: var(--muted); margin-left: 6px; }
+.usage-srow-none[data-negative="true"] { color: var(--error); font-style: normal; font-weight: 650; }
+
+.usage-srow-none {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-srow-chip { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.usage-srow-chip .usage-chip { font-size: 9.5px; padding: 1px 6px; letter-spacing: 0.03em; }
+
+.usage-srow-chevron {
+  width: 10px;
+  height: 10px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform var(--transition-fast);
+  justify-self: end;
+}
+.usage-srow[data-open="true"] .usage-srow-chevron { transform: rotate(-135deg); }
+
+.usage-srow-detail {
+  padding: 2px 13px 14px;
+  min-width: 0;
+}
+.usage-srow-detail[hidden] { display: none; }
+
+/* ─────────────────────────────────────────────── 8. layout 02 · ledger_rows ── */
+
+.usage-ledger-table {
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--panel);
+  min-width: 0;
+}
+
+.usage-ledger-head,
+.usage-ledger-row {
+  display: grid;
+  grid-template-columns:
+    minmax(140px, 1.05fr)
+    minmax(220px, 1.6fr)
+    minmax(140px, 0.85fr)
+    minmax(0, auto);
+  gap: 0 18px;
+  padding: 9px 14px;
+  min-width: 0;
+}
+
+.usage-ledger-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel-strong);
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: var(--card-radius) var(--card-radius) 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.usage-ledger-th { min-width: 0; overflow-wrap: anywhere; }
+
+.usage-ledger-row {
+  border-top: 1px solid var(--line);
+  align-items: start;
+  min-width: 0;
+}
+.usage-ledger-row:first-of-type { border-top: 0; }
+.usage-ledger-row:hover { background: var(--card-hover); }
+
+.usage-ledger-provider { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.usage-ledger-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-strong);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.usage-ledger-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-ledger-windows { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.usage-ledger-window {
+  display: grid;
+  /* The FIGURE track is a budget, not `auto`: a 3x-mutated label under a
+     3x-mutated figure cannot both fit in an `auto` track, and the row's own
+     measure must not grow. 112 px holds `$34.93 of $35.00` at 11.5 px. */
+  grid-template-columns: minmax(0, 1fr) 88px minmax(0, 112px);
+  gap: 0 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.usage-ledger-window-name {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-ledger-window-figure {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-strong);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-ledger-window-share {
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-ledger-window .usage-reset {
+  grid-column: 1 / -1;
+  text-align: left;
+  font-size: 10px;
+  margin-top: -1px;
+}
+
+.usage-ledger-quiet { margin: 0; color: var(--muted); font-size: 11px; font-style: italic; overflow-wrap: anywhere; }
+.usage-ledger-disclosure { min-width: 0; }
+
+.usage-ledger-money { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.usage-ledger-money-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  min-width: 0;
+}
+.usage-ledger-amount {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.usage-ledger-kind {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-ledger-state { display: flex; justify-content: flex-end; min-width: 0; }
+.usage-ledger-state .usage-chip { max-width: 100%; }
+
+.usage-ledger-note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.usage-ledger-note[data-tone="error"] { color: var(--error); }
+.usage-ledger-note-full { grid-column: 1 / -1; }
+
+/* ─────────────────────────────────────────────── 9. layout 01 · meter_board ── */
+
+.usage-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+  min-width: 0;
+}
+
+.usage-tile {
+  min-width: 0;
+  padding: 12px 14px 13px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow: hidden;
+}
+
+/* Two lines each with its own clamp, each with its own `title` in the markup.
+   One line of two sentences showed "Providers measuredProv…" at 200 % zoom —
+   the start of the sentence that comes AFTER it. */
+.usage-tile-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.usage-tile-value {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 750;
+  line-height: 1.06;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  font-variant-numeric: proportional-nums;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.usage-tile-value small { font-size: 13px; font-weight: 650; color: var(--muted); letter-spacing: 0; }
+
+.usage-tile-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.usage-tile[data-tone="warn"] .usage-tile-value { color: var(--warn); }
+.usage-tile[data-tone="critical"] .usage-tile-value { color: var(--error); }
+
+.usage-band {
+  margin-bottom: 18px;
+  padding: 14px 16px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  min-width: 0;
+}
+
+.usage-band-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 14px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.usage-band-title {
+  margin: 0;
+  font-size: var(--h3-size, 17px);
+  font-weight: 700;
+  color: var(--text-strong);
+  letter-spacing: -0.01em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-band-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 90ch;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-band-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-band-body { display: flex; flex-direction: column; min-width: 0; }
+
+.usage-board-row {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 0.8fr)
+    minmax(200px, 1.5fr)
+    minmax(120px, 0.7fr);
+  gap: 8px 18px;
+  align-items: start;
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.usage-board-row:first-child { border-top: 0; padding-top: 4px; }
+
+.usage-board-id { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.usage-board-name {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+.usage-board-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* A row with nothing to show: one sentence spanning the grid, and the chip at
+   the end. Two empty columns read as "the figures are missing" rather than as
+   "there are no figures", which is the opposite of the truth. */
+/* A row with nothing to show: the sentence spans the grid, and the chip sits
+   at the end. TWO NAMED AREAS, not an implicit two-column grid: the row's
+   children are name / sentence / chip, and letting them fall into three
+   implicit rows of a two-column template gave the NAME a 0 px box — measured
+   at 390 px, where the name is the only thing on the first line. */
+.usage-board-row[data-empty="true"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name chip"
+    "sentence sentence";
+  align-items: baseline;
+}
+
+.usage-board-row[data-empty="true"] .usage-board-id { grid-area: name; }
+.usage-board-row[data-empty="true"] .usage-board-sentence { grid-area: sentence; }
+.usage-board-row[data-empty="true"] .usage-chip { grid-area: chip; }
+
+.usage-board-sentence {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-board-sentence[data-tone="error"] { color: var(--error); }
+
+.usage-board-windows { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.usage-board-quiet { margin: 0; color: var(--muted); font-size: 11.5px; font-style: italic; overflow-wrap: anywhere; }
+
+.usage-board-cash {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+.usage-board-cash-figure { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.usage-board-amount {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.usage-board-cash-meta { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* ──────────────────────────────────────────────── 10. layout 03 · dial_cards ── */
+
+.usage-dial-group { margin-bottom: 20px; min-width: 0; }
+.usage-dial-head { margin-bottom: 6px; min-width: 0; }
+
+.usage-dial-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 14px;
+  /* `start`, not `stretch`: a card whose provider has nothing to read must not
+     be stretched to the height of a neighbour with three windows — the empty
+     space reads as a missing figure. */
+  align-items: start;
+  min-width: 0;
+}
+@media (min-width: 1240px) {
+  .usage-dial-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.usage-dial-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 15px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+}
+
+.usage-dial-card[data-state="failed"] { border-color: var(--error-border); }
+.usage-dial-card[data-state="stale"] { border-color: var(--warn-border); }
+.usage-dial-card[data-state="unsupported"],
+.usage-dial-card[data-state="not_measured"],
+.usage-dial-card[data-state="possible_endpoint"],
+.usage-dial-card[data-state="needs_credential"] {
+  background: var(--panel);
+  border-style: dashed;
+}
+
+.usage-dial-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.usage-dial-title { min-width: min(100%, 140px); flex: 1 1 140px; }
+.usage-dial-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 750;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+.usage-dial-plan {
+  margin: 1px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* The ring and its text WRAP rather than overflow: at a narrow card the
+   104 px ring plus a `$0.18 left of $0.20` pair is wider than the card,
+   and the first render pushed the text across the arc. `flex-wrap`
+   drops the text under the ring, which is readable; a squeezed pair is
+   not. */
+.usage-dial-focal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  min-width: 0;
+  padding: 2px 0 1px;
+}
+.usage-dial-focal-text { min-width: min(100%, 150px); flex: 1 1 150px; display: flex; flex-direction: column; gap: 2px; }
+.usage-dial-focal-label { margin: 0; color: var(--text); font-size: 12.5px; font-weight: 650; overflow-wrap: anywhere; }
+.usage-dial-focal-note { margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+
+.usage-dial-rest { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.usage-dial-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  /* A THIRD ROW for the consumed share. The share is a child of this grid, and
+     an element appended into an occupied area is an OVERLAP (UI-QUALITY §A.5),
+     so it gets its own row rather than sharing `f` with the figure. */
+  grid-template-areas: "t f" "b b" "s s";
+  gap: 2px 8px;
+  min-width: 0;
+}
+.usage-dial-line-name { grid-area: t; font-size: 11.5px; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-dial-line-figure { grid-area: f; font-size: 11.5px; font-weight: 700; color: var(--text-strong); white-space: nowrap; text-align: right; }
+.usage-dial-line .usage-meter { grid-area: b; }
+.usage-dial-line-share {
+  grid-area: s;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-dial-money { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.usage-dial-money-headline {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 750;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  font-variant-numeric: proportional-nums;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.usage-dial-quiet { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+
+.usage-dial-foot {
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.usage-dial-foot .usage-provenance { font-size: 11px; }
+
+/* ───────────────────────────────────────────── 11. layout 05 · master_detail ── */
+
+.usage-master-detail {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  min-width: 0;
+}
+
+.usage-master {
+  /* BELOW THE SECTION STRIP, not under it. The strip is `position: sticky;
+     top: 0` at 32 px tall, so a pane pinned at 12 px slides underneath it and
+     its first rows vanish as the page scrolls — which a full-page screenshot
+     of the first real render showed. 52 px clears the strip with its own gap.
+     The height is the viewport MINUS what is pinned above, for the same
+     reason: the pane's own scroll container must not run past the strip
+     either. */
+  position: sticky;
+  top: 52px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  max-height: calc(100vh - 76px);
+  overflow: auto;
+  min-width: 0;
+}
+
+.usage-master-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name chip"
+    "bar meta";
+  gap: 4px 8px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.usage-master-row > * { min-width: 0; }
+.usage-master-row:hover { background: var(--card-hover); }
+
+/* Selection is a solid 3 px accent edge PLUS the tint PLUS `aria-current` —
+   the pattern the product's own left rail uses, because a tint alone cannot
+   carry selection at WCAG 1.4.11's 3:1. */
+.usage-master-row[aria-current="true"] {
+  background: var(--accent-muted);
+  border-color: var(--accent-border);
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding-left: 10px;
+}
+
+/* AN EMPTY ROW'S CHIP MAY WRAP. `.usage-chip` is `white-space: nowrap` so a
+   "MEASURED" chip is one line; in a 2-column empty row at 390 px "POSSIBLE
+   ENDPOINT" is wider than the chip's `auto` track and spilled its box (76
+   measured cells). A chip that wraps to two lines is readable; a chip that
+   escapes its row is not. */
+.usage-board-row[data-empty="true"] .usage-chip {
+  white-space: normal;
+  max-width: 100%;
+  text-align: right;
+}
+
+.usage-board-row[data-empty="true"] .usage-board-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.usage-master-name {
+  grid-area: name;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-strong);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.usage-master-row .usage-chip { grid-area: chip; font-size: 9.5px; padding: 1px 6px; }
+.usage-master-row .usage-meter { grid-area: bar; }
+
+.usage-master-meta {
+  grid-area: meta;
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.usage-master-meta[data-negative="true"] { color: var(--error); }
+
+/* A master row's state sentence. A master list has no expansion, so the
+   fact a chip names has to be readable on the row itself. It is clamped
+   to three lines and the whole sentence is on its `title`, so a long
+   provider sentence cannot make one row taller than the pane. */
+.usage-master-note {
+  grid-area: bar;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.usage-master-group {
+  margin: 6px 9px 2px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.usage-inspector {
+  min-width: 0;
+  padding: 16px 18px 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.usage-inspector-empty { margin: 0; color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
+
+.usage-inspector-head { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.usage-inspector-title { min-width: 0; flex: 1 1 auto; }
+.usage-inspector-name { margin: 0; font-size: 18px; font-weight: 750; color: var(--text-strong); overflow-wrap: anywhere; }
+.usage-inspector-plan { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+
+/* ─────────────────────────────────────────────────────────── 12. narrows ──── */
+
+/* 768 px: the master/detail pair stacks, the ledger loses its header, the
+   board's three columns become one, and every layout keeps every row. */
+@media (max-width: 980px) {
+  .usage-ledger-head { display: none; }
+  .usage-ledger-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 42%);
+    grid-template-areas:
+      "prov state"
+      "win win"
+      "money money";
+    gap: 4px 12px;
+    padding: 11px 13px;
+  }
+  .usage-ledger-provider { grid-area: prov; }
+  .usage-ledger-windows { grid-area: win; }
+  .usage-ledger-money { grid-area: money; flex-direction: row; flex-wrap: wrap; gap: 2px 14px; align-items: baseline; }
+  .usage-ledger-state { grid-area: state; align-items: flex-start; }
+  .usage-ledger-note-full { grid-area: auto; }
+}
+
+@media (max-width: 900px) {
+  .usage-master-detail { grid-template-columns: minmax(0, 1fr); }
+  .usage-master { position: static; max-height: none; }
+  .usage-inspector { padding: 14px; }
+}
+
+@media (max-width: 860px) {
+  .usage-board-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+}
+
+@media (max-width: 760px) {
+  .usage-window { grid-template-columns: minmax(0, 1fr); grid-template-areas: "title" "figure" "bar" "meta" "reset"; }
+  .usage-window-figure { text-align: left; }
+  .usage-reset { text-align: left; }
+  .usage-header-row { grid-template-columns: minmax(0, 1fr); }
+  .usage-header-value { text-align: left; }
+  .usage-toolbar-controls { width: 100%; justify-content: flex-start; }
+}
+
+@media (max-width: 700px) {
+  /* The one_screen row keeps the FIGURE (the number is the content) and the
+     STATE CHIP moves to a second line rather than being hidden — the word is
+     what distinguishes "read failed" from "not published". */
+  .usage-srow-button {
+    grid-template-columns: minmax(0, 1fr) auto 10px;
+    grid-template-areas:
+      "name name chev"
+      "bar fig chev"
+      "chip chip chev";
+    gap: 3px 10px;
+    padding: 8px 12px;
+  }
+  .usage-srow-name { grid-area: name; white-space: normal; }
+  .usage-srow-bar { grid-area: bar; align-self: center; }
+  .usage-srow-figure { grid-area: fig; text-align: right; }
+  .usage-srow-chip { grid-area: chip; justify-self: start; }
+  .usage-srow-chevron { grid-area: chev; align-self: center; }
+  .usage-ledger-window { grid-template-columns: minmax(0, 1fr) 64px minmax(0, 96px); }
+  .usage-ledger-window-name { white-space: normal; text-overflow: clip; }
+}
+
+@media (max-width: 520px) {
+  .usage-tile-value { font-size: 24px; }
+  .usage-dial-money-headline { font-size: 22px; }
+}
+
+/* 200 % zoom on a 390 px window is a ~195 px layout. Every layout collapses to
+   ONE column here and puts the figure under its own name: every arrangement
+   that kept two columns clipped in the previews' harness. */
+@media (max-width: 300px) {
+  .usage-srow-button {
+    grid-template-columns: minmax(0, 1fr) 10px;
+    grid-template-areas: "name chev" "bar chev" "fig chev" "chip chev";
+    gap: 2px 8px;
+    padding: 8px;
+  }
+  .usage-srow-name { white-space: normal; }
+  .usage-srow-figure { text-align: left; white-space: normal; }
+  .usage-ledger-window { grid-template-columns: minmax(0, 1fr); gap: 2px 0; }
+  .usage-ledger-window .usage-meter { grid-column: 1 / -1; }
+  .usage-ledger-window-name { white-space: normal; }
+  .usage-ledger-window-figure { text-align: left; }
+  .usage-master-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "chip" "bar" "meta"; gap: 3px; padding: 8px; }
+  .usage-master-name { white-space: normal; }
+  .usage-master-meta { text-align: left; }
+  .usage-dial-focal { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .usage-dial-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .usage-dial-line-name { white-space: normal; }
+  .usage-dial-money-headline { font-size: 20px; }
+  .usage-tile-value { font-size: 21px; }
+  .usage-band { padding: 11px 10px; }
+  .usage-picker-label { white-space: normal; }
+  .usage-error-detail { padding: 10px; }
+}

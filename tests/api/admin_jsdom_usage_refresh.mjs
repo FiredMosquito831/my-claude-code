@@ -79,6 +79,13 @@ export function prepareUsageRefreshScenario({ window, ROUTES, fetchBodies, fetch
     return false;
   }
 
+  /** Open every provider row's detail (8.7.0's `one_screen` expansion). */
+  const openAllRows = () => {
+    doc.querySelectorAll(".usage-srow-button").forEach((button) => {
+      if (button.getAttribute("aria-expanded") !== "true") button.click();
+    });
+  };
+
   async function run({ scriptErrors, consoleErrors }) {
     const out = { scenarioFatal: null, scriptErrors, consoleErrors };
     if (typeof window.usageHarness !== "function") {
@@ -277,11 +284,17 @@ export function prepareUsageRefreshScenario({ window, ROUTES, fetchBodies, fetch
       enabled: PAGE.usageAutoRefreshEnabled(),
       ms: PAGE.usageAutoRefreshMs(),
       due: PAGE.usageDueProviders(),
-      // The page is 8.5.0's: the control is still there, and it is the only
-      // way to ask.
-      readNowButtons: doc.querySelectorAll("#usageCapturedGrid .usage-read-button").length,
+      // The control is still there, and it is the only way to ask. Since
+      // 8.7.0 a provider's Read now lives inside its row's expansion (the row
+      // is 44 px and the detail is one press away), so the scenario opens the
+      // rows before counting — otherwise it would measure the collapsed state
+      // and report the control as missing rather than one press in.
+      readNowButtons: (() => {
+        openAllRows();
+        return doc.querySelectorAll("#usageLayoutRoot .usage-read-button").length;
+      })(),
       buttonText: (() => {
-        const button = doc.querySelector("#usageCapturedGrid .usage-read-button");
+        const button = doc.querySelector("#usageLayoutRoot .usage-read-button");
         return button ? flat(button) : null;
       })(),
     };

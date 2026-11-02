@@ -444,20 +444,37 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
         preexisting: snapshot,
       };
 
+      /** Open every provider row's detail.
+       *
+       * 8.7.0 puts a provider's reading, its Read now and its full figure list
+       * behind the row's own expansion in `one_screen` — the default layout —
+       * so every capture below opens the rows first. The control and the
+       * figures are still on the page; they are one press in, which is what
+       * keeps the page on one screen (UI-QUALITY-RULE §D's accordion).
+       */
+      const openAllRows = () => {
+        doc.querySelectorAll(".usage-srow-button").forEach((button) => {
+          if (button.getAttribute("aria-expanded") !== "true") button.click();
+        });
+      };
+
       // ── the header-derived block (8.4.0) ────────────────────────────────
       // Read once from the route's own shape above. `PAGE.usageCaptured` is
       // the state a real answer arrives in, so what this reads is what a real
       // GET would have produced.
       const capturedCards = () => {
-        const grid = doc.getElementById("usageCapturedGrid");
-        return Array.from(grid ? grid.children : []).map((card) => ({
+        openAllRows();
+        const grid = doc.getElementById("usageLayoutRoot");
+        return Array.from(grid ? grid.querySelectorAll(".usage-card") : []).map((card) => ({
           title: flat(card.querySelector(".usage-card-title")),
           chip: flat(card.querySelector(".usage-chip")),
           chipState: card.querySelector(".usage-chip")
             ? card.querySelector(".usage-chip").dataset.state
             : null,
           keys: flat(card.querySelector(".usage-card-keys")),
-          blocks: Array.from(card.querySelectorAll(".usage-block")).map(
+          blocks: Array.from(
+            card.querySelectorAll(".usage-detail-columns .usage-block"),
+          ).map(
             (block) => ({
               heading: flat(block.querySelector(".usage-block-heading")),
               figures: Array.from(block.querySelectorAll("dt")).map((dt, i) => [
@@ -470,6 +487,8 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
             }),
           ),
           stateNote: flat(card.querySelector(".usage-state-note")),
+          plan: flat(card.querySelector(".usage-plan")).replace(/^Plan: /, ""),
+          account: flat(card.querySelector(".usage-account")),
           provenance: flat(card.querySelector(".usage-provenance")),
         }));
       };
@@ -502,9 +521,13 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
         // A host that sent nothing is "not read yet" rather than a zero, and
         // one with no mechanism gets the one sentence.
         unreadCard: (() => {
+          // The coverage row is what the page draws from (8.7.0), so that is
+          // what the fixture feeds it: a provider with a header mechanism that
+          // has carried nothing.
           PAGE.rememberUsageCaptured({
             observed_at: nowSeconds,
             stale_after_seconds: 1800,
+            auto_refresh_seconds: 30,
             providers: [
               {
                 provider_id: "deepseek",
@@ -516,6 +539,44 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
                 observed_at: null,
                 status_code: null,
                 values: {},
+                readable: false,
+                endpoint: null,
+                fetched_at: null,
+                reading: null,
+                attempted_at: null,
+                read_error: "",
+                not_sent: false,
+                retry_in_seconds: null,
+                next_read_in_seconds: null,
+                interval_seconds: 30,
+                consecutive_failures: 0,
+              },
+            ],
+            coverage: [
+              {
+                provider_id: "deepseek",
+                display_name: "DeepSeek",
+                credentials: 1,
+                state: "not_measured",
+                stage: "read",
+                recognised: "",
+                sentence: "",
+                readable: false,
+                mechanisms: ["response-header"],
+                detail: "the x-ratelimit response headers",
+                needs_credential: "",
+                reading: null,
+                fetched_at: null,
+                observed_at: null,
+                attempted_at: null,
+                read_error: "",
+                not_sent: false,
+                retry_in_seconds: null,
+                next_read_in_seconds: null,
+                consecutive_failures: 0,
+                interval_seconds: 30,
+                values: {},
+                endpoint: null,
               },
             ],
           });
@@ -527,7 +588,7 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
           PAGE.rememberUsageCapturedFailure(
             new Error("the server did not answer"),
           );
-          const note = doc.getElementById("usageCapturedEmpty");
+          const note = doc.getElementById("usageStatus");
           return {
             hidden: note.hidden,
             text: flat(note),
@@ -541,8 +602,9 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
 
       // ── the four states ─────────────────────────────────────────────────
       const readCards = () => {
-        const grid = doc.getElementById("usageSubscriptionsGrid");
-        const cards = Array.from(grid ? grid.children : []);
+        openAllRows();
+        const grid = doc.getElementById("usageLayoutRoot");
+        const cards = Array.from(grid ? grid.querySelectorAll(".usage-card") : []);
         return cards.map((card) => ({
           title: flat(card.querySelector(".usage-card-title")),
           chip: flat(card.querySelector(".usage-chip")),
@@ -555,29 +617,92 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
                 .map((name) => name.slice("usage-chip-".length))[0]
             : null,
           keys: flat(card.querySelector(".usage-card-keys")),
-          blocks: Array.from(card.querySelectorAll(".usage-block")).map(
+          blocks: Array.from(
+            card.querySelectorAll(".usage-detail-columns .usage-block"),
+          ).map(
             (block) => ({
               heading: flat(block.querySelector(".usage-block-heading")),
-              note: flat(block.querySelector(".usage-block-note")),
-              figures: Array.from(block.querySelectorAll("dt")).map((dt, i) => [
+              note: flat(block.querySelector(".usage-block-note, .usage-figures-note")),
+              figures: (() => {
+                // The provider's own numbers, as this card draws them. A
+                // window is a bar with a money pair; a balance is money. The
+                // value printed here is the one a reader sees, and the exact
+                // provider strings are on the element's `title`.
+                const pairs = [];
+                block.querySelectorAll(".usage-window").forEach((win) => {
+                  const name = flat(win.querySelector(".usage-window-title"));
+                  const value = win.querySelector(".usage-window-figure");
+                  if (!name || !value) return;
+                  pairs.push([
+                    name,
+                    flat(value),
+                    value.className,
+                    value.getAttribute("title") || "",
+                  ]);
+                  // The reset belongs to the same window and travels with it:
+                  // a percentage without its reset cannot be acted on.
+                  const reset = win.querySelector(".usage-reset");
+                  if (reset) {
+                    pairs.push([
+                      `${name} resets`,
+                      flat(reset).replace(/^resets /, ""),
+                      reset.className,
+                      reset.getAttribute("title") || "",
+                    ]);
+                  }
+                });
+                block.querySelectorAll(".usage-money-row").forEach((line) => {
+                  const name = flat(line.querySelector(".usage-money-label"));
+                  const value = line.querySelector(".usage-money-amount");
+                  if (!name || !value) return;
+                  pairs.push([name, flat(value), value.className, value.getAttribute("title") || ""]);
+                });
+                if (pairs.length) return pairs;
+                return Array.from(block.querySelectorAll("dt")).map((dt, i) => [
+                  flat(dt),
+                  flat(block.querySelectorAll("dd")[i]),
+                  block.querySelectorAll("dd")[i]
+                    ? block.querySelectorAll("dd")[i].className
+                    : "",
+                  block.querySelectorAll("dd")[i]
+                    ? block.querySelectorAll("dd")[i].getAttribute("title") || ""
+                    : "",
+                ]);
+              })(),
+              // The EXACT strings, from the disclosure 8.7.0 keeps them in.
+              // Read from the CARD, not the block: the disclosure is a sibling
+              // of the two human blocks, not a child of either.
+              exact: Array.from(
+                card.querySelectorAll(".usage-figures dt"),
+              ).map((dt, index) => [
                 flat(dt),
-                flat(block.querySelectorAll("dd")[i]),
-                block.querySelectorAll("dd")[i]
-                  ? block.querySelectorAll("dd")[i].className
-                  : "",
-                block.querySelectorAll("dd")[i]
-                  ? block.querySelectorAll("dd")[i].getAttribute("title") || ""
-                  : "",
+                flat(card.querySelectorAll(".usage-figures dd")[index]),
               ]),
             }),
           ),
           stateNote: flat(card.querySelector(".usage-state-note")),
-          failure: flat(card.querySelector(".usage-failure")),
+          // The plan and the account: what a reader looks for BEFORE a number.
+          plan: flat(card.querySelector(".usage-plan")).replace(/^Plan: /, ""),
+          account: flat(card.querySelector(".usage-account")),
+          failure:
+            flat(card.querySelector(".usage-failure")) ||
+            flat(card.querySelector('.usage-state-note[data-tone="error"]')),
           provenance: flat(card.querySelector(".usage-provenance")),
-          // The thing this page must never print: one combined "remaining".
-          hasCombinedTotal:
-            /remaining/i.test(flat(card)) &&
-            !/not a cash balance|it is not added|never added/i.test(flat(card)),
+          // The thing this page must never print: one combined "remaining"
+          // figure. Measured over the card's TERMS AND VALUES only, never over
+          // its prose: every balance block says in words that the two are not
+          // added, and a scan of the whole card would fire on that sentence
+          // rather than on a failure.
+          hasCombinedTotal: (() => {
+            const values = Array.from(
+              card.querySelectorAll(
+                ".usage-window-title, .usage-window-figure, .usage-money-label, .usage-money-amount, dt, dd",
+              ),
+            )
+              .map(flat)
+              .join(" ");
+            return /remaining total|total remaining/i.test(values);
+          })(),
         }));
       };
 
@@ -610,24 +735,56 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
       PAGE.rememberUsagePayload("chatgpt_oauth", payloads.measured.chatgpt);
       PAGE.paintUsageView();
       await wait(20);
+      // ── the providers with nothing readable ─────────────────────────────
+      //
+      // 8.7.0 draws EVERY configured provider as a row in the one list, in
+      // exactly one of eight states, so "other providers" is no longer a
+      // separate sentinel list — it is the cards whose state says there is
+      // nothing to show. The four words are the ones the page prints, and a
+      // card in any of them must carry no number and no control that promises
+      // one.
+      const NOTHING_READABLE = new Set([
+        "unsupported",
+        "needs_credential",
+        "possible_endpoint",
+      ]);
+      // The rows must be OPEN before their sentences can be read: `one_screen`
+      // builds a row's detail on its first expansion, and the paint above made
+      // fresh rows.
+      openAllRows();
       const others = Array.from(
-        doc.querySelectorAll("#usageOtherList .usage-other-item"),
-      ).map((item) => ({
-        provider: item.dataset.provider,
-        name: flat(item.querySelector(".usage-other-name")),
-        sentence: flat(item.querySelector(".usage-other-sentence")),
-        pool: flat(item.querySelector(".usage-other-pool")),
-        controls: item.querySelectorAll(
-          "button, input, select, textarea, [role='button']",
-        ).length,
-        spinner: item.querySelectorAll(".spinner, [aria-busy='true']").length,
-      }));
+        doc.querySelectorAll("#usageLayoutRoot .usage-card"),
+      )
+        .filter((item) => NOTHING_READABLE.has(item.dataset.state))
+        .map((item) => ({
+          provider: item.dataset.provider,
+          state: item.dataset.state,
+          name: flat(item.querySelector(".usage-card-title")),
+          sentence: flat(item.querySelector(".usage-state-note")),
+          pool: "",
+          controls: item.querySelectorAll(
+            "button, input, select, textarea, [role='button']",
+          ).length,
+          // A control that CANNOT be pressed. A provider with nothing to read
+          // draws a DISABLED Read now (which says why), so the claim is "no
+          // control that can only fail" rather than "no element".
+          enabled_controls: Array.from(
+            item.querySelectorAll(
+              "button, input, select, textarea, [role='button']",
+            ),
+          ).filter((control) => !control.disabled).length,
+          disabled_read_now: (() => {
+            const button = item.querySelector(".usage-read-button");
+            return button ? Boolean(button.disabled) : false;
+          })(),
+          spinner: item.querySelectorAll(".spinner, [aria-busy='true']").length,
+        }));
       out.providers = {
         others,
         otherIds: others.map((item) => item.provider),
         cardTitles: readCards().map((card) => card.title),
-        emptyNoteHidden: doc.getElementById("usageEmptyNote").hidden,
-        otherEmptyHidden: doc.getElementById("usageOtherEmpty").hidden,
+        emptyNoteHidden: doc.getElementById("usageStatus").hidden,
+        otherEmptyHidden: doc.getElementById("usageStatus").hidden,
       };
 
       // ── subscription allowance and cash, kept apart ─────────────────────
@@ -651,19 +808,32 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
         // being truncated by the renderer.
         hasTwoDecimalPercent: longestCards.some((card) =>
           card.blocks.some((block) =>
-            block.figures.some(([term, value]) => term.includes("used") && value === "100.00"),
+            block.figures.some(
+              ([term, value]) =>
+                term.includes("window") && value === "100.00%",
+            ),
           ),
         ),
+        // The provider's own `$4,050.2926` — the LONGEST dollar figure the
+        // page meets — rendered as money. Above ten cents that is two decimals
+        // (`$4,050.29`); the exact string is on the element's `title`, which
+        // the assertion below checks rather than restating the rule here.
         hasDollarFigure: longestCards.some((card) =>
           card.blocks.some((block) =>
-            block.figures.some(([, value]) => value === "$4,050.2926"),
+            block.figures.some(
+              ([, value, , title]) =>
+                value === "$4,050.29" && /4,050\.2926/.test(title || ""),
+            ),
           ),
         ),
+        // A reset instant, in the reader's own clock, with the provider's raw
+        // value on the `title` — "resets Nov 2, 8:13 AM", never the epoch.
         hasResetTimestamp: longestCards.some((card) =>
           card.blocks.some((block) =>
             block.figures.some(
-              ([term, , , title]) =>
-                term.includes("resets") && /\(\d{10,13}\)/.test(title || ""),
+              ([, value]) =>
+                /^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2}/.test(value || "") &&
+                !/T\d\d:/.test(value || ""),
             ),
           ),
         ),
@@ -673,6 +843,24 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
         hasLongIdentifier: longestCards.some((card) =>
           card.blocks.some((block) =>
             block.figures.some(([, value]) => (value || "").length >= 40),
+          ),
+        ),
+        // The EXACT provider strings, from the disclosure where 8.7.0 keeps
+        // them: the human form deliberately shortens a figure, and the claim
+        // §A.3 makes is that the whole value is still on the page — never that
+        // it is the first thing a reader sees.
+        // The widest single value the disclosure holds, which is where the
+        // long provider strings live: `$4,050.2926 USD`, `100.00%`, and a
+        // 62-character account line above them.
+        exactFigureChars: Math.max(
+          0,
+          ...longestCards.flatMap((card) =>
+            (card.blocks || []).flatMap((block) =>
+              (block.exact || []).flatMap(([term, value]) => [
+                String(value || "").length,
+                String(term || "").length,
+              ]),
+            ),
           ),
         ),
         longestFigureChars: Math.max(

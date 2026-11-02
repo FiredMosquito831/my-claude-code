@@ -243,6 +243,8 @@ from .constants import (
     TOOL_RESULT_TRIM_THRESHOLD_CHARS_DEFAULT,
     TRIM_MODE_NAMES,
     USAGE_AUTO_REFRESH_SECONDS_DEFAULT,
+    USAGE_LAYOUT_DEFAULT,
+    USAGE_LAYOUT_VALUES,
     VISION_ADAPTER_MODE_DEFAULT,
     VISION_ADAPTER_MODE_NAMES,
     WEB_FETCH_EXTRACTOR_DEFAULT,
@@ -1352,6 +1354,28 @@ class Settings(BaseSettings):
             "obeys a provider's own Retry-After, and backs off per provider "
             "on repeated failures. 0 turns it off and leaves the page on "
             "demand only."
+        ),
+    )
+    # 8.7.0 (USAGE-LAYOUTS): which of the five Usage page layouts the page
+    # draws. A VIEW over one payload -- no route, no payload field and no
+    # poller behaviour depends on it -- so it applies without a restart and
+    # without a reload.
+    #
+    # An unknown word falls back to the default with one log line rather than
+    # refusing to start: a `.env` naming a layout a later release removed must
+    # still serve a page. The admin save path refuses a bad value before it is
+    # written, which is where a reader can act on it.
+    usage_layout: str = Field(
+        default=USAGE_LAYOUT_DEFAULT,
+        validation_alias="USAGE_LAYOUT",
+        description=(
+            "Which layout the Usage page draws: one_screen (the default, one "
+            "compact row per provider that expands in place), ledger_rows "
+            "(one table row per provider), meter_board (headline figures over "
+            "full-width bands of meters), dial_cards (a card per provider "
+            "leading with one ring), or master_detail (a provider list beside "
+            "a full inspector). Every layout shows every configured provider "
+            "and the same figures; only the arrangement changes."
         ),
     )
     # The escalating bench for a key the provider keeps rejecting with
@@ -2666,6 +2690,52 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("usage_layout", mode="before")
+    @classmethod
+    def fold_usage_layout(cls, v: object) -> str:
+        """Fold case and surrounding space before the vocabulary check.
+
+        The template and a human disagree about both, and the page reads this
+        word against its own registry: an un-folded ``One_Screen`` would fail
+        the page's lookup and silently draw the fallback while the dashboard
+        showed the raw string. The vocabulary itself is enforced by
+        :meth:`normalise_usage_layout`, which falls back with one log line
+        rather than refusing to start the server (see ``USAGE_LAYOUT_VALUES``'s
+        comment in ``constants.py``).
+        """
+
+        return str(v if v is not None else "").strip().lower()
+
+    @model_validator(mode="after")
+    def normalise_usage_layout(self) -> Settings:
+        """An unknown Usage layout falls back to the default, named once.
+
+        A layout is a VIEW over one payload and nothing else -- no route, no
+        payload field, no poller behaviour depends on it -- so a `.env` naming
+        one a later release removed must still serve a page rather than refuse
+        to start the server. The admin save path refuses a bad value before it
+        is written, which is where a reader can act on it.
+
+        One line per process, the same shape as :func:`_log_ignored_fcc_env_names_once`:
+        a watcher restarting a server with a stale value must not fill the log.
+        """
+
+        global _USAGE_LAYOUT_FALLBACK_LOGGED
+        if self.usage_layout in USAGE_LAYOUT_VALUES:
+            return self
+        if not _USAGE_LAYOUT_FALLBACK_LOGGED:
+            _USAGE_LAYOUT_FALLBACK_LOGGED = True
+            logger.warning(
+                "USAGE_LAYOUT={!r} is not one of {}; the Usage page will draw "
+                "{!r} instead. Set one of those five values on Limits & "
+                "Resilience, or clear the line to use the default.",
+                self.usage_layout,
+                ", ".join(USAGE_LAYOUT_VALUES),
+                USAGE_LAYOUT_DEFAULT,
+            )
+        self.usage_layout = USAGE_LAYOUT_DEFAULT
+        return self
+
     @field_validator("messaging_rate_limit")
     @classmethod
     def validate_messaging_rate_limit(cls, v: int) -> int:
@@ -3299,6 +3369,9 @@ class Settings(BaseSettings):
 
 
 _LEGACY_FCC_ENV_LOGGED = False
+
+#: 8.7.0: ``normalise_usage_layout`` has already said its one line.
+_USAGE_LAYOUT_FALLBACK_LOGGED = False
 
 
 def _log_ignored_fcc_env_names_once() -> None:

@@ -1739,6 +1739,132 @@ def models_dev_describes_provider(provider_id: str, path: Path | None = None) ->
     return _has_models_dev_bucket(_cached_raw_index(path), provider_id)
 
 
+# ────────────────────────────── 8.7.0 (USAGE-LAYOUTS): the `api` host index ─
+#
+# WHAT THIS IS FOR. The Usage page must give every CONFIGURED provider a row
+# including the custom ones, and a custom provider is a host somebody typed --
+# there is no catalogue row to read a mechanism from. models.dev's own `api`
+# field is the one offline source that says "this host is provider X", and
+# `specs/RESEARCH-BILLING-ENDPOINT-DISCOVERY.md`'s USER DECISIONS Q7 promotes
+# that match to an identity rung: **"the host picks the row, the row supplies
+# the route"**. Measured against the cache on this machine when the table was
+# written: 235 providers, 197 distinct `api` hosts, 12 hosts claimed by more
+# than one provider, 185 providers resolved unambiguously.
+#
+# WHAT IT IS NOT. It is not a probe and it never produces a number. A row it
+# identifies is *possible endpoint, unverified* (§2's eighth state): words
+# only, no figure, no bar, no retry -- because recognising a host is not the
+# same fact as having read it. A host claimed by two providers is AMBIGUOUS and
+# resolves to nothing at all rather than to a guess, which is the ambiguity
+# refusal the same decision names.
+#
+# Read-only, offline, and cached per cache generation exactly like
+# `_cached_raw_index` beside it: one scan of the parsed index, memoized against
+# the file's mtime, so a page load costs nothing after the first.
+
+_api_hosts_lock = threading.Lock()
+#: ``(mtime, {host: frozenset(models.dev provider id)})`` per cache path.
+_api_hosts_cache: dict[Path, tuple[float, dict[str, frozenset[str]]]] = {}
+
+
+def _normalise_api_host(url: str) -> str:
+    """The bare lower-case host of one ``api`` value, or ``""``.
+
+    models.dev publishes these as full URLs, but several are templates
+    (``${databricks_host}``, ``${snowflake_account}.snowflakecomputing.com``)
+    and one is a bare host with no scheme. A template is not a host anybody can
+    match against, so anything still carrying a ``$``, a space or no dot is
+    dropped -- a false match is worse than the honest "not published" the
+    custom provider falls back to.
+    """
+
+    text = url.strip()
+    if not text or "$" in text or "{" in text or " " in text:
+        return ""
+    if "//" in text:
+        text = text.split("//", 1)[1]
+    host = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    if "@" in host:
+        host = host.rsplit("@", 1)[1]
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    host = host.strip().lower()
+    # A host with no dot is a local alias (`localhost`), which every local
+    # runtime claims; it identifies nothing.
+    if "." not in host:
+        return ""
+    return host
+
+
+def _build_api_host_index(index: Mapping[str, Any]) -> dict[str, frozenset[str]]:
+    """``{api host: {models.dev provider ids}}`` for every bucket that states one."""
+
+    built: dict[str, set[str]] = {}
+    for provider_id, bucket in index.items():
+        if not isinstance(provider_id, str) or not isinstance(bucket, Mapping):
+            continue
+        api = bucket.get("api")
+        if not isinstance(api, str):
+            continue
+        host = _normalise_api_host(api)
+        if not host:
+            continue
+        built.setdefault(host, set()).add(provider_id)
+    return {host: frozenset(ids) for host, ids in built.items()}
+
+
+def models_dev_api_hosts(path: Path | None = None) -> Mapping[str, frozenset[str]]:
+    """Every `api` host models.dev knows, and which providers claim each one.
+
+    Read-only and offline. An absent or unreadable cache is an empty mapping,
+    which callers must read as "models.dev knows nothing" and never as "no host
+    matches" -- the same distinction `IV.16` draws everywhere else.
+    """
+
+    cache_path = path if path is not None else models_dev_cache_path()
+    try:
+        mtime = cache_path.stat().st_mtime
+    except OSError:
+        return {}
+    with _api_hosts_lock:
+        cached = _api_hosts_cache.get(cache_path)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    cache = read_models_dev_cache(cache_path)
+    built = _build_api_host_index(cache.index) if cache is not None else {}
+    with _api_hosts_lock:
+        _api_hosts_cache[cache_path] = (mtime, built)
+    return built
+
+
+def models_dev_provider_for_host(
+    host: str, path: Path | None = None
+) -> tuple[str, frozenset[str]] | None:
+    """Which models.dev provider a host belongs to, or ``None``.
+
+    Returns ``(provider_id, every claimant)`` for a host exactly ONE provider
+    claims, and ``None`` for a host nobody claims **and** for a host claimed by
+    several -- the ambiguity refusal is the caller's whole reason to ask. The
+    second element is returned so a caller can say *why* a shared host resolved
+    to nothing rather than reporting silence.
+
+    Matching folds the scheme, a trailing dot, ``www.`` and the port, so a
+    custom provider typed as ``https://api.example.com/v1`` and one typed as
+    ``api.example.com`` reach the same answer.
+    """
+
+    wanted = _normalise_api_host(host)
+    if wanted.startswith("www."):
+        wanted = wanted[len("www.") :]
+    if not wanted:
+        return None
+    hosts = models_dev_api_hosts(path)
+    claimants = hosts.get(wanted)
+    if claimants is None:
+        return None
+    return (next(iter(claimants)), claimants) if len(claimants) == 1 else None
+
+
 def _build_output_limit_index(
     index: Mapping[str, Any],
 ) -> dict[str, dict[str, int]]:

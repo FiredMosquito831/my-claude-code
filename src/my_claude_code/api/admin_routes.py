@@ -720,6 +720,10 @@ async def admin_asset(filename: str, request: Request):
         "themes.css",
         "foundation.css",
         "designs.js",
+        # 8.7.0: the Usage page's layout registry, the same shape as
+        # `designs.js` one layer over — one declared table the page reads and
+        # switches on.
+        "usage_layouts.js",
     }:
         raise HTTPException(status_code=404, detail="Admin asset not found")
     return _asset_response(filename)
