@@ -125,7 +125,7 @@ KNOWN_DYNAMIC_ONLY_IDS: set[str] = {
     # created by loadDesignStylesheet() in admin.js and given a stable id so a
     # later design SWAPPING it can find and remove the previous one. It is not
     # declared in index.html because whether it exists at all depends on the
-    # selected registry row (8.1.0's only row, `today`, has no CSS).
+    # selected registry row: `today` has no CSS, and `hybrid` (8.2.0) does.
     "designStylesheet",
 }
 

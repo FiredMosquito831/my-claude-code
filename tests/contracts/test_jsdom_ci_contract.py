@@ -37,6 +37,7 @@ _SUITES = (
     "tests/api/test_admin_static_jsdom.py",
     "tests/api/test_admin_ux_pass_jsdom.py",
     "tests/api/test_admin_design_system_jsdom.py",
+    "tests/api/test_admin_design_shell_jsdom.py",
     "tests/contracts/test_admin_static_xss.py",
 )
 _JOB_ID = "jsdom"

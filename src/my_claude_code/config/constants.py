@@ -884,7 +884,13 @@ ADMIN_DENSITY_DEFAULT = "design"
 # saved and so the contract tests read the vocabulary from one place.
 # ``ADMIN_DENSITY=design`` means "whatever the selected design declares"
 # (§13.2.1: per-design default with a Compact/Comfortable override).
-ADMIN_DESIGN_VALUES = ("today",)
+# 8.2.0 appends the first real design to the registry (designs.js) and to
+# this list. The two must agree in BOTH directions: a row with no entry here
+# is refused by the server before it can be saved, and a word here with no
+# registry row is refused by the page. `tests/contracts/test_admin_design_vocabulary.py`
+# pins them together and reads the registry, so adding a design is still one
+# CSS file + one shell + one registry row + this tuple.
+ADMIN_DESIGN_VALUES = ("today", "hybrid")
 ADMIN_THEME_VALUES = ("today", "midnight", "paper", "hc", "velvet", "navy", "own")
 ADMIN_MODE_VALUES = ("light", "dark")
 ADMIN_DENSITY_VALUES = ("design", "compact", "comfortable")

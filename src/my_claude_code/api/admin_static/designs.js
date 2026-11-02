@@ -34,6 +34,13 @@
      shell            a path under admin_static/, or null for no shell module.
      layout           free-form tags describing the structure, used by the
                       tiles' one-line note and by later parity reports.
+     attrs            the variant attributes the design declares, written to
+                      `data-<name>` on <html> while this row is selected and
+                      removed when it is not. The legal names are the ones the
+                      foundation implements: `sections`, `fields`, `detail`,
+                      `analytics`, `shell`. A row may not invent one — see
+                      `DESIGN_ATTRIBUTE_ALLOWLIST` in admin.js and its contract
+                      test.
      defaultFor       "fallback" for the row a page uses when nothing else is
                       chosen. Exactly one row may carry it.
      note             one line, shown under the tile's name.
@@ -57,6 +64,46 @@ const ADMIN_DESIGNS = [
     layout: ["pages", "sidebar", "sections"],
     defaultFor: "fallback",
     note: "The dashboard as it is: one page at a time, a grouped sidebar, every setting on its page.",
+  },
+  {
+    /* 8.2.0 — the first real design, and the one the user asked to see first
+       (§13.3 row 19, ROUND 4 Q2: "Hybrid is BOTH the flagship and the
+       default-design candidate"). Ledger's structure — a masthead, a numbered
+       grouped rail, ruled sections — with Console's operation: a Ctrl/⌘K
+       palette, g-key shortcuts, compact density and the request detail as a
+       right drawer.
+
+       It is a registry row, a stylesheet and a shell module, exactly as
+       §13.2.2 says. Nothing in admin.js names it: the loader is generic, and
+       `tests/api/test_admin_design_system_jsdom.py` refuses a registry row
+       whose id appears as a string in admin.js.
+
+       `defaultTheme` is Velvet because that is the dark default the owner
+       asked for; `defaultDensity` is Compact, which is what this design's own
+       preview used and what makes its rule-heavy pages fit (§14 table:
+       Hybrid Limits 0.86x of today's page height). */
+    id: "hybrid",
+    name: "Hybrid",
+    version: 1,
+    status: "stable",
+    defaultTheme: "velvet",
+    defaultDensity: "compact",
+    css: "designs/hybrid.css",
+    shell: "designs/hybrid.js",
+    /* §13.2.1's layout vocabulary, as tags. Every one of these is implemented
+       by the foundation's variant systems, not by this row — the row is data. */
+    layout: ["masthead", "numbered-rail", "ruled-sections", "palette", "drawer"],
+    /* The variant attributes the foundation already implements. Rights are
+       written to `data-*` on <html> by `syncDesignAttributes()` while this row
+       is selected, and removed when it is not, which is what keeps Today's
+       page free of them. */
+    attrs: {
+      sections: "ruled",
+      fields: "rows",
+      analytics: "list-first",
+      detail: "drawer",
+    },
+    note: "Ledger's structure, Console's operation",
   },
 ];
 

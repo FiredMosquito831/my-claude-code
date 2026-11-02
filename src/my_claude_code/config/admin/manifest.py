@@ -1178,7 +1178,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         # without rebuilding a single provider.
         affects_providers=False,
     ),
-    # ---- Dashboard appearance (8.1.0) ------------------------------------
+    # ---- Dashboard appearance (8.1.0; the first design added in 8.2.0) ----
     # The four machine defaults behind the Appearance card. Each is a plain
     # vocabulary value with no numeric bound to publish, so there is no
     # `minimum`/`maximum` here: the bound is the option list, and the server
@@ -1196,14 +1196,21 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
                 "today",
                 "Today — the current dashboard, every setting on its page",
             ),
+            ConfigOptionSpec(
+                "hybrid",
+                "Hybrid — Ledger's structure, Console's operation",
+            ),
         ),
         description=(
             "Which dashboard design a browser opens on before anybody has "
             "chosen one. Today is the dashboard as it already is: one page at "
             "a time, a grouped sidebar, every setting on the page that owns "
-            "it. Later releases add designs as more choices here, so the "
-            "value always names one exactly. A reader who picks a design in "
-            "the Appearance card keeps it whatever this says."
+            "it. Hybrid is the first design added on top of it — Ledger's "
+            "masthead, numbered rail and ruled sections with Console's "
+            "keyboard palette and right-hand drawer for a request. Every "
+            "design is the same dashboard underneath: the same pages, the same "
+            "controls, the same settings. A reader who picks one in the "
+            "Appearance card keeps it whatever this says."
         ),
     ),
     ConfigFieldSpec(

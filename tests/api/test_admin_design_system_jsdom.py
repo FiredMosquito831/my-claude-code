@@ -124,12 +124,26 @@ def test_with_both_features_off_every_view_is_the_base_tree(
     run that never built them), with clicks' transient marks, comments,
     whitespace artefacts and rendered clocks normalised on BOTH sides.
 
-    Every one of the fifteen views must match. A view that moves is a defect.
+    **8.2.0 re-shot exactly one entry in this baseline, and it is declared here
+    rather than quietly rewritten.** The cost tile's headline changed from
+    ``Cost (reported)`` / ``reported_usd`` to ``Cost`` / ``total_usd`` with both
+    halves named in the small print (SPEC ADDENDUM ROUND 4 §4), which is a
+    deliberate change to one rendered line on Analytics. The entry re-shot is
+    ``views["requests"]`` and nothing else — the digest below is a NEW
+    measurement of the SAME page, and comparing it to itself would pass
+    vacuously. What keeps this test honest is that the re-shoot is declared,
+    with its reason, in the fixture's ``written_by`` and in this docstring, and
+    that the set below is empty again: from here on, a view that moves is a
+    defect.
     """
 
     baseline = json.loads(BASE_BASELINE.read_text(encoding="utf-8"))
     assert baseline["base_commit"] == "421d81f7"
     assert "421d81f7" in baseline["written_by"]
+    #: Views this release DELIBERATELY changed after the baseline was taken.
+    #: Empty, because 8.2.0's one move (`requests`, the cost tile) was re-shot.
+    #: An entry here must be justified in a docstring AND in the fixture.
+    DECLARED_MOVES: set[str] = set()
     base = baseline["views"]
     mine = design_system_off["views"]
 
@@ -139,9 +153,9 @@ def test_with_both_features_off_every_view_is_the_base_tree(
         for view in base
         if base[view]["stripFreeSha256"] != mine[view]["stripFreeSha256"]
     )
-    assert moved == [], (
-        "with the section navigator and the Appearance card disabled, these "
-        f"views are not what the base tree drew: {moved}"
+    assert moved == sorted(DECLARED_MOVES), (
+        "these views are not what the base tree drew, and are not declared "
+        f"moves: {sorted(set(moved) - set(DECLARED_MOVES))}"
     )
 
 
@@ -452,18 +466,30 @@ def test_light_mode_follows_the_light_theme_default(design_system) -> None:
 
 
 def test_the_card_exists_with_exactly_one_design_tile(design_system) -> None:
-    """PR A ships one real registry entry, and the grid must look right with one."""
+    """PR A shipped one real registry entry; 8.2.0 appends the second.
+
+    The grid's contract is "one tile per registry row, in registry order, the
+    selected one checked". What changed at 8.2.0 is the COUNT — `hybrid` is the
+    first design added on top of Today — so this test now pins both tiles, the
+    Classic badge that marks the fallback, and which one is selected by default.
+    """
 
     card = design_system["appearance"]
     assert card["present"] is True
-    assert [tile["id"] for tile in card["tiles"]] == ["today"]
-    tile = card["tiles"][0]
-    assert tile["name"] == "Today"
-    assert tile["badge"] == "Classic"
-    assert tile["checked"] == "true"
-    assert tile["role"] == "radio"
-    assert tile["hasPreview"] is True
-    assert tile["note"]
+    assert [tile["id"] for tile in card["tiles"]] == ["today", "hybrid"]
+    today, hybrid = card["tiles"]
+    assert today["name"] == "Today"
+    assert today["badge"] == "Classic"
+    assert today["checked"] == "true"
+    assert today["role"] == "radio"
+    assert today["hasPreview"] is True
+    assert today["note"]
+    # The new row is a full tile: a name, a note, and no Classic badge.
+    assert hybrid["name"] == "Hybrid"
+    assert hybrid["checked"] == "false"
+    assert hybrid["badge"] is None
+    assert hybrid["hasPreview"] is True
+    assert "Ledger's structure" in hybrid["note"]
 
 
 def test_the_card_offers_every_family_and_both_modes(design_system) -> None:
@@ -670,14 +696,28 @@ def test_the_rail_typography_floor_is_what_ships() -> None:
 
 
 def test_the_registry_has_exactly_one_real_entry() -> None:
-    """PR A ships one design and its loader must take more rows as DATA."""
+    """The registry's shape is checked on the two rows 8.2.0 ships.
 
-    assert DESIGNS_JS.count("    id: ") == 1
+    PR A asserted "exactly one row"; 8.2.0 appends the first real design. What
+    matters for the "adding a design is data-only" claim is unchanged, and is
+    asserted below exactly as before: the fallback row, the vocabularies beside
+    the table, and — the load-bearing one — that **admin.js names no design**,
+    so a new row needs no code change.
+
+    Renamed in effect by the extra row, not by a rule: the assertion that
+    matters is the last one, and `test_admin_design_shell_jsdom.py` proves the
+    loader takes the new row with no change to admin.js.
+    """
+
+    assert DESIGNS_JS.count("    id: ") == 2
     assert 'id: "today"' in DESIGNS_JS
+    assert 'id: "hybrid"' in DESIGNS_JS
     assert 'status: "classic"' in DESIGNS_JS
     assert 'defaultFor: "fallback"' in DESIGNS_JS
     assert "css: null" in DESIGNS_JS
     assert "shell: null" in DESIGNS_JS
+    assert 'css: "designs/hybrid.css"' in DESIGNS_JS
+    assert 'shell: "designs/hybrid.js"' in DESIGNS_JS
     # The vocabularies live beside it, so a later row reads one list.
     assert "const ADMIN_THEME_FAMILIES" in DESIGNS_JS
     assert "const ADMIN_DENSITIES" in DESIGNS_JS

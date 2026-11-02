@@ -554,11 +554,51 @@ _COST_DIMENSION_SQL: dict[str, str] = {
 }
 
 
+#: The one expression that answers "what did this window cost", in SQL beside
+#: the two halves it adds. ``_cost_row`` reads it under the name ``total_usd``.
+#:
+#: **Why a third sum rather than adding the two in JavaScript.** The tile, the
+#: panel and any export must print the same number, and a browser that adds
+#: ``reported_usd + estimated_usd`` itself would disagree with the server the
+#: first time one of the two arrived as ``null`` -- which is exactly the case a
+#: window with no host-reported figure produces. Computed here, the total is a
+#: property of the rows, not of a caller's arithmetic.
+#:
+#: **Why it is not a laundering of a guess into a fact (SPEC ROUND 4 §4).** The
+#: two halves are DISJOINT SETS OF ROWS, not two views of one set:
+#:
+#:     reported_usd  = SUM(cost_usd) WHERE cost_source =  'provider'
+#:     estimated_usd = SUM(cost_usd) WHERE cost_source IS NOT NULL
+#:                                   AND cost_source <> 'provider'
+#:
+#: A row whose ``cost_source`` is NULL (never priced) matches NEITHER half --
+#: ``cost_usd`` is NULL there too -- so it contributes nothing to the total and
+#: still counts in ``requests``. A row matches one half or the other, never
+#: both, so no row is counted twice and the sum is a total rather than a
+#: double count. ``tests/core/test_request_log_cost_total.py`` proves that on a
+#: hand-built fixture that includes an unpriced row.
+#:
+#: A NULL half contributes zero, which is the arithmetic truth: "no host
+#: reported a price" is zero reported dollars, not an unknown quantity to be
+#: propagated -- unlike a group's own sum, where NULL is the honest answer for
+#: "nothing here was priced at all".
+_COST_TOTAL_SQL = "SUM(CASE WHEN cost_source IS NOT NULL THEN cost_usd END)"
+
+
 def _cost_row(row: Any, *, key: str | None) -> dict[str, Any]:
-    """Shape one cost aggregate, keeping every NULL a NULL."""
+    """Shape one cost aggregate, keeping every NULL a NULL.
+
+    ``total_usd`` is the window's whole cost -- reported plus estimated --
+    computed in SQL beside the two halves (``_COST_TOTAL_SQL``), so the
+    Analytics tile and the cost panel cannot disagree about it. The two halves
+    stay separate fields: which half is which is what makes an estimated figure
+    readable as an estimate, and nothing here merges them into one column that
+    loses its provenance.
+    """
     shaped: dict[str, Any] = {
         "reported_usd": row["reported_usd"],
         "estimated_usd": row["estimated_usd"],
+        "total_usd": row["total_usd"],
         "priced": row["priced"] or 0,
         "requests": row["requests"] or 0,
     }
@@ -9359,10 +9399,19 @@ class RequestLogStore:
         question here -- "what did this cost, and how much of the answer is a
         guess" -- is asked on a page, not on the hot path.
 
-        **Reported and estimated are summed apart and never added together.**
-        A merged total silently launders an estimate into a fact, and no reader
+        **Reported and estimated are summed apart.** A merged column in a
+        per-group row silently launders an estimate into a fact, and no reader
         can tell afterwards which half was which. The two arrive as two numbers
-        and are rendered as two numbers.
+        and are rendered as two numbers, in every table this feeds.
+
+        **And the window's total is its own field, ``total_usd``.** The
+        Analytics tile asks a different question from the tables -- "what did
+        this traffic cost" -- and answering it by adding the two halves in the
+        browser is how the tile and the panel come to disagree. It is summed
+        here, in SQL, beside them: the halves are DISJOINT SETS OF ROWS (see
+        ``_COST_TOTAL_SQL``), so the total counts no row twice, and a row that
+        was never priced belongs to neither half -- it is still counted in
+        ``requests`` and it still moves no dollar figure.
 
         **Every sum ships with its denominator.** ``priced`` of ``requests`` is
         what makes a partial total readable as a partial total; without it a
@@ -9426,6 +9475,11 @@ class RequestLogStore:
             " AS reported_usd,"
             " SUM(CASE WHEN cost_source IS NOT NULL"
             " AND cost_source <> 'provider' THEN cost_usd END) AS estimated_usd,"
+            # The whole window's cost, summed in SQL beside the two halves that
+            # make it up, so no caller can arrive at a different number. See
+            # ``_COST_TOTAL_SQL`` for why this is a total and not a double
+            # count: the two halves are disjoint sets of rows.
+            f" {_COST_TOTAL_SQL} AS total_usd,"
             " SUM(CASE WHEN cost_usd IS NOT NULL THEN 1 ELSE 0 END) AS priced,"
             " COUNT(*) AS requests"
         )

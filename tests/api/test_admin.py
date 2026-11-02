@@ -181,6 +181,11 @@ def test_admin_responses_are_never_cached(monkeypatch, tmp_path, path):
     (
         ("/admin", "203.0.113.10", 403),
         ("/admin/assets/missing.js", "127.0.0.1", 404),
+        # 8.2.0: a design's two files come from their own route, which matches
+        # the name against the files that SHIPPED rather than joining the
+        # request path onto a filesystem path. An unknown name is a 404 there
+        # exactly as it is under /admin/assets/.
+        ("/admin/designs/missing.css", "127.0.0.1", 404),
     ),
 )
 def test_admin_http_errors_are_never_cached(
@@ -2486,3 +2491,47 @@ def test_admin_models_report_which_models_reject_images():
     assert body["blind_models"] == ["open_router/text-only"]
     assert "open_router/sighted" in body["models"]
     assert "open_router/unreported" in body["models"]
+
+
+def _design_files() -> list[str]:
+    """Every design file the registry names, spelled the way it spells them."""
+
+    import re
+
+    designs = (
+        Path(__file__).resolve().parents[2]
+        / "src/my_claude_code/api/admin_static/designs.js"
+    ).read_text(encoding="utf-8")
+    return sorted(re.findall(r'(?:css|shell): "(designs/[^"]+)"', designs))
+
+
+def test_a_designs_stylesheet_and_shell_are_served_from_their_own_route(
+    monkeypatch, tmp_path
+):
+    """8.2.0's shell arrives on the same route as the stylesheet.
+
+    8.1.1 fixed the STYLESHEET's URL (`/admin/<css>`, not `/admin/assets/<css>`)
+    and nothing exercised it, because 8.1.0 shipped no design with a `css`. The
+    first real design is where BOTH halves have to be provably reachable: the
+    page asks for each of them, and the route answers from the files that
+    shipped. This asserts the answer, so a design whose module 404s fails here
+    rather than as a dashboard silently rendering Today.
+    """
+
+    _set_home(monkeypatch, tmp_path)
+    client = _local_client(create_test_app())
+
+    files = _design_files()
+    assert files, "the registry names no design files; the scan is vacuous"
+    assert any(name.endswith(".css") for name in files), files
+    assert any(name.endswith(".js") for name in files), files
+    for name in files:
+        response = client.get(f"/admin/{name}")
+        assert response.status_code == 200, name
+        assert response.headers["cache-control"] == "no-store", name
+        body = response.content.decode("utf-8")
+        assert "{" in body and "}" in body, name
+        if name.endswith(".js"):
+            # The factory key the loader looks up, so this proves the right
+            # FILE answered rather than a 200 from some fallback.
+            assert "MCCDesignShells" in body, name

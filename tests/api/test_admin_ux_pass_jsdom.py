@@ -333,12 +333,22 @@ def test_the_analytics_page_reads_tiles_then_in_flight_then_requests(ux_pass) ->
 
 
 def test_the_summary_band_carries_a_cost_tile_first(ux_pass) -> None:
+    """The tile's headline is the WINDOW'S WHOLE COST (ADDENDUM ROUND 4 §4).
+
+    It read ``Cost (reported)`` / ``$1.5000`` until 8.2.0, with the estimated
+    half mentioned underneath -- so on a log where most hosts report no price,
+    the first number on the page described the smallest slice of the traffic
+    (the owner's own dashboard: $0.7097 against $4,050.2926 estimated). What it
+    prints now is ``total_usd``: both halves, summed by the server, with each
+    half still named in the small print so the estimate stays labelled.
+    """
+
     tile = ux_pass["analytics"]["costTile"]
     assert tile["exists"] is True
     assert tile["first"] is True
-    assert tile["label"] == "Cost (reported)"
-    assert tile["value"] == "$1.5000"
-    assert tile["note"] == "7 of 7 priced · estimated $0.2500 shown separately"
+    assert tile["label"] == "Cost"
+    assert tile["value"] == "$1.7500"
+    assert tile["note"] == "7 of 7 priced · $1.5000 reported + $0.2500 est."
 
 
 def test_the_four_summary_charts_are_drawn_and_readable(ux_pass) -> None:
