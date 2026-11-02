@@ -85,6 +85,13 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
 
     Get Started is declared separately: 8.1.0 puts the Appearance card there,
     which is that release's own addition and is proved in the same file.
+
+    8.3.0 adds a NEW page (``usage``) that did not exist when this baseline was
+    taken. It is declared here by name rather than compared: there is nothing
+    on the base tree to compare it to, and every view the baseline DOES name is
+    still compared, unchanged, which is the claim this test exists to make.
+    ``tests/api/test_admin_usage_page_jsdom.py`` carries the addition's own
+    base-written equality against v8.2.0.
     """
 
     baseline = json.loads(UX_BASELINE.read_text(encoding="utf-8"))
@@ -95,7 +102,8 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     mine = {
         name: entry["sha256Normalised"] for name, entry in ux_views["views"].items()
     }
-    assert set(base) == set(mine)
+    assert set(mine) - set(base) == {"usage"}
+    assert set(base) - set(mine) == set()
     moved = sorted(name for name, digest in base.items() if mine[name] != digest)
     assert moved == sorted(UX_CHANGED_VIEWS | {"get_started"})
 

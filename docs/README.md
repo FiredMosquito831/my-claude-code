@@ -4,7 +4,7 @@ The [README](../README.md) is the map: what My Claude Code is, how to install it
 
 | Page | What is in it |
 | --- | --- |
-| [Usage Guide](./USAGE.md) | The manual. Install per platform, first run, connecting each coding agent and desktop app, providers and keys, tiers and routing, web search, analytics, rotation, limits, updating, security, using a VPN, WARP or Tor, troubleshooting. |
+| [Usage Guide](./USAGE.md) | The manual. Install per platform, first run, connecting each coding agent and desktop app, providers and keys, tiers and routing, web search, the usage page, analytics, rotation, limits, updating, security, using a VPN, WARP or Tor, troubleshooting. |
 | [Clients](./CLIENTS.md) | Editor integrations, and the API reference for any OpenAI-, Anthropic- or Gemini-shaped client that is not one of the launchers: one runnable example per endpoint, auth, errors. |
 | [OAuth providers](./OAUTH-PROVIDERS.md) | Sign-in-based providers: a Claude subscription, ChatGPT, Kimi For Coding. |
 | [Messaging](./MESSAGING.md) | Running sessions over Discord or Telegram, with voice-note transcription. |

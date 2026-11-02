@@ -13547,6 +13547,8 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
         | UX_SETTINGS_ONLY_VIEWS
         | SECTION_NAVIGATOR_VIEWS
         | {"get_started"}
+        # 8.3.0: a page this baseline's tree never had (VIEWS_ADDED_AFTER_BASELINES).
+        | VIEWS_ADDED_AFTER_BASELINES
     )
     assert {
         key: value
@@ -13832,6 +13834,8 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
         | UX_SETTINGS_ONLY_VIEWS
         | SECTION_NAVIGATOR_VIEWS
         | {"get_started"}
+        # 8.3.0: a page this baseline's tree never had (VIEWS_ADDED_AFTER_BASELINES).
+        | VIEWS_ADDED_AFTER_BASELINES
     )
     assert {
         key: value
@@ -14699,6 +14703,8 @@ def test_get_started_leaves_every_other_view_as_the_base_tree_drew_it(
         | UX_SETTINGS_ONLY_VIEWS
         | SECTION_NAVIGATOR_VIEWS
         | {GET_STARTED_VIEW}
+        # 8.3.0: a page this baseline's tree never had (VIEWS_ADDED_AFTER_BASELINES).
+        | VIEWS_ADDED_AFTER_BASELINES
     )
     base_without = {key: value for key, value in base.items() if key not in excluded}
     mine_without = {key: value for key, value in mine.items() if key not in excluded}
@@ -14751,3 +14757,16 @@ assert _SECTION_NAVIGATOR_BLOCK, "admin.js no longer declares SECTION_NAVIGATOR"
 SECTION_NAVIGATOR_VIEWS = frozenset(
     re.findall(r"^  ([a-z_]+): \[\n", _SECTION_NAVIGATOR_BLOCK.group(1), re.MULTILINE)
 )
+
+#: Views that did not exist when the base-written baselines above were taken.
+#:
+#: A previous release's baseline can only compare views its own tree HAD, so a
+#: later release's new page lands in the comparison as "a view the base tree
+#: never drew" rather than as drift. Naming it here is the declared, one-line
+#: answer, and each entry carries the file that proves the addition against ITS
+#: OWN base tree -- which is where the byte-identity of every pre-existing view
+#: is actually asserted for that release.
+#:
+#:   8.3.0 USAGE PR 1 -> the `usage` page (tests/api/test_admin_usage_page_jsdom.py,
+#:                      base tree bb85fe79 = v8.2.0)
+VIEWS_ADDED_AFTER_BASELINES = frozenset({"usage"})

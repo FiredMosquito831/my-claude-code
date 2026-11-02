@@ -161,7 +161,7 @@ def test_the_round_trip_is_not_vacuous(shell) -> None:
     """The digest must have had a page to digest, and the design must have run."""
 
     before = shell["roundTrip"]["before"]
-    assert len(before["views"]) == 15
+    assert len(before["views"]) == 16
     assert len(before["chrome"]) > 0  # the action bar and banners live out here
     assert before["htmlAttrs"], "no <html> attributes were captured at all"
     # ...and the switch really did happen: the running shell is Hybrid's.
@@ -183,17 +183,24 @@ def test_hybrid_builds_its_masthead_once(shell) -> None:
 
 
 def test_the_rail_is_numbered_and_grouped_in_the_products_own_order(shell) -> None:
-    """SETUP · AGENTS · ROUTING · OBSERVE · SYSTEM over all fifteen pages.
+    """SETUP · AGENTS · ROUTING · OBSERVE · SYSTEM over all sixteen pages.
 
     The grouped structure is the thing the user said he likes (LEFT RAIL,
     binding). What must also hold is that the NUMBERING is the product's own
     order — a design reorders nothing — and that every page keeps its link.
+
+    8.3.0 adds the sixteenth page (``usage``), first in OBSERVE. The counts here
+    move with it; the ORDER assertion below is what proves the design did not
+    reorder anything to accommodate it.
     """
 
     hybrid = shell["hybrid"]
     assert hybrid["groups"] == ["Setup", "Agents", "Routing", "Observe", "System"]
-    assert hybrid["numbers"] == [f"{index:02d}" for index in range(1, 15)]
-    assert hybrid["sectionNavButtons"] == 15
+    # Sixteen links, one of which (InferHub) has no marketplace key in this
+    # fixture and is therefore hidden — the number counts what is VISIBLE, so
+    # 01…15 over 16 links is the correct reading, not a defect.
+    assert hybrid["numbers"] == [f"{index:02d}" for index in range(1, 16)]
+    assert hybrid["sectionNavButtons"] == 16
     order = hybrid["groupOrder"]
     # Every heading sits directly before the page it opens, and the pages are
     # the product's order: get_started … docs, with no page moved.
@@ -208,6 +215,9 @@ def test_the_rail_is_numbered_and_grouped_in_the_products_own_order(shell) -> No
         "model_config",
         "models",
         "messaging",
+        # 8.3.0: the new page lands before Analytics, which is the position the
+        # user asked for; nothing else moved.
+        "usage",
         "requests",
         "optimizer",
         "web_search",
@@ -276,7 +286,7 @@ def test_the_palette_is_a_dialog_over_pages_sections_and_settings(shell) -> None
     assert palette["modal"] == "true"
     assert palette["labelled"] == "Command palette"
     # It opens on the pages — one per page, which is the whole rail.
-    assert palette["itemsOnOpen"] == 15
+    assert palette["itemsOnOpen"] == 16
     assert set(palette["hintsOnOpen"]) == {"page"}
     assert palette["expandedOnButton"] == "true"
 
@@ -336,7 +346,7 @@ def test_a_burst_of_switches_ends_with_exactly_one_shell(shell) -> None:
     assert burst["state"]["running"]["id"] == "hybrid"
     assert burst["mastheads"] == 1
     assert burst["shellNodes"] == 1
-    assert burst["numbers"] == 14
+    assert burst["numbers"] == 15
     assert burst["groups"] == 5
     assert burst["palettes"] == 0
     assert burst["versionIndicators"] == 1

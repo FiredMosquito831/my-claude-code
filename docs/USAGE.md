@@ -50,6 +50,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
   - [Tutorial: manage many models](#tutorial-manage-many-models)
   - [Catalogue refresh, and what MCC learned](#catalogue-refresh-and-what-mcc-learned)
 - [10. Web search](#10-web-search)
+- [10b. Usage: what is left](#10b-usage-what-is-left-830)
 - [11. Analytics](#11-analytics)
   - [Tutorial: read the request detail](#tutorial-read-the-request-detail)
   - [Tutorial: read a request's cost](#tutorial-read-a-requests-cost)
@@ -4879,8 +4880,50 @@ All **66** advanced options are editable from the Web Search tab's **Advanced op
 
 ---
 
-## 11. Analytics
+## 10b. Usage: what is left (8.3.0)
 
+The **Usage** page answers one question — *how much is left?* — for the providers you actually configured. It is the first page in the dashboard's **Observe** group, above Analytics.
+
+Nothing on this page is asked for. Two providers already report their usage on the responses your own requests carry, and MCC has been capturing those figures since the OAuth cards shipped:
+
+| Card | Where the figures come from | What it can show |
+| --- | --- | --- |
+| **Claude subscription** | Anthropic's `anthropic-ratelimit-unified-*` response headers | 5-hour and weekly window utilisation with their reset times, the unified status Anthropic itself reports, overage status and the usage limit |
+| **ChatGPT / Codex subscription** | Codex's own `x-codex-*` response headers | primary and secondary window utilisation with window length and reset, the credits balance, and the limit name OpenAI reports |
+
+Every other configured provider gets **one sentence** — *"<Provider> publishes no usage endpoint MCC can read."* That is a fact about the provider, not a failure of the page: most of the catalogue publishes no usage figure at all. A provider you have not configured does not appear, in any form.
+
+### The four states, and what each one looks like
+
+Every number on the page is in exactly one of these, and the chip at the top of a card says which:
+
+| State | Chip | What you see |
+| --- | --- | --- |
+| **Measured now** | `Measured` | the number, plus *"Read 3 minutes ago"* |
+| **Measured at T** | `Stale` | the number, the observation time, and *"Read 4 hours ago, which is older than 30 minutes. What follows is what the provider said then, not what it says now."* |
+| **Not available from this provider** | `Not read yet` | *"no response from this provider has carried a usage header since the server started"*, and every figure reads *"not measured by this provider"* |
+| **The read failed** | `Read failed` | *"Could not read usage: \<the reason\>"* — and the page says it is a fact about the read, not about the provider |
+
+A missing value is **never** a zero and never an empty box. The stale bound is 30 minutes, the same interval an on-demand read would use: the header-derived readings cost nothing, so they update with your traffic, and 30 minutes is when a percentage stops being a picture of now.
+
+### Two blocks on every card, never one total
+
+A subscription window is a **percentage of an allowance that resets**. A credits balance is **cash**. Codex reports both on the same response, so the page keeps them apart on purpose:
+
+- **Subscription allowance** — the windows, with a reset time on each.
+- **Credits** / **Overage** — the cash or the overage figures, under their own heading.
+
+There is no element anywhere on the page that adds the two together, and no "remaining" total. Adding a percentage of a plan to a dollars balance would be a wrong number that looks like a right one.
+
+### Where each figure came from
+
+The last line of every card names its source and when it was observed — *"Source: Anthropic's unified rate-limit response headers · observed 2 Nov 2026, 06:38 (2 minutes ago)"*. A balance read four hours ago is not a live balance, and the age on the card is what tells you which one you are reading.
+
+> **This release makes no network call of its own.** The page draws from the two payloads the Providers page already asks for (`/admin/api/anthropic-oauth/sources` and `/admin/api/chatgpt-oauth/status`) and the provider list that arrives with `/admin/api/config`. Opening it adds no request, starts no timer and has no refresh button — the jsdom suite asserts that by recording every URL the page's fetch stub answers and comparing the count before and after the view is opened.
+
+If a subscription card says `Read failed`, the Providers page is where the cause lives: a refused credential, an expired sign-in, or a server that never answered. Fixing it there is what makes the next reading arrive.
+
+## 11. Analytics
 Two separate local SQLite stores under `~/.mcc/logs/`, both written by a background thread so they never block a request.
 
 ### Model requests

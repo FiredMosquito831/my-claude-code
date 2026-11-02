@@ -13239,3 +13239,263 @@ audio.req-media-preview {
   }
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   8.3.0 — THE USAGE PAGE.
+
+   Two blocks per card, never one total (§4.3, Q5), and four honest states
+   (§4.2). The rules that matter for the standing UI-QUALITY-RULE:
+
+   - every card is a grid child with `min-width: 0`, so a 60-character provider
+     name or a `$4,050.2926` figure wraps or ellipsises instead of widening the
+     track and spilling the page sideways;
+   - every long value wraps at the word level with `overflow-wrap: anywhere`,
+     because a provider id has no spaces to break at;
+   - nothing here has a fixed height, so 200 % zoom and a 20 px root font size
+     only make the cards taller.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.usage-section {
+  margin-bottom: 24px;
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* The card. `min-width: 0` is load-bearing: a grid item defaults to
+   `min-width: auto`, which is its content's minimum, and a long unbreakable
+   string then widens the track past the container — the exact spill the
+   standing rule forbids. */
+.usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--card);
+}
+
+.usage-card-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.usage-card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-strong);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-card-keys {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* The state chip. Four tones for four states, and the WORD carries the
+   meaning — colour is redundant, so a reader who cannot see it still gets the
+   distinction between "measured" and "read failed". */
+.usage-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 2px 9px;
+  border: 1px solid var(--neutral-border);
+  border-radius: var(--radius-full);
+  background: var(--neutral-bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.usage-chip-ok {
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.usage-chip-warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.usage-chip-error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error);
+}
+
+.usage-chip-neutral {
+  border-color: var(--neutral-border);
+  background: var(--neutral-bg);
+  color: var(--muted);
+}
+
+/* One block: its own heading, its own note, its own figures. Two of these on a
+   card is how a subscription allowance and a cash balance stay separate. */
+.usage-block {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.usage-block-heading {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-strong);
+}
+
+.usage-block-note {
+  margin: 0 0 10px;
+  max-width: 60ch;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.usage-account-name {
+  margin: 8px 0 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.usage-account-name:first-child {
+  margin-top: 0;
+}
+
+/* The figure list: term on the left, value on the right, and the value is the
+   only side that may wrap. `minmax(0, …)` on both tracks keeps a long value
+   from widening the term column. */
+.usage-figures {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.usage-figures dt {
+  margin: 0;
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-figures dd {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+  min-width: 0;
+  /* A provider id, a model slug or `$4,050.2926` must break rather than push
+     the column wider. `anywhere` is the only value that breaks a string with
+     no spaces in it. */
+  overflow-wrap: anywhere;
+}
+
+/* A value nobody measured. Dimmed AND said, never a zero: the words already
+   read "not measured by this provider", and the colour is redundant. */
+.usage-unmeasured {
+  color: var(--muted);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.usage-state-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.usage-failure {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-sm);
+  background: var(--error-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The provenance line: the source, and when it was observed. Always present,
+   because a number with neither is a number a reader cannot check. */
+.usage-provenance {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* Every other configured provider: one sentence each, no spinner, no retry. */
+.usage-other-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.usage-other-item {
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.usage-other-name {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.usage-other-sentence,
+.usage-other-pool {
+  color: var(--muted);
+}
+
+/* Below 760 px a two-column term/value row squeezes both sides; one column
+   under the other is the phone layout the foundation's 4/3/2/1 rule asks for. */
+@media (max-width: 759px) {
+  .usage-figures {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px 0;
+  }
+
+  .usage-figures dd {
+    text-align: left;
+    padding-bottom: 6px;
+  }
+}
