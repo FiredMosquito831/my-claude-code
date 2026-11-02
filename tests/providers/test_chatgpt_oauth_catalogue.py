@@ -652,6 +652,58 @@ def test_the_allow_list_is_the_seventeen_names_codex_itself_parses():
     assert all(name == name.lower() for name in CODEX_RESPONSE_HEADERS)
 
 
+def test_the_seven_names_a_naive_grep_called_missing_are_still_allow_listed():
+    """8.4.0's re-audit against codex-cli 0.166.0: nothing was removed.
+
+    ``specs/INVESTIGATION-USAGE-AND-CREDITS.md`` §3.8 reported these seven as
+    absent from the installed 0.166.0, on a whole-name ``grep``. They are
+    present -- stored as length-prefixed suffixes behind a shared ``x-codex``
+    head, which is what the linker does to string constants sharing a prefix,
+    so a whole-name search finds nothing while the name is complete. The
+    evidence is in ``response_headers.py``'s module comment, and deleting any
+    of these would blank a card that works.
+
+    Pinned rather than left to a comment, because "remove the field that can
+    never fill" is exactly the action a future audit would take again.
+    """
+
+    for name in (
+        "x-codex-primary-used-percent",
+        "x-codex-primary-window-minutes",
+        "x-codex-primary-reset-at",
+        "x-codex-secondary-used-percent",
+        "x-codex-secondary-window-minutes",
+        "x-codex-secondary-reset-at",
+        "x-codex-limit-name",
+    ):
+        assert name in CODEX_RESPONSE_HEADERS, name
+
+
+def test_the_captured_has_credits_header_reaches_the_admin_payload():
+    """D3: allow-listed at the observer, dropped by the payload, fixed in 8.4.0."""
+
+    from my_claude_code.api.admin_routes import _chatgpt_oauth_windows
+
+    crosscheck = CodexResponseObserver()
+    crosscheck.observe(
+        {
+            "x-codex-credits-has-credits": "false",
+            "x-codex-credits-balance": "0",
+        },
+        status_code=200,
+        now=1_760_000_000.0,
+    )
+    from unittest.mock import patch
+
+    from my_claude_code.api import admin_routes
+
+    with patch.object(admin_routes, "CHATGPT_RESPONSE_OBSERVER", crosscheck):
+        windows = _chatgpt_oauth_windows()
+    assert windows.credits_has_credits == "false"
+    assert windows.credits_balance == "0"
+    assert windows.credits_unlimited == "not yet observed"
+
+
 def test_the_observer_keeps_the_latest_snapshot_and_ignores_bare_responses():
     observer = CodexResponseObserver()
     assert observer.latest is None

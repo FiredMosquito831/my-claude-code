@@ -4880,18 +4880,37 @@ All **66** advanced options are editable from the Web Search tab's **Advanced op
 
 ---
 
-## 10b. Usage: what is left (8.3.0)
+## 10b. Usage: what is left (8.3.0, extended in 8.4.0)
 
 The **Usage** page answers one question — *how much is left?* — for the providers you actually configured. It is the first page in the dashboard's **Observe** group, above Analytics.
 
-Nothing on this page is asked for. Two providers already report their usage on the responses your own requests carry, and MCC has been capturing those figures since the OAuth cards shipped:
+Nothing on this page is *asked of a provider*. Two providers already report their usage on the responses your own requests carry, and MCC has been capturing those figures since the OAuth cards shipped:
 
 | Card | Where the figures come from | What it can show |
 | --- | --- | --- |
 | **Claude subscription** | Anthropic's `anthropic-ratelimit-unified-*` response headers | 5-hour and weekly window utilisation with their reset times, the unified status Anthropic itself reports, overage status and the usage limit |
-| **ChatGPT / Codex subscription** | Codex's own `x-codex-*` response headers | primary and secondary window utilisation with window length and reset, the credits balance, and the limit name OpenAI reports |
+| **ChatGPT / Codex subscription** | Codex's own `x-codex-*` response headers | primary and secondary window utilisation with window length and reset, the credits balance, whether the account has credits at all, and the limit name OpenAI reports |
+
+### From your own traffic (8.4.0)
+
+**This is the block that costs nothing at all.** Two more header families arrive on ordinary inference responses, and MCC now keeps them instead of discarding them:
+
+| Provider | Headers | What they can show |
+| --- | --- | --- |
+| **Nous Portal** | `x-nous-credits-*` | remaining credits (micros and dollars), subscription value and ceiling, rollover, purchased, paid access, the spend source, and an `as-of` stamp |
+| **DeepSeek, OpenRouter, Kimi, Command Code** | the `x-ratelimit-*` family | request and token limits, how many remain, and when each resets |
+
+A provider appears in this block only if it is **configured** and sends one of those families. A host that sends nothing shows `Not read yet`, never a zero — and the page keeps saying that until a real response carries a figure, because there is nothing to fetch and nothing to retry.
+
+> **What is captured, and what is not.** MCC stores only the header names on a **declared allow-list** (`core/usage_capture.py`), with their values **verbatim**. Nothing is computed, nothing is derived from a clock, and nothing is carried forward past the next response. A header nobody allow-listed is not stored at all, so an edge that adds one costs you a diagnostic rather than a surprise on the page.
+
+The observer runs inside the response path of the providers that opt in, and it can never fail a request: a callback that raised would cost that one observation and nothing else. Not one byte of any outbound request changes — these are response headers of requests you were already making.
+
+**How the page knows.** Opening the Usage page makes exactly **one** request, and it is to your own server: `GET /admin/api/usage`. That route is loopback-only and read-only — it reports what the server's memory already holds, opens no connection upstream, reads no credential and starts no timer. There is no **Read now** button, no polling and no background refresh; the readings fill in from your traffic, which is why they cost nothing.
 
 Every other configured provider gets **one sentence** — *"<Provider> publishes no usage endpoint MCC can read."* That is a fact about the provider, not a failure of the page: most of the catalogue publishes no usage figure at all. A provider you have not configured does not appear, in any form.
+
+An on-demand read of a *provider's own* usage endpoints (DeepSeek's balance route, OpenRouter's per-key route, and the others that need a request of their own) is not part of this release. A provider whose only mechanism is one of those shows `Not read yet` rather than the "publishes no endpoint" sentence, because those are different facts.
 
 ### The four states, and what each one looks like
 
@@ -4919,7 +4938,7 @@ There is no element anywhere on the page that adds the two together, and no "rem
 
 The last line of every card names its source and when it was observed — *"Source: Anthropic's unified rate-limit response headers · observed 2 Nov 2026, 06:38 (2 minutes ago)"*. A balance read four hours ago is not a live balance, and the age on the card is what tells you which one you are reading.
 
-> **This release makes no network call of its own.** The page draws from the two payloads the Providers page already asks for (`/admin/api/anthropic-oauth/sources` and `/admin/api/chatgpt-oauth/status`) and the provider list that arrives with `/admin/api/config`. Opening it adds no request, starts no timer and has no refresh button — the jsdom suite asserts that by recording every URL the page's fetch stub answers and comparing the count before and after the view is opened.
+> **This page sends nothing upstream.** The two subscription cards draw from the payloads the Providers page already asks for (`/admin/api/anthropic-oauth/sources` and `/admin/api/chatgpt-oauth/status`), and the provider list arrives with `/admin/api/config`. Since 8.4.0 opening the page makes exactly one more request — `GET /admin/api/usage` on your own server, which reads its memory — and nothing else: no timer, no refresh button, no polling. The jsdom suite asserts that by recording every URL the page's fetch stub answers and comparing the list before and after the view is opened.
 
 If a subscription card says `Read failed`, the Providers page is where the cause lives: a refused credential, an expired sign-in, or a server that never answered. Fixing it there is what makes the next reading arrive.
 

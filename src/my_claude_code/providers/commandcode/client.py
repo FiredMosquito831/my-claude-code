@@ -1,7 +1,7 @@
 """Command Code dual-protocol Provider API implementation."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_gateway_family
@@ -162,6 +162,28 @@ class CommandCodeProvider(BaseProvider):
 
     def throttle_remaining(self, model: str | None = None) -> float:
         return self._openai.throttle_remaining(model)
+
+    def set_response_observer(
+        self, observer: Callable[[Mapping[str, str], int], None] | None
+    ) -> None:
+        """Install one response-header observer on *both* protocol delegates.
+
+        Command Code is the one provider in the catalogue whose single
+        catalogue is served by two classes: the Claude-shaped models go out on
+        Anthropic Messages and everything else on Chat Completions (see
+        :meth:`_delegate`). A response header is a property of the host, not of
+        the protocol the request happened to use, so an observer installed on
+        one delegate would report half the user's traffic and -- worse -- would
+        look like a host that had simply been quiet.
+
+        Added in 8.4.0 for the generic usage observer. When nothing installs
+        one -- which is the default, and was the only state before this release
+        -- neither delegate holds an observer and both behave exactly as they
+        did, because the seam is nullable on each of them.
+        """
+
+        self._anthropic.set_response_observer(observer)
+        self._openai.set_response_observer(observer)
 
     async def cleanup(self) -> None:
         results = await asyncio.gather(

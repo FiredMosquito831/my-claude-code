@@ -392,6 +392,25 @@ class MessagesTransport:
 
         await self._provider.cleanup()
 
+    def set_response_observer(
+        self, observer: Callable[[Mapping[str, str], int], None] | None
+    ) -> None:
+        """Install one response-header observer on this door (8.4.0).
+
+        A forwarder, and nothing more: the Messages door is a thin wrapper over
+        its own :class:`AnthropicMessagesProvider`, which has carried the seam
+        since the Claude subscription's headers needed reading. A marketplace
+        already installs its header reader there through this same setter, so
+        this is the same mechanism with a second caller -- a provider that
+        speaks all three protocols is observed on all three rather than on the
+        two this release happened to add.
+
+        ``None`` restores the door to no observer, which is what every install
+        without an opted-in provider has.
+        """
+
+        self._provider.set_response_observer(observer)
+
     async def probe(self, model_id: str) -> None:
         """Ask this endpoint whether it serves one model. Raises what it said."""
 

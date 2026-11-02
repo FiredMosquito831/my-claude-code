@@ -62,12 +62,17 @@ SOURCE_ROUTES = [
     "/admin/api/chatgpt-oauth/status",
 ]
 
-#: The base tree (v8.2.0) wrote this, by running the ``usage_views`` scenario
-#: against its own ``admin_static`` with the same fixture through the same
-#: harness. This release's job is to leave every view it names exactly as it
-#: found it.
+#: The base tree (v8.3.0) wrote this, by running the ``usage_views`` scenario
+#: against its own ``admin_static`` with the same fixture and the same harness
+#: run (``MCC_JSDOM_SCENARIO=usage_views``, output captured, ``views`` and
+#: ``navLabels`` written verbatim). 8.4.0's job is to leave every view it names
+#: exactly as it found it, with the ONE declared exception below.
+#:
+#: Re-taken from 8.3.0 rather than 8.2.0 because the Usage page itself is 8.3.0's
+#: work: comparing against 8.2.0 would report the page's own existence as a
+#: change and hide whatever this release did to it.
 BASE_BASELINE = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "usage_page_dom_8_2_0.json"
+    Path(__file__).resolve().parents[1] / "fixtures" / "usage_page_dom_8_3_0.json"
 )
 
 
@@ -82,14 +87,15 @@ def usage_views() -> dict:
     views = _run(MCC_JSDOM_SCENARIO="usage_views")
     # Writing the baseline is a deliberate, one-off act: point
     # MCC_JSDOM_USAGE_BASELINE_OUT at a path and run this module against the
-    # BASE tree's admin_static. Nothing in CI sets it.
+    # BASE tree's admin_static. Nothing in CI sets it. (8.4.0 wrote
+    # ``usage_page_dom_8_3_0.json`` this way from the v8.3.0 release worktree.)
     out = os.environ.get("MCC_JSDOM_USAGE_BASELINE_OUT")
     if out:
         Path(out).write_text(
             json.dumps(
                 {
-                    "base_commit": "bb85fe79",
-                    "written_by": "BASE tree bb85fe79 (v8.2.0), scenario usage_views",
+                    "base_commit": "84d82c5a",
+                    "written_by": "BASE tree 84d82c5a (v8.3.0), scenario usage_views",
                     "views": views["views"],
                     "nav": [entry["view"] for entry in views["navLabels"]],
                 },
@@ -162,21 +168,24 @@ def test_the_page_is_a_real_view_with_markup(usage) -> None:
 # ------------------------------------------------------- zero new traffic ---
 
 
-def test_opening_the_page_makes_no_request(usage) -> None:
-    """The release's whole contract, measured at the fetch stub.
+def test_opening_the_page_makes_exactly_one_local_request(usage) -> None:
+    """The contract, measured at the fetch stub, updated for 8.4.0.
 
-    ``before`` is the recorder after the page has finished loading, ``afterOpen``
-    is after clicking the nav entry, and ``afterRepaint`` is after three more
-    renders with a payload already in memory (which is what a theme switch, a
-    settings reload or a second account arriving does to the page). All three
-    are the same number, and the recorder is the stub that answers every
-    request the dashboard makes -- not a counter this scenario keeps itself.
+    8.3.0's promise was "opening this page adds no request". 8.4.0 adds one and
+    only one: ``GET /admin/api/usage``, which reads THIS SERVER'S MEMORY and
+    sends nothing upstream. The promise that survives unchanged is the one that
+    mattered -- the page never *asks a provider* for anything -- and it is what
+    the assertions below hold to: exactly one URL on the first open, the usage
+    route and nothing else, and none at all on the repaints that follow, so a
+    theme switch or a settings reload costs nothing.
     """
 
     requests = usage["requests"]
     assert requests["opened"] is True
-    assert requests["before"]["calls"] == requests["afterOpen"]["calls"]
-    assert requests["before"]["urls"] == requests["afterOpen"]["urls"]
+    assert requests["addedOnOpen"] == ["/admin/api/usage"]
+    assert requests["addedOnRepaint"] == []
+    # And nothing else moved, so the one new URL is the whole difference.
+    assert requests["before"]["calls"] + 1 == requests["afterOpen"]["calls"], requests
     assert requests["afterOpen"]["calls"] == requests["afterRepaint"]["calls"]
     assert requests["afterOpen"]["urls"] == requests["afterRepaint"]["urls"]
     # A recorder that never recorded anything would pass the equality above
@@ -185,7 +194,15 @@ def test_opening_the_page_makes_no_request(usage) -> None:
 
 
 def test_the_page_names_only_the_two_existing_routes(usage) -> None:
-    """No third route can have crept in, because only two are declared."""
+    """The two SUBSCRIPTION payloads are still the only ones the page reuses.
+
+    8.4.0 adds a third source of figures, and it is a different thing: a read of
+    this server's own memory rather than a payload the Providers page already
+    pulls. That one is asserted separately, by ``addedOnOpen`` in
+    ``test_opening_the_page_makes_exactly_one_local_request`` -- so this list
+    staying at two is the claim that no subscription reading gained a route of
+    its own.
+    """
 
     assert usage["requests"]["sources"] == SOURCE_ROUTES
 
@@ -298,16 +315,59 @@ def test_the_two_failure_states_never_look_like_each_other(usage) -> None:
 
 
 def test_every_other_configured_provider_gets_one_sentence(usage) -> None:
-    """§5.4/Q7, and only providers holding a credential."""
+    """§5.4/Q7, and only providers holding a credential.
+
+    ``deepseek`` left this list in 8.4.0: it has a header mechanism, so it is
+    a CARD in the "From your own traffic" block rather than a sentence here.
+    One row per provider, and the row that exists is the one with something to
+    say. The rest are still exactly one sentence each, with no control of any
+    kind.
+    """
 
     providers = usage["providers"]
-    assert providers["otherIds"] == ["deepseek", "novita", "cline", "ollama"]
+    assert providers["otherIds"] == ["novita", "cline", "ollama"]
     for item in providers["others"]:
         # One sentence, in the words the user approved.
         assert NO_ENDPOINT_SENTENCE in item["sentence"]
         # No spinner, no retry, no control at all: this is a fact, not a task.
         assert item["controls"] == 0
         assert item["spinner"] == 0
+
+
+def test_a_provider_with_a_mechanism_is_a_card_not_a_sentence(usage) -> None:
+    """The one row per provider rule, from the other side of the split."""
+
+    captured = usage["captured"]
+    assert captured["shownFor"] == ["DeepSeek"]
+    assert "deepseek" not in usage["providers"]["otherIds"]
+    # A reading the server holds for a provider this install does not have is
+    # NOT drawn: the page is about what you configured.
+    assert "Nous Portal" not in captured["titles"]
+
+
+def test_the_captured_block_renders_every_state_the_server_can_send(usage) -> None:
+    """The four states plus an unknown word, mapped rather than guessed."""
+
+    captured = usage["captured"]
+    mapping = {item["serverState"]: item["kind"] for item in captured["stateFixtures"]}
+    assert mapping["measured"] == "measured"
+    assert mapping["stale"] == "stale"
+    assert mapping["not_measured"] == "not_measured"
+    assert mapping["unsupported"] == "unsupported"
+    # A word the page has never seen must not be rendered as a measurement.
+    assert mapping["something_new"] == "not_measured"
+
+
+def test_a_provider_that_sent_nothing_says_not_read_rather_than_zero(usage) -> None:
+    card = usage["captured"]["unreadCard"][0]
+    assert card["chip"] == "Not read yet"
+    assert card["chipState"] == "not_measured"
+    # No block at all, because there is no value to put in one -- and no "0".
+    assert card["blocks"] == []
+    assert (
+        "fills in on the next" in card["stateNote"]
+        or "not the same" in (card["stateNote"])
+    )
 
 
 def test_a_provider_with_no_credential_is_not_on_the_page(usage) -> None:
@@ -471,30 +531,38 @@ def test_a_long_plan_name_and_a_long_status_wrap_rather_than_break_the_row(
 def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
     """TODAY MUST RENDER BYTE-IDENTICALLY. This is that proof.
 
-    The baseline is this same scenario run against the BASE tree ``bb85fe79``
-    (v8.2.0) with the same fixtures and the same waits. Both digests are
+    The baseline is this same scenario run against the BASE tree ``84d82c5a``
+    (v8.3.0) with the same fixtures and the same waits. Both digests are
     compared: the raw one, and one with the 8.1.0/7.122.3 whole-page additions
     normalised out on both sides (``usageNormalise``) so a later release's
     strip cannot hide a real change on the page underneath it.
 
-    This release adds ONE page. Everything else is what it was.
+    This release changes ONE page -- the Usage page it is the subject of -- and
+    touches nothing else at all.
     """
 
     baseline = json.loads(BASE_BASELINE.read_text(encoding="utf-8"))
-    assert baseline["base_commit"] == "bb85fe79"
-    assert "bb85fe79" in baseline["written_by"]
+    assert baseline["base_commit"] == "84d82c5a"
+    assert "84d82c5a" in baseline["written_by"]
     base = baseline["views"]
     mine = usage_views["views"]
 
     #: Views this release DELIBERATELY changed after the baseline was taken.
-    #: `guide` is the one: a new page is a documented feature, and the Guide's
-    #: task section for it is that documentation (the release's own scope, §7
-    #: PR 1: "a page entry in docs/, README.md, USAGE, the Guide task section").
-    #: Nothing else may be here.
-    DECLARED_MOVES = {"guide"}
+    #:
+    #: `usage` -- USAGE PR 2 adds the "From your own traffic" block to this one
+    #: page: markup, a renderer and a route.
+    #:
+    #: `guide` -- this release documents that block in the in-dashboard Guide,
+    #: which is a deliverable of every feature (IV.15) and is the same view
+    #: 8.3.0 declared when it documented the page itself.
+    #:
+    #: Both are written out rather than left empty so the intent is visible: an
+    #: empty set would say this release changed nothing, which is not true, and
+    #: would make the next release's real regression look declared.
+    DECLARED_MOVES = {"guide", "usage"}
 
-    # Exactly one view is new, it is `usage`, and nothing was removed.
-    assert sorted(set(mine) - set(base)) == ["usage"]
+    # No view is new and none was removed: 8.3.0 already had the page.
+    assert sorted(set(mine) - set(base)) == []
     assert sorted(set(base) - set(mine)) == []
 
     moved = sorted(
@@ -504,9 +572,9 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
         "these views are not what the base tree drew, and are not declared "
         f"moves: {sorted(set(moved) - DECLARED_MOVES)}"
     )
-    # The declared move really is the Guide's new section and nothing else --
-    # the normalised digest (which strips the 8.1.0 strip and 7.122.3 chips)
-    # moves for the same single view.
+    # The declared move is the Usage page's new block and nothing else -- the
+    # normalised digest (which strips the 8.1.0 strip and 7.122.3 chips) moves
+    # for the same single view, so the change is not one of those wrappers.
     assert sorted(
         view
         for view in base
@@ -518,21 +586,23 @@ def test_the_equality_comparison_is_not_vacuous(usage_views) -> None:
     """The comparison above would also pass if nothing had a digest."""
 
     baseline = json.loads(BASE_BASELINE.read_text(encoding="utf-8"))
-    assert len(baseline["views"]) == 15
+    assert len(baseline["views"]) == 16
     for view, entry in baseline["views"].items():
         assert entry["length"] > 0, view
         assert len(entry["sha256"]) == 64, view
-    # And the branch's own run really carried content, including the new page.
+    # And the branch's own run really carried content, including the page this
+    # release changes.
     assert usage_views["views"]["usage"]["length"] > 0
     assert usage_views["views"]["requests"]["length"] > 10000
 
 
-def test_the_only_navigation_change_is_the_new_entry(usage_views) -> None:
-    """One link added, immediately before Analytics, and no other moved."""
+def test_the_navigation_is_unchanged(usage_views) -> None:
+    """This release adds no page, so the sidebar is exactly 8.3.0's."""
 
     baseline = json.loads(BASE_BASELINE.read_text(encoding="utf-8"))
     base_nav = baseline["nav"]
     mine_nav = [entry["view"] for entry in usage_views["navLabels"]]
-    expected = list(base_nav)
-    expected.insert(expected.index("requests"), "usage")
-    assert mine_nav == expected
+    assert mine_nav == list(base_nav)
+    # Named rather than implied: the Usage entry still sits immediately before
+    # Analytics, which is what 8.3.0 promised about this page's position.
+    assert mine_nav.index("usage") + 1 == mine_nav.index("requests")

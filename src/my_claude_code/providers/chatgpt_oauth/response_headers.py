@@ -24,6 +24,28 @@ from dataclasses import dataclass, field
 #: Read out of Codex CLI 0.151.0's SSE response handler, lower-cased because
 #: HTTP header names are case-insensitive and ``httpx`` hands them back in the
 #: casing the server chose.
+#:
+#: **Re-audited against codex-cli 0.166.0 in 8.4.0, and nothing was removed.**
+#: The research note that prompted the audit (``specs/INVESTIGATION-USAGE-AND-
+#: CREDITS.md`` §3.8) reported that seven of these names -- the six window
+#: fields and ``x-codex-limit-name`` -- were "absent from the installed 0.166.0"
+#: on a ``grep -c`` of the whole name. They are not absent. They are stored in
+#: the binary as **length-prefixed suffixes of a shared ``x-codex`` head**,
+#: which is what the linker does to string constants sharing a prefix:
+#:
+#:     x-codex-credits-balance\x02x-\xc0<NUL>\xc0\x15-primary-used-percent
+#:                                      ^^  ^^^^^^^^^^^^^^^^^^^^^^ 21 bytes
+#:
+#: so a whole-name search finds nothing while the name is present and complete.
+#: Checked in two binaries -- codex-cli 0.166.0's npm payload (371,735,856
+#: bytes) and the older sandbox build (341,142,832 bytes) -- where all
+#: seventeen names are present and all seven windows/limit names are stored
+#: this way. Nothing was removed, because nothing is gone.
+#:
+#: The lesson for the next audit: a header name that greps to zero in a
+#: stripped binary is a claim about the search, not about the header. Check for
+#: the suffix behind its length byte before deleting a field that can never
+#: fill -- deleting these seven would have blanked a card that works.
 CODEX_RESPONSE_HEADERS: frozenset[str] = frozenset(
     {
         # Catalogue/stream identity.

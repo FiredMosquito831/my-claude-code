@@ -11356,6 +11356,16 @@ function usageHarness() {
        which names the symptom instead of the cause. */
     renderUsageAnthropicCard,
     renderUsageChatGPTCard,
+    /* 8.4.0: the header-derived block. `rememberUsageCaptured` is the door a
+       real answer comes through, so a scenario feeds it the route's own shape
+       rather than inventing a second one. */
+    usageCaptured,
+    rememberUsageCaptured,
+    rememberUsageCapturedFailure,
+    loadUsageCaptured,
+    renderUsageCapturedCard,
+    usageCapturedStateKind,
+    USAGE_HEADER_BLOCKS,
   };
 }
 
@@ -18662,9 +18672,11 @@ async function refreshChatGPTOAuthStatus(details) {
    infers one from a 429, carries a value forward past the next response, or
    renders a missing value as a zero.
 
-   ZERO NEW TRAFFIC is a property of the code, not a promise.
-   `openUsageView()` calls nothing: it paints from three payloads the dashboard
-   has already fetched for its own reasons --
+   ONE LOCAL READ, AND NOTHING UPSTREAM is a property of the code, not a
+   promise. `openUsageView()` makes exactly one request, 8.4.0's
+   `GET /admin/api/usage`, which reads this server's memory; the rest of the
+   page paints from payloads the dashboard has already fetched for its own
+   reasons --
      - `/admin/api/anthropic-oauth/sources` and
        `/admin/api/chatgpt-oauth/status`, the two the Providers page asks for
        to draw its subscription cards, and
@@ -18672,8 +18684,10 @@ async function refreshChatGPTOAuthStatus(details) {
        `load()` fetches once on every page load for the whole dashboard.
    The two OAuth answers are remembered by `rememberUsagePayload()`, called
    from the two refreshers the Providers page already runs, so opening this
-   page reuses an answer rather than asking again. There is no refresh button,
-   no timer and no second read path anywhere in this block.
+   page reuses an answer rather than asking again. There is no refresh button
+   and no timer anywhere in this block; the one read is made when the view is
+   opened and never again, which is what keeps `usageCaptured.state` at
+   `ready` and a repaint a pure read.
 
    SUBSCRIPTION ALLOWANCE AND CASH ARE TWO BLOCKS, never one total (§4.3, Q5).
    Codex reports both on the same response, which is what forces the rule: a
@@ -18758,6 +18772,252 @@ function rememberUsageFailure(providerId, error) {
   };
   if (state.activeView === "usage") paintUsageView();
 }
+
+/* 8.4.0 (USAGE PR 2): the third block, fed by what providers put on the
+   responses your own requests already carry. `GET /admin/api/usage` is a READ
+   of this server's memory -- it opens no connection, reads no credential and
+   starts no timer -- so opening the Usage page is still one extra local GET
+   and nothing else. That single GET is what makes the four states below
+   possible for a provider the page has never otherwise heard from.
+
+   The state words come from the SERVER, not from this file: the route decides
+   measured / stale / not_measured / unsupported from the observation time it
+   holds, and this page renders what it is told. There is exactly one place
+   that arithmetic happens, and it is not in a browser. */
+const usageCaptured = {
+  state: "pending",
+  payload: null,
+  error: "",
+};
+
+/** Remember the answer to the one usage read this page makes. */
+function rememberUsageCaptured(payload) {
+  usageCaptured.state = "ready";
+  usageCaptured.payload = payload;
+  usageCaptured.error = "";
+  if (state.activeView === "usage") paintUsageView();
+}
+
+function rememberUsageCapturedFailure(error) {
+  usageCaptured.state = "failed";
+  usageCaptured.payload = null;
+  usageCaptured.error =
+    (error && error.message) || String(error || "no reason given");
+  if (state.activeView === "usage") paintUsageView();
+}
+
+/** Ask the server what it has already seen. One GET, no parameters.
+ *
+ *  Called when the view OPENS and by nothing else -- no timer, no polling, no
+ *  refresh button (§5.5.2). The read costs no upstream traffic; it is this
+ *  machine's own memory, and the figures in it arrived on requests the user
+ *  made anyway. */
+async function loadUsageCaptured() {
+  try {
+    rememberUsageCaptured(await api("/admin/api/usage"));
+  } catch (error) {
+    rememberUsageCapturedFailure(error);
+  }
+}
+
+/** One header-derived provider's card.
+ *
+ *  Two blocks, never one: the allowance figures (a percentage or a remaining
+ *  count that resets) and the credits figures (money that does not) are drawn
+ *  under their own headings, exactly as the two subscription cards are. Which
+ *  block a header belongs to is decided by its NAME through `USAGE_HEADER_BLOCKS`
+ *  below -- declared data, not a branch on the provider's id, so a host that
+ *  starts sending a new credits field shows it without a release. */
+function renderUsageCapturedCard(provider, pool) {
+  const card = usageCardShell(provider.display_name || provider.provider_id);
+  const poolLine = usagePoolLine(pool);
+  if (poolLine) {
+    const keys = document.createElement("p");
+    keys.className = "usage-card-keys";
+    keys.textContent = poolLine;
+    card.appendChild(keys);
+  }
+  const stateKind = usageCapturedStateKind(provider.state);
+  card
+    .querySelector(".usage-card-heading")
+    .appendChild(usageChip(stateKind));
+
+  if (stateKind === "not_measured" || stateKind === "unsupported") {
+    // Same two shapes of "nothing to show", and the words keep them apart:
+    // one is a point of capture waiting for traffic, the other is a provider
+    // with no point of capture at all.
+    const note = document.createElement("p");
+    note.className = "usage-state-note";
+    note.textContent =
+      stateKind === "unsupported"
+        ? usageUnavailableSentence(provider.display_name || provider.provider_id)
+        : provider.detail
+          ? `${provider.detail} arrive on the responses your own requests ` +
+            "carry, so this fills in on the next one. Until then there is " +
+            "nothing to show, which is not the same as nothing left."
+          : "No response from this provider has carried a usage figure since " +
+            "the server started. It is read from your own traffic, so this " +
+            "fills in on the next request.";
+    card.appendChild(note);
+    appendUsageProvenance(
+      card,
+      provider.detail || "the provider's own response headers",
+      null,
+    );
+    return card;
+  }
+
+  const values = provider.values || {};
+  USAGE_HEADER_BLOCKS.forEach((spec) => {
+    const present = spec.headers.filter((name) =>
+      Object.prototype.hasOwnProperty.call(values, name),
+    );
+    if (!present.length) return;
+    const block = usageBlock(
+      spec.heading,
+      spec.note,
+    );
+    present.forEach((name) => {
+      appendUsageFigure(block.list, spec.labels[name] || name, values[name], {
+        instant: spec.instant.includes(name),
+      });
+    });
+    card.appendChild(block.block);
+  });
+
+  const age = usageAge(provider.observed_at);
+  const stateInfo = {
+    age,
+    kind: stateKind,
+    sentence:
+      stateKind === "stale"
+        ? `Read ${age ? age.text : "a while ago"}, which is older than 30 ` +
+          "minutes. What follows is what the provider said then, not what it " +
+          "says now."
+        : `Read ${age ? age.text : "just now"}.`,
+  };
+  const stateNote = document.createElement("p");
+  stateNote.className = "usage-state-note";
+  stateNote.textContent = stateInfo.sentence;
+  card.appendChild(stateNote);
+  appendUsageProvenance(
+    card,
+    provider.detail || "the provider's own response headers",
+    stateInfo,
+  );
+  return card;
+}
+
+/** The server's state word, mapped to the four chip states this file knows.
+ *
+ *  One translation and no more: the route decides, this maps the vocabulary.
+ *  An unknown word is `not_measured` rather than a guess, because a chip that
+ *  claims a measurement is the one direction this page must never fail in. */
+function usageCapturedStateKind(serverState) {
+  if (serverState === "measured" || serverState === "stale") return serverState;
+  if (serverState === "unsupported") return "unsupported";
+  return "not_measured";
+}
+
+/** Which allow-listed header name belongs in which block, and what to call it.
+ *
+ *  Declared data (IV.6). The names are the ones `core/usage_capture.py`
+ *  allow-lists; a name the server did not send is simply absent from `values`
+ *  and its row is not drawn, so a host that reports only some of them gets
+ *  only those rows.
+ *
+ *  `instant` marks a value that is an epoch the reader should see as local
+ *  time, with the raw value kept on `title` -- the same rule `usageInstant`
+ *  applies to the subscription cards. An `as-of` in milliseconds is an epoch
+ *  too and is treated as one. */
+const USAGE_HEADER_BLOCKS = [
+  {
+    heading: "Credits",
+    note:
+      "A balance, not a percentage. It does not reset with a window and it is " +
+      "not added to the figures in any other block.",
+    instant: ["x-nous-credits-as-of-ms"],
+    headers: [
+      "x-nous-credits-remaining-usd",
+      "x-nous-credits-remaining-micros",
+      "x-nous-credits-subscription-usd",
+      "x-nous-credits-subscription-micros",
+      "x-nous-credits-subscription-limit-usd",
+      "x-nous-credits-subscription-limit-micros",
+      "x-nous-credits-rollover-micros",
+      "x-nous-credits-purchased-usd",
+      "x-nous-credits-purchased-micros",
+      "x-nous-credits-denominator-kind",
+      "x-nous-credits-spend-source",
+      "x-nous-credits-paid-access",
+      "x-nous-credits-disabled-reason",
+      "x-nous-credits-window-paused-reason",
+      "x-nous-credits-keep-going-on-credits",
+      "x-nous-credits-window-gauges",
+      "x-nous-credits-version",
+      "x-nous-credits-as-of-ms",
+      "x-nous-tool-pool-micros",
+      "x-nous-tool-pool-gated-off",
+    ],
+    labels: {
+      "x-nous-credits-remaining-usd": "Credits remaining",
+      "x-nous-credits-remaining-micros": "Credits remaining (micros)",
+      "x-nous-credits-subscription-usd": "Subscription value",
+      "x-nous-credits-subscription-micros": "Subscription value (micros)",
+      "x-nous-credits-subscription-limit-usd": "Subscription ceiling",
+      "x-nous-credits-subscription-limit-micros": "Subscription ceiling (micros)",
+      "x-nous-credits-rollover-micros": "Rolled over (micros)",
+      "x-nous-credits-purchased-usd": "Purchased",
+      "x-nous-credits-purchased-micros": "Purchased (micros)",
+      "x-nous-credits-denominator-kind": "Denominator",
+      "x-nous-credits-spend-source": "Spend source",
+      "x-nous-credits-paid-access": "Paid access",
+      "x-nous-credits-disabled-reason": "Disabled because",
+      "x-nous-credits-window-paused-reason": "Window paused because",
+      "x-nous-credits-keep-going-on-credits": "Keeps going on credits",
+      "x-nous-credits-window-gauges": "Window gauges",
+      "x-nous-credits-version": "Header version",
+      "x-nous-credits-as-of-ms": "As of",
+      "x-nous-tool-pool-micros": "Tool pool (micros)",
+      "x-nous-tool-pool-gated-off": "Tool pool gated off",
+    },
+  },
+  {
+    heading: "Rate limits",
+    note:
+      "What this host says about the request rate it allows you. A remaining " +
+      "count and a reset belong together; neither is a balance.",
+    instant: ["x-ratelimit-reset", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens", "ratelimit-reset"],
+    headers: [
+      "x-ratelimit-limit-requests",
+      "x-ratelimit-remaining-requests",
+      "x-ratelimit-reset-requests",
+      "x-ratelimit-limit-tokens",
+      "x-ratelimit-remaining-tokens",
+      "x-ratelimit-reset-tokens",
+      "x-ratelimit-limit",
+      "x-ratelimit-remaining",
+      "x-ratelimit-reset",
+      "ratelimit-limit",
+      "ratelimit-remaining",
+      "ratelimit-reset",
+    ],
+    labels: {
+      "x-ratelimit-limit-requests": "Request limit",
+      "x-ratelimit-remaining-requests": "Requests remaining",
+      "x-ratelimit-reset-requests": "Requests reset",
+      "x-ratelimit-limit-tokens": "Token limit",
+      "x-ratelimit-remaining-tokens": "Tokens remaining",
+      "x-ratelimit-reset-tokens": "Tokens reset",
+      "x-ratelimit-limit": "Limit",
+      "x-ratelimit-remaining": "Remaining",
+      "x-ratelimit-reset": "Resets",
+      "ratelimit-limit": "Limit",
+      "ratelimit-remaining": "Remaining",
+      "ratelimit-reset": "Resets",
+    },
+  },
+];
 
 /** One payload value as the page shows it: the provider's string, or why not.
  *
@@ -19198,6 +19458,12 @@ function renderUsageChatGPTCard(spec, displayName, entry, pool) {
   );
   [
     ["Credits balance", first.credits_balance],
+    // 8.4.0 (D3): OpenAI's own boolean, allow-listed by the observer since it
+    // was written and dropped by the payload until now. It is a separate fact
+    // from the balance -- an account can say "no credits" and report a balance
+    // of zero, and one of those means "spent out" while the other means "this
+    // plan does not carry credits at all".
+    ["Has credits", first.credits_has_credits],
     ["Unlimited credits", first.credits_unlimited],
     ["Limit name", first.limit_name],
   ].forEach(([term, raw]) => {
@@ -19254,12 +19520,15 @@ function usageConfiguredProviders() {
 function paintUsageView() {
   const grid = byId("usageSubscriptionsGrid");
   const otherList = byId("usageOtherList");
+  const capturedGrid = byId("usageCapturedGrid");
   if (!grid || !otherList) return;
   grid.replaceChildren();
   otherList.replaceChildren();
+  // Cleared here, at the top, rather than at the append below: every branch
+  // that can skip a card must leave an empty grid, not the previous paint.
+  if (capturedGrid) capturedGrid.replaceChildren();
 
   const configured = usageConfiguredProviders();
-  const byProvider = new Map(configured.map((entry) => [entry.provider_id, entry]));
   const knownToServer = new Map(
     (Array.isArray(state.config?.provider_status)
       ? state.config.provider_status
@@ -19311,6 +19580,57 @@ function paintUsageView() {
         "where that happens.";
   }
 
+  // ---- the providers whose figures arrive on your own traffic (8.4.0)
+  //
+  // One card per CONFIGURED provider the server has an opinion about, and the
+  // server's own state word decides what the card says. A provider the server
+  // reports but this install does not hold a credential for is skipped: the
+  // page is about what you have, and naming 59 catalogue ids to say "nothing"
+  // is a wall of unknown providers, which is the thing §5.2 forbids.
+  const rowByProvider = new Map(
+    (Array.isArray(usageCaptured.payload?.providers)
+      ? usageCaptured.payload.providers
+      : []
+    ).map((row) => [row.provider_id, row]),
+  );
+  let anyCaptured = false;
+  configured.forEach((provider) => {
+    if (subscriptionIds.has(provider.provider_id)) return;
+    if (provider.provider_id === "openai") return;
+    const row = rowByProvider.get(provider.provider_id);
+    // No row means the server has no mechanism for this provider at all: it is
+    // the state-3 sentence below, not a card with nothing on it.
+    if (!row) return;
+    if (!row.mechanisms || !row.mechanisms.length) return;
+    anyCaptured = true;
+    if (capturedGrid) {
+      capturedGrid.appendChild(
+        renderUsageCapturedCard(
+          { ...row, display_name: row.display_name || provider.display_name },
+          provider.keys ? { count: provider.keys } : null,
+        ),
+      );
+    }
+  });
+  const capturedEmpty = byId("usageCapturedEmpty");
+  if (capturedEmpty) {
+    let sentence = "";
+    if (usageCaptured.state === "failed") {
+      // State 4, in the page's own words: the read of THIS server failed, which
+      // is a fact about the read and not about any provider.
+      sentence =
+        "Could not read what this server has already observed: " +
+        `${usageCaptured.error}. This is a fact about the read, not about any ` +
+        "provider, and nothing will be retried on its own.";
+    } else if (!anyCaptured) {
+      sentence =
+        "None of your configured providers sends a usage figure on its own " +
+        "responses, so there is nothing in this block yet.";
+    }
+    capturedEmpty.hidden = !sentence;
+    capturedEmpty.textContent = sentence;
+  }
+
   // ---- every other configured provider, one plain sentence each
   const others = configured.filter((provider) => {
     if (subscriptionIds.has(provider.provider_id)) return false;
@@ -19318,8 +19638,11 @@ function paintUsageView() {
     // the same subscription behind another name, so it is the same card, not
     // a second row saying "no usage endpoint".
     if (provider.provider_id === "openai") return false;
-    // The OpenCode pair share one account behind two gateways; naming it once
-    // is what the Providers page does and what a reader expects here.
+    // A provider that got a card above is not repeated as a sentence: the one
+    // row per provider rule, and the reason a configured OpenRouter does not
+    // appear twice with two different answers.
+    const row = rowByProvider.get(provider.provider_id);
+    if (row && row.mechanisms && row.mechanisms.length) return false;
     return true;
   });
   others.forEach((provider) => {
@@ -19364,13 +19687,25 @@ function paintUsageView() {
   }
 }
 
-/** Open the Usage page: a read of what the dashboard already has.
+/** Open the Usage page: one local GET, and a paint of what is already here.
  *
- *  THIS FUNCTION MAKES NO REQUEST -- that is the release's contract (§7 PR 1,
- *  "zero new traffic"), and the jsdom scenario pins it by recording every URL
- *  the fetch stub answers and asserting that opening this view adds none. */
+ *  TWO things, and the second is the one worth stating:
+ *
+ *  1. 8.4.0 adds `loadUsageCaptured()` -- a single `GET /admin/api/usage`,
+ *     which reads THIS SERVER'S MEMORY and nothing else. It opens no upstream
+ *     connection, reads no credential and starts no timer, and there is no
+ *     refresh button anywhere on this page (§5.5.2).
+ *  2. 8.3.0's contract still holds for everything else: the two subscription
+ *     cards are painted from payloads the Providers page already fetched, and
+ *     opening the view adds no second read for them.
+ *
+ *  The jsdom scenario pins both halves by recording every URL the fetch stub
+ *  answers: exactly one new URL on open, and it is the usage route. */
 function openUsageView() {
   paintUsageView();
+  if (usageCaptured.state === "pending") {
+    loadUsageCaptured();
+  }
 }
 
 async function importChatGPTOAuthCodexTokens(button) {

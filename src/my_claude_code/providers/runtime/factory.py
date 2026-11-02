@@ -42,6 +42,7 @@ from .opencode_credentials import build_opencode_provider
 from .proxy_leg import ProxiedLegRateLimiter
 from .proxy_rotating import ProxyRotatingProvider, ProxyRotationState
 from .rotating import RotatingProvider
+from .usage_observers import install_usage_observer
 
 ProviderFactory = Callable[
     [ProviderConfig, Settings, ProviderRateLimiter], BaseProvider
@@ -509,6 +510,31 @@ def _create_leaf_provider(
     )
     if exit_stops is not None and isinstance(rate_limiter, ProxiedLegRateLimiter):
         rate_limiter.arm_exit_stops(transport=True, rate_limit=exit_stops.rate_limit)
+    provider = _instantiate_leaf(descriptor, config, settings, rate_limiter)
+    # 8.4.0: the generic usage observer, on the seam the two OAuth providers
+    # already use. Installed here because this builder is the one place every
+    # provider -- the plain one, every proxied chain leg and a chain's Direct
+    # rung -- passes through exactly once and only for inference.
+    #
+    # It is a no-op for a provider that did not opt in (see
+    # ``config.usage_sources``), so every host that sends no usage header is
+    # the object it always was, with nothing written on it. For one that did,
+    # it installs a callback that records allow-listed response headers into
+    # ``core.usage_capture`` and does nothing else: no request header, no body,
+    # no timeout, no retry, no ladder. The equality run in the release's report
+    # is what proves the last sentence rather than asserting it.
+    install_usage_observer(provider, descriptor.provider_id)
+    return provider
+
+
+def _instantiate_leaf(
+    descriptor: ProviderDescriptor,
+    config: ProviderConfig,
+    settings: Settings,
+    rate_limiter: ProviderRateLimiter,
+) -> BaseProvider:
+    """Build the leaf itself, with no observer and nothing else attached."""
+
     factory = _SPECIAL_PROVIDER_FACTORIES.get(descriptor.provider_id)
     if factory is not None:
         return factory(config, settings, rate_limiter)

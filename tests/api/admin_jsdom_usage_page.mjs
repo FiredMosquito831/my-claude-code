@@ -353,9 +353,51 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
       const nowSeconds = Math.floor(Date.now() / 1000);
       const payloads = usagePayloads(nowSeconds);
 
+      // ── the one route 8.4.0 adds (USAGE PR 2) ───────────────────────────
+      // Stubbed in the shape the Python route returns, so the page renders a
+      // real answer rather than a fixture invented for the renderer. Every
+      // state it can produce is here once: measured, stale, not read yet, and
+      // a provider with no mechanism at all (which is not drawn).
+      ROUTES["/admin/api/usage"] = {
+        observed_at: nowSeconds,
+        stale_after_seconds: 1800,
+        providers: [
+          {
+            provider_id: "deepseek",
+            display_name: "DeepSeek",
+            mechanisms: ["response-header", "provider-endpoint"],
+            source: "response-header",
+            detail: "the x-ratelimit response headers",
+            state: "measured",
+            observed_at: nowSeconds - 90,
+            status_code: 200,
+            values: {
+              "x-ratelimit-limit-requests": "5000",
+              "x-ratelimit-remaining-requests": "4997",
+              "x-ratelimit-reset-requests": "1s",
+            },
+          },
+          {
+            // A provider this install does not hold, so it must NOT be drawn:
+            // the page is about what you have.
+            provider_id: "nous_portal",
+            display_name: "Nous Portal",
+            mechanisms: ["response-header"],
+            source: "response-header",
+            detail: "Nous Portal's credits response headers",
+            state: "measured",
+            observed_at: nowSeconds - 60,
+            status_code: 200,
+            values: { "x-nous-credits-remaining-usd": "142.5" },
+          },
+        ],
+      };
+
       // ── zero new requests ───────────────────────────────────────────────
       // `fetchCalls` and `fetchUrls` are the harness's own recorders, filled
-      // by the fetch stub. Nothing in this scenario may add to them.
+      // by the fetch stub. 8.4.0 changed what this block proves: opening the
+      // view now makes EXACTLY ONE request -- `/admin/api/usage`, this
+      // server's own memory -- and re-rendering makes none at all.
       const fetchCounters = () => ({
         calls: fetchCalls.length,
         urls: fetchUrls.length,
@@ -374,6 +416,7 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
       PAGE.rememberUsagePayload("chatgpt_oauth", payloads.measured.chatgpt);
       const beforeOpen = fetchCounters();
       const opened = await openUsage();
+      await waitFor(() => PAGE.usageCaptured.state !== "pending", 4000);
       const afterOpen = fetchCounters();
       // Re-render three times with the payload already in memory: the page's
       // own re-render path, which is what a theme switch or a settings reload
@@ -388,13 +431,113 @@ export function prepareUsagePageScenario({ window, ROUTES, fetchCalls, fetchUrls
         before: beforeOpen,
         afterOpen,
         afterRepaint,
-        // The two admin paths the figures arrive on, named so a reader can
-        // check that no third one exists.
+        // The two admin paths the subscription figures arrive on, named so a
+        // reader can check that no third one exists. 8.4.0 adds exactly one
+        // more, below, and it is this server's own memory.
         sources: PAGE.USAGE_SUBSCRIPTIONS.map((spec) => spec.route),
+        // What opening the view added, URL by URL. One entry on a first open
+        // (`/admin/api/usage`), none on the repaints that follow it.
+        addedOnOpen: fetchUrls.slice(beforeOpen.urls, afterOpen.urls),
+        addedOnRepaint: fetchUrls.slice(afterOpen.urls, afterRepaint.urls),
         // The payloads a page load ALREADY made, for context: these were
         // recorded before this scenario touched anything.
         preexisting: snapshot,
       };
+
+      // ── the header-derived block (8.4.0) ────────────────────────────────
+      // Read once from the route's own shape above. `PAGE.usageCaptured` is
+      // the state a real answer arrives in, so what this reads is what a real
+      // GET would have produced.
+      const capturedCards = () => {
+        const grid = doc.getElementById("usageCapturedGrid");
+        return Array.from(grid ? grid.children : []).map((card) => ({
+          title: flat(card.querySelector(".usage-card-title")),
+          chip: flat(card.querySelector(".usage-chip")),
+          chipState: card.querySelector(".usage-chip")
+            ? card.querySelector(".usage-chip").dataset.state
+            : null,
+          keys: flat(card.querySelector(".usage-card-keys")),
+          blocks: Array.from(card.querySelectorAll(".usage-block")).map(
+            (block) => ({
+              heading: flat(block.querySelector(".usage-block-heading")),
+              figures: Array.from(block.querySelectorAll("dt")).map((dt, i) => [
+                flat(dt),
+                flat(block.querySelectorAll("dd")[i]),
+                block.querySelectorAll("dd")[i]
+                  ? block.querySelectorAll("dd")[i].getAttribute("title") || ""
+                  : "",
+              ]),
+            }),
+          ),
+          stateNote: flat(card.querySelector(".usage-state-note")),
+          provenance: flat(card.querySelector(".usage-provenance")),
+        }));
+      };
+      const capturedFromRoute = capturedCards();
+      out.captured = {
+        loadedState: PAGE.usageCaptured.state,
+        cards: capturedFromRoute,
+        titles: capturedFromRoute.map((card) => card.title),
+        // One card per CONFIGURED provider with a mechanism: DeepSeek is
+        // configured and has one, Nous is not configured and must be absent
+        // even though the server reports a reading for it.
+        shownFor: capturedFromRoute.map((card) => card.title),
+        // Neither of the two subscriptions, and nothing with no credential.
+        drawsSubscriptions: capturedFromRoute.some((card) =>
+          /subscription/i.test(card.title),
+        ),
+        // The four states the route can produce, rendered faithfully. The
+        // state word comes from the server, so the page is checked against
+        // every value it can be handed rather than against one fixture.
+        stateFixtures: [
+          "measured",
+          "stale",
+          "not_measured",
+          "unsupported",
+          "something_new",
+        ].map((serverState) => ({
+          serverState,
+          kind: PAGE.usageCapturedStateKind(serverState),
+        })),
+        // A host that sent nothing is "not read yet" rather than a zero, and
+        // one with no mechanism gets the one sentence.
+        unreadCard: (() => {
+          PAGE.rememberUsageCaptured({
+            observed_at: nowSeconds,
+            stale_after_seconds: 1800,
+            providers: [
+              {
+                provider_id: "deepseek",
+                display_name: "DeepSeek",
+                mechanisms: ["response-header"],
+                source: "response-header",
+                detail: "the x-ratelimit response headers",
+                state: "not_measured",
+                observed_at: null,
+                status_code: null,
+                values: {},
+              },
+            ],
+          });
+          return capturedCards();
+        })(),
+        // The read of this server failing is state 4 and says so, in the
+        // block's own note rather than as a blank grid.
+        failedNote: (() => {
+          PAGE.rememberUsageCapturedFailure(
+            new Error("the server did not answer"),
+          );
+          const note = doc.getElementById("usageCapturedEmpty");
+          return {
+            hidden: note.hidden,
+            text: flat(note),
+          };
+        })(),
+      };
+      // Restore the good answer for the blocks that follow.
+      PAGE.rememberUsageCaptured(ROUTES["/admin/api/usage"]);
+      PAGE.paintUsageView();
+      await wait(20);
 
       // ── the four states ─────────────────────────────────────────────────
       const readCards = () => {
