@@ -13532,3 +13532,70 @@ audio.req-media-preview {
     padding-bottom: 6px;
   }
 }
+
+/* 8.5.0 (USAGE PR 3): the on-demand read -- a button, a deadline line, and the
+   reading a declared endpoint returned.
+
+   The standing UI rule applies to every element here: nothing may spill, and
+   the longest realistic values (`$4,050.2926`, a 20-character provider id, a
+   reset datetime, a provider's own error sentence) must fit, wrap or be
+   ellipsised WITH a `title`. Every rule below follows the two that already
+   carry this card family: `min-width: 0` on a grid item and
+   `overflow-wrap: anywhere` on any value a provider wrote. */
+
+/* The action row. `flex-wrap` rather than a fixed place, because the button
+   carries a countdown inside its own label ("Read now (27 minutes)") and that
+   label must never push the row wider than the card. */
+.usage-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The one control on this page. `secondary-button` is the product's OWN
+   secondary button class -- the earlier draft said `.secondary`, which no rule
+   in this stylesheet matches, and a screenshot is what caught it: the button
+   rendered with no border, no padding and the browser's default focus ring.
+   These declarations only bound it; the shape, hover and focus ring come from
+   the shared rule. `white-space: normal` matters: the countdown label wraps
+   inside a narrow card instead of overflowing it, and `max-width: 100%` keeps
+   a long countdown from widening a grid track. */
+.usage-read-button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.usage-read-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* The blocks a declared reading draws. A plain stacking container: the blocks
+   inside it are `.usage-block`s and carry their own spacing, so this rule
+   exists only to keep the two sources on one card in a column rather than
+   letting a flex parent stretch them side by side. */
+.usage-read-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* "The provider reports nothing available for this account." Neutral, not an
+   error: the call worked. Same box shape as `.usage-failure` so the two read
+   as siblings and differ in TONE and in WORDS -- which is the whole point of
+   §4.2's "state 3 and state 4 must never look alike". */
+.usage-unavailable {
+  padding: 8px 10px;
+  border: 1px solid var(--neutral-border);
+  border-radius: var(--radius-sm);
+  background: var(--neutral-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

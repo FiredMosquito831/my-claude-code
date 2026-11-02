@@ -40,6 +40,9 @@ _SUITES = (
     "tests/api/test_admin_design_shell_jsdom.py",
     # 8.3.0 (USAGE PR 1): the Usage page and its base-written equality run.
     "tests/api/test_admin_usage_page_jsdom.py",
+    # 8.5.0 (USAGE PR 3): the on-demand read -- the control, one press, one
+    # POST, the countdown, the 429 deadline and the unavailable state.
+    "tests/api/test_admin_usage_reads_jsdom.py",
     "tests/contracts/test_admin_static_xss.py",
 )
 _JOB_ID = "jsdom"

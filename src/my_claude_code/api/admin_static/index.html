@@ -6308,11 +6308,44 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   it &mdash; nothing is computed, and a name nobody listed is
                   not stored at all. Opening this page reads your own server's
                   memory at <code>GET /admin/api/usage</code> and nothing else;
-                  there is no polling and no "Read now", because these figures
-                  cost no request. A provider whose only usage route needs a
-                  read of its own says <em>not read yet</em> rather than
-                  claiming it publishes nothing &mdash; those reads are a later
-                  release.
+                  there is no polling and no background refresh, because these
+                  figures cost no request.
+                </p>
+                <p class="guide-note">
+                  <strong>Read now (8.5.0).</strong> Seven providers publish a
+                  usage route MCC can read with a credential you already hold:
+                  the Claude and ChatGPT subscriptions, Command Code,
+                  OpenRouter's per-key route, DeepSeek, Kimi (Moonshot) and
+                  OpenCode Go. Their cards get a <em>Read now</em> button, and
+                  pressing it sends <strong>one</strong> request to that
+                  provider &mdash; the only thing on this page that ever
+                  contacts a provider. It works at most once every 30 minutes
+                  per provider, the button carries the countdown, and a
+                  provider that answers <code>429</code> sets its own deadline
+                  from <code>Retry-After</code>, which the button shows.
+                </p>
+                <p class="guide-note">
+                  <strong>A usage read can never cost you a key.</strong> The
+                  read uses its own client and never enters the rotation,
+                  rate-limit or benching machinery: a <code>401</code> shows
+                  <em>Read failed</em> on the card and nothing else happens
+                  &mdash; no lockout, no bench, no rotation. A route MCC does
+                  not recognise reads as <em>Read failed</em> with a plain
+                  sentence rather than as a zero. OpenRouter's account-credits
+                  endpoint (it needs a management key), OpenCode's cookie-gated
+                  console, the organisation APIs (admin keys) and Z.ai,
+                  MiniMax, Copilot and Kimi Coding are deliberately not
+                  built: each needs a credential you do not have or must not be
+                  asked for.
+                </p>
+                <p class="guide-note">
+                  <strong>A provider whose answer is "nothing available"
+                  (8.5.0).</strong> An expired plan or an account that cannot
+                  serve is a <em>successful</em> read with the provider's own
+                  reason on it, so its chip is <em>Not available</em> and never
+                  <em>Read failed</em>. The call worked; there is simply nothing
+                  left to show. Keeping the two apart is the same rule that
+                  keeps "no usage API" apart from "the read broke".
                 </p>
                 <p class="guide-note">
                   <strong>A window and a balance are never added together.</strong>
@@ -6326,11 +6359,13 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <strong>Four honest states, and a chip that names which one.</strong>
                   <em>Measured</em> is a reading inside the last 30 minutes.
                   <em>Stale</em> is a real reading that is older, shown with the
-                  time it was taken. <em>Not read yet</em> means no response has
-                  carried a usage header since the server started &mdash; every
-                  figure says <em>not measured by this provider</em> rather than
-                  showing a zero. <em>Read failed</em> is a read that did not
-                  happen, with the reason it did not. A missing value is never a
+                  time it was taken. <em>Not read yet</em> means nothing has
+                  carried a figure yet &mdash; every figure says <em>not
+                  measured by this provider</em> rather than showing a zero.
+                  <em>Read failed</em> is a read that did not happen, with the
+                  reason it did not. Since 8.5.0 there is a fifth word,
+                  <em>Not available</em>, for a provider that answered and said
+                  there is nothing left (see below). A missing value is never a
                   zero, and "we could not read it" never looks like "this
                   provider has nothing to read".
                 </p>
@@ -6341,9 +6376,10 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   each, saying exactly that. There is no spinner and no retry,
                   because there is nothing to wait for. A provider with no key
                   does not appear on this page at all &mdash; and since 8.4.0 a
-                  configured provider that <em>does</em> send a header is a card
-                  in the block above rather than a sentence here, one row per
-                  provider either way.
+                  configured provider that <em>does</em> send a header, or since
+                  8.5.0 one whose usage route MCC can read, is a card in the
+                  block above rather than a sentence here, one row per provider
+                  either way.
                 </p>
                 <p class="guide-note">
                   <strong>Each card names its source and when it was read.</strong>
