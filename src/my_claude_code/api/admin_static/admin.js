@@ -30367,7 +30367,17 @@ function applyAppearance(appearance) {
  */
 function loadDesignStylesheet(design) {
   const existing = document.getElementById("designStylesheet");
-  const href = design && design.css ? `/admin/assets/${design.css}` : null;
+  // `css` is a path RELATIVE TO admin_static/, which is how the registry's own
+  // examples spell it (`css: "designs/ledger.css"`). The page therefore asks
+  // for `/admin/<that path>`, and `admin_design_asset` answers it from
+  // `/admin/designs/{filename}` — matched against the files that actually
+  // shipped, never joined onto a filesystem path.
+  //
+  // `/admin/assets/` was wrong: that route serves the five fixed names and
+  // would 404 every design. Nothing exercised it, because 8.1.0's only row
+  // has `css: null` — which is exactly why the first design PR would have
+  // shipped a dashboard whose design loaded no stylesheet at all.
+  const href = design && design.css ? `/admin/${design.css}` : null;
   if (!href) {
     if (existing) existing.remove();
     return;
