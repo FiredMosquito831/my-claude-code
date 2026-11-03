@@ -115,6 +115,7 @@ RAW_DIAGNOSTICS_COLUMNS: tuple[str, ...] = (
     "raw_sse_events",
     "raw_error_tracebacks",
     "raw_cli_diagnostics",
+    "raw_upstream",
 )
 #: The group reads every request's lines out of the log files, so it is a
 #: scope limit, not a cut: an export matching more requests than this is
@@ -605,6 +606,7 @@ _REQUEST_COLUMN_LABELS: dict[str, str] = {
     "raw_sse_events": "Raw SSE events",
     "raw_error_tracebacks": "Raw API error tracebacks",
     "raw_cli_diagnostics": "Raw CLI diagnostics",
+    "raw_upstream": "Raw provider output",
 }
 
 

@@ -150,7 +150,14 @@ def test_with_both_features_off_every_view_is_the_base_tree(
     #: as part of shipping a new page (USAGE §7 PR 1), so the Guide gains one
     #: section and nothing else moves. 8.2.0's own move (`requests`, the cost
     #: tile) was re-shot into the fixture.
-    DECLARED_MOVES: set[str] = {"guide"}
+    #:
+    #: 8.8.0 adds `requests` again, and by exactly four lines: the raw
+    #: diagnostics export picker lives inside this view's DOM, and the new
+    #: "Provider raw output" checkbox is one row of it. The whole-page digest
+    #: sees that row; a diff of the two trees' rendered HTML shows those four
+    #: lines and nothing else. Declared rather than re-shot, because the rest
+    #: of the page is still the base tree's bytes and this test is what says so.
+    DECLARED_MOVES: set[str] = {"guide", "requests"}
     base = baseline["views"]
     mine = design_system_off["views"]
 

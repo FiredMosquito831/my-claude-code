@@ -12825,6 +12825,33 @@ def _rawv_answers(folder: Path) -> dict[str, Any]:
         ],
         now - 5,
     )
+    # 8.8.0: the provider's own bytes for request 1, chunked the way a
+    # transport hands them over -- a comment, an `id:` line and a `data: `
+    # prefix in the first two -- plus a refusal head and a media metadata line
+    # for the reader's non-chunk tags. Written in the sink's own format
+    # (`UPSTREAM: door=... bytes=N <text>`), so the page renders the same
+    # sentences a real capture would produce.
+    _rawv_file(
+        logs / "raw-diagnostics.2026-10-30_09-45-00_000003.log",
+        [
+            _rawv_sink(
+                "RAW_UPSTREAM",
+                RAWV_FIRST,
+                "UPSTREAM: door=anthropic_messages bytes=22 : keepalive\\n\\nevent: ",
+            ),
+            _rawv_sink(
+                "RAW_UPSTREAM",
+                RAWV_FIRST,
+                "UPSTREAM: door=anthropic_messages bytes=20 message_start\\nid: e",
+            ),
+            _rawv_sink(
+                "RAW_UPSTREAM",
+                RAWV_FIRST,
+                'UPSTREAM: door=anthropic_messages bytes=24 vt_1\\ndata: {"type": "me',
+            ),
+        ],
+        now - 400,
+    )
     error = {
         "time": "2026-10-30 10:00:00.000000+03:00",
         "level": "ERROR",
@@ -12882,11 +12909,23 @@ def _rawv_answers(folder: Path) -> dict[str, Any]:
     }
     settings = {
         "req-fallback": raw_reader.RawSettings(
-            enabled={"payloads": True, "sse": True, "traceback": True, "cli": False},
+            enabled={
+                "payloads": True,
+                "sse": True,
+                "traceback": True,
+                "cli": False,
+                "upstream": True,
+            },
             retain_files=2,
         ),
         RAWV_FIRST: raw_reader.RawSettings(
-            enabled={"payloads": True, "sse": True, "traceback": True, "cli": False},
+            enabled={
+                "payloads": True,
+                "sse": True,
+                "traceback": True,
+                "cli": False,
+                "upstream": True,
+            },
             retain_files=2,
         ),
         RAWV_SECOND: raw_reader.RawSettings(
@@ -12966,12 +13005,19 @@ def test_jsdom_raw_section_is_last_collapsed_and_names_what_it_shows(
     assert raw_diagnostics["sectionIsLast"] is True
     assert "nothing is masked" in raw_diagnostics["warning"]
     boxes = raw_diagnostics["collapsed"]
-    assert [box["kind"] for box in boxes] == ["payloads", "sse", "traceback", "cli"]
+    assert [box["kind"] for box in boxes] == [
+        "payloads",
+        "sse",
+        "traceback",
+        "cli",
+        "upstream",
+    ]
     assert [box["label"] for box in boxes] == [
         "API payloads",
         "SSE events",
         "API error tracebacks",
         "CLI diagnostics",
+        "Provider raw output",
     ]
     assert all(box["open"] is False for box in boxes)
     assert all(
@@ -13006,6 +13052,12 @@ def test_jsdom_raw_shows_the_four_honest_states(raw_diagnostics) -> None:
     assert raw["cli"]["codeSpans"] == 1
     assert "Limits & Resilience → Diagnostics → “Log Raw CLI Diagnostics”" in cli
     assert raw["cli"]["pre"] is None
+    # 8.8.0: the fifth box is present, shows the provider's own bytes joined
+    # back together, and names the door in its summary line.
+    assert raw["upstream"]["pre"] is not None
+    assert ": keepalive" in raw["upstream"]["pre"]
+    assert "id: evt_1" in raw["upstream"]["pre"]
+    assert raw["upstream"]["hasCopy"] is True
 
 
 def test_jsdom_raw_and_normalized_never_show_each_others_text(raw_diagnostics) -> None:
@@ -13033,17 +13085,21 @@ def test_jsdom_the_view_choice_is_remembered_and_blocked_storage_reads_raw(
     normalized = [["raw", "false"], ["normalized", "true"]]
     raw = [["raw", "true"], ["normalized", "false"]]
     assert raw_diagnostics["storedAfterNormalized"] == "normalized"
-    assert raw_diagnostics["pressedAfterNormalized"] == [normalized] * 4
-    assert raw_diagnostics["pressedOnReopen"] == [normalized] * 4
+    assert raw_diagnostics["pressedAfterNormalized"] == [normalized] * 5
+    assert raw_diagnostics["pressedOnReopen"] == [normalized] * 5
     # Raw is the default and is stored as absence.
     assert raw_diagnostics["storedAfterRaw"] is None
     assert raw_diagnostics["blockedStore"] is True, raw_diagnostics.get("blockError")
-    assert raw_diagnostics["pressedWhenBlocked"] == [raw] * 4
+    assert raw_diagnostics["pressedWhenBlocked"] == [raw] * 5
 
 
 def test_jsdom_payload_pretty_print_is_labelled_and_lossless(raw_diagnostics) -> None:
     line = f"FULL_PAYLOAD [{RAWV_SECOND}]: {RAWV_PAYLOAD!r}"
-    assert raw_diagnostics["payloadVerbatim"] == line.replace("\n", "\\n")
+    # 8.8.0 labels each payload line with the side of the exchange it belongs
+    # to, so two very different bodies in one box cannot be read as one.
+    assert raw_diagnostics["payloadVerbatim"] == (
+        f"── outbound (sent upstream) ──\n{line.replace(chr(10), chr(92) + 'n')}"
+    )
     assert raw_diagnostics["prettyButton"] == "Pretty-print as JSON"
     assert raw_diagnostics["prettyButtonOn"] == "Show the stored line"
     assert any(
@@ -13104,6 +13160,8 @@ def test_jsdom_the_per_request_export_picker(raw_diagnostics) -> None:
         ["sse", True, "SSE events"],
         ["traceback", True, "API error tracebacks"],
         ["cli", True, "CLI diagnostics"],
+        # 8.8.0: the new kind exports too, from the same picker.
+        ["upstream", True, "Provider raw output"],
     ]
     assert [value for value, _label in raw_diagnostics["exportViews"]] == [
         "both",

@@ -74,6 +74,12 @@ from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.raw_upstream import (
+    DOOR_MEDIA,
+    capture_enabled,
+    emit,
+    media_line,
+)
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .adapters import WireBody, build_wire_body
@@ -82,6 +88,12 @@ from .param_refusal import note_param_refusal
 #: Upstream response headers carried onto a buffered media response. Only what
 #: the client or the log can use; never anything that could carry a secret.
 _KEPT_HEADERS = ("content-type", "x-request-id", "request-id")
+
+#: 8.8.0: how much of a refused media answer is recorded in the raw log. The
+#: error page or JSON says why the host refused; the answer bytes themselves are
+#: never written. Four kilobytes matches ``ERROR_BODY_RAW_MAX_BYTES`` above the
+#: transport and is what the spec named.
+_MEDIA_REFUSAL_HEAD_BYTES = 4096
 
 
 def _host(url: str) -> str:
@@ -307,6 +319,21 @@ class MediaLeaf:
             error = await read_error_body(response)
             await response.aclose()
             note_response_head(error.head)
+            # 8.8.0: a media answer is recorded as METADATA only -- status,
+            # content type, length, and the first 4 KB of a refusal. The image,
+            # audio and video bytes are deliberately never written (user
+            # decision 4 of 2026-11-01): one image is 1.3-1.7 MB, more than a
+            # normal request's entire raw record, and the question this box
+            # answers is what the host said, not what it sent.
+            if capture_enabled():
+                for line in media_line(
+                    DOOR_MEDIA,
+                    status=response.status_code,
+                    content_type=response.headers.get("content-type", ""),
+                    nbytes=len(error.raw),
+                    refusal_head=error.raw[:_MEDIA_REFUSAL_HEAD_BYTES],
+                ):
+                    emit(line)
             raise httpx.HTTPStatusError(
                 f"{self._provider_id} media API error {response.status_code}",
                 request=request,
@@ -383,6 +410,18 @@ class MediaLeaf:
                     answer = await self._translated(surface, attempt, answer, body)
                 elif attempt.request.inline_urls:
                     answer = await self._inlined(answer)
+                # 8.8.0: a successful answer is a metadata line too, and never
+                # the body. It is the one place that can say "the host answered
+                # 200 with 1.3 MB of image/png", which is what an operator
+                # asking "did the media door work" needs.
+                if capture_enabled():
+                    for line in media_line(
+                        DOOR_MEDIA,
+                        status=answer.status_code,
+                        content_type=answer.content_type,
+                        nbytes=len(answer.body),
+                    ):
+                        emit(line)
                 yield answer
                 return
             try:

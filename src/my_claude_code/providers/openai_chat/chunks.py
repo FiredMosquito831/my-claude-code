@@ -36,6 +36,12 @@ import asyncio
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
+from my_claude_code.providers.raw_upstream import (
+    DOOR_OPENAI_CHAT,
+    capture_chunks,
+    capture_enabled,
+)
+
 #: How long a finished stream waits, after ``data: [DONE]``, for the rest of
 #: its body -- in practice only the chunked terminator, which a host writes in
 #: the same breath as ``[DONE]``. Read to its end, the response hands its
@@ -323,7 +329,18 @@ class MccChatChunkStream:
 
     async def __stream__(self) -> AsyncIterator[Any]:
         response = self.response
-        events = self._decoder.aiter_bytes(response.aiter_bytes())
+        # 8.8.0: the decoder reads ``response.aiter_bytes()``, which is where
+        # the provider's own octets still exist -- after the decoder they are
+        # ``sse.data``, a parsed field. ``capture_chunks`` hands the same
+        # iterator straight through when the setting is off, so nothing about
+        # this stream changes then.
+        events = self._decoder.aiter_bytes(
+            capture_chunks(
+                response.aiter_bytes(),
+                DOOR_OPENAI_CHAT,
+                enabled=capture_enabled(),
+            )
+        )
         try:
             async for sse in events:
                 if sse.data.startswith("[DONE]"):

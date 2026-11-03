@@ -92,12 +92,16 @@ class ErrorBody:
     truth, and the raw bytes, truncated, when it did not. ``decoded`` says
     which, and ``head`` is the response head recorded for the operator on the
     second case -- ``None`` on the first, so an ordinary refusal's try row is
-    byte-identical to what it was before.
+    byte-identical to what it was before. ``raw`` is always the octets the
+    transport delivered, undecoded and uncapped, for the raw log (8.8.0): it is
+    ``b""`` on the branch where an already-read response is handed back, where
+    this function never saw the wire.
     """
 
     content: bytes
     decoded: bool = True
     head: dict[str, Any] | None = None
+    raw: bytes = b""
 
 
 def _head_value(value: Any) -> str:
@@ -174,8 +178,9 @@ async def read_error_body(response: Any) -> ErrorBody:
             head=response_head_record(
                 response.status_code, headers, raw, decode_error=str(exc)
             ),
+            raw=raw,
         )
-    return ErrorBody(content=decoded)
+    return ErrorBody(content=decoded, raw=raw)
 
 
 def error_response_headers(headers: Any) -> list[tuple[str, str]]:

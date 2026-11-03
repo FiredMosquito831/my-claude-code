@@ -240,7 +240,7 @@ export function prepareRawDiagnosticsScenario({ window, ROUTES }) {
       /* no store */
     }
     await openDetail(first);
-    const painted = await waitFor(() => panes().length === 4);
+    const painted = await waitFor(() => panes().length === 5);
     if (!painted) {
       out.scenarioFatal = "the four raw boxes never painted";
       out.status = flat(doc.getElementById("reqDetailRawStatus"));
@@ -255,13 +255,13 @@ export function prepareRawDiagnosticsScenario({ window, ROUTES }) {
     out.warning = flat(doc.querySelector("#reqDetailRaw .req-raw-warning"));
     out.collapsed = panes().map(summaryOf);
     out.rawFirst = {};
-    for (const kind of ["payloads", "sse", "traceback", "cli"]) {
+    for (const kind of ["payloads", "sse", "traceback", "cli", "upstream"]) {
       out.rawFirst[kind] = await openBox(kind, "raw");
     }
     await clickView("sse", "normalized");
     out.storedAfterNormalized = storedView();
     out.normalizedFirst = {};
-    for (const kind of ["payloads", "sse", "traceback", "cli"]) {
+    for (const kind of ["payloads", "sse", "traceback", "cli", "upstream"]) {
       await waitFor(() => settled(pane(kind), "normalized"));
       out.normalizedFirst[kind] = bodyOf(pane(kind));
     }
@@ -270,7 +270,7 @@ export function prepareRawDiagnosticsScenario({ window, ROUTES }) {
     // Remembered: the next request detail opens on Normalized.
     window.eval("closeRequestDetail()");
     await openDetail(first);
-    await waitFor(() => panes().length === 4);
+    await waitFor(() => panes().length === 5);
     out.pressedOnReopen = panes().map(summaryOf).map((s) => s.pressed);
     await clickView("sse", "raw");
     out.storedAfterRaw = storedView();
@@ -295,7 +295,7 @@ export function prepareRawDiagnosticsScenario({ window, ROUTES }) {
       out.blockError = String(error);
     }
     await openDetail(first);
-    await waitFor(() => panes().length === 4);
+    await waitFor(() => panes().length === 5);
     out.blockedStore = blocked;
     out.pressedWhenBlocked = panes().map(summaryOf).map((s) => s.pressed);
     if (blocked) delete window.localStorage;
@@ -317,7 +317,7 @@ export function prepareRawDiagnosticsScenario({ window, ROUTES }) {
       },
     });
     await openDetail(second);
-    await waitFor(() => panes().length === 4);
+    await waitFor(() => panes().length === 5);
     out.collapsedSecond = panes().map(summaryOf);
 
     const payloads = await openBox("payloads", "raw");

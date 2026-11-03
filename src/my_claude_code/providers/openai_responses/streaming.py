@@ -27,6 +27,10 @@ from my_claude_code.core.reported_cost import (
     reported_reasoning_tokens,
 )
 from my_claude_code.core.wire_capture import ResponseShape
+from my_claude_code.providers.raw_upstream import (
+    DOOR_OPENAI_RESPONSES,
+    capture_chunks,
+)
 from my_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 
 
@@ -611,8 +615,22 @@ class ResponsesStreamConverter:
 
 async def iter_responses_sse_events(
     raw_stream: Any,
+    *,
+    door: str = DOOR_OPENAI_RESPONSES,
+    log_raw_bytes: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Parse a raw async SSE byte stream into Responses API event dicts."""
+    """Parse a raw async SSE byte stream into Responses API event dicts.
+
+    ``door`` and ``log_raw_bytes`` (8.8.0) name the door these bytes came
+    through and say whether the provider's own octets are written to the raw
+    log as they pass. They exist here because this is the last place they
+    exist: after this generator the ``data: `` prefix, the ``event:`` and
+    comment lines and ``[DONE]`` are all gone, and the only other copy is
+    ``json.dumps(event)`` -- a re-serialisation the host never sent. Keyword
+    arguments with the old defaults, so every existing call site keeps exactly
+    the code path (and the timing) it had.
+    """
+    raw_stream = capture_chunks(raw_stream, door, enabled=log_raw_bytes)
     buffer = ""
     async for chunk in raw_stream:
         if isinstance(chunk, bytes):

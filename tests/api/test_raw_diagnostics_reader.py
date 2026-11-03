@@ -747,3 +747,225 @@ def test_the_export_pickers_kind_labels_are_the_readers_own() -> None:
     picker = html.split('id="reqRawExportPanel"', 1)[1].split("</fieldset>", 1)[0]
     pairs = re.findall(r'value="(\w+)"[^>]*/>\s*<span>([^<]+)</span>', picker)
     assert pairs == [(kind, rd.KINDS[kind].label) for kind in rd.RAW_KINDS]
+
+
+# ---------------------------------------------------------------------------
+# 8.8.0: the provider's own bytes, and the door that explains an absence
+# ---------------------------------------------------------------------------
+
+
+def _upstream(request_id: str, chunk: bytes, door: str = "anthropic_messages") -> bytes:
+    text = chunk.decode("utf-8").replace("\r", "\\r").replace("\n", "\\n")
+    return _sink_line(
+        "RAW_UPSTREAM", request_id, f"UPSTREAM: door={door} bytes={len(chunk)} {text}"
+    )
+
+
+def test_the_upstream_kind_reads_its_own_marker_and_joins_back(raw_log_window):
+    """Every page concatenated equals a direct read, by count and SHA-256."""
+
+    from my_claude_code.providers import raw_upstream as ru
+
+    sources, paths, wire = raw_log_window
+    pages = _all_pages(sources, rd.KIND_UPSTREAM)
+    texts = [line["text"] for page in pages for line in page["lines"]]
+    expected = _direct(paths, "RAW_UPSTREAM", RID)
+    assert len(texts) == len(expected)
+    assert _digest(texts) == _digest(expected)
+    # And the joined bytes ARE the provider's answer, digests compared. The
+    # reader's own round trip is what joins them, so a change to either side
+    # of the escaping shows here rather than in a screenshot.
+    pieces: list[bytes] = []
+    for text in expected:
+        decoded = ru.chunk_bytes_of(text.split(" ", 1)[1])
+        assert decoded is not None, text
+        pieces.append(decoded[1])
+    joined = b"".join(pieces)
+    assert hashlib.sha256(joined).hexdigest() == hashlib.sha256(wire).hexdigest()
+
+
+@pytest.fixture
+def raw_log_window(tmp_path: Path) -> tuple[rd.RawSources, list[Path], bytes]:
+    """A request whose provider bytes span a rotation, chunked not by frame."""
+
+    now = time.time()
+    wire = (
+        b': keepalive\n\nevent: message_start\nid: evt_1\ndata: {"type": "message_start"}\n'
+        b'\nevent: message_stop\ndata: {"type": "message_stop"}\n\n'
+    )
+    pieces = [wire[at : at + 23] for at in range(0, len(wire), 23)]
+    older = [_upstream(RID, piece) for piece in pieces[:3]]
+    newer = [_upstream(RID, piece) for piece in pieces[3:]]
+    logs = tmp_path / "logs"
+    rotated = _write(
+        logs / "raw-diagnostics.2026-10-30_10-00-00_000001.log",
+        older,
+        mtime=now - 600,
+    )
+    active = _write(logs / RAW_DIAGNOSTICS_LOG_FILENAME, newer, mtime=now - 5)
+    return (
+        rd.RawSources(raw_log=active, server_log=logs / "server.log"),
+        [rotated, active],
+        wire,
+    )
+
+
+def test_a_chat_door_request_says_the_door_not_the_setting(tmp_path: Path) -> None:
+    """The sentence the product lacked: name the provider and the door.
+
+    8.8.0 also made the Chat door record bytes, so the "this door records
+    nothing" state is reached here through the two doors that still do not
+    write a body: media (metadata only) and web search (nothing). The point of
+    the state is that the sentence names the door and never the setting, and
+    that assertion is written for both.
+    """
+
+    path = _write(
+        tmp_path / RAW_DIAGNOSTICS_LOG_FILENAME,
+        [_sse(RID, 0)],
+        mtime=time.time(),
+    )
+    sources = rd.RawSources(raw_log=path, server_log=None)
+    for protocol, expected in (
+        ("openai_images", "the media API"),
+        ("openai_chat", "OpenAI Chat Completions"),
+    ):
+        row = _row(protocol=protocol)
+        page = rd.raw_page(sources, RID, rd.KIND_UPSTREAM, row, ALL_ON)
+        if protocol == "openai_images":
+            assert (page["capture"], page["reason"]) == (
+                rd.CAPTURE_NEVER,
+                "door_records_nothing",
+            )
+            assert page["headline"] == "Not captured by this door."
+            assert expected in page["message"]
+            assert "megabytes" in page["message"]
+        else:
+            # A byte door with no line is a different, also-honest sentence:
+            # it names the door and the two real causes, not the setting.
+            assert page["reason"] == "not_recorded"
+            assert expected in page["message"]
+        assert "`LOG_RAW_UPSTREAM_BYTES` is off" not in page["message"]
+
+
+def test_the_setting_off_sentence_still_names_the_setting_for_a_byte_door(
+    tmp_path: Path,
+) -> None:
+    """An Anthropic request with the setting off is the ordinary case."""
+
+    sources = rd.RawSources(
+        raw_log=tmp_path / RAW_DIAGNOSTICS_LOG_FILENAME, server_log=None
+    )
+    page = rd.raw_page(
+        sources, RID, rd.KIND_UPSTREAM, _row(protocol="anthropic"), ALL_OFF
+    )
+    assert (page["capture"], page["reason"]) == (rd.CAPTURE_SETTING, "setting_off")
+    assert "`LOG_RAW_UPSTREAM_BYTES` is off" in page["message"]
+
+
+def test_a_media_door_says_it_records_metadata_and_never_bytes(tmp_path: Path) -> None:
+    sources = rd.RawSources(
+        raw_log=tmp_path / RAW_DIAGNOSTICS_LOG_FILENAME, server_log=None
+    )
+    page = rd.raw_page(
+        sources, RID, rd.KIND_UPSTREAM, _row(protocol="openai_images"), ALL_OFF
+    )
+    assert page["reason"] == "door_records_nothing"
+    assert "the media API" in page["message"]
+    assert "megabytes" in page["message"]
+
+
+def test_the_upstream_box_states_the_rotation_window_not_nothing_lost(
+    tmp_path: Path,
+) -> None:
+    """The one claim this kind may not make: that nothing is ever lost.
+
+    The window has to contain no line of this request at all, or the box would
+    correctly say ``present`` -- so the request's ts sits before the oldest
+    kept file, exactly as the §5.2 measurement found a pruned request.
+    """
+
+    now = time.time()
+    logs = tmp_path / "logs"
+    for index in range(2):
+        _write(
+            logs / f"raw-diagnostics.2026-10-30_1{index}-00-00_00000{index}.log",
+            [_upstream(OTHER, b"other")],
+            mtime=now - 3000 + index * 600,
+        )
+    active = _write(
+        logs / RAW_DIAGNOSTICS_LOG_FILENAME, [_upstream(OTHER, b"other")], mtime=now
+    )
+    sources = rd.RawSources(raw_log=active, server_log=None)
+    keeps_two = rd.RawSettings(
+        enabled=dict.fromkeys(rd.RAW_KINDS, True), retain_files=2
+    )
+    page = rd.raw_page(
+        sources, RID, rd.KIND_UPSTREAM, _row(ts_epoch=now - 7200), keeps_two
+    )
+    assert (page["capture"], page["reason"]) == (rd.CAPTURE_ROTATED, "pruned")
+    assert "the older one can go first" in page["message"]
+    assert "not days" in page["message"]
+
+
+def test_the_present_box_says_which_doors_its_lines_came_from(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path / RAW_DIAGNOSTICS_LOG_FILENAME,
+        [
+            _upstream(RID, b"a", door="anthropic_messages"),
+            _upstream(RID, b"b", door="anthropic_messages"),
+            _upstream(RID, b"c", door="openai_chat"),
+        ],
+        mtime=time.time(),
+    )
+    page = rd.raw_page(
+        rd.RawSources(raw_log=path, server_log=None),
+        RID,
+        rd.KIND_UPSTREAM,
+        _row(protocol="anthropic"),
+        ALL_ON,
+    )
+    assert page["capture"] == rd.CAPTURE_PRESENT
+    assert [(entry["door"], entry["lines"]) for entry in page["doors"]] == [
+        ("anthropic_messages", 2),
+        ("openai_chat", 1),
+    ]
+    assert any(
+        "Anthropic Messages, OpenAI Chat Completions" in n for n in page["notes"]
+    )
+
+
+def test_the_summary_gains_a_fifth_entry_and_the_four_keep_their_shape(
+    raw_log_window,
+) -> None:
+    sources, _paths, _wire = raw_log_window
+    summary = rd.raw_summary(sources, RID, _row(protocol="anthropic"), ALL_ON)
+    assert [entry["kind"] for entry in summary["kinds"]] == list(rd.RAW_KINDS)
+    assert rd.RAW_KINDS[:4] == ("payloads", "sse", "traceback", "cli")
+    assert rd.RAW_KINDS[4] == "upstream"
+
+
+def test_an_inbound_payload_line_is_labelled_beside_the_outbound_one(
+    tmp_path: Path,
+) -> None:
+    inbound = _sink_line(
+        "RAW_PAYLOAD", RID, f'INBOUND_PAYLOAD [{RID}]: {{"model": "m"}}'
+    )
+    outbound = _sink_line("RAW_PAYLOAD", RID, f"FULL_PAYLOAD [{RID}]: {{'model': 'm'}}")
+    path = _write(
+        tmp_path / RAW_DIAGNOSTICS_LOG_FILENAME,
+        [inbound, outbound],
+        mtime=time.time(),
+    )
+    page = rd.raw_page(
+        rd.RawSources(raw_log=path, server_log=None),
+        RID,
+        rd.KIND_PAYLOADS,
+        _row(),
+        ALL_ON,
+    )
+    assert [line["text"].split(" ", 1)[0] for line in page["lines"]] == [
+        "INBOUND_PAYLOAD",
+        "FULL_PAYLOAD",
+    ]
+    assert any("Both sides of the exchange are here" in note for note in page["notes"])

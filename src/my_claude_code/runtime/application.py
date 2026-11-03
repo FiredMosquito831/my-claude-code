@@ -714,17 +714,19 @@ class ApplicationRuntime:
             "log_raw_sse_events",
             "log_raw_api_payloads",
             "log_raw_cli_diagnostics",
+            "log_raw_upstream_bytes",
             "server_log_retain_files",
         ):
-            # 7.113.4: the three raw settings decide whether raw-diagnostics.log
-            # exists at all, and each one applies on Save. No path is passed:
-            # the composition root adopted it, and a save may arrive without
-            # one. A build that never adopted a path (an embedded harness, a
-            # unit test) answers False and does nothing.
+            # 7.113.4: the raw settings decide whether raw-diagnostics.log exists
+            # at all, and each one applies on Save. No path is passed: the
+            # composition root adopted it, and a save may arrive without one. A
+            # build that never adopted a path (an embedded harness, a unit test)
+            # answers False and does nothing.
             configure_raw_diagnostics(
                 sse=current.log_raw_sse_events,
                 payloads=current.log_raw_api_payloads,
                 cli=current.log_raw_cli_diagnostics,
+                upstream=current.log_raw_upstream_bytes,
                 retain_files=current.server_log_retain_files,
             )
         if changed(

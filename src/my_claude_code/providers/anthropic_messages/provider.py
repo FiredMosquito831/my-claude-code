@@ -50,6 +50,14 @@ from my_claude_code.providers.http import (
 from my_claude_code.providers.model_listing import model_infos_from_ids
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.raw_upstream import (
+    DOOR_ANTHROPIC_MESSAGES,
+    DOOR_REFUSAL,
+    capture_chunks,
+    capture_enabled,
+    emit,
+    refusal_line,
+)
 from my_claude_code.providers.recovery import (
     ANTHROPIC_OUTPUT_FIELDS,
     OutputCapRecovery,
@@ -351,6 +359,15 @@ class AnthropicMessagesProvider(BaseProvider):
                     response=response,
                 )
             note_response_head(error.head)
+            # 8.8.0: a provider's refusal is raw output too (user decision 3 of
+            # 2026-11-01). Recorded WHOLE here, in the raw log, and never in
+            # the request database -- the retry ladder keeps its own bounded,
+            # redacted 800-character excerpt and is untouched. ``error.content``
+            # is httpx's decode of the bytes; ``error.raw`` is what actually
+            # arrived, which is what "as received" means.
+            if capture_enabled():
+                for line in refusal_line(DOOR_REFUSAL, response.status_code, error.raw):
+                    emit(line)
             # Re-wrapped rather than re-raised as itself: the body was taken
             # off the wire raw, so the decoded bytes have to be carried on a
             # response that says what they are, and the two headers that
@@ -504,6 +521,11 @@ class AnthropicMessagesProvider(BaseProvider):
         # Adopted once, like every other setting this stream reads: the flag
         # says whether a raw frame is worth serializing at all on this request.
         log_raw_frames = self._config.log_raw_sse_events
+        # 8.8.0: and the flag that makes the provider's OWN bytes reach the raw
+        # log, before ``_validated_frame`` rebuilds (and so loses) them. The
+        # process switch is read per chunk inside ``capture_chunks``, so a Save
+        # reaches a stream that is already open.
+        log_raw_bytes = capture_enabled()
         # What the build took out of the client's history, recorded beside
         # every try's body: a retry never changes what the history left out.
         wire_notes: dict[str, Any] = {}
@@ -600,7 +622,12 @@ class AnthropicMessagesProvider(BaseProvider):
                     recovery.upstream_opened()
                     shape = start_response_shape()
                     async for event in iter_anthropic_sse_frames(
-                        response.aiter_bytes(), shape
+                        capture_chunks(
+                            response.aiter_bytes(),
+                            DOOR_ANTHROPIC_MESSAGES,
+                            enabled=log_raw_bytes,
+                        ),
+                        shape,
                     ):
                         if log_raw_frames:
                             # 7.113.4: the Messages door was the one streaming

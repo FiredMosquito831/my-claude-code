@@ -100,6 +100,13 @@ from my_claude_code.providers.model_listing import (
 )
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.raw_upstream import (
+    DOOR_REFUSAL,
+    capture_enabled,
+    emit,
+    record_refusal_bytes,
+    refusal_line,
+)
 from my_claude_code.providers.recovery import (
     OutputCapRecovery,
     ProviderRecovery,
@@ -990,6 +997,12 @@ class OpenAIChatProvider(BaseProvider):
                 observe_identity_enforcement(
                     self._provider_id, self._profile.client_identity, error
                 )
+                # 8.8.0: a refusal's own bytes, whole, in the raw log only. The
+                # SDK has already read and parsed the body by the time it
+                # raises, so this is the closest surviving copy of the octets
+                # on this door -- and the request database never sees it.
+                if capture_enabled():
+                    record_refusal_bytes(error, DOOR_REFUSAL, emit, refusal_line)
                 if self._profile.marketplace is not None:
                     # 7.109.0: what the refusal said, and the one 402 that is
                     # not out of credits as the door's short 400 -- before the
