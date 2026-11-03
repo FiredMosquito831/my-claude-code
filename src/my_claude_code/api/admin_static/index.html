@@ -1624,6 +1624,10 @@
                   title="Every word must appear somewhere in the request: the prompt, the reply, the model's reasoning, or its tool calls."
                 />
               </label>
+              <!-- RANGE (PR-CW-3): what a wide search costs, said before it
+                   runs. Advisory only -- the window is never narrowed, the
+                   search is never refused, and no result is ever cut. -->
+              <p id="reqSearchCost" class="requests-search-cost" role="status" hidden></p>
               <label>
                 Status
                 <select id="reqFilterStatus">
@@ -1676,8 +1680,77 @@
                   <option value="86400">last 24h</option>
                   <option value="604800">last 7d</option>
                   <option value="2592000">last 30d</option>
+                  <!-- Appended after the five above, never renumbered: a saved
+                       view, a bookmark or a link that carries one of their
+                       values still means exactly what it did. -->
+                  <option value="custom-relative">last N&hellip;</option>
+                  <option value="custom-calendar">calendar&hellip;</option>
                 </select>
               </label>
+              <!-- The two custom shapes. Both hidden until the select asks
+                   for one; the calendar shape shows the parts the shape
+                   picker names (a month, months, a year, exact times). -->
+              <label id="reqWindowCustomWrap" class="window-custom" hidden>
+                Last
+                <span class="window-custom-row">
+                  <input
+                    id="reqWindowAmount"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value="7"
+                    inputmode="numeric"
+                    aria-label="How many"
+                  />
+                  <select id="reqWindowUnit" aria-label="Hours, days or weeks">
+                    <option value="hours">hours</option>
+                    <option value="days" selected>days</option>
+                    <option value="weeks">weeks</option>
+                  </select>
+                </span>
+              </label>
+              <span id="reqWindowRange" class="window-range" hidden>
+                <label>
+                  Shape
+                  <select id="reqWindowShape">
+                    <option value="month" selected>a month</option>
+                    <option value="months">months</option>
+                    <option value="year">a year</option>
+                    <option value="exact">exact times</option>
+                  </select>
+                </label>
+                <label id="reqWindowMonthWrap">
+                  Month
+                  <input id="reqWindowMonth" type="month" aria-label="Month" />
+                </label>
+                <label id="reqWindowFromWrap" hidden>
+                  From month
+                  <input id="reqWindowFrom" type="month" aria-label="From month" />
+                </label>
+                <label id="reqWindowToWrap" hidden>
+                  To month (included whole)
+                  <input id="reqWindowTo" type="month" aria-label="To month, included whole" />
+                </label>
+                <label id="reqWindowYearWrap" hidden>
+                  Year
+                  <input
+                    id="reqWindowYear"
+                    type="number"
+                    min="1970"
+                    max="9999"
+                    step="1"
+                    inputmode="numeric"
+                    aria-label="Year"
+                  />
+                </label>
+                <label id="reqWindowExactWrap" class="window-exact" hidden>
+                  Exact times
+                  <span class="window-exact-row">
+                    <input id="reqWindowFromTime" type="datetime-local" aria-label="From" />
+                    <input id="reqWindowUntilTime" type="datetime-local" aria-label="To" />
+                  </span>
+                </label>
+              </span>
               <label>
                 Rows
                 <select id="reqPageSize">
@@ -2294,6 +2367,11 @@
                     <option value="604800">Last 7 days</option>
                     <option value="2592000">Last 30 days</option>
                     <option value="custom">Custom…</option>
+                    <!-- RANGE: the same two shapes the Analytics window
+                         offers, appended after the six above so a value any
+                         saved link already carries keeps its meaning. -->
+                    <option value="custom-relative">Last N…</option>
+                    <option value="custom-calendar">Calendar…</option>
                   </select>
                   <span id="exportCustomRange" class="export-custom-range" hidden>
                     <input
@@ -2306,6 +2384,63 @@
                       type="datetime-local"
                       aria-label="To"
                     />
+                  </span>
+                  <label id="exportWindowCustomWrap" class="window-custom" hidden>
+                    Last
+                    <span class="window-custom-row">
+                      <input
+                        id="exportWindowAmount"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value="7"
+                        inputmode="numeric"
+                        aria-label="How many"
+                      />
+                      <select id="exportWindowUnit" aria-label="Hours, days or weeks">
+                        <option value="hours">hours</option>
+                        <option value="days" selected>days</option>
+                        <option value="weeks">weeks</option>
+                      </select>
+                    </span>
+                  </label>
+                  <span id="exportWindowRange" class="window-range" hidden>
+                    <label>
+                      Shape
+                      <select id="exportWindowShape">
+                        <option value="month" selected>a month</option>
+                        <option value="months">months</option>
+                        <option value="year">a year</option>
+                      </select>
+                    </label>
+                    <label id="exportWindowMonthWrap">
+                      Month
+                      <input id="exportWindowMonth" type="month" aria-label="Month" />
+                    </label>
+                    <label id="exportWindowFromWrap" hidden>
+                      From month
+                      <input id="exportWindowFrom" type="month" aria-label="From month" />
+                    </label>
+                    <label id="exportWindowToWrap" hidden>
+                      To month (included whole)
+                      <input
+                        id="exportWindowTo"
+                        type="month"
+                        aria-label="To month, included whole"
+                      />
+                    </label>
+                    <label id="exportWindowYearWrap" hidden>
+                      Year
+                      <input
+                        id="exportWindowYear"
+                        type="number"
+                        min="1970"
+                        max="9999"
+                        step="1"
+                        inputmode="numeric"
+                        aria-label="Year"
+                      />
+                    </label>
                   </span>
                 </div>
 
@@ -5817,6 +5952,38 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   per browser polls (the others show what it reads), and a busy or
                   silent server makes the polls wait longer instead of piling up. After
                   an update, reload any dashboard tab that was already open.
+                </p>
+                <p class="guide-note">
+                  <strong>Any window you like</strong> (8.9.0). The Window picker on the
+                  toolbar and the Period picker in the export dialog are the same control,
+                  and both go past the five fixed periods: <em>last N</em> hours, days or
+                  weeks, or a <em>calendar</em> month, span of months, year or pair of exact
+                  times. A calendar month is <strong>your</strong> month in
+                  <strong>your</strong> timezone, and its two ends can carry different
+                  offsets &mdash; October 2026 in a UTC+2 zone starts at +03:00 and ends at
+                  +02:00, so it is 745 hours rather than 744. That is your clock, not a
+                  fault. The end month of a span is included whole, and the window ends at
+                  the first instant it does not include, never at 23:59:59. A saved view
+                  keeps the <em>shape</em> ("last 7 days" is still the last 7 days next
+                  week); a month or a year is fixed by definition.
+                </p>
+                <p class="guide-note">
+                  <strong>The cards and the table can disagree, by design.</strong> The
+                  cards are counted from whole UTC hours, so a window that does not start
+                  and end on the hour counts a little more than the table shows &mdash; on
+                  October 2026 that was +325 on a real log. And retention deletes rows
+                  while keeping every older count, so a window reaching past retention
+                  shows fewer rows than the cards count. One line above the cards says
+                  which of the two it is whenever they differ; neither number is wrong.
+                </p>
+                <p class="guide-note">
+                  <strong>A wide search is slow, and the page tells you so first.</strong>
+                  Searching reads the whole window. On a real 700,000-request log with the
+                  index built, 24 hours took about a second, 30 days about 38 seconds, a
+                  month a minute to two, and a year about five. The line under the search
+                  box says which of those you are about to pay. It is advice only: nothing
+                  is narrowed, refused or cut, Enter still runs it, and typing again or
+                  reloading stops it.
                 </p>
                 <p>Input tokens are reported in parts, because they bill differently:</p>
                 <table class="guide-table">

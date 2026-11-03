@@ -2605,6 +2605,76 @@ textarea:focus-visible,
   margin-left: auto;
 }
 
+/* RANGE: the two custom window shapes, on the Analytics toolbar and in the
+   export dialog alike. Both wrap rather than widen: a toolbar at 390 px has to
+   hold `Last [7] [days]` and `Shape [months] From [2026-01] To [2026-12]`
+   without pushing the row sideways, and a native month box renders wider on
+   some platforms than its declared width. */
+.window-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted, #888);
+}
+
+.window-custom-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* The amount box is small on purpose: nobody types a five-digit count, and a
+   full-width box would shove the unit selector out of the row. */
+.window-custom-row input[type="number"] {
+  width: 5.5em;
+}
+
+.window-range {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.window-range label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted, #888);
+}
+
+/* A month/year value can be long in a locale that spells the month name;
+   let the box size to its content up to a limit instead of clipping it. */
+.window-range input[type="month"] {
+  min-width: 9.5em;
+  max-width: 16em;
+}
+
+.window-range input[type="number"] {
+  width: 6.5em;
+}
+
+.window-exact-row {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* PR-CW-3: the price of a wide search, said under the box before it runs. Same
+   quiet register as the other advisory lines on this page; it wraps rather
+   than ellipsises because it is a sentence, and it never takes the width the
+   filters beside it need. */
+.requests-search-cost {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted, #888);
+}
+
 .secondary-button.danger {
   border-color: #a33;
   color: #e05d5d;

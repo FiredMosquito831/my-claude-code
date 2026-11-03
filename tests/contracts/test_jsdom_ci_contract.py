@@ -52,6 +52,10 @@ _SUITES = (
     # eight coverage states, the compaction's formatters, the refresh picker
     # and the page-level Refresh now.
     "tests/api/test_admin_usage_layouts_jsdom.py",
+    # 8.9.0 (RANGE): the custom time window -- the base-written URL equality,
+    # the boundary table (a calendar month resolved per boundary, so October
+    # 2026 is 745 hours), the three sentences, and the wide-search warning.
+    "tests/api/test_admin_range_windows_jsdom.py",
     "tests/contracts/test_admin_static_xss.py",
 )
 _JOB_ID = "jsdom"

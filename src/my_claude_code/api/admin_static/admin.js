@@ -794,6 +794,7 @@ async function loadDashboardState() {
   }
   // Restore the analytics filters and page so a refresh continues the same query.
   if (savedState?.reqFilters) restoreReqFilters(savedState.reqFilters);
+  else paintWindowControls("req");
   if (savedState?.reqOffset) {
     reqState.offset = Number(savedState.reqOffset) || 0;
   }
@@ -11425,6 +11426,49 @@ function usageHarness() {
     usageStateSentence,
     usageNoteParts,
     usageVisibilityHeader,
+  };
+}
+
+/** A handle on RANGE's window machinery, for its jsdom scenario.
+ *
+ * Same shape and same purpose as ``uxPassHarness`` and ``usageHarness`` above:
+ * a function with no behaviour of its own, returning references the page
+ * already has. Two reasons this exists rather than the scenario calling
+ * ``window.eval``:
+ *
+ *  - ``reqState`` is a script-level const and an indirect ``eval`` cannot see
+ *    it (IX.6), so a scenario that wants to put the search box into its held
+ *    state -- the one state where the cost line must stay silent -- has no
+ *    other door.
+ *  - ``windowParams`` is the subject of the boundary table. Handing it out is
+ *    what lets the test assert the exact epoch pair the helper returns, rather
+ *    than only the URL string it ends up in.
+ */
+function rangeHarness() {
+  return {
+    reqState,
+    windowParams,
+    reqWindowParams,
+    exportWindowParams,
+    searchWindowSeconds,
+    searchCostText,
+    paintSearchCostNotice,
+    paintWindowControls,
+    savedWindowInputs,
+    restoreWindowInputs,
+    hourSnapNote,
+    lifetimeOutrunsRows,
+    emptyTableText,
+    reqWindowLabel,
+    analyticsWindowText,
+    persistDashboardState,
+    restoreReqFilters,
+    renderRequestsTable,
+    renderRequestRetentionNote,
+    renderRequestCoverage,
+    SEARCH_COST_WIDTHS,
+    SEARCH_COST_MONTH_TEXT,
+    SEARCH_COST_YEAR_TEXT,
   };
 }
 
@@ -31244,14 +31288,19 @@ document.querySelectorAll('input[name="exportScope"]').forEach((radio) => {
     const scope = exportScope();
     renderExportFieldList(scope);
     byId("exportPeriod").value = EXPORT_DEFAULT_PERIOD[scope];
-    byId("exportCustomRange").hidden = true;
+    // RANGE: one painter, both hosts. `paintWindowControls` decides which of
+    // the dialog's custom inputs are visible from the selected value; the
+    // legacy `custom` pair is one of its cases, so this replaces the one-line
+    // rule that used to sit here with the same rule plus the two new shapes.
+    paintWindowControls("export");
     syncExportFilterVisibility(scope);
     byId("exportHint").textContent = "";
   });
 });
-byId("exportPeriod").addEventListener("change", () => {
-  byId("exportCustomRange").hidden = byId("exportPeriod").value !== "custom";
-});
+byId("exportPeriod").addEventListener("change", () => paintWindowControls("export"));
+// RANGE: a shape change swaps which boxes the calendar form shows. Nothing is
+// fetched here -- the export is its own explicit gesture, so this only paints.
+byId("exportWindowShape").addEventListener("change", () => paintWindowControls("export"));
 
 // 7.122.0 (decision 5): Dismiss has an undo. The button becomes "Undo dismiss"
 // once the page is dismissed, and the sentence beside it says what changed --
@@ -31367,11 +31416,340 @@ function reqWindowSeconds() {
   return Number(byId("reqFilterWindow").value) || 0;
 }
 
-/** The window select's own words: "all time", "last 7d", ... */
+/* ======================= RANGE: the window conversion =====================
+   The user's governing constraint (2026-11-01): this is ADDITIVE. The server
+   already accepts arbitrary `since`/`until` epoch seconds on every windowed
+   route (13 in `admin_routes.py`, one in `admin_media_routes.py`, plus the
+   string-parsing variant on the export), so a custom window is a UI question
+   and the arithmetic below is the whole of it. One pure function, called by
+   the Analytics filters and by the export, so the two can never drift apart
+   the way `#reqFilterWindow` and `#exportPeriod` already had.
+
+   Every existing period must produce the byte-identical request it produced
+   before this existed. The five fixed values keep their spelling AND their
+   meaning: `since = now - N`, no `until`, formatted by the caller with
+   `.toFixed(0)` exactly as 8.8.0 wrote it -- the value that was rounded was
+   the DIFFERENCE, not `now`, so rounding `now` first would move a request by
+   up to a second. Any other value (`""` for all time, the export's `all` and
+   `custom`) takes the same branch and yields `Number(v) || 0` seconds, which
+   is what the old code did.
+
+   The calendar shapes are the user's own calendar, in his own zone (§5 of the
+   investigation, USER DECISIONS Q2). Two rules make that true and both are
+   load-bearing:
+
+   1. Each boundary is resolved SEPARATELY. `new Date(y, m, d)` applies the
+      offset in force AT THAT DATE, not the offset in force now. October 2026
+      in this zone starts at +03:00 and ends at +02:00, so it is 745 hours,
+      not 744. A helper written as `start + 31 * 86400` is wrong on every DST
+      month by an hour, and wrong silently.
+   2. A `type="month"` value is NEVER handed to `new Date(value)`. The engine
+      reads `"2026-10"` as ISO and therefore UTC, which moves a month boundary
+      by the local offset (3 h in an October here). The parts are parsed by
+      hand and the instant is built in local time.
+   3. The interval is half-open, `[since, until)`. The server's `_where` is
+      inclusive at the top today, and no row in the measured 700,005 lands on
+      a whole second, so the difference is invisible now -- but a row written
+      at exactly `until` would be double-counted into the next month, and a
+      window that is right only by luck is not a rule.
+
+   `until` is `undefined` -- never `null`, never `NaN` -- when the shape has no
+   upper bound, because every caller tests it for truth and `URLSearchParams`
+   would otherwise send the string "undefined". */
+
+/** `"2026-10"` or `"2026-10-01"` -> `[2026, 10]` / `[2026, 10, 1]`, or null.
+ *
+ * Deliberately a hand parse: `new Date("2026-10")` is UTC (ECMA-262 reads an
+ * ISO date-only/partial form as UTC), which would shift the boundary by the
+ * viewer's offset. Firefox desktop renders `type="month"` as a plain text box
+ * and hands back whatever was typed, so a value that is not exactly the shape
+ * below is rejected here rather than becoming an Invalid Date downstream. */
+function parseWindowParts(value, wantDay) {
+  const match = String(value || "")
+    .trim()
+    .match(wantDay ? /^(\d{4})-(\d{2})-(\d{2})$/ : /^(\d{4})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = wantDay ? Number(match[3]) : 1;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return [year, month, day];
+}
+
+/** The instant a local wall-clock date began, as epoch seconds.
+ *
+ * `new Date(y, m - 1, d, 0, 0, 0, 0)` — the local-time constructor, which is
+ * the one that applies the offset in force on that date. A date that does not
+ * exist (a midnight inside a DST gap, which this zone does not have at a month
+ * boundary but `America/Santiago` does) resolves forward to the first instant
+ * after the gap; that is the harmless direction for a window START, and the
+ * reason an END boundary is always built as the START of the next period. */
+function localMidnightSeconds(year, month, day) {
+  return new Date(year, month - 1, day, 0, 0, 0, 0).getTime() / 1000;
+}
+
+/** `{since, until}` epoch seconds for a window shape. PURE.
+ *
+ * @param {string} windowValue  the select's value: "", "3600", "86400",
+ *                              "604800", "2592000", "custom-relative",
+ *                              "custom-calendar" (and, on the export,
+ *                              "all"/"custom" for its two legacy values).
+ * @param {number|string} amount  the relative shape's count.
+ * @param {string} unit         "hours" | "days" | "weeks".
+ * @param {string} from         the calendar shape's first input, in the shape
+ *                              its control writes: "YYYY-MM", an exact-times
+ *                              ISO string, or "match" below depending on
+ *                              `shape`.
+ * @param {string} to           its second input, same terms.
+ * @param {number} now          epoch SECONDS to resolve a relative window
+ *                              against. Passed in rather than read inside so
+ *                              the boundary table is a pure table.
+ * @param {string} [shape]      "month" | "months" | "year" | "exact" — which
+ *                              calendar shape `from`/`to` carry. Defaults to
+ *                              "exact", which is the legacy export pair.
+ * @returns {{since: number|undefined, until: number|undefined}}
+ */
+function windowParams(windowValue, amount, unit, from, to, now, shape) {
+  const value = String(windowValue == null ? "" : windowValue);
+  // The two new shapes, appended AFTER the five fixed values. `value` is
+  // otherwise a seconds count (or "" for all time, "all" on the export, or
+  // "custom" for the export's legacy free pair) and takes the fixed branch.
+  if (value === "custom-relative") {
+    const count = Number(amount);
+    const perUnit = { hours: 3600, days: 86400, weeks: 604800 };
+    const seconds = perUnit[String(unit || "")];
+    // A count that is not a positive finite number is an unfinished box, not
+    // a window: `undefined` means "no bound", the same as all time, rather
+    // than a `NaN` URL parameter the server would reject.
+    if (!Number.isFinite(count) || count <= 0 || !seconds) {
+      return { since: undefined, until: undefined };
+    }
+    // Duration, not calendar: "last 3 days" is 72 real hours, and across a DST
+    // change it spans 71 or 73 local clock-hours. That is correct -- it is the
+    // difference between this shape and the calendar one.
+    return { since: now - count * seconds, until: undefined };
+  }
+  if (value === "custom-calendar") {
+    const kind = String(shape || "exact");
+    if (kind === "month" || kind === "months") {
+      const startParts = parseWindowParts(from, false);
+      // "months": the end month is included WHOLE, so its `until` is the first
+      // instant of the month after it. "month" is the one-month case of the
+      // same arithmetic rather than a second implementation.
+      const endParts = kind === "month" ? startParts : parseWindowParts(to, false);
+      if (!startParts || !endParts) return { since: undefined, until: undefined };
+      const since = localMidnightSeconds(startParts[0], startParts[1], 1);
+      const until = localMidnightSeconds(endParts[0], endParts[1] + 1, 1);
+      // A backwards range is an unfinished pick, not a window; saying so with
+      // no bound is better than a query whose `since` is after its `until`.
+      if (!(until > since)) return { since: undefined, until: undefined };
+      return { since, until };
+    }
+    if (kind === "year") {
+      const year = Number(from);
+      if (!Number.isInteger(year) || year < 1970) {
+        return { since: undefined, until: undefined };
+      }
+      // Both ends built by the same local-midnight rule, so the two DST shifts
+      // inside a year cancel and it is 8,760 hours (8,784 in a leap year).
+      return {
+        since: localMidnightSeconds(year, 1, 1),
+        until: localMidnightSeconds(year + 1, 1, 1),
+      };
+    }
+    // "exact": the datetime-local pair. `new Date("2026-10-01T00:00")` has no
+    // zone in the value and is therefore parsed as LOCAL time, which is what
+    // the export's custom range has always done -- so this keeps its meaning
+    // byte for byte. An empty box is no bound, exactly as before.
+    const since = from ? new Date(from) : null;
+    const until = to ? new Date(to) : null;
+    return {
+      since: since && !Number.isNaN(since.getTime()) ? since.getTime() / 1000 : undefined,
+      until: until && !Number.isNaN(until.getTime()) ? until.getTime() / 1000 : undefined,
+    };
+  }
+  // The five fixed seconds, unchanged: `since = now - N`, no `until`. NOT
+  // rounded here -- the caller has always written it with `.toFixed(0)`, and
+  // rounding to nearest is not flooring: reproducing the caller's own
+  // formatting is what makes these five values' requests byte-identical
+  // rather than merely close.
+  const seconds = Number(value) || 0;
+  if (!seconds) return { since: undefined, until: undefined };
+  return { since: now - seconds, until: undefined };
+}
+
+/** The window the Analytics toolbar is on, as `{since, until}`.
+ *
+ * One reader for the select and its two custom shapes, so `reqFilters()`,
+ * `requestTotalsSignature()` and `renderRequestCoverage()` cannot disagree
+ * about where the window starts. */
+function reqWindowParams(now = Date.now() / 1000) {
+  const value = byId("reqFilterWindow").value;
+  if (value === "custom-relative") {
+    return windowParams(
+      value,
+      byId("reqWindowAmount").value,
+      byId("reqWindowUnit").value,
+      "",
+      "",
+      now,
+    );
+  }
+  if (value === "custom-calendar") {
+    const shape = byId("reqWindowShape").value;
+    const [from, to] = reqWindowCalendarInputs(shape);
+    return windowParams(value, "", "", from, to, now, shape);
+  }
+  return windowParams(value, "", "", "", "", now);
+}
+
+/** The two values the calendar shape's inputs hold, by shape. */
+function reqWindowCalendarInputs(shape) {
+  if (shape === "month") return [byId("reqWindowMonth").value, ""];
+  if (shape === "months") {
+    return [byId("reqWindowFrom").value, byId("reqWindowTo").value];
+  }
+  if (shape === "year") return [byId("reqWindowYear").value, ""];
+  return [byId("reqWindowFromTime").value, byId("reqWindowUntilTime").value];
+}
+
+/** Show exactly the inputs the chosen shape needs, and hide the rest.
+ *
+ * One function for both hosts (`req` on the toolbar, `export` in the dialog)
+ * because the two controls are the same control: the failure this prevents is
+ * already on the page's record -- the toolbar had no custom option at all
+ * while the dialog had one, and nothing tied the two together.
+ *
+ * `shape` only matters when the calendar shape is selected; the export has no
+ * "exact" row of its own because its legacy `custom` pair IS the exact-times
+ * shape, kept where it has always been.
+ */
+function paintWindowControls(prefix) {
+  const value = byId(prefix === "req" ? "reqFilterWindow" : "exportPeriod").value;
+  const relative = value === "custom-relative";
+  const calendar = value === "custom-calendar";
+  const legacyExact = prefix === "export" && value === "custom";
+  byId(`${prefix}WindowCustomWrap`).hidden = !relative;
+  byId(`${prefix}WindowRange`).hidden = !calendar;
+  if (prefix === "export") byId("exportCustomRange").hidden = !legacyExact;
+  if (!calendar) return;
+  const shape = byId(`${prefix}WindowShape`).value;
+  byId(`${prefix}WindowMonthWrap`).hidden = shape !== "month";
+  byId(`${prefix}WindowFromWrap`).hidden = shape !== "months";
+  byId(`${prefix}WindowToWrap`).hidden = shape !== "months";
+  byId(`${prefix}WindowYearWrap`).hidden = shape !== "year";
+  // The exact-times pair lives on the toolbar only; the export reaches it
+  // through its own legacy `custom` value above.
+  const exactWrap = document.getElementById(`${prefix}WindowExactWrap`);
+  if (exactWrap) exactWrap.hidden = shape !== "exact";
+}
+
+/** The window the export dialog is on, as `{since, until}`.
+ *
+ * The export's own select keeps its `all` and `custom` spellings and its
+ * default of "last 24 hours"; both legacy values reach `windowParams()` and
+ * produce today's answer for today's inputs (`all`: nothing; `custom` with an
+ * empty pair: nothing; `custom` with one end: that end only). */
+function exportWindowParams(now = Date.now() / 1000) {
+  const value = byId("exportPeriod").value;
+  if (value === "custom-relative") {
+    return windowParams(
+      value,
+      byId("exportWindowAmount").value,
+      byId("exportWindowUnit").value,
+      "",
+      "",
+      now,
+    );
+  }
+  if (value === "custom-calendar") {
+    const shape = byId("exportWindowShape").value;
+    const from =
+      shape === "month"
+        ? byId("exportWindowMonth").value
+        : shape === "months"
+          ? byId("exportWindowFrom").value
+          : shape === "year"
+            ? byId("exportWindowYear").value
+            : byId("exportSince").value;
+    const to =
+      shape === "months"
+        ? byId("exportWindowTo").value
+        : shape === "exact"
+          ? byId("exportUntil").value
+          : "";
+    return windowParams(value, "", "", from, to, now, shape);
+  }
+  // "custom" is the legacy exact pair; anything else is a fixed count or all.
+  const pair = value === "custom";
+  return windowParams(
+    pair ? "custom-calendar" : value,
+    "",
+    "",
+    byId("exportSince").value,
+    byId("exportUntil").value,
+    now,
+    "exact",
+  );
+}
+
+/** The window's own words: "all time", "last 7d", "last 3 weeks", ... */
 function reqWindowLabel() {
   const select = byId("reqFilterWindow");
   const option = select ? select.options[select.selectedIndex] : null;
+  const value = select ? select.value : "";
+  if (value === "custom-relative") {
+    const count = Number(byId("reqWindowAmount").value);
+    const unit = byId("reqWindowUnit").value;
+    if (!Number.isFinite(count) || count <= 0) return "a window not set yet";
+    return `last ${count} ${count === 1 ? unit.replace(/s$/, "") : unit}`;
+  }
+  if (value === "custom-calendar") return calendarWindowText();
   return option ? option.textContent.trim() : "all time";
+}
+
+/** "October 2026", "Sep 2026 – Dec 2026", "2026", "Aug 12 14:00 – Aug 13 09:30",
+ *  in the reader's own words and marked local (§5 rule 7).
+ *
+ * A relative window stays the PHRASE, never the resolved dates: a saved view
+ * that says "last 7 days" has to keep meaning the last 7 days, and a label
+ * carrying today's dates would read as a frozen snapshot the moment it was
+ * saved (USER DECISIONS Q4). */
+function calendarWindowText() {
+  const shape = byId("reqWindowShape").value;
+  if (shape === "month") {
+    const parts = parseWindowParts(byId("reqWindowMonth").value, false);
+    return parts ? `${monthYearText(parts[0], parts[1])}, local` : "a month not set yet";
+  }
+  if (shape === "months") {
+    const start = parseWindowParts(byId("reqWindowFrom").value, false);
+    const end = parseWindowParts(byId("reqWindowTo").value, false);
+    if (!start || !end) return "months not set yet";
+    return `${monthYearText(start[0], start[1])} – ${monthYearText(end[0], end[1])}, local`;
+  }
+  if (shape === "year") {
+    const year = Number(byId("reqWindowYear").value);
+    return Number.isInteger(year) && year > 0 ? `${year}, local` : "a year not set yet";
+  }
+  return `${exactPairText()}, local`;
+}
+
+function monthYearText(year, month) {
+  // `toLocaleDateString` on the first of the month, in the reader's locale: a
+  // date, not a month name table this page would have to carry.
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function exactPairText() {
+  const from = byId("reqWindowFromTime").value;
+  const to = byId("reqWindowUntilTime").value;
+  const show = (value) =>
+    value ? new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "…";
+  if (!from && !to) return "no bounds";
+  return `${show(from)} → ${show(to)}`;
 }
 
 /* `withHeldSearch` is for the one caller that acts on the box as it reads --
@@ -31390,7 +31768,6 @@ function reqFilters({ withHeldSearch = false } = {}) {
   const search = byId("reqFilterSearch").value.trim();
   const endpoint = byId("reqFilterEndpoint").value.trim();
   const local = byId("reqFilterLocal").value;
-  const windowSeconds = byId("reqFilterWindow").value;
   if (provider) params.set("provider", provider);
   if (model) params.set("model", model);
   if (key) params.set("key", key);
@@ -31407,9 +31784,15 @@ function reqFilters({ withHeldSearch = false } = {}) {
   // Always sent, including "all": the store's default is "all", so an omitted
   // param and a chosen Show would look the same to the pulse signature.
   if (local) params.set("local", local);
-  if (windowSeconds) {
-    params.set("since", (Date.now() / 1000 - Number(windowSeconds)).toFixed(0));
-  }
+  // RANGE: the window conversion moved into `windowParams()`, which the export
+  // calls too. The five fixed values build exactly what this line built before
+  // it existed -- `(now - N).toFixed(0)`, no `until` -- so their requests are
+  // byte-identical. `toFixed(0)` also keeps a big epoch out of exponential
+  // notation, which `String(epoch)` would produce above 1e21 and the server
+  // would reject.
+  const window = reqWindowParams();
+  if (window.since !== undefined) params.set("since", window.since.toFixed(0));
+  if (window.until !== undefined) params.set("until", window.until.toFixed(0));
   return params;
 }
 
@@ -31423,7 +31806,17 @@ const ANALYTICS_CONFIG_BOUNDARY = new Set(["Failover", "Vision adapter", "Provid
 function analyticsWindowText(windowOnly = false) {
   const select = byId("reqFilterWindow");
   const option = select ? select.options[select.selectedIndex] : null;
-  const label = option && option.value ? option.textContent.trim() : "all stored rows";
+  // RANGE: a custom window is named by its own bounds and marked local (§5
+  // rule 7) — "October 2026" alone is ambiguous the moment a screenshot is
+  // shared, and it does not say whose calendar was meant. A relative one names
+  // the PHRASE, never the resolved dates, so a saved view still reads as a
+  // window rather than as a snapshot.
+  const custom = select ? select.value.startsWith("custom-") : false;
+  const label = custom
+    ? reqWindowLabel()
+    : option && option.value
+      ? option.textContent.trim()
+      : "all stored rows";
   // The Media card is sent the window and nothing else, so its caption must
   // not claim the page's filters narrowed it.
   const filtered =
@@ -31526,6 +31919,17 @@ function requestTotalsSignature() {
   const params = reqFilters();
   params.delete("since");
   params.set("window", String(reqWindowSeconds()));
+  // RANGE: the fixed periods keep the line above exactly as it was -- their
+  // value IS the seconds. A custom window has no single number, so it is
+  // named by its SELECT value plus the shape that produced it: a rolling
+  // "last 7 days" must not look due on every tick (its `since` moves every
+  // second, which is why `since` was dropped in the first place), and two
+  // different calendar months must not look like the same question.
+  const value = byId("reqFilterWindow").value;
+  if (value.startsWith("custom-")) {
+    params.set("window", value);
+    params.set("shape", value === "custom-calendar" ? byId("reqWindowShape").value : byId("reqWindowUnit").value);
+  }
   return params.toString();
 }
 
@@ -31798,6 +32202,13 @@ async function loadRequestsView({ auto = false } = {}) {
   renderReqPager();
   reqState.listUpdatedAt = Date.now();
   noteAnalyticsAsOf("totals", stats, requestedAt);
+  // RANGE (PR-CW-2, sentence 1): the hour-snap clause names how many MORE the
+  // cards counted than the table, and the table's own exact count arrives on
+  // the LIST payload -- which lands after the stats paint above. Repainting
+  // the note here is one text assignment on a paragraph that is already on
+  // screen; without it the clause would read "a little past where it ends"
+  // with no number, because `reqState.total` was still the previous load's.
+  renderRequestRetentionNote(stats);
 }
 
 /** The shape `renderRequestStatsCards` and friends read, with nothing in it.
@@ -31877,6 +32288,113 @@ function paintRequestSearchCount(loadId, settled) {
 const SEARCH_PROGRESS_POLL_MS = 1000;
 /** How long the last view's rows may stand while a search finds its first page. */
 const SEARCH_ROWS_WAIT_MS = 1000;
+
+/* RANGE (PR-CW-3): what a wide search costs, measured -- not estimated.
+ *
+ * The numbers are §4.3 of `specs/INVESTIGATION-CUSTOM-TIME-WINDOWS.md`: one
+ * search pass over the real 700,005-row log with the search index attached,
+ * reading a word that matches nearly every row. Wall clock, seconds:
+ *
+ *     last 24 h          1.05
+ *     last 30 d         37.53
+ *     a month       54.75 - 131.30   (two comparable months, a 2.4x spread)
+ *     a year           276.15 (4 min 36 s)
+ *     all time         314.14 (5 min 14 s)
+ *
+ * The month figure is a RANGE and stays one: the two months measured took 55 s
+ * and 131 s for a 1.3x difference in matched rows, because the planner chooses
+ * between the trigram index and the body scan per window. Quoting a single
+ * month number would be the kind of figure this codebase has had to retract
+ * before, so the sentence says "a minute to two" and means it.
+ *
+ * This is ADVISORY, and the user's decision was explicit about what it must
+ * not become: no silent bound, no refusal, no truncation of results. Pressing
+ * Enter still runs the search over the whole window, the progress line still
+ * says how far it has read, and a new load still aborts it. Only the price is
+ * stated, before the reader commits.
+ */
+/* The four widths the sentence steps through, in seconds. They are the
+   measured windows themselves rather than invented thresholds: below a day the
+   pass is about a second and needs no warning at all. */
+const SEARCH_COST_WIDTHS = {
+  day: 86400,
+  thirtyDays: 2592000,
+  twoMonths: 5184000,
+  tenMonths: 25920000,
+};
+const SEARCH_COST_30D_TEXT = "about 38 seconds";
+const SEARCH_COST_MONTH_TEXT = "a minute to two";
+const SEARCH_COST_YEAR_TEXT = "about five minutes";
+
+/** The window a search will actually read, in seconds, or 0 for all time. */
+function searchWindowSeconds() {
+  const window = reqWindowParams();
+  if (window.since === undefined) return 0;
+  // The all-time case is the one place this helper has to answer a question
+  // about "now", so the clock is read here rather than by `reqWindowParams`:
+  // the window's own answer must not depend on when it was asked.
+  const now = Date.now() / 1000;
+  const end = window.until !== undefined ? Number(window.until) : now;
+  // And the END is clamped to `now`, because a calendar window that reaches
+  // into the future is priced by what exists inside it, not by its own width.
+  return Math.max(0, Math.min(end, now) - Number(window.since));
+}
+
+/** The line under the search box, or "" when there is nothing to warn about.
+ *
+ * Fires only when a search is actually going to run (the box has text and the
+ * search is not being held for Run -- a held search has its own notice and
+ * runs nothing) and only when the window is wide enough to cost real time. The
+ * numbers are the measurements above, so the wording never claims more than
+ * was observed; below a day there is nothing to say and this says nothing.
+ *
+ * The closing clause is PR-CW-3's whole contract with the reader: it runs when
+ * they press Enter, it says how far it has read, and it stops when they type
+ * again or reload. Nothing here narrows the window, refuses the search, or
+ * cuts a result. */
+function searchCostText() {
+  const box = byId("reqFilterSearch");
+  if (!box || !box.value.trim()) return "";
+  if (reqState.searchHeld) return "";
+  const seconds = searchWindowSeconds();
+  const how =
+    "It runs when you press Enter, says how far it has read, and stops if you " +
+    "type again or reload.";
+  // All time: the widest window this page offers, and the measured worst case
+  // (314 s against a year's 276 s -- the same 681,460 rows, measured twice).
+  if (seconds === 0) {
+    return (
+      `Searching this whole window reads the entire log: a year took ${SEARCH_COST_YEAR_TEXT} ` +
+      `here and all time a little longer. ${how}`
+    );
+  }
+  const days = Math.round(seconds / 86400);
+  if (seconds > SEARCH_COST_WIDTHS.tenMonths) {
+    return (
+      `Searching ${days} days reads most of the log: a year took ` +
+      `${SEARCH_COST_YEAR_TEXT} here. ${how}`
+    );
+  }
+  if (seconds > SEARCH_COST_WIDTHS.twoMonths) {
+    return (
+      `Searching this window reads months of the log: a month took ${SEARCH_COST_MONTH_TEXT} ` +
+      `here and several months longer. ${how}`
+    );
+  }
+  if (seconds > SEARCH_COST_WIDTHS.thirtyDays) {
+    return (
+      `Searching this window reads a month or more of the log: a month took ` +
+      `${SEARCH_COST_MONTH_TEXT} here. ${how}`
+    );
+  }
+  if (seconds > SEARCH_COST_WIDTHS.day) {
+    return (
+      `Searching this window reads several days of the log: 30 days took ` +
+      `${SEARCH_COST_30D_TEXT} here and a month ${SEARCH_COST_MONTH_TEXT}. ${how}`
+    );
+  }
+  return "";
+}
 
 /** The table while a search has not found its first page yet. */
 function renderRequestsSearching() {
@@ -31961,6 +32479,12 @@ function requestSearchProgressText(progress) {
  *  running one has read. Hidden otherwise. */
 function renderReqSearchNotice() {
   const notice = byId("reqSearchNotice");
+  // RANGE (PR-CW-3): the cost line is painted from here, so every path that
+  // says what the search box is doing also says what it will cost -- one call
+  // site, not a second parallel set of hooks that could drift from this one.
+  // It runs first because it is independent of `notice`'s own existence: a
+  // tree where the notice were removed should still warn about the price.
+  paintSearchCostNotice();
   if (!notice) return;
   const text = byId("reqSearchNoticeText");
   const actions = byId("reqSearchNoticeActions");
@@ -31983,6 +32507,27 @@ function renderReqSearchNotice() {
   }
   text.textContent = "";
   notice.hidden = true;
+}
+
+/** RANGE (PR-CW-3): repaint the cost line wherever the notice is repainted.
+ *
+ * One call site rather than several, because the two lines under the search
+ * box answer the same question at the same moments -- what is this search
+ * going to do? -- and a second, parallel set of hooks is how they would drift.
+ * The cost line hides itself the moment the search is running (the progress
+ * line is the news then) and whenever the box is empty.
+ */
+function paintSearchCostNotice() {
+  const notice = byId("reqSearchCost");
+  if (!notice) return;
+  // A search already pending says how far it has read in its own line; the
+  // price it is paying is no longer a decision the reader can still make.
+  const running = Boolean(
+    reqState.searchPendingFor && reqState.searchPendingFor === reqState.loadId,
+  );
+  const text = running ? "" : searchCostText();
+  notice.textContent = text;
+  notice.hidden = !text;
 }
 
 /* 7.92.0: the search index line under the filters. It says how many rows a
@@ -33236,18 +33781,119 @@ function atRetentionCap(stats) {
   return cap > 0 && Number(stats.total || 0) >= cap;
 }
 
+/* RANGE (PR-CW-2, sentence 1): the cards count whole UTC hours and the table
+   counts the window exactly, so on a window that does not start and end on an
+   hour boundary the two disagree -- by design, and by a real amount: measured
+   on the 700,005-row log, October 2026 showed 211,992 rows in the table and
+   212,317 on the cards (+325), September 271,829 against 272,903 (+1,074). The
+   whole of that gap is the traffic in the partial hour at the END of the
+   window (a local month starts on an exact UTC-hour boundary in this zone and
+   ends inside one).
+
+   The payload already carries both bounds -- `window.since`/`window.until` as
+   requested and `window.snapped_since`/`window.snapped_until` as summed
+   (`core/request_log.py:10889-10896`) -- so this is a read of two numbers the
+   page already has, never a query. It says nothing when the two agree, which
+   is every hour-aligned window and every all-time view. */
+function hourSnapNote(stats) {
+  const window = stats && stats.window;
+  if (!window) return "";
+  const since = window.since;
+  const until = window.until;
+  // Only the END is worth a sentence. The rollup floors `since` to its hour
+  // and rounds `until` up to the end of its hour, so it can only ever count
+  // MORE than was asked for, and on every window the page offers the start is
+  // already hour-aligned or absent.
+  if (until == null || window.snapped_until == null) return "";
+  const extraSeconds = Number(window.snapped_until) - Number(until);
+  if (!(extraSeconds > 0) || (since != null && Number(since) > Number(until))) return "";
+  // How many MORE the cards counted than the table did. Both payloads carry a
+  // total: `stats.total` is the rollup's, and the list's own `total` is the
+  // exact count for the same window. Reading the difference is what lets the
+  // sentence name a number instead of an hour count.
+  const exact = reqState.total;
+  const rolled = Number(stats.total);
+  const more =
+    Number.isFinite(rolled) && Number.isFinite(exact) && exact != null && rolled > exact
+      ? rolled - exact
+      : null;
+  const counted = more === null ? "" : ` (${formatAnalyticsNumber(more)} more requests than the table here)`;
+  const hours = extraSeconds >= 3600 ? Math.round(extraSeconds / 3600) : 1;
+  return (
+    `The cards count whole UTC hours, so this window's last ${
+      hours === 1 ? "hour counts" : `${hours} hours count`
+    } a little past where it ends${counted}; the table is exact.`
+  );
+}
+
 function renderRequestRetentionNote(stats) {
   const note = byId("reqRetentionNote");
-  note.hidden = !atRetentionCap(stats);
-  if (note.hidden) return;
-  const cap = formatAnalyticsNumber(Number(stats.retained_rows_max || 0));
-  note.textContent =
-    `Only the most recent ${cap} requests are kept. Older ones have been deleted, ` +
-    `so they cannot be listed, opened or searched, and every figure above counts ` +
-    `just those ${cap} — it will hover around the cap rather than keep rising. ` +
-    `All time below keeps counting for good. To browse more of them, raise ` +
-    `REQUEST_LOG_MAX_ROWS: bodies are compressed, so each request now costs about ` +
-    `7 KB instead of 41 KB.`;
+  const atCap = atRetentionCap(stats);
+  // RANGE (PR-CW-2, sentence 2): the note used to fire only at the row cap.
+  // Retention deletes `requests` rows and keeps the rollup those counts come
+  // from, so the all-time counters (`renderRequestLifetime`, on this page
+  // already) outrun the stored rows by exactly the pruned amount. Measured on
+  // the copy: 700,005 rows against 738,165 rolled (+38,160), almost all of it
+  // in one month. A reader who meets two different totals deserves the
+  // sentence whether or not the table is exactly AT the cap right now (prune
+  // runs every hundred requests, so it rarely is).
+  const outrun = lifetimeOutrunsRows(stats);
+  const snap = hourSnapNote(stats);
+  if (!atCap && !outrun && !snap) {
+    note.hidden = true;
+    return;
+  }
+  note.textContent = "";
+  if (atCap) {
+    const cap = formatAnalyticsNumber(Number(stats.retained_rows_max || 0));
+    note.textContent =
+      `Only the most recent ${cap} requests are kept. Older ones have been deleted, ` +
+      `so they cannot be listed, opened or searched, and every figure above counts ` +
+      `just those ${cap} — it will hover around the cap rather than keep rising. ` +
+      `All time below keeps counting for good. To browse more of them, raise ` +
+      `REQUEST_LOG_MAX_ROWS: bodies are compressed, so each request now costs about ` +
+      `7 KB instead of 41 KB.`;
+  }
+  if (outrun) {
+    // One clause, in the same paragraph as whatever is already here, because
+    // two "nothing here" lines stacked read as a fault.
+    //
+    // It does NOT claim the cards were counting a WIDER window than the table:
+    // the cards read the same `[since, until]` the table does, from a rollup
+    // that retention never prunes. What the two totals really measure is the
+    // difference between "rows still stored" and "requests ever recorded
+    // inside this window", and that is what the sentence says -- the 38,160
+    // measured on the copy is August traffic that falls inside a year window
+    // but whose rows have been deleted.
+    const gap = formatAnalyticsNumber(outrun);
+    note.textContent +=
+      (note.textContent ? " " : "") +
+      `The cards count requests ever recorded inside this window, from a rollup ` +
+      `retention never prunes; the table can only list the rows still stored. ` +
+      `That is ${gap} requests the cards counted for this window and the table ` +
+      `cannot show.`;
+  }
+  if (snap) note.textContent += (note.textContent ? " " : "") + snap;
+  note.hidden = false;
+}
+
+/** How many more requests the all-time counters hold than the log has rows.
+ *
+ * `renderRequestLifetime` already fetches this payload for the panel on the
+ * same page, so the answer is a cross-read of two payloads rather than a
+ * route. `null` when the two agree (or when either is missing) -- a zero here
+ * would make the sentence fire on every view, which is the opposite of the
+ * point. */
+function lifetimeOutrunsRows(stats) {
+  const lifetime = reqState.lastLifetime;
+  if (!lifetime || !stats) return null;
+  const all = Number(lifetime.requests);
+  const rows = Number(stats.total);
+  if (!Number.isFinite(all) || !Number.isFinite(rows)) return null;
+  const gap = all - rows;
+  // A handful of rows is a race between two requests, not a fact worth a
+  // sentence. The measured gap on a pruned log is tens of thousands.
+  return gap > 100 ? gap : null;
 }
 
 // Binary units, because this is a file on a disk and that is what the operating
@@ -33355,10 +34001,18 @@ async function toggleHistoryConversion() {
 function renderRequestLifetime(lifetime) {
   const cards = byId("reqLifetimeCards");
   const span = byId("reqLifetimeSpan");
+  // RANGE (PR-CW-2, sentence 2): the retention note cross-reads this payload
+  // against the stats one to explain a table with fewer rows than the cards
+  // count. Kept here, where the payload already arrives, rather than fetched a
+  // second time for the note's sake.
+  reqState.lastLifetime = lifetime && lifetime.enabled !== false ? lifetime : null;
   if (!lifetime || lifetime.enabled === false) {
     cards.innerHTML = "";
     span.textContent = "";
     byId("reqLifetimeModels").innerHTML = "";
+    // The note is repainted on this paint too, or a card/table sentence about
+    // retention would outlive the numbers it is about.
+    if (reqState.lastStats) renderRequestRetentionNote(reqState.lastStats);
     return;
   }
   const requests = Number(lifetime.requests || 0);
@@ -33407,20 +34061,48 @@ function renderRequestLifetime(lifetime) {
 function renderRequestCoverage(stats) {
   const note = byId("reqCoverageNote");
   const coverage = stats.coverage;
-  const windowSeconds = reqWindowSeconds();
-  if (!coverage || !windowSeconds || coverage.tracking_since == null) {
+  // RANGE: a custom window is a real range too, and the route already answers
+  // `coverage` for whatever `since`/`until` it was sent (`admin_routes.py:5012`,
+  // `store.coverage`), so this reads the same payload the fixed windows read.
+  // No new query and no new field.
+  const window = reqWindowParams();
+  const relative = reqWindowSeconds();
+  // The window's own length in seconds: a fixed period is its own number, and
+  // a custom one is its two bounds. `null` for all time, which has no length
+  // and therefore nothing to be missing from.
+  const windowSeconds = relative
+    ? relative
+    : window.since !== undefined && window.until !== undefined
+      ? Number(window.until) - Number(window.since)
+      : 0;
+  const windowStart = relative
+    ? Date.now() / 1000 - relative
+    : window.since !== undefined
+      ? Number(window.since)
+      : 0;
+  if (!coverage || !(windowSeconds > 0) || coverage.tracking_since == null) {
     note.hidden = true;
     return;
   }
-  const windowStart = Date.now() / 1000 - windowSeconds;
   // Before the first recorded session there is no uptime data, so a gap means
   // "not recorded", not "the server was down".
   const measurable = Math.min(
     windowSeconds,
-    Math.max(0, Date.now() / 1000 - coverage.tracking_since),
+    Math.max(0, (window.until !== undefined && !relative ? Number(window.until) : Date.now() / 1000) - coverage.tracking_since),
   );
   if (measurable <= 0) {
     note.hidden = true;
+    // RANGE (PR-CW-2, sentence 3): an empty window that predates any uptime
+    // record is not "no requests" -- nothing was measured then. Saying which
+    // of the two it is, in the place the reader is already looking, is the
+    // difference between "quiet" and "unmeasured" that the store's own NULL
+    // discipline insists on everywhere else.
+    if (reqState.total === 0) {
+      note.textContent =
+        "This window is not measured: it ends before uptime tracking began, so " +
+        "there is nothing to report for it rather than nothing in it.";
+      note.hidden = false;
+    }
     return;
   }
   const missing = measurable - Number(coverage.covered_seconds || 0);
@@ -34680,7 +35362,7 @@ function renderRequestsTable(rows) {
     const td = document.createElement("td");
     td.colSpan = requestTableColumnCount();
     td.className = "analytics-empty";
-    td.textContent = "No requests match the current filters.";
+    td.textContent = emptyTableText();
     tr.appendChild(td);
     body.appendChild(tr);
     return;
@@ -34774,8 +35456,59 @@ function requestsFiltersActive() {
     "reqFilterWindow",
   ];
   if (ids.some((id) => String(byId(id)?.value || "").trim() !== "")) return true;
+  // RANGE: a custom window is a narrowing filter even though the select's own
+  // value is the bare string "custom-relative"/"custom-calendar" -- the check
+  // above already catches it, and this line is what keeps that true if the
+  // select's value ever stops being truthy for a shape.
+  if (byId("reqFilterWindow")?.value?.startsWith("custom-")) return true;
   const local = String(byId("reqFilterLocal")?.value || "hide");
   return local !== "hide";
+}
+
+/** What an empty table says (RANGE, PR-CW-2 sentence 3).
+ *
+ * Two different things look identical as an empty table: a window that was
+ * measured and had nothing in it, and a window the log was never measuring.
+ * `renderRequestCoverage` already draws that distinction for uptime -- this is
+ * the same distinction in the row that is actually empty, and it is the one a
+ * reader meets first.
+ *
+ * The custom shapes make the second case ordinary rather than exotic: a month
+ * picked from the native box is very often a month before the log existed, and
+ * "No requests match the current filters" reads as a fault in that case when
+ * the truth is "nothing was being recorded then". */
+function emptyTableText() {
+  const custom = Boolean(byId("reqFilterWindow")?.value?.startsWith("custom-"));
+  if (!custom) return "No requests match the current filters.";
+  const window = reqWindowParams();
+  const coverage = reqState.lastStats && reqState.lastStats.coverage;
+  const tracking = coverage ? Number(coverage.tracking_since) : null;
+  const until = window.until !== undefined ? Number(window.until) : Date.now() / 1000;
+  // The window ends before a single session was ever recorded, and nothing was
+  // in it: that is "not measured", not "empty".
+  if (
+    Number.isFinite(tracking) &&
+    tracking != null &&
+    until <= tracking &&
+    !(reqState.total > 0)
+  ) {
+    return (
+      "This window is not measured: it ends before uptime tracking began, so " +
+      "there is nothing to report for it rather than nothing in it."
+    );
+  }
+  // The other direction: the window is entirely before the oldest kept row.
+  const lifetime = reqState.lastLifetime;
+  if (lifetime && lifetime.first_day) {
+    const firstDay = new Date(`${lifetime.first_day}T00:00:00`);
+    if (!Number.isNaN(firstDay.getTime()) && until * 1000 <= firstDay.getTime()) {
+      return (
+        "This window is not measured: the oldest request kept is newer than it, " +
+        "so there is nothing to report for it rather than nothing in it."
+      );
+    }
+  }
+  return "No requests in this window.";
 }
 
 /* The status, and -- when it is `cancelled` -- which of the four things that
@@ -35700,6 +36433,15 @@ function persistDashboardState() {
         endpoint: byId("reqFilterEndpoint")?.value?.trim() || undefined,
         local: byId("reqFilterLocal")?.value || undefined,
         window: byId("reqFilterWindow")?.value || undefined,
+        // RANGE: the custom window's SHAPE and INPUTS, never a computed
+        // epoch. A relative window saved as "last 7 days" has to still mean
+        // the last 7 days when the view is reopened -- storing the resolved
+        // `since` would turn it into a snapshot that reads as broken a week
+        // later (USER DECISIONS Q4). An absolute one is fixed by its own
+        // inputs and needs nothing more. Kept as its own object so a saved
+        // view written before this existed (no `windowCustom` key at all)
+        // restores exactly as it did.
+        windowCustom: savedWindowInputs("req"),
         pageSize: byId("reqPageSize")?.value || undefined,
       },
       reqOffset: reqState.offset > 0 ? reqState.offset : undefined,
@@ -35708,6 +36450,27 @@ function persistDashboardState() {
   } catch (_) {
     /* storage unavailable or full; persistence is best-effort */
   }
+}
+
+/** The custom window's shape and its inputs, as the saved view stores them.
+ *
+ * `undefined` when neither custom shape is selected, so an ordinary view's
+ * saved object carries nothing new and a page written by 8.8.0 still loads. */
+function savedWindowInputs(prefix) {
+  const value = byId(prefix === "req" ? "reqFilterWindow" : "exportPeriod")?.value;
+  if (value !== "custom-relative" && value !== "custom-calendar") return undefined;
+  return {
+    value,
+    amount: byId(`${prefix}WindowAmount`)?.value || undefined,
+    unit: byId(`${prefix}WindowUnit`)?.value || undefined,
+    shape: byId(`${prefix}WindowShape`)?.value || undefined,
+    month: byId(`${prefix}WindowMonth`)?.value || undefined,
+    from: byId(`${prefix}WindowFrom`)?.value || undefined,
+    to: byId(`${prefix}WindowTo`)?.value || undefined,
+    year: byId(`${prefix}WindowYear`)?.value || undefined,
+    fromTime: byId(`${prefix}WindowFromTime`)?.value || undefined,
+    untilTime: byId(`${prefix}WindowUntilTime`)?.value || undefined,
+  };
 }
 
 /* Put a persisted analytics query back into the toolbar. Its own function so
@@ -35725,6 +36488,11 @@ function restoreReqFilters(f) {
   if (byId("reqFilterEndpoint")) byId("reqFilterEndpoint").value = f.endpoint || "";
   if (f.local && byId("reqFilterLocal")) byId("reqFilterLocal").value = f.local;
   if (f.window && byId("reqFilterWindow")) byId("reqFilterWindow").value = f.window;
+  // RANGE: the shape and its inputs, back into the boxes. Every input is
+  // guarded: a saved view is untrusted (it is localStorage, and a hand-edited
+  // one must not put an invalid year in a number box and have the page query
+  // with it), and a key a newer release adds is simply absent here.
+  restoreWindowInputs("req", f.windowCustom);
   if (f.pageSize && byId("reqPageSize")) {
     byId("reqPageSize").value = f.pageSize;
     reqState.limit = Number(f.pageSize) || reqState.limit;
@@ -35734,6 +36502,40 @@ function restoreReqFilters(f) {
   // view loads as it always did.
   reqState.searchHeld = Boolean(String(f.search || "").trim());
   renderReqSearchNotice();
+}
+
+/** Put a saved custom window back into one host's boxes, then repaint. */
+function restoreWindowInputs(prefix, saved) {
+  if (!saved || typeof saved !== "object") {
+    // A view saved before RANGE has no custom inputs; the select's restored
+    // value decides what is on screen and the boxes stay at their defaults.
+    paintWindowControls(prefix);
+    return;
+  }
+  if (byId(`${prefix}WindowShape`) && saved.shape) {
+    byId(`${prefix}WindowShape`).value = saved.shape;
+  }
+  // Only a value the shipped control offers is restored, so a hand-edited
+  // saved view cannot select an option that does not exist and leave the
+  // select reading its own first option while the page queries something else.
+  const offers = (id, value) =>
+    value &&
+    byId(id) &&
+    Array.from(byId(id).options || []).some((option) => option.value === value);
+  if (offers(`${prefix}WindowUnit`, saved.unit)) {
+    byId(`${prefix}WindowUnit`).value = saved.unit;
+  }
+  const set = (id, value) => {
+    if (value && byId(id)) byId(id).value = String(value);
+  };
+  set(`${prefix}WindowAmount`, saved.amount);
+  set(`${prefix}WindowMonth`, saved.month);
+  set(`${prefix}WindowFrom`, saved.from);
+  set(`${prefix}WindowTo`, saved.to);
+  set(`${prefix}WindowYear`, saved.year);
+  set(`${prefix}WindowFromTime`, saved.fromTime);
+  set(`${prefix}WindowUntilTime`, saved.untilTime);
+  paintWindowControls(prefix);
 }
 
 function restoreDashboardState() {
@@ -39877,7 +40679,11 @@ function openExportModal(scopeOverride) {
   });
   byId("exportFormat").value = "json";
   byId("exportPeriod").value = EXPORT_DEFAULT_PERIOD[initial];
-  byId("exportCustomRange").hidden = true;
+  // RANGE: this used to hide #exportCustomRange alone. The dialog now has two
+  // more optional blocks and the same single painter the toolbar uses keeps
+  // them in step, so opening the dialog can never leave two of the three
+  // visible at once.
+  paintWindowControls("export");
   byId("exportGroupBy").value = "";
   renderExportFieldList(initial);
   syncExportFilterVisibility(initial);
@@ -39923,25 +40729,13 @@ function trapExportModalFocus(event) {
   }
 }
 
-function exportPeriodSeconds() {
-  const raw = byId("exportPeriod").value;
-  // "all" (lifetime) and "custom" both mean "no fixed window": the caller
-  // sends no since, or the custom bounds instead.
-  if (raw === "all" || raw === "custom") return null;
-  return Number(raw) || 0;
-}
-
-function exportCustomSince() {
-  const value = byId("exportSince").value;
-  if (!value) return null;
-  return new Date(value).toISOString();
-}
-
-function exportCustomUntil() {
-  const value = byId("exportUntil").value;
-  if (!value) return null;
-  return new Date(value).toISOString();
-}
+/* RANGE: `exportPeriodSeconds()`, `exportCustomSince()` and
+   `exportCustomUntil()` were the export's own three readers of its period
+   control. They are gone rather than left as dead code: the export now calls
+   the one `windowParams()` above, which is what keeps the two halves of the
+   page from drifting apart again (the display side had no custom option while
+   this dialog had one). A second reader left in place is exactly how that
+   happened, so there is now exactly one. */
 
 function exportParamsFor(scope) {
   const params = new URLSearchParams();
@@ -39956,14 +40750,37 @@ function exportParamsFor(scope) {
   if (provider) params.set("provider", provider);
   const model = byId("exportModelFilter").value.trim();
   if (model) params.set("model", model);
-  const periodSeconds = exportPeriodSeconds();
-  if (periodSeconds !== null) {
-    params.set("since", String(Math.floor(Date.now() / 1000) - periodSeconds));
-  } else if (byId("exportPeriod").value === "custom") {
-    const since = exportCustomSince();
-    if (since) params.set("since", since);
-    const until = exportCustomUntil();
-    if (until) params.set("until", until);
+  // RANGE: the export calls the SAME `windowParams()` the Analytics toolbar
+  // does (USER DECISIONS Q7: one period vocabulary). Its four fixed periods
+  // build exactly what they built before -- `String(Math.floor(now) - N)`,
+  // the same operation expressed the same way -- and its two legacy values
+  // keep their meaning: `all` sends no bound, and `custom` with an empty pair
+  // sends none either, which is the URL the old two-input dialog produced.
+  //
+  // One deliberate difference from the display side: the export route takes
+  // its bounds as STRINGS it parses itself (`_parse_bound` in
+  // `admin_export_routes.py`) and reads a zone-less value as UTC, so the
+  // legacy `custom` pair keeps sending its `toISOString()` form to the
+  // millisecond. A calendar boundary is a local midnight the helper has
+  // already converted, so the instant is sent as an integer -- the same
+  // instant in the vocabulary those routes already understand.
+  const legacyExact = byId("exportPeriod").value === "custom";
+  const window = exportWindowParams();
+  if (window.since !== undefined) {
+    params.set(
+      "since",
+      legacyExact && byId("exportSince").value
+        ? new Date(window.since * 1000).toISOString()
+        : String(Math.floor(window.since)),
+    );
+  }
+  if (window.until !== undefined) {
+    params.set(
+      "until",
+      legacyExact && byId("exportUntil").value
+        ? new Date(window.until * 1000).toISOString()
+        : String(Math.floor(window.until)),
+    );
   }
   return params;
 }
@@ -40142,6 +40959,7 @@ byId("reqApplyFilters").addEventListener("click", applyReqFilters);
   byId(id).addEventListener("change", applyReqFilters);
 });
 
+
 // Text inputs wait for a pause instead of querying per keystroke: 400 ms is
 // long enough that a typed provider name is one query, short enough that it
 // still feels like the view is following along.
@@ -40167,6 +40985,45 @@ let reqFilterTypingTimer = null;
     });
   },
 );
+
+/* RANGE: the toolbar's two custom shapes.
+ *
+ * The select and the shape picker say WHICH inputs exist, so they repaint the
+ * control first and query after; the amount, unit and month/year boxes hold
+ * values, so they share the 400 ms pause above rather than querying per
+ * keystroke -- an `input[type=number]` fires `input` on every digit, and "202"
+ * is a year nobody asked for. `change` fires on a number box too (on blur or
+ * on the spinner), so a reader who types and presses Tab still gets an answer
+ * without waiting out the pause.
+ *
+ * The exact-times pair keeps the plain `change` the export dialog's two
+ * datetime boxes have always had: a picker's close is a finished edit.
+ */
+byId("reqFilterWindow").addEventListener("change", () => paintWindowControls("req"));
+byId("reqWindowShape").addEventListener("change", () => {
+  paintWindowControls("req");
+  applyReqFilters();
+});
+byId("reqWindowUnit").addEventListener("change", applyReqFilters);
+[
+  "reqWindowAmount",
+  "reqWindowMonth",
+  "reqWindowFrom",
+  "reqWindowTo",
+  "reqWindowYear",
+].forEach((id) => {
+  byId(id).addEventListener("change", applyReqFilters);
+  byId(id).addEventListener("input", () => {
+    if (reqFilterTypingTimer) window.clearTimeout(reqFilterTypingTimer);
+    reqFilterTypingTimer = window.setTimeout(() => {
+      reqFilterTypingTimer = null;
+      applyReqFilters();
+    }, 400);
+  });
+});
+["reqWindowFromTime", "reqWindowUntilTime"].forEach((id) => {
+  byId(id).addEventListener("change", applyReqFilters);
+});
 byId("reqClearFilters").addEventListener("click", () => {
   // Reset every analytics filter to its default and reload, so the view
   // returns to "show everything" without a manual page refresh.
@@ -40184,6 +41041,19 @@ byId("reqClearFilters").addEventListener("click", () => {
   // rows are hidden unless the reader asked for them.
   byId("reqFilterLocal").value = "hide";
   byId("reqFilterWindow").value = "";
+  // RANGE: the two custom shapes go back to their defaults with the window, so
+  // "clear" leaves nothing behind that a later change of the select would
+  // silently resurrect.
+  byId("reqWindowAmount").value = "7";
+  byId("reqWindowUnit").value = "days";
+  byId("reqWindowShape").value = "month";
+  ["reqWindowMonth", "reqWindowFrom", "reqWindowTo", "reqWindowYear"].forEach((id) => {
+    byId(id).value = "";
+  });
+  ["reqWindowFromTime", "reqWindowUntilTime"].forEach((id) => {
+    byId(id).value = "";
+  });
+  paintWindowControls("req");
   byId("reqPageSize").value = "25";
   reqState.limit = 25;
   // A pending keystroke from the box we just emptied would otherwise fire

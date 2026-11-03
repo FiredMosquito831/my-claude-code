@@ -5023,12 +5023,53 @@ if (process.env.MCC_JSDOM_SCENARIO === "usage_refresh") {
   );
   scenario = prepareUsageRefreshScenario({ window, ROUTES, fetchBodies, fetchUrls });
 }
+/* MCC_JSDOM_SCENARIO=range_windows (RANGE): every fetched URL for each of the
+   five existing period values, on the Analytics toolbar AND in the export
+   dialog, as the state machine drives them. The same scenario runs on the BASE
+   tree and on this branch and the Python test diffs the two lists, so
+   "byte-identical where untouched" is a comparison rather than a claim. It
+   also captures the two new shapes, which is where the boundary table's live
+   half comes from. */
+if (process.env.MCC_JSDOM_SCENARIO === "range_windows") {
+  const { prepareRangeWindowsScenario } = await import(
+    "./admin_jsdom_range_windows.mjs"
+  );
+  scenario = prepareRangeWindowsScenario({ window, ROUTES, fetchUrls });
+}
 
 const scriptErrors = [];
 window.addEventListener("error", (event) => scriptErrors.push(String(event.message)));
 window.addEventListener("unhandledrejection", (event) =>
   scriptErrors.push(String(event.reason)),
 );
+
+/* RANGE: freeze the clock, but only when a scenario asks for it.
+ *
+ * Four of the five period values resolve `now - N`, so a URL diff between the
+ * base tree and this branch would otherwise be a diff of two clocks -- it
+ * would move on every run and prove nothing. `MCC_JSDOM_NOW_MS` pins `Date.now`
+ * (and the no-argument `new Date()`, which is the same instant) for the whole
+ * eval. `setTimeout` is deliberately NOT frozen to the virtual clock: the page
+ * debounces on it, and a timer that never fires would hang the harness rather
+ * than prove anything. Nothing else in the page reads a clock for a request.
+ *
+ * Unset, this block does nothing at all, so every other scenario is untouched.
+ */
+const FROZEN_NOW_MS = Number(process.env.MCC_JSDOM_NOW_MS || 0);
+if (FROZEN_NOW_MS > 0) {
+  const RealDate = window.Date;
+  const frozen = FROZEN_NOW_MS;
+  function FrozenDate(...args) {
+    if (args.length === 0) return new RealDate(frozen);
+    return new RealDate(...args);
+  }
+  FrozenDate.prototype = RealDate.prototype;
+  Object.setPrototypeOf(FrozenDate, RealDate);
+  FrozenDate.now = () => frozen;
+  FrozenDate.parse = RealDate.parse;
+  FrozenDate.UTC = RealDate.UTC;
+  window.Date = FrozenDate;
+}
 
 try {
   window.eval(scriptSource);
