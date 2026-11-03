@@ -980,6 +980,10 @@
       "control": "field-LOG_RAW_SSE_EVENTS",
       "page": "limits"
     },
+    "LOG_RAW_UPSTREAM_BYTES": {
+      "control": "field-LOG_RAW_UPSTREAM_BYTES",
+      "page": "limits"
+    },
     "MARKETPLACE_PUBLIC_MARKET": {
       "control": "field-MARKETPLACE_PUBLIC_MARKET",
       "page": "providers"

@@ -39041,10 +39041,20 @@ function rawCount(value) {
 function rawBoxFacts(kind) {
   if (kind.capture === "present") {
     const lines = kind.lines_total === 1 ? "1 line" : `${rawCount(kind.lines_total)} lines`;
-    return `${lines} · ${formatImageBytes(Number(kind.bytes_total || 0))}`;
+    const facts = `${lines} · ${formatImageBytes(Number(kind.bytes_total || 0))}`;
+    /* 8.8.0: "Provider raw output" says which door it came through, because
+       that is the fact that tells the reader whether the bytes can exist at
+       all. Every other box keeps the two facts it always had. */
+    if (kind.kind === "upstream" && kind.door_label) {
+      return `${facts} · ${kind.door_label}`;
+    }
+    return facts;
   }
   if (kind.capture === "absent_setting") return `not captured · ${kind.setting} is off`;
   if (kind.capture === "absent_rotated") return "pruned by rotation";
+  if (kind.kind === "upstream" && kind.reason === "door_records_nothing" && kind.door_label) {
+    return `${kind.door_label} · not recorded by this door`;
+  }
   return String(kind.headline || "not captured")
     .replace(/\.$/, "")
     .toLowerCase();
@@ -39261,11 +39271,58 @@ function renderRawBody(box, view, state) {
   addCopyButton(body, () => pre.textContent);
 }
 
-/** One line per recorded line; a line too large to carry is its marker. */
-function rawLinesText(lines) {
+/** One line per recorded line; a line too large to carry is its marker.
+ *
+ *  8.8.0: a payload line is now labelled with the side of the exchange it
+ *  belongs to -- `inbound` is the client's own body, `outbound` the one MCC
+ *  sent upstream -- so two very different bodies in one box can never be read
+ *  as one. Every other kind keeps the bare text it always had. */
+function rawLinesText(lines, labelSides = false) {
   return lines
-    .map((line) => (typeof line.text === "string" ? line.text : String(line.marker || "")))
+    .map((line) => {
+      const text = typeof line.text === "string" ? line.text : String(line.marker || "");
+      if (!labelSides) return text;
+      const side = /^INBOUND_PAYLOAD \[/.test(text) ? "inbound (from the client)" : "outbound (sent upstream)";
+      return `── ${side} ──\n${text}`;
+    })
     .join("\n");
+}
+
+/** The provider's own bytes, reassembled: the whole point of this box.
+ *
+ *  One recorded line is one transport chunk, so the response the host sent is
+ *  exactly the lines of a request put back together in order. Rendered that
+ *  way by default, because a stream cut into 200 chunks is unreadable and the
+ *  reader's question is "what did the provider say"; the per-chunk view is one
+ *  click away for the cases where the *boundaries* are the evidence (a frame
+ *  split across a chunk, a comment between frames, a chunk that is only a
+ *  `data: ` prefix). */
+function rawUpstreamJoined(state) {
+  const parts = [];
+  let skipped = 0;
+  for (const line of state.lines) {
+    if (typeof line.text !== "string") {
+      skipped += 1;
+      parts.push(String(line.marker || ""));
+      continue;
+    }
+    /* A non-chunk line (an oversize marker, a refusal head, a media metadata
+       line) is shown as its own paragraph; a chunk is appended raw, because
+       the line breaks it carries are the provider's own. The `UPSTREAM: `
+       prefix is the emit site's route to the raw sink and is not part of the
+       bytes, so it is stripped here rather than shown as if the host wrote it. */
+    if (/^(OVERSIZE|REFUSAL|MEDIA) /.test(line.text)) {
+      parts.push(`\n${line.text}\n`);
+      continue;
+    }
+    const split = /^(?:UPSTREAM: )?door=[^ ]+ bytes=\d+ ([\s\S]*)$/.exec(line.text);
+    if (!split) {
+      parts.push(`${line.text}\n`);
+      continue;
+    }
+    parts.push(split[1].replace(/\\r/g, "\r").replace(/\\n/g, "\n"));
+  }
+  return { text: parts.join(""), skipped };
 }
 
 function renderRawLines(box, state) {
@@ -39281,13 +39338,47 @@ function renderRawLines(box, state) {
   const pre = document.createElement("pre");
   pre.className = "requests-detail-body req-raw-lines";
   state.pretty = false;
+  state.chunked = false;
+  const isUpstream = answer.kind === "upstream";
+  const labelSides = answer.kind === "payloads";
   const paint = () => {
-    pre.textContent = state.pretty ? prettyPayloadLines(state.lines) : rawLinesText(state.lines);
+    if (isUpstream && !state.chunked) {
+      pre.textContent = rawUpstreamJoined(state).text;
+      return;
+    }
+    pre.textContent = state.pretty
+      ? prettyPayloadLines(state.lines)
+      : rawLinesText(state.lines, labelSides);
   };
   paint();
+  const toolbar = document.createElement("div");
+  toolbar.className = "req-raw-toolbar";
+  if (isUpstream) {
+    /* Two readings of one capture: the answer as received (the default), and
+       the chunks exactly as they were recorded. Neither is the normalised
+       text -- both are the recorded bytes, and the label says which. */
+    const chunked = document.createElement("button");
+    chunked.type = "button";
+    chunked.className = "ghost-button req-raw-chunked";
+    chunked.textContent = "Show as recorded chunks";
+    const joined = rawUpstreamJoined(state);
+    const label = rawParagraph(
+      "req-raw-note",
+      joined.skipped
+        ? `Joined back into the answer as received. ${rawCount(joined.skipped)} line(s) are a marker rather than bytes and are marked in place.`
+        : "Joined back into the answer as received: these are the provider's own bytes, in order.",
+    );
+    chunked.addEventListener("click", () => {
+      state.chunked = !state.chunked;
+      chunked.textContent = state.chunked
+        ? "Show as one answer"
+        : "Show as recorded chunks";
+      paint();
+    });
+    toolbar.append(chunked, label);
+    body.appendChild(toolbar);
+  }
   if (answer.pretty_print) {
-    const toolbar = document.createElement("div");
-    toolbar.className = "req-raw-toolbar";
     const pretty = document.createElement("button");
     pretty.type = "button";
     pretty.className = "ghost-button req-raw-pretty";
@@ -39304,7 +39395,7 @@ function renderRawLines(box, state) {
       paint();
     });
     toolbar.append(pretty, label);
-    body.appendChild(toolbar);
+    if (!isUpstream) body.appendChild(toolbar);
   }
   body.appendChild(pre);
   addCopyButton(body, () => pre.textContent);

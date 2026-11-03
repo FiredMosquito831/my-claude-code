@@ -7,7 +7,10 @@ from loguru import logger
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from my_claude_code.config.logging_config import inbound_capture_enabled
 from my_claude_code.core.trace import extract_claude_session_id_from_headers
+
+from . import inbound_body
 
 REQUEST_ID_HEADER = "request-id"
 OPENAI_REQUEST_ID_HEADER = "x-request-id"
@@ -20,8 +23,23 @@ _OPENAI_REQUEST_ID_PATHS = frozenset(
 class RequestCorrelationMiddleware:
     """Own one request id and logging context for the full ASGI response."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, *, capture_inbound: bool | None = None) -> None:
         self._app = app
+        #: 8.8.0: whether the client's own body is recorded under
+        #: ``INBOUND_PAYLOAD``. ``None`` -- how the application installs it --
+        #: means "ask the live setting on every request", which is what makes a
+        #: Save reach a running server without a restart. A test that wants it
+        #: pinned passes the value instead.
+        self._capture_inbound = capture_inbound
+
+    def set_capture_inbound(self, enabled: bool) -> None:
+        """Pin the flag for this process (a test's, or a future admin hook)."""
+
+        self._capture_inbound = bool(enabled)
+
+    def _inbound_enabled(self) -> bool:
+        pinned = self._capture_inbound
+        return inbound_capture_enabled() if pinned is None else pinned
 
     async def __call__(
         self,
@@ -59,7 +77,20 @@ class RequestCorrelationMiddleware:
             claude_session_id=claude_sid,
             request_id=request_id,
         ):
-            await self._app(scope, receive, send_with_correlation)
+            # 8.8.0: the client's own body, recorded beside the outbound one.
+            # ``wrap_receive`` returns ``receive`` itself when the setting is
+            # off or the path is not a model door, so this line costs one
+            # comparison and the app below reads exactly what arrived.
+            await self._app(
+                scope,
+                inbound_body.wrap_receive(
+                    receive,
+                    path,
+                    request_id=request_id,
+                    enabled=self._inbound_enabled(),
+                ),
+                send_with_correlation,
+            )
 
 
 def new_request_id() -> str:

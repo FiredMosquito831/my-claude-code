@@ -66,6 +66,13 @@ from my_claude_code.providers.openai_responses import (
 )
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.raw_upstream import (
+    DOOR_REFUSAL,
+    DOOR_RESPONSES_TRANSPORT,
+    capture_enabled,
+    emit,
+    refusal_line,
+)
 from my_claude_code.providers.recovery import (
     RUNG_TOOL_NAME_LENGTH,
     RUNG_TOOL_SCHEMA,
@@ -577,6 +584,10 @@ class ResponsesTransport:
             error = await read_error_body(response)
             await response.aclose()
             note_response_head(error.head)
+            # 8.8.0: the refusal's own bytes, whole, in the raw log only.
+            if capture_enabled():
+                for line in refusal_line(DOOR_REFUSAL, response.status_code, error.raw):
+                    emit(line)
             raise httpx.HTTPStatusError(
                 f"{self._provider_name} Responses API error {response.status_code}",
                 request=request,
@@ -906,7 +917,9 @@ class ResponsesTransport:
                     generation = GenerationClock()
                     try:
                         async for event in iter_responses_sse_events(
-                            response.aiter_raw()
+                            response.aiter_raw(),
+                            door=DOOR_RESPONSES_TRANSPORT,
+                            log_raw_bytes=capture_enabled(),
                         ):
                             note_responses_event_shape(shape, event)
                             note_responses_generation_delta(generation, event)

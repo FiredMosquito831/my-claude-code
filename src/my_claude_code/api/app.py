@@ -119,6 +119,12 @@ def create_app(services: ApiServices) -> FastAPI:
     """Create the HTTP adapter around explicitly supplied runtime services."""
     app = FastAPI(title="Claude Code Proxy", version=package_version())
     app.state.services = services
+    # 8.8.0: the client's own inbound body rides on the correlation middleware,
+    # because that is the one place an ASGI body can be observed without
+    # consuming it. No flag is passed: the middleware asks the live setting on
+    # every request (``config.logging_config.inbound_capture_enabled``, which
+    # ``configure_raw_diagnostics`` keeps current), so a Save reaches a running
+    # server without a restart and a test can pin the value on the class.
     app.add_middleware(RequestCorrelationMiddleware)
     app.add_middleware(AdminNoStoreMiddleware)
 

@@ -1,12 +1,17 @@
 """One request's raw diagnostics, read back out of the log files (7.121.0).
 
-Four settings write material that names a request id:
+Four settings wrote material that names a request id; 8.8.0 added a fifth:
 
 * ``LOG_RAW_API_PAYLOADS`` -- one ``RAW_PAYLOAD`` line per request in
   ``raw-diagnostics.log``: the payload as a Python repr, not JSON;
 * ``LOG_RAW_SSE_EVENTS`` -- one ``RAW_SSE`` line per server-sent event: MCC's
   own stream to the client, and, on the Anthropic Messages and OpenAI
   Responses doors, the provider's own frames as well;
+* ``LOG_RAW_UPSTREAM_BYTES`` -- one ``RAW_UPSTREAM`` line per transport chunk:
+  the provider's own bytes exactly as received, before any parsing or
+  re-encoding, plus the whole body of a refusal and a metadata line per media
+  answer. The four kinds above are MCC's spelling of what happened; this one
+  is the thing itself, which is why it has a marker and a box of its own;
 * ``LOG_API_ERROR_TRACEBACKS`` -- ERROR lines in ``server.log`` carrying the
   request id, with the message and the traceback when it was on and the
   exception type alone when it was off;
@@ -58,18 +63,42 @@ from my_claude_code.config.logging_config import (
     RAW_MARKER_CLI,
     RAW_MARKER_PAYLOAD,
     RAW_MARKER_SSE,
+    RAW_MARKER_UPSTREAM,
     log_rotation_bytes,
     raw_diagnostics_log_path,
     server_log_nominal_path,
+)
+from my_claude_code.config.upstream_doors import (
+    CAPTURES_BYTES,
+    CAPTURES_METADATA,
+    DOOR_ANTHROPIC_MESSAGES,
+    DOOR_MEDIA,
+    DOOR_OPENAI_CHAT,
+    DOOR_OPENAI_RESPONSES,
+    MODEL_DOORS,
+    door_captures,
+    door_label,
 )
 
 KIND_PAYLOADS = "payloads"
 KIND_SSE = "sse"
 KIND_TRACEBACK = "traceback"
 KIND_CLI = "cli"
+#: 8.8.0: the provider's own bytes. Its own kind, never folded into ``sse`` --
+#: that box is MCC's stream to the client and this one is what the provider
+#: sent, and the two must never be rendered as each other.
+KIND_UPSTREAM = "upstream"
 
-#: Box order in the request detail, and row order in every export.
-RAW_KINDS: tuple[str, ...] = (KIND_PAYLOADS, KIND_SSE, KIND_TRACEBACK, KIND_CLI)
+#: Box order in the request detail, and row order in every export. The new
+#: kind goes LAST so every existing kind keeps the position the 7.121.0 viewer
+#: and its exports gave it.
+RAW_KINDS: tuple[str, ...] = (
+    KIND_PAYLOADS,
+    KIND_SSE,
+    KIND_TRACEBACK,
+    KIND_CLI,
+    KIND_UPSTREAM,
+)
 
 VIEW_RAW = "raw"
 VIEW_NORMALIZED = "normalized"
@@ -160,12 +189,21 @@ KINDS: dict[str, RawKind] = {
         RAW_LOG_FAMILY,
         "raw CLI diagnostics",
     ),
+    KIND_UPSTREAM: RawKind(
+        KIND_UPSTREAM,
+        "Provider raw output",
+        "LOG_RAW_UPSTREAM_BYTES",
+        RAW_MARKER_UPSTREAM,
+        RAW_LOG_FAMILY,
+        "provider bytes",
+    ),
 }
 
 _MARKER_KINDS: dict[bytes, str] = {
     RAW_MARKER_PAYLOAD.encode(): KIND_PAYLOADS,
     RAW_MARKER_SSE.encode(): KIND_SSE,
     RAW_MARKER_CLI.encode(): KIND_CLI,
+    RAW_MARKER_UPSTREAM.encode(): KIND_UPSTREAM,
 }
 
 #: ``server.log``'s own file name, for the sentences that name it.
@@ -185,6 +223,52 @@ _EGRESS_SSE = re.compile(rb"^SSE_EVENT: ([A-Za-z_]+) - event: \1(?:\\n|$)")
 
 _TRACEBACK_TEXT = "Traceback (most recent call last)"
 _EXC_TYPE_ONLY = re.compile(r"\bexc_type=\w")
+
+#: 8.8.0: a payload line holding the CLIENT's own body rather than the one MCC
+#: sent upstream. Both are ``RAW_PAYLOAD`` lines; the box tells them apart by
+#: this word and by nothing else.
+_INBOUND_PREFIX = b"INBOUND_PAYLOAD ["
+
+#: A ``RAW_UPSTREAM`` line's door, as the provider module writes it:
+#: ``door=<id> ...``. Read off the line rather than from the request, because
+#: one request can reach several doors (a fallback chain) and the box must say
+#: which doors its lines actually came from.
+_UPSTREAM_DOOR = re.compile(rb"(?:^| )door=([A-Za-z0-9_.]+)")
+
+
+def _upstream_door_field(message: bytes) -> str:
+    found = _UPSTREAM_DOOR.search(message)
+    return found.group(1).decode("ascii", "replace") if found else ""
+
+
+#: The door a request's *client-facing* protocol implies, when nothing recorded
+#: says otherwise. This is what lets the box name the door for a request that
+#: predates this release, or whose door records nothing: the request log's own
+#: ``protocol`` column is the only surviving statement of which transport
+#: served it. ``openai_chat`` is the widest, because nine providers and the
+#: Gemini and Vertex families all inherit its stream.
+_PROTOCOL_DOORS: dict[str, str] = {
+    "anthropic": DOOR_ANTHROPIC_MESSAGES,
+    "openai_responses": DOOR_OPENAI_RESPONSES,
+    "openai_chat": DOOR_OPENAI_CHAT,
+    "openai_images": DOOR_MEDIA,
+    "gemini": DOOR_OPENAI_CHAT,
+}
+
+
+def door_for_row(row: Mapping[str, Any] | None) -> str:
+    """Which door this request ran on, as far as anything recorded can say.
+
+    The request's own protocol first, because it is a fact written when the
+    request finished. Empty when the row says nothing this table knows -- an
+    older row, a media operation this release did not map -- so the box says
+    "an unidentified door" rather than inventing one.
+    """
+
+    if row is None:
+        return ""
+    return _PROTOCOL_DOORS.get(str(row.get("protocol") or ""), "")
+
 
 #: Up to this many request ids, ``raw-diagnostics.log`` is searched for each
 #: id's own bytes; beyond it (an Analytics export of up to 200 requests), the
@@ -577,6 +661,17 @@ def _raw_matcher(
         tag = ""
         if kind == KIND_SSE:
             tag = "egress" if _EGRESS_SSE.match(message) else "upstream"
+        elif kind == KIND_UPSTREAM:
+            # 8.8.0: which door wrote this line, read off its own ``door=``
+            # field, so the box can say "Anthropic Messages" rather than
+            # "some bytes". Empty for a line written before that field
+            # existed, which the box then reports as an unnamed door.
+            tag = _upstream_door_field(message)
+        elif kind == KIND_PAYLOADS and message.startswith(_INBOUND_PREFIX):
+            # The client's own body, recorded beside the outbound one. Same
+            # marker, a different word, so the box says which side of the
+            # exchange a line is rather than presenting one as the other.
+            tag = "inbound"
         yield RawLine(
             kind=kind,
             request_id=request_id.decode("utf-8", "replace"),
@@ -676,7 +771,7 @@ def read_raw_lines(
     stats = stats if stats is not None else ScanStats()
     wanted = set(kinds)
     ids = {request_id.encode("utf-8") for request_id in request_ids}
-    raw_kinds = wanted & {KIND_PAYLOADS, KIND_SSE, KIND_CLI}
+    raw_kinds = wanted & {KIND_PAYLOADS, KIND_SSE, KIND_CLI, KIND_UPSTREAM}
     if raw_kinds:
         if len(ids) <= _NEEDLE_IDS:
             needles = [b" " + request_id + b" " for request_id in ids]
@@ -813,11 +908,23 @@ class KindFacts:
     over_limit: list[int] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     first_file: str | None = None
+    #: 8.8.0: the doors a ``RAW_UPSTREAM`` request actually wrote through, with
+    #: how many lines each contributed. A fallback chain can leave more than
+    #: one, and the box says so rather than picking a winner.
+    doors: dict[str, int] = field(default_factory=dict)
+    #: 8.8.0: how many ``RAW_PAYLOAD`` lines are the client's own body. One per
+    #: request at most, and zero for every request served before this release.
+    inbound: int = 0
 
     def add(self, line: RawLine) -> None:
         self.lines += 1
         self.bytes += line.nbytes
-        if line.tag == "egress":
+        if line.kind == KIND_UPSTREAM:
+            if line.tag:
+                self.doors[line.tag] = self.doors.get(line.tag, 0) + 1
+        elif line.tag == "inbound":
+            self.inbound += 1
+        elif line.tag == "egress":
             self.egress += 1
         elif line.tag == "upstream":
             self.upstream += 1
@@ -896,6 +1003,11 @@ def capture_state(
         return CAPTURE_NEVER, "not_request_correlated"
     request_ts = _row_ts(row)
     if window.get("files") and _older_than_window(window, request_ts):
+        # ``absent_text`` says the window in so many words for this state, and
+        # for the upstream kind that sentence is load-bearing rather than
+        # incidental: a request's payload line and its provider bytes can sit
+        # in different rotated files, so "nothing is lost" is only true of the
+        # file and never of one request. Measured and reported in the notes.
         return CAPTURE_ROTATED, "pruned"
     if kind == KIND_TRACEBACK:
         if row is not None and not _row_failed(row):
@@ -903,6 +1015,16 @@ def capture_state(
         if not enabled:
             return CAPTURE_SETTING, "setting_off"
         return CAPTURE_NEVER, "no_error_line" if row is not None else "no_row"
+    if kind == KIND_UPSTREAM:
+        # The order matters here and is the whole point of the kind: the door
+        # is asked BEFORE the setting, so a request served by a door that has
+        # never recorded anything is told so, instead of being told the user
+        # forgot to turn a setting on when it was on all along.
+        door = door_for_row(row)
+        if door and door_captures(door) != CAPTURES_BYTES:
+            return CAPTURE_NEVER, "door_records_nothing"
+        if not enabled:
+            return CAPTURE_SETTING, "setting_off"
     if not enabled:
         return CAPTURE_SETTING, "setting_off"
     if not window.get("files"):
@@ -949,16 +1071,34 @@ def absent_text(
         else ""
     )
     if capture == CAPTURE_ROTATED:
-        return (
-            "No raw lines remain.",
+        rotation = (
             f"{window.get('file')} keeps {window.get('retain_files')} rotated files of "
             f"{window.get('rotate_mb')} MB (`SERVER_LOG_RETAIN_FILES`); the oldest one "
             f"kept was last written {window.get('oldest_modified')} "
             f"({_ago(float(window.get('oldest_age_seconds') or 0.0))} ago) and this "
             "request started before that, so any lines it wrote were in a file "
             "rotation has since deleted. The normalised text is unaffected."
-            + only_normalized,
         )
+        if kind == KIND_UPSTREAM:
+            # THE rotation sentence: this is the one kind where a request's
+            # lines can be inside a rotated file while another kind of the
+            # same request is not, so the claim here is about the WINDOW and
+            # never about "nothing lost". Measured direction: the payload line
+            # is written when the request starts and the provider's bytes
+            # while it streams, so a rotation between the two puts them in
+            # different files -- and retention deletes the oldest first.
+            rotation += (
+                " A request's payload line is written when the request starts and "
+                "its provider bytes while the answer streams, so a rotation in "
+                "between puts them in different files and the older one can go "
+                "first: this box may be empty while another box for the same "
+                "request still has lines, or the other way round. At "
+                f"{window.get('retain_files')} files of {window.get('rotate_mb')} MB "
+                f"that window is {_ago(float(window.get('oldest_age_seconds') or 0.0))} "
+                "of your traffic, not days. Raise `SERVER_LOG_RETAIN_FILES` if you "
+                "need a longer one."
+            )
+        return ("No raw lines remain.", rotation + only_normalized)
     if reason == "setting_off":
         tail = ""
         if kind == KIND_CLI:
@@ -971,11 +1111,44 @@ def absent_text(
                 " A provider's classified failure has no traceback either way; "
                 "Normalized shows what the request log stored."
             )
+        elif kind == KIND_UPSTREAM:
+            tail = (
+                " A provider that refused the request before answering leaves a "
+                "refusal body here instead of a stream."
+            )
         return (
             "Not captured.",
             f"{setting} is off, so no {spec.noun} are being written, and none were "
             f"found for this request. Turn it on in {place}, make the request again, "
             f"then reopen this box. ({applies}){tail}{only_normalized}",
+        )
+    if reason == "door_records_nothing":
+        # 8.8.0, the sentence the product lacked: a request on a door that
+        # records nothing must be told WHICH door, not told its setting was off
+        # when it was on. Nothing here blames the operator.
+        door = door_for_row(row)
+        named = door_label(door) if door else "an unidentified upstream door"
+        what = door_captures(door) if door else ""
+        if what == CAPTURES_METADATA:
+            detail = (
+                "That door records what the provider said about its answer -- the "
+                "status, the content type and the byte count, with the first 4 KB of "
+                "a refusal -- and never the answer's own bytes, because a media "
+                "answer is megabytes and the question this box answers is what the "
+                "host said, not what it sent."
+            )
+        else:
+            detail = (
+                "That door does not record the provider's own bytes at all. This is a "
+                "property of the door, not of your settings: "
+                f"`{spec.setting}` is what turns recording on for the doors that "
+                "support it, and turning it on would not add anything here."
+            )
+        return (
+            "Not captured by this door.",
+            f"This request's provider answered through {named}, and that door does "
+            f"not record the provider's own output.{' ' + detail if detail else ''}"
+            + only_normalized,
         )
     if reason == "not_request_correlated":
         return (
@@ -1014,6 +1187,22 @@ def absent_text(
             "Not captured for this request.",
             "No raw line carries this request id, and the request log has no row for "
             "it, so whether it is older than the retained window cannot be told.",
+        )
+    if kind == KIND_UPSTREAM:
+        # The last honest case for this kind: the setting is on, the door does
+        # record bytes, and this request has no line. Say which door it should
+        # have come from and the two real causes -- never the setting, which
+        # the reader can see is on. A request answered before this release has
+        # no bytes for the plain reason that nothing wrote them then.
+        door = door_for_row(row)
+        named = door_label(door) if door else "an unidentified upstream door"
+        return (
+            "Not captured for this request.",
+            f"This request answered through {named}. `{spec.setting}` is on now, so "
+            "either it ran before MCC recorded the provider's own bytes on this door, "
+            "or the door recorded nothing for it — a request refused before any "
+            "stream, for example. Make the request again and reopen this box."
+            + only_normalized,
         )
     return (
         "Not captured for this request.",
@@ -1061,11 +1250,42 @@ def present_notes(
                 f"received; {facts.egress:,} are MCC's stream to the client."
             )
     if kind == KIND_PAYLOADS:
+        if facts.inbound:
+            notes.append(
+                "The line marked `INBOUND_PAYLOAD` is the body the client sent MCC, "
+                "exactly as it arrived. The lines marked `FULL_PAYLOAD` (and its three "
+                "siblings) are the body MCC sent upstream — a Python repr of it, not "
+                "JSON. Both sides of the exchange are here; neither is the other."
+            )
         notes.append(
-            "Each line is the payload as a Python repr, not JSON. “Pretty-print as "
-            "JSON” converts it in your browser by reading it as a literal; nothing is "
+            "Each outbound line is the payload as a Python repr, not JSON. “Pretty-print "
+            "as JSON” converts it in your browser by reading it as a literal; nothing is "
             "evaluated."
         )
+    if kind == KIND_UPSTREAM:
+        notes.append(
+            "These are the provider's own bytes, exactly as the transport received "
+            "them — one line per chunk, before anything parsed or re-encoded them. "
+            "Put a request's lines together in order and you have the response as the "
+            "host sent it: SSE comments, `id:`/`retry:` fields, `data: ` prefixes and "
+            "[DONE] included. They are unredacted, so a prompt the host echoed back "
+            "appears in them."
+        )
+        # The door facts, per door, from the lines themselves -- a fallback
+        # chain can leave lines from more than one door under one request.
+        doors = sorted(facts.doors)
+        if doors:
+            names = ", ".join(door_label(door) for door in doors)
+            notes.append(f"Recorded through: {names}.")
+        silent = sorted(set(MODEL_DOORS) - set(doors))
+        if silent and len(doors) == 1:
+            others = ", ".join(door_label(door) for door in silent)
+            notes.append(
+                f"Only {door_label(doors[0])} appears in this request's lines. A "
+                f"fallback that moved the request through {others} would have added "
+                "those doors' bytes here as well, so their absence means it did not "
+                "reach them."
+            )
     if kind == KIND_TRACEBACK and facts.tracebacks == 0 and facts.exc_type_only:
         notes.append(
             f"`{spec.setting}` was off when this request failed, so "
@@ -1264,6 +1484,19 @@ def _kind_answer(
         answer["notes"] = []
     if kind == KIND_SSE:
         answer["frames"] = {"egress": facts.egress, "upstream": facts.upstream}
+    if kind == KIND_UPSTREAM:
+        # What the collapsed box and the header say about the door, kept in the
+        # answer rather than computed in the browser so the viewer, both
+        # exports and the tests read one statement of it.
+        answer["doors"] = [
+            {"door": door, "label": door_label(door), "lines": count}
+            for door, count in sorted(facts.doors.items())
+        ]
+        answer["door"] = door_for_row(row)
+        answer["door_label"] = door_label(answer["door"]) if answer["door"] else ""
+        answer["door_captures"] = (
+            door_captures(answer["door"]) if answer["door"] else ""
+        )
     return answer
 
 

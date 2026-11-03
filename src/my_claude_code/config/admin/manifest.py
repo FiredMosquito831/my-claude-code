@@ -2095,6 +2095,28 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "LOG_RAW_UPSTREAM_BYTES",
+        "Log Raw Upstream Bytes",
+        "diagnostics",
+        "boolean",
+        settings_attr="log_raw_upstream_bytes",
+        default="false",
+        advanced=True,
+        description=(
+            "Write the provider's own response bytes to logs/raw-diagnostics.log as "
+            "the transport receives them, one RAW_UPSTREAM line per chunk and before "
+            "anything parses or re-encodes them: SSE comments, id/retry fields, data: "
+            "prefixes and [DONE] all arrive exactly as sent. Turn it on when a stream "
+            "truncates, a tool call arrives malformed or a provider fails mid-stream and "
+            "you need the bytes rather than MCC's spelling of them. A refused request's "
+            "error body is recorded whole, and a media answer is recorded as metadata "
+            "only (status, content type and length, plus the first 4 KB of a refusal) — "
+            "never an image, audio or video file. The request card gains a “Provider raw "
+            "output” box. Applies on Save; the volume is roughly 25-190 KB per request on "
+            "a streaming model door."
+        ),
+    ),
+    ConfigFieldSpec(
         "LOG_API_ERROR_TRACEBACKS",
         "Log API Error Tracebacks",
         "diagnostics",

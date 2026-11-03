@@ -349,7 +349,12 @@ def test_export_parameters_are_validated(client) -> None:
 def test_the_viewer_and_both_exports_read_through_one_function(
     client, monkeypatch
 ) -> None:
-    """``read_raw_lines`` is the only reader: a second code path would miss this."""
+    """``read_raw_lines`` is the only reader: a second code path would miss this.
+
+    8.8.0 adds a fifth kind and the same route serves it -- the assertion that
+    ``kind=upstream`` goes through this one function, and not a reader of its
+    own, is the point of the last two calls.
+    """
 
     calls: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
     real = rd.read_raw_lines
@@ -367,10 +372,27 @@ def test_the_viewer_and_both_exports_read_through_one_function(
         params={"format": "json", "scope": "requests", "fields": "raw_diagnostics"},
     )
     assert bulk.status_code == 200
+    assert _raw(client, kind="upstream").status_code == 200
+    assert _export(client, format="json", kinds="upstream").status_code == 200
     assert calls[0] == ((RID,), tuple(sorted(rd.RAW_KINDS)))
     assert calls[1] == ((RID,), ("sse",))
     assert calls[2] == ((RID,), tuple(sorted(rd.RAW_KINDS)))
     assert calls[3] == (tuple(sorted((RID, OTHER))), tuple(sorted(rd.RAW_KINDS)))
+    assert calls[4] == ((RID,), ("upstream",))
+    assert calls[5] == ((RID,), ("upstream",))
+
+
+def test_the_upstream_kind_answers_through_the_same_route(client) -> None:
+    """No new route: ``kind=upstream`` on the route 7.121.0 already had."""
+
+    response = _raw(client, kind="upstream")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "upstream"
+    assert body["setting"] == "LOG_RAW_UPSTREAM_BYTES"
+    assert body["label"] == "Provider raw output"
+    assert response.headers["content-type"].startswith("application/json")
+    assert "no-store" in response.headers.get("cache-control", "")
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +577,9 @@ def test_the_group_is_opt_in_and_origin_stays_the_last_group() -> None:
     ) == (export_engine.request_detail_columns([]))
     assert export_engine.request_detail_derived_columns(
         [export_engine.RAW_DIAGNOSTICS_FIELD]
-    )[-4:] == list(export_engine.RAW_DIAGNOSTICS_COLUMNS)
+    )[-len(export_engine.RAW_DIAGNOSTICS_COLUMNS) :] == list(
+        export_engine.RAW_DIAGNOSTICS_COLUMNS
+    )
     source = (
         Path(__file__).resolve().parents[2]
         / "src/my_claude_code/api/admin_static/admin.js"

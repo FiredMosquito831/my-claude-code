@@ -717,12 +717,13 @@ runs at startup as well as on each rotation, so lowering the number cleans up a
 backlog on the next restart. `logs/requests.db` is the request-analytics
 database and is never touched by log rotation.
 
-The raw diagnostics settings — `LOG_RAW_SSE_EVENTS`, `LOG_RAW_API_PAYLOADS` and
-the non-JSON lines of `LOG_RAW_CLI_DIAGNOSTICS` — write one line per record to
-`logs/raw-diagnostics.log`, tagged with the request id and rotated and pruned
-exactly like `server.log`; the file is created only while one of those settings
-is on, and it holds prompt text, answer text and tool output in clear text, so
-turn them off again once the problem is captured.
+The raw diagnostics settings — `LOG_RAW_SSE_EVENTS`, `LOG_RAW_API_PAYLOADS`,
+the non-JSON lines of `LOG_RAW_CLI_DIAGNOSTICS` and `LOG_RAW_UPSTREAM_BYTES` —
+write one line per record to `logs/raw-diagnostics.log`, tagged with the
+request id and rotated and pruned exactly like `server.log`; the file is
+created only while one of those settings is on, and it holds prompt text,
+answer text and tool output in clear text, so turn them off again once the
+problem is captured.
 
 **`server.<pid>.log` appeared next to `server.log`.**
 Since 7.69.6, if the startup rotation or the 50 MB size rotation cannot rename
@@ -5272,17 +5273,47 @@ and cannot be combined with Group by. XLSX refuses when a line would not fit
 Excel's 32,767-character cell, naming the request; JSON, CSV and TXT carry
 every line whole.
 
-#### Raw diagnostics: the raw log of one request (7.121.0)
+#### Raw diagnostics: the raw log of one request (7.121.0, five boxes since 8.8.0)
 
-At the very bottom of a request's detail are four collapsed boxes for the four
+At the very bottom of a request's detail are five collapsed boxes for the
 optional logs a request can write, each with a **Raw | Normalized** toggle:
 
 | Box | Setting | What Raw shows |
 | --- | --- | --- |
-| API payloads | `LOG_RAW_API_PAYLOADS` | the outbound payload MCC logged, as a Python repr (not JSON), with a labelled **Pretty-print as JSON** button that reads it as a literal in the browser — nothing is evaluated |
+| API payloads | `LOG_RAW_API_PAYLOADS` | the outbound payload MCC logged, as a Python repr (not JSON), with a labelled **Pretty-print as JSON** button that reads it as a literal in the browser — nothing is evaluated — and, since 8.8.0, a second line marked **inbound (from the client)**: the body the client sent, exactly as it arrived |
 | SSE events | `LOG_RAW_SSE_EVENTS` | every server-sent event, one per line, `\n` escaped: the model's output as produced, `<thinking>` tags and all |
+| Provider raw output | `LOG_RAW_UPSTREAM_BYTES` | the provider's own bytes, exactly as the transport received them, before anything parsed or re-encoded them — see below |
 | API error tracebacks | `LOG_API_ERROR_TRACEBACKS` | the `server.log` ERROR lines carrying this request id; with the setting off, the exception type only, and the box says which setting to turn on |
 | CLI diagnostics | `LOG_RAW_CLI_DIAGNOSTICS` | the managed CLI's own lines — which carry no request id, so the box says so instead of inventing one |
+
+**Provider raw output (8.8.0)** is the one box that shows what the provider
+actually sent rather than MCC's spelling of it. One `RAW_UPSTREAM` line is
+written per transport chunk, so the lines of a request put back together are
+the response byte for byte: SSE comments, `id:` and `retry:` fields, `data: `
+prefixes, `[DONE]`, and an in-band `event: error` frame that ends a stream —
+the frame that names why a stream failed, and which no other log holds. The
+box shows the answer joined back together by default; **Show as recorded
+chunks** switches to the chunks exactly as they were written, for when the
+frame boundaries are the evidence.
+
+It never stands in for the SSE box. That box is MCC's stream to the client;
+this one is the provider's. Which doors record, and what:
+
+| Door | What it records |
+| --- | --- |
+| Anthropic Messages (and the `anthropic`, Anthropic OAuth, Command Code and gateway Messages surfaces on it) | the bytes |
+| OpenAI Responses (and ChatGPT OAuth, and the Responses transport) | the bytes |
+| OpenAI Chat Completions — and therefore Gemini, Mistral, DeepSeek, Cloudflare, GitHub Models, LM Studio, NVIDIA NIM, Google/Vertex, the OpenRouter family and Command Code's chat delegate | the bytes |
+| A refused request | the error body, whole (never in the request database) |
+| Media — image, speech, transcript, video | **metadata only**: status, content type, byte count, and the first 4 KB of a refusal. Never an image, an audio file or a video |
+| Web search | nothing — its answer is in the Web Search page's own log |
+
+A request served by a door that records nothing is told so, by name: the box
+says *"This request's provider answered through the media API, and that door
+does not record the provider's own output"* rather than blaming your setting.
+A request whose bytes rotation already pruned says so, and — because a
+request's payload line can outlive its provider bytes — it states the window
+in hours rather than claiming nothing is ever lost.
 
 **Nothing recorded is dropped.** A box reads its lines a page at a time —
 4,000 lines or 8 MB, whichever comes first, always ending on a whole line —

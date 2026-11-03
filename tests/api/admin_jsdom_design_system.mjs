@@ -158,7 +158,7 @@ export function prepareDesignSystemScenario({ window, ROUTES }) {  const doc = w
   const READY = {
     models: "#modelsTree .models-tree-row, #modelsTree .models-tree-card, #modelsTree *",
     docs: "#docsContent h1, #docsContent h2, #docsContent h3",
-    requests: "#reqLogTableWrap table, #reqStatsCards *",
+    requests: "#reqLogTableWrap table, #reqStatsCards *, #reqRawExportPanel *",
     web_search: "#webSearchGrid *",
     providers: "#providersSections .pv-card, #providersSections *",
     coding_agents: "#codingAgentsList .coding-agent-card",

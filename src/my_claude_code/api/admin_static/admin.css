@@ -8833,6 +8833,14 @@ audio.req-media-preview {
   font-size: 11px;
 }
 
+/* 8.8.0: the Provider raw output box's two readings of one capture -- the
+   answer joined back together (default) and the chunks exactly as recorded.
+   Sized like the pretty-print control beside it so the toolbar reads as one
+   row at every width. */
+.req-raw-chunked {
+  font-size: 11px;
+}
+
 /* Wrapped, never scrolled sideways; the detail body's 260px cap keeps a
    two-megabyte payload inside its box. */
 .req-raw-lines {

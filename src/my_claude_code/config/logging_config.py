@@ -805,16 +805,57 @@ def log_rotation_bytes() -> int:
 #: The raw-diagnostics log beside ``server.log``.
 RAW_DIAGNOSTICS_LOG_FILENAME = "raw-diagnostics.log"
 
+#: Whether ``LOG_RAW_UPSTREAM_BYTES`` is in force for this process (8.8.0).
+#:
+#: Kept here, in the leaf package everything may import, rather than on each
+#: provider's config, because two of the gates are free functions that no
+#: provider instance reaches (``providers/http.read_error_body`` is called from
+#: four different classes) and because ``LOG_RAW_UPSTREAM_BYTES`` applies on
+#: Save without rebuilding the provider generation -- a copied field would keep
+#: the old value for the life of the process. ``configure_raw_diagnostics`` is
+#: the only writer.
+_upstream_capture = False
+
+
+def set_upstream_capture(enabled: bool) -> None:
+    """Turn the provider-bytes capture on or off for this process."""
+
+    global _upstream_capture
+    _upstream_capture = bool(enabled)
+
+
+def upstream_capture_enabled() -> bool:
+    """Whether a provider's own bytes are being written right now.
+
+    The one question every gate asks. ``False`` means the emit sites are a
+    single comparison and an early return, so with the setting off nothing is
+    allocated, nothing is written and no existing line moves.
+    """
+
+    return _upstream_capture
+
+
 #: Marker written in front of every raw line, one per setting that owns it.
 RAW_MARKER_SSE = "RAW_SSE"
 RAW_MARKER_PAYLOAD = "RAW_PAYLOAD"
 RAW_MARKER_CLI = "RAW_CLI"
+#: 8.8.0: the provider's own bytes, exactly as the transport received them.
+#: A marker of its own rather than a fourth spelling under ``RAW_SSE`` so a
+#: reader never has to guess whether a line is the provider's octets or MCC's
+#: re-encoding of them -- the two are the whole point of the box.
+RAW_MARKER_UPSTREAM = "RAW_UPSTREAM"
 
 #: A raw upstream/server-sent event, as every streaming door logs it. The
 #: Anthropic emitter has spelled its line this way since 6.x; the Responses
 #: converter's ``print`` became this same line in 7.113.4, and the Messages
 #: transport (which had no raw logging at all) gained one.
 _RAW_SSE_PREFIX = "SSE_EVENT: "
+
+#: One chunk of a provider's own response bytes, as the transport handed it
+#: over: before any framing, decoding or JSON parsing. ``door=`` and
+#: ``bytes=`` ride in the same line so a reader can tell which door produced
+#: it and how much of the body the chunk carries without re-parsing anything.
+_RAW_UPSTREAM_PREFIX = "UPSTREAM: "
 
 #: A full API payload, one prefix per client door. The four labels are the
 #: literals ``ProviderExecutor.stream`` is called with, and
@@ -825,6 +866,11 @@ _RAW_PAYLOAD_PREFIXES = (
     "FULL_RESPONSES_PAYLOAD [",
     "FULL_CHAT_COMPLETIONS_PAYLOAD [",
     "FULL_GEMINI_PAYLOAD [",
+    # 8.8.0: the client's own inbound body, the second line of the Payloads
+    # box's story. It carries the same ``[<request id>]`` field, so the same
+    # reader finds it, and a prefix of its own so the box can say which side
+    # of the exchange a line is.
+    "INBOUND_PAYLOAD [",
 )
 
 #: A managed Claude CLI line that is not JSON. Module-qualified because the
@@ -836,13 +882,35 @@ _RAW_CLI_MODULE = "my_claude_code.cli.managed.claude"
 #: kept across an off/on cycle so a later admin save can re-enable the same
 #: file without knowing where it is.
 _raw_path: Path | None = None
-_raw_flags: tuple[bool, bool, bool, int] | None = None
+_raw_flags: tuple[bool, bool, bool, bool, int] | None = None
+
+
+#: Whether ``LOG_RAW_API_PAYLOADS`` also records the CLIENT's own inbound body
+#: (8.8.0). One setting, both sides of the exchange, so the switch is derived
+#: here and read by the correlation middleware on every model request.
+_inbound_capture = False
+
+
+def set_inbound_capture(enabled: bool) -> None:
+    """Turn the inbound-body record on or off for this process."""
+
+    global _inbound_capture
+    _inbound_capture = bool(enabled)
+
+
+def inbound_capture_enabled() -> bool:
+    """Whether the client's own body is being written right now."""
+
+    return _inbound_capture
 
 
 def _raw_marker(record: Any) -> str | None:
-    """Which raw setting, if any, this record belongs to."""
 
     message = record["message"]
+    # Before the SSE test: ``UPSTREAM: `` is a prefix of neither, and the two
+    # markers must stay distinguishable in one file.
+    if message.startswith(_RAW_UPSTREAM_PREFIX):
+        return RAW_MARKER_UPSTREAM
     if message.startswith(_RAW_SSE_PREFIX):
         return RAW_MARKER_SSE
     if message.startswith(_RAW_PAYLOAD_PREFIXES):
@@ -965,19 +1033,25 @@ def configure_raw_diagnostics(
     sse: bool = False,
     payloads: bool = False,
     cli: bool = False,
+    upstream: bool = False,
     retain_files: int = _default_retain_files,
 ) -> bool:
     """Point the raw-diagnostics file at the operator's settings.
 
     Called by ``runtime.bootstrap`` after ``configure_logging`` (which removes
     every existing sink, this one included) and again by the admin apply path
-    with no path, so a saved change to one of the three settings takes effect
+    with no path, so a saved change to one of the settings takes effect
     without a restart. ``log_file=None`` reuses the path adopted by the first
     call; before any call with a path this is a no-op and returns ``False``.
 
-    With all three off nothing exists: no sink, no file, no directory, no
+    With all of them off nothing exists: no sink, no file, no directory, no
     write on any log path. The file is created by the first call that turns
     one on, because that is exactly when the operator asked for it.
+
+    ``upstream`` is 8.8.0's ``LOG_RAW_UPSTREAM_BYTES``. It only decides whether
+    the *file* exists: the call sites that write a ``RAW_UPSTREAM`` line ask
+    their own provider config first, so a live settings value reaches them
+    without this function being called again.
 
     Returns whether the settings are now in force (``True``) or there is no
     path to put them in (``False``).
@@ -988,18 +1062,33 @@ def configure_raw_diagnostics(
     path = Path(log_file).expanduser().resolve() if log_file is not None else _raw_path
     if path is None:
         return False
-    flags = (bool(sse), bool(payloads), bool(cli), max(0, int(retain_files)))
+    flags = (
+        bool(sse),
+        bool(payloads),
+        bool(cli),
+        bool(upstream),
+        max(0, int(retain_files)),
+    )
     if path == _raw_path and flags == _raw_flags:
         return True
 
     _stop_raw_sink()
     _raw_path = path
     _raw_flags = flags
-    if not any(flags[:3]):
+    # 8.8.0: the capture's own gate. The emit sites live in ``providers/``,
+    # which this module must not import (``config`` is a leaf) -- so the one
+    # switch they read is kept here, in ``config``, where both sides may see
+    # it. Set before the early return, so turning the setting OFF also turns
+    # the gates off in a process whose file stays open for other reasons.
+    set_upstream_capture(flags[3])
+    # The inbound body shares ``LOG_RAW_API_PAYLOADS``'s switch: the user's
+    # answer of 2026-11-01 was one setting, both sides of the exchange.
+    set_inbound_capture(flags[1])
+    if not any(flags[:4]):
         return True
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    sink = _RawDiagnosticsSink(path, retain_files=flags[3])
+    sink = _RawDiagnosticsSink(path, retain_files=flags[4])
     _raw_sink_id = logger.add(
         sink,
         level="DEBUG",
@@ -1010,5 +1099,5 @@ def configure_raw_diagnostics(
     _raw_sink = sink
     # A directory left huge by an earlier install is trimmed on the next
     # start, exactly as ``server.log``'s rotations are.
-    _sweep_rotated_logs(path, flags[3], exclude=sink.active_path)
+    _sweep_rotated_logs(path, flags[4], exclude=sink.active_path)
     return True

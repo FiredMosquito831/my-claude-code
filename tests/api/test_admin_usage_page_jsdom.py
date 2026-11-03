@@ -639,7 +639,12 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
     #: Both are written out rather than left empty so the intent is visible: an
     #: empty set would say this release changed nothing, which is not true, and
     #: would make the next release's real regression look declared.
-    DECLARED_MOVES = {"guide", "usage"}
+    #:
+    #: 8.8.0 adds `requests` on the same terms: the raw diagnostics export
+    #: picker is inside that view's DOM and gained one checkbox for the new
+    #: "Provider raw output" kind. A diff of the two trees' rendered HTML shows
+    #: those four lines and nothing else on the page.
+    DECLARED_MOVES = {"guide", "requests", "usage"}
 
     # No view is new and none was removed: 8.3.0 already had the page.
     assert sorted(set(mine) - set(base)) == []

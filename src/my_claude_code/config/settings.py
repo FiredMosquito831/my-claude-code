@@ -2154,6 +2154,15 @@ class Settings(BaseSettings):
     log_raw_sse_events: bool = Field(
         default=False, validation_alias="LOG_RAW_SSE_EVENTS"
     )
+    # When true, write the provider's own response bytes to
+    # logs/raw-diagnostics.log as they arrive from the transport, one
+    # ``RAW_UPSTREAM`` line per chunk, before anything parses or re-encodes
+    # them. The provider's refusal bodies are recorded whole, and a media
+    # answer is recorded as metadata only (status, content type, length, and
+    # the first 4 KB of a refusal) -- never the image, audio or video bytes.
+    log_raw_upstream_bytes: bool = Field(
+        default=False, validation_alias="LOG_RAW_UPSTREAM_BYTES"
+    )
     # When false (default), unhandled exceptions log only type + route metadata (no message/traceback).
     log_api_error_tracebacks: bool = Field(
         default=False, validation_alias="LOG_API_ERROR_TRACEBACKS"
