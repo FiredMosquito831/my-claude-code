@@ -5156,6 +5156,27 @@ Reasoning and tool calls are the majority of a real log: on a typical machine 55
 - **The log itself is unchanged by the index**, so older versions still open it and ignore the index file. **Since 7.93.0 the index file also holds the prompts the log stores as chunks** (see *Prompts are stored as chunks* below): do not delete `requests-search.db`, and keep it with `requests.db` in any backup — without it those prompts read as empty. **Clear log** clears it with the log, and retention removes pruned requests from it too.
 - If this Python's SQLite has no FTS5 trigram tokenizer, the index is off, the line says so, and every search reads the stored requests as before.
 
+**What a wide search costs, said before you run it (8.9.0).** A search reads the whole window, and on a big log that is minutes, not seconds. Under the search box the page now says what the window you have picked costs, measured on a real 700,005-request log with the index built: **24 hours about a second · 30 days about 38 seconds · a month a minute to two · a year about five minutes · all time a little longer than that**. The month figure is a range on purpose — two months of comparable size took 55 s and 131 s, because the planner chooses between the index and a body scan per window — so the page does not quote one number for "a month".
+
+It is **advice, and only advice**. Nothing is bounded, refused or truncated: pressing Enter still runs the search over the whole window, the progress line still says how far it has read, and typing again or reloading stops it. Below a day there is nothing to say and the line stays hidden.
+
+#### The custom time window (8.9.0)
+
+The **Window** control on the Analytics toolbar and the **Period** control in the export dialog are the same control now, so the two can never disagree about what a window means. Both offer the five periods they always did — all time, last hour, 24 hours, 7 days, 30 days — plus two new shapes, added after them so every saved view and link keeps its meaning:
+
+| Shape | What it means | Where to pick it |
+| --- | --- | --- |
+| **Last N…** | A rolling window: `now` minus N hours, days or weeks. It includes the current partial hour, exactly as the five fixed periods do, and it is a **duration**, not a calendar — across a clock change "last 3 days" is still 72 real hours. | The number box and the unit selector |
+| **Calendar…** | A period of **your** calendar, in **your** timezone. Four sub-shapes: a month, a span of months (**the end month included whole**), a year, or exact times. | The Shape picker, then native month / year / `datetime-local` boxes |
+
+**A calendar month is your month, and its two ends can carry different offsets.** October 2026 in a UTC+2 zone (UTC+3 while summer time is on) starts at +03:00 and ends at +02:00, because the clock goes back inside it — so that month is **745 hours**, not 744. A month containing the spring change is **743 hours**. That is correct rather than a bug: it is your month as your clock measured it. A UTC month would move the first two or three hours of the first local day into the previous month.
+
+**The end is never `23:59:59`.** A window ends at the first instant it does not include — 1 November 00:00 local for October — so nothing is lost in a one-second or one-millisecond hole, and nothing is double-counted into the next month.
+
+**A saved view stores the shape and its inputs, never the resolved dates.** "Last 7 days" saved today still means the last 7 days next week: it is labelled with that phrase, not with today's dates. An absolute window (a month, a year) is fixed by definition and restores to the same instant. A view saved before this release restores exactly as it did.
+
+**No new limit was added, anywhere.** The window is display and export vocabulary: the server already accepted any `since`/`until` on every windowed route, so nothing about the queries, the rollups, the indices or the export bounds changed. A wide window is slower to *search*, which is what the line above the search box is for.
+
 #### Which model actually answered
 
 A request does not always go where the tier points. **View** on any row draws the whole path it took:
@@ -5247,7 +5268,7 @@ Every row's dialog also shows the full request and response, the resolved config
 
 #### Exporting
 
-**Export** opens the export window. It covers Model requests, **Route attempts** and Web Search, in four formats — JSON, CSV, XLSX and TXT — and streams the **entire** matching row set (it is not capped at the 500-row list page). Pick a period (last hour, 24 hours, 7 days, 30 days, or a custom from–to range), choose which fields to include, and optionally group the output by provider, period, model or key — with the grouping order selectable (e.g. Provider → Period → Model, or Period → Provider → Model). Selecting body-bearing fields (Input, Output, Tool calls, Thinking) includes the stored text for each row.
+**Export** opens the export window. It covers Model requests, **Route attempts** and Web Search, in four formats — JSON, CSV, XLSX and TXT — and streams the **entire** matching row set (it is not capped at the 500-row list page). Pick a period (last hour, 24 hours, 7 days, 30 days, a custom from–to range, or — since 8.9.0 — the same **Last N** and **Calendar** shapes the Analytics toolbar offers), choose which fields to include, and optionally group the output by provider, period, model or key — with the grouping order selectable (e.g. Provider → Period → Model, or Period → Provider → Model). Selecting body-bearing fields (Input, Output, Tool calls, Thinking) includes the stored text for each row. **No new export limit came with the new shapes**: the bounds that already existed (the ≤ 200-request raw-diagnostics refusal, the "no Group by with raw diagnostics" rule) are unchanged.
 
 ##### Route attempts: one row per model tried
 

@@ -1,0 +1,201 @@
+{
+ "base_commit": "6eb5551b",
+ "export": {
+  "2592000": {
+   "since": "1790959232"
+  },
+  "3600": {
+   "since": "1793547632"
+  },
+  "604800": {
+   "since": "1792946432"
+  },
+  "86400": {
+   "since": "1793464832"
+  },
+  "all": {},
+  "custom": {}
+ },
+ "frozen_now_ms": 1793551232000,
+ "toolbar": {
+  "2592000": [
+   {
+    "path": "/admin/api/requests/cost",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/requests/latency",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/requests/ttft",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/requests/no-answer",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/requests/origin",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/analytics/media",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/requests/stats",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/requests",
+    "since": "1790959232"
+   },
+   {
+    "path": "/admin/api/requests/lifetime"
+   }
+  ],
+  "3600": [
+   {
+    "path": "/admin/api/requests/cost",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/requests/latency",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/requests/ttft",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/requests/no-answer",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/requests/origin",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/analytics/media",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/requests/stats",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/requests",
+    "since": "1793547632"
+   },
+   {
+    "path": "/admin/api/requests/lifetime"
+   }
+  ],
+  "604800": [
+   {
+    "path": "/admin/api/requests/cost",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/requests/latency",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/requests/ttft",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/requests/no-answer",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/requests/origin",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/analytics/media",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/requests/stats",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/requests",
+    "since": "1792946432"
+   },
+   {
+    "path": "/admin/api/requests/lifetime"
+   }
+  ],
+  "86400": [
+   {
+    "path": "/admin/api/requests/cost",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/requests/latency",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/requests/ttft",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/requests/no-answer",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/requests/origin",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/analytics/media",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/requests/stats",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/requests",
+    "since": "1793464832"
+   },
+   {
+    "path": "/admin/api/requests/lifetime"
+   }
+  ],
+  "all": [
+   {
+    "path": "/admin/api/requests/cost"
+   },
+   {
+    "path": "/admin/api/requests/latency"
+   },
+   {
+    "path": "/admin/api/requests/ttft"
+   },
+   {
+    "path": "/admin/api/requests/no-answer"
+   },
+   {
+    "path": "/admin/api/requests/origin"
+   },
+   {
+    "path": "/admin/api/analytics/media"
+   },
+   {
+    "path": "/admin/api/requests/stats"
+   },
+   {
+    "path": "/admin/api/requests"
+   },
+   {
+    "path": "/admin/api/requests/lifetime"
+   }
+  ]
+ },
+ "written_by": "BASE tree 6eb5551b (v8.8.0), scenario range_windows",
+ "zone": "Europe/Bucharest"
+}

@@ -336,6 +336,31 @@ def test_admin_static_exposes_professional_observability_controls():
         "exportFieldList",
         "exportClose",
         "exportCustomRange",
+        # 8.9.0 (RANGE): the two custom shapes, in the export dialog and on
+        # the Analytics toolbar. The ids are asserted here as well as in the
+        # asset-wiring contract because this list is the one a reader greps
+        # when asking "which controls does the page declare".
+        "exportWindowCustomWrap",
+        "exportWindowAmount",
+        "exportWindowUnit",
+        "exportWindowRange",
+        "exportWindowShape",
+        "exportWindowMonth",
+        "exportWindowFrom",
+        "exportWindowTo",
+        "exportWindowYear",
+        "reqWindowCustomWrap",
+        "reqWindowAmount",
+        "reqWindowUnit",
+        "reqWindowRange",
+        "reqWindowShape",
+        "reqWindowMonth",
+        "reqWindowFrom",
+        "reqWindowTo",
+        "reqWindowYear",
+        "reqWindowFromTime",
+        "reqWindowUntilTime",
+        "reqSearchCost",
     ):
         assert f'id="{control_id}"' in html
     assert ">Export<" in html
