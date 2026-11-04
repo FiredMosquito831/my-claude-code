@@ -21509,6 +21509,12 @@ function usageSubscriptionRow(spec, entry, known, routeRow) {
     nextReadInSeconds: routeRow ? routeRow.next_read_in_seconds : null,
     intervalSeconds: routeRow ? routeRow.interval_seconds : null,
     values: {},
+    // A subscription has no declared presentation rule today; the two keys are
+    // carried so every row has the same shape and `usageFinishRow` has one
+    // test (`=== true`) rather than a `row.percentOnlyWindows` that is
+    // sometimes undefined.
+    percentOnlyWindows: false,
+    percentOnlyNote: "",
   };
   let reading = null;
   if (entry.state === "ready") {
@@ -21636,7 +21642,10 @@ function usageFinishRow(base, reading, routeRow, entry) {
   return {
     ...base,
     state,
-    windows: reading ? reading.windows : [],
+    windows: usageMarkPercentOnly(
+      reading ? reading.windows : [],
+      base.percentOnlyWindows,
+    ),
     balances: reading ? reading.balances : [],
     notes: reading ? reading.notes : [],
     plan: (reading && reading.plan) || "",
@@ -21690,12 +21699,19 @@ function usageCoverageRow(entry, known) {
     intervalSeconds: entry.interval_seconds || null,
     values: entry.values && typeof entry.values === "object" ? entry.values : {},
     consecutiveFailures: entry.consecutive_failures || 0,
+    // SPEC §9.1: the provider's own declared presentation rule, read off the
+    // route's row. Absent (an older server) means "no rule", never "true".
+    percentOnlyWindows: entry.percent_only_windows === true,
+    percentOnlyNote: entry.percent_only_note || "",
   };
   const state = USAGE_STATES[entry.state] ? entry.state : "not_measured";
   return {
     ...base,
     state,
-    windows: reading ? reading.windows : [],
+    windows: usageMarkPercentOnly(
+      reading ? reading.windows : [],
+      base.percentOnlyWindows,
+    ),
     balances: reading ? reading.balances : [],
     notes: reading ? reading.notes : [],
     plan: (reading && reading.plan) || "",
@@ -21709,7 +21725,27 @@ function usageCoverageRow(entry, known) {
   };
 }
 
-/** THE MODEL: every configured provider, exactly once, in the order §5.2 fixes.
+/** Stamp ONE provider's declared presentation rule onto its windows.
+ *
+ *  SPEC §9.1: the rule is "a provider-scoped presentation rule in declared
+ *  data (a flag on the provider's usage row), not an `if provider ==
+ *  "commandcode"` branch in a renderer, and not a heuristic on the shape of
+ *  the numbers". So the flag arrives on the ROUTE's row
+ *  (`UsageSource.percent_only_windows`, published as `percent_only_windows`),
+ *  and this is the single place it is copied onto the windows every layout
+ *  reads. One stamp, five layouts: a layout that forgot to look would still
+ *  draw the percentage, because the decision is already on the datum.
+ *
+ *  It is `=== true`, never a truthy test: a payload from an older server has no
+ *  such key at all, and absent must mean "no rule" rather than "whatever the
+ *  string says".
+ */
+function usageMarkPercentOnly(windows, declared) {
+  if (declared !== true) return windows;
+  return windows.map((win) => ({ ...win, percent_only: true }));
+}
+
+/** The model: every configured provider, exactly once, in the order §5.2 fixes.
  *
  *  Sources, in the order they are trusted:
  *
@@ -22009,10 +22045,56 @@ function usageResetNode(value) {
  *  the `title` so nothing is lost. A window whose provider sent no percentage
  *  and no cap returns `null`, and the caller draws words instead — never a
  *  zero.
+ *
+ *  **ONE provider is the exception, and it is declared rather than branched
+ *  on**: a window carrying `percent_only` (stamped from the provider's own row)
+ *  draws its percentage and no money at all — see the branch below.
  */
 function usageWindowFigure(win) {
   const unit = String(win.unit || "");
   const code = win.currency || "USD";
+  // ── SPEC §9.1, THE DECLARED RULE, AND THE ONLY PLACE IT IS HONOURED ─────
+  //
+  // A window whose row declares `percent_only_windows` is drawn as a
+  // percentage and NOTHING ELSE: no `$34.93 of $35.00` beside the bar. The
+  // decision is `win.percent_only`, which the model stamps from the provider's
+  // own declared row (`config/usage_sources.py` — `UsageSource.
+  // percent_only_windows`) — never from the id, and never from the shape of the
+  // numbers.
+  //
+  // A window with NO cap has no honest percentage (`usageFraction` returns
+  // null), so the figure says exactly that rather than inventing a
+  // denominator. §9.3's guard, and the reason this branch does not fall
+  // through to the money text below: a percentage-only provider's block
+  // carries no `$`, even on the day it has no percentage to carry.
+  if (win.percent_only === true) {
+    const share = usageFraction(win);
+    if (share && share.text) {
+      return {
+        text: share.text,
+        percent: share,
+        kind: "percent",
+        // The renderers use this to skip the "99.8% of the cap" companion
+        // span: they would otherwise print the same percentage twice, because
+        // the figure itself is now that percentage.
+        percentOnly: true,
+      };
+    }
+    // NO CAP, NO PERCENTAGE — and NO DROPPED ROW EITHER. §9.3: "never a
+    // percentage where the provider published no denominator". The window is
+    // still drawn, because a window the provider reported a `used` for is not
+    // a window nobody measured; what it says is that there is no cap to take a
+    // share of. The provider's own number stays reachable on `title` (A.3),
+    // which is how this obeys §9.1's "no `$` in the block" without losing the
+    // figure — the same trade the money pair already makes.
+    return {
+      text: "no cap reported, so no percentage",
+      percent: null,
+      kind: "percent",
+      percentOnly: true,
+      noCap: true,
+    };
+  }
   if (unit === "percent") {
     const shown = usagePct(win.used);
     return shown ? { text: shown, percent: usageFraction(win), kind: "percent" } : null;
@@ -22077,6 +22159,13 @@ function usageCount(value) {
 function usageWindowRow(win, options) {
   const opts = options || {};
   const row = usageEl("div", "usage-window");
+  // SPEC §9.1's proof has to ask "is there a `$` in THIS window's row" in all
+  // five layouts, and the three arrangements below draw a window three
+  // different ways. One hook, three call sites, so the question is one
+  // selector rather than five structure-aware queries.
+  row.dataset.windowId = String(win.id || "");
+  row.dataset.windowUnit = String(win.unit || "");
+  if (win.percent_only === true) row.dataset.percentOnly = "true";
   const fraction = usageFraction(win);
   const figure = usageWindowFigure(win);
   const title = usageEl("span", "usage-window-title", win.label || win.id);
@@ -22086,13 +22175,27 @@ function usageWindowRow(win, options) {
     const value = usageEl("span", "usage-window-figure", figure.text);
     // A.3: the shortened money pair keeps the provider's exact strings
     // reachable. `$34.93 of $35.00` is honest at that precision; the raw
-    // `34.9300790367` is one hover away.
+    // `34.9300790367` is one hover away. A percentage-only window puts its two
+    // raw numbers on `title` for the same reason and in the same place — the
+    // figures are still reachable, they are simply not PRINTED beside the bar
+    // (§9.1).
     if (figure.kind === "money") {
       value.title = `${win.used || ""}${win.limit ? ` of ${win.limit}` : ""}${
         win.remaining ? ` · ${win.remaining} remaining` : ""
       }`.trim();
+    } else if (figure.percentOnly && figure.percent) {
+      value.title = `${win.used || ""}${win.limit ? ` of ${win.limit}` : ""}${
+        win.resets_at ? ` · resets ${win.resets_at}` : ""
+      }`.trim();
+    } else if (figure.noCap) {
+      // The provider's own figure, reachable and not printed: §9.1 keeps the
+      // block free of `$` and §9.3 forbids a percentage with no denominator,
+      // so the number a reader could act on lives one hover away with its unit.
+      value.title = `${win.used || ""}${win.used ? ` ${win.unit || ""}` : ""}${
+        win.resets_at ? ` · resets ${win.resets_at}` : ""
+      }`.trim();
     }
-    if (figure.percent && figure.percent.text && figure.percent.source !== "provider-percent") {
+    if (figure.percent && figure.percent.text && figure.percent.source !== "provider-percent" && !figure.percentOnly) {
       // THE SHARE IS THE POINT of a used/limit pair (the user's own brief: a
       // `34.9300790367 / 35` window IS 99.8 %). It is drawn as visible text
       // beside the pair, in the same words the bar's aria label uses, so a
@@ -22189,6 +22292,37 @@ function usageUnmeasuredBlock(windows, headingText) {
   details.appendChild(list);
   wrap.appendChild(details);
   return wrap;
+}
+
+/** The declared sentence a percentage-only provider prints, or `null`.
+ *
+ *  §9.3: "the PR says so in one sentence on the card rather than inventing a
+ *  cap". The sentence lives in DECLARED DATA
+ *  (`UsageSource.percent_only_note`, published on the row as
+ *  `percent_only_note`), so no renderer composes its own and the docs, the
+ *  card and the release note cannot describe the omission three ways.
+ *
+ *  **It describes an ABSENCE, so it is printed only while the absence is
+ *  real.** The sentence exists to explain why there is no monthly row; if the
+ *  provider ever states the grant and a monthly window appears, printing it
+ *  would be the page contradicting itself in two adjacent lines — so the
+ *  sentence is withheld and the third percentage speaks for itself. That is a
+ *  renderer deciding WHETHER to say a declared fact, never WHAT the fact is.
+ *
+ *  A row without one draws nothing: an older server sends no such key, and a
+ *  page that invented a sentence for it would be saying something the server
+ *  did not.
+ */
+function usagePercentOnlyNote(row) {
+  const text = String(row.percentOnlyNote || "").trim();
+  if (!row.percentOnlyWindows || !text) return null;
+  const windows = Array.isArray(row.windows) ? row.windows : [];
+  if (windows.some((win) => win && win.percent_only === true && win.id === "monthly")) {
+    return null;
+  }
+  const note = usageEl("p", "usage-percent-only-note", text);
+  note.dataset.rule = "percent-only";
+  return note;
 }
 
 /** The Allowance block: every window, or one sentence when none was measured.
@@ -22390,7 +22524,15 @@ function usageDetailBody(row, options) {
   if (heading.firstChild) body.appendChild(heading);
   const columns = usageEl("div", "usage-detail-columns");
   const allowance = usageAllowanceBlock(row, opts);
-  if (allowance) columns.appendChild(allowance);
+  if (allowance) {
+    // SPEC §9.3's sentence, in the block it explains: a provider whose windows
+    // are percentage-only says what the rule leaves out, so a reader who
+    // expected a third (monthly) figure is told why there is none instead of
+    // being left to wonder whether the page dropped it.
+    const note = usagePercentOnlyNote(row);
+    if (note) allowance.appendChild(note);
+    columns.appendChild(allowance);
+  }
   const balances = usageBalanceBlock(row);
   if (balances) columns.appendChild(balances);
   // EVERY note the provider sent, not a capped three: a note is where a
@@ -22491,6 +22633,30 @@ function usageFigureList(row) {
     windows.forEach((win) => {
       const label = win.label || win.id;
       const unit = win.unit === "percent" ? "%" : win.unit === "usd" ? " USD" : "";
+      // SPEC §9.1's rule reaches THIS disclosure too, and it has to: this is
+      // "every figure, exactly as the provider sent it", and for a
+      // percentage-only provider the provider's own USD strings are precisely
+      // what the rule says must not sit beside the percentage. The denominator
+      // and the used figure are still one hover away on the bar (§UI-QUALITY
+      // A.3), and the percentage itself is printed here in the provider's own
+      // units — so the disclosure loses its dollars and keeps its facts.
+      // Every OTHER provider's disclosure is untouched, byte for byte.
+      if (win.percent_only === true) {
+        const share = usageFraction(win);
+        if (share && share.text) {
+          rows.push([`${label} used`, share.text, win.unit || ""]);
+        } else {
+          // No cap, so no share (§9.3). The complete form still names the
+          // window rather than dropping it — an absent figure is a sentence,
+          // never a missing row.
+          rows.push([`${label} used`, "no cap reported, so no percentage", ""]);
+        }
+        const reset = usageInstantParts(win.resets_at);
+        if (reset && win.resets_at) {
+          rows.push([`${label} resets`, reset.text, reset.title]);
+        }
+        return;
+      }
       if (win.used !== "" && win.used != null) {
         rows.push([`${label} used`, `${win.used}${unit}`, win.unit || ""]);
       }
@@ -22786,6 +22952,9 @@ window.MCCUsageLayouts = (function () {
           const figure = usageWindowFigure(win);
           const fraction = usageFraction(win);
           const windowLine = usageEl("div", "usage-ledger-window");
+          windowLine.dataset.windowId = String(win.id || "");
+          windowLine.dataset.windowUnit = String(win.unit || "");
+          if (win.percent_only === true) windowLine.dataset.percentOnly = "true";
           const name = usageEl("span", "usage-ledger-window-name", win.label || win.id);
           name.title = win.label || win.id;
           windowLine.appendChild(name);
@@ -22803,7 +22972,8 @@ window.MCCUsageLayouts = (function () {
           if (
             figure.percent &&
             figure.percent.text &&
-            figure.percent.source !== "provider-percent"
+            figure.percent.source !== "provider-percent" &&
+            !figure.percentOnly
           ) {
             windowLine.appendChild(
               usageEl("span", "usage-ledger-window-share", figure.percent.text),
@@ -22851,6 +23021,11 @@ window.MCCUsageLayouts = (function () {
           ),
         );
       }
+      // §9.3's sentence, in the one place this layout can put it — it has no
+      // expansion, so a reader who looked for a monthly figure must be told
+      // here or not at all.
+      const percentOnlyNote = usagePercentOnlyNote(row);
+      if (percentOnlyNote) windows.appendChild(percentOnlyNote);
       line.appendChild(windows);
 
       const money = usageEl("div", "usage-ledger-money");
@@ -23085,6 +23260,10 @@ window.MCCUsageLayouts = (function () {
     // is the layout's only place for "Free tier: false" and its siblings.
     const notes = usageNotesBlock(row);
     if (notes) windows.appendChild(notes);
+    // §9.3's sentence: the meter board has no expansion either, and this band
+    // is where the windows live.
+    const percentOnlyNote = usagePercentOnlyNote(row);
+    if (percentOnlyNote) windows.appendChild(percentOnlyNote);
     const chip = usageStateChip(row.state);
     cash.appendChild(chip);
     if (stateNeedsSentence(row.state) && (row.windows.length || row.balances.length)) {
@@ -23240,6 +23419,9 @@ window.MCCUsageLayouts = (function () {
     const focal = usageFocalWindow(row);
     if (focal) {
       const block = usageEl("div", "usage-dial-focal");
+      block.dataset.windowId = String(focal.window.id || "");
+      block.dataset.windowUnit = String(focal.window.unit || "");
+      if (focal.window.percent_only === true) block.dataset.percentOnly = "true";
       // THE RING'S TEXT IS THE SHARE, NOT THE WHOLE PAIR. A money window's
       // `$34.93 of $35.00` is wider than the ring and the first render drove it
       // straight through the stroke; the ring's own value is the percentage the
@@ -23258,13 +23440,21 @@ window.MCCUsageLayouts = (function () {
       );
       const text = usageEl("div", "usage-dial-focal-text");
       text.appendChild(usageEl("p", "usage-dial-focal-label", focal.window.label));
-      text.appendChild(usageEl("p", "usage-dial-focal-note", focal.figure.text));
+      // For a money window this is the `$34.93 of $35.00` pair the ring's arc
+      // is drawn from, and it belongs here. A percentage-only window has
+      // already printed that exact percentage as the ring's own label, so the
+      // note would be the same string twice on one card — §9.1's rule is "the
+      // percentage and nothing else", not "the percentage, twice".
+      if (!focal.figure.percentOnly) {
+        text.appendChild(usageEl("p", "usage-dial-focal-note", focal.figure.text));
+      }
       // A money pair's consumed share, beside the pair: the ring shows it as an
       // arc and this says it, so a reader who cannot see the arc still gets the
       // percentage the provider's two numbers add up to.
       if (
         focal.figure.percent &&
-        focal.figure.percent.source !== "provider-percent"
+        focal.figure.percent.source !== "provider-percent" &&
+        !focal.figure.percentOnly
       ) {
         text.appendChild(
           usageEl(
@@ -23321,13 +23511,17 @@ window.MCCUsageLayouts = (function () {
         .forEach((win) => {
           const figure = usageWindowFigure(win);
           const line = usageEl("div", "usage-dial-line");
+          line.dataset.windowId = String(win.id || "");
+          line.dataset.windowUnit = String(win.unit || "");
+          if (win.percent_only === true) line.dataset.percentOnly = "true";
           line.appendChild(usageEl("span", "usage-dial-line-name", win.label || win.id));
           if (figure) {
             line.appendChild(usageEl("span", "usage-dial-line-figure", figure.text));
             if (
               figure.percent &&
               figure.percent.text &&
-              figure.percent.source !== "provider-percent"
+              figure.percent.source !== "provider-percent" &&
+              !figure.percentOnly
             ) {
               // TWO SEPARATE FIXES LIVED HERE. The share has to be visible (a
               // used/limit pair IS a percentage), and it has to go in its OWN
@@ -23372,6 +23566,10 @@ window.MCCUsageLayouts = (function () {
 
     const notes = usageNotesBlock(row);
     if (notes) card.appendChild(notes);
+    // §9.3's sentence. A dial card is complete on its face, so the omission
+    // has to be explained on the face.
+    const percentOnlyNote = usagePercentOnlyNote(row);
+    if (percentOnlyNote) card.appendChild(percentOnlyNote);
 
     const foot = usageEl("div", "usage-dial-foot");
     foot.appendChild(usageProvenanceLine(row, { showUnread: row.state !== "measured" }));

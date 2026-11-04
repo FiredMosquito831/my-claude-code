@@ -6512,6 +6512,36 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>localStorage</code>.
                 </p>
                 <p class="guide-note">
+                  <strong>Command Code's windows are percentages
+                  (8.11.1).</strong> Its 5-hour and weekly windows are
+                  denominated in model-equivalent credits rather than cash, so
+                  the same percentage can move under a different dollar figure
+                  whenever prices change. Both windows therefore show
+                  <strong>the percentage and nothing else</strong> &mdash;
+                  <code>99.8%</code> and <code>0%</code>, with no
+                  <code>$34.93 of $35.00</code> beside them &mdash; and the
+                  provider's own two numbers are one hover away on the figure.
+                  This is a rule declared on that provider's row, not a special
+                  case in the page, and it applies to its subscription windows
+                  and nowhere else: <strong>every other provider keeps its
+                  money exactly as it was</strong> (OpenRouter still reads
+                  <code>$0.18 left of $0.20</code>, DeepSeek still reads
+                  <code>&minus;$0.01</code>, the Claude card still reads its
+                  <code>$50.00</code> extra-usage cap), and Command Code's own
+                  balance rows &mdash; monthly credits left, purchased, free
+                  &mdash; are still money, in the separate Balance block.
+                </p>
+                <p class="guide-note">
+                  <strong>Why there is no monthly percentage (8.11.1).</strong>
+                  A monthly percentage would need the monthly <em>grant</em> as
+                  its denominator. Command Code's API states what is
+                  <em>left</em> of the monthly pool and never the grant, so the
+                  row is left out entirely rather than shown as a balance, a
+                  guess or <code>0%</code>, and the card says so in one
+                  sentence. If the API ever states the grant, the row appears
+                  with no change to this page.
+                </p>
+                <p class="guide-note">
                   <strong>Every provider you configured, including your own
                   (8.7.0).</strong> The list is built from your configuration,
                   not from a fixed table, so a custom provider appears too.

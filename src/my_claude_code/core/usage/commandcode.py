@@ -22,6 +22,37 @@ Three blocks, and they are three different questions about one account:
 
 A ``planId`` is not a price and is never rendered as one (IV.9): it is the
 provider's own identifier for what the account bought.
+
+**There is no monthly grant, and that is a measured fact rather than an
+assumption** (SPEC §9.3, which requires the implementer to find the grant rather
+than assume its absence). Re-read out of the installed ``command-code`` 1.88.2
+bundle's ``projectUsageView`` and every other reader of the credits record:
+
+* the record's fields the vendor's own code reads are exactly ``credits``
+  (``monthlyCredits``, ``purchasedCredits``, ``freeCredits``), ``windowLimits``
+  (``limited``, ``fiveHour``/``weekly`` each ``{used, cap, resetAt}``),
+  ``sandboxMinutes`` (``{usedMinutes, limitMinutes, resetAt}``),
+  ``sandboxAccess`` and ``planId``;
+* there is **no** monthly grant, allowance, included-credits or total field on
+  the record — the identifiers ``monthlyGrant``, ``grantCredits``,
+  ``totalCredits``, ``planCredits``, ``monthlyLimit``, ``creditsLimit``,
+  ``includedCredits``, ``allowance``, ``monthlyAllowance``, ``creditGrant`` and
+  ``monthlyTotal`` do not occur in the bundle at all;
+* the only per-plan monthly figure anywhere in the bundle is a **client-side
+  price table** (``Ir``: ``individual-go`` 10, ``individual-pro`` 30,
+  ``individual-max`` 150, …) that the vendor uses for a *depletion warning*, not
+  a value the API returned.
+
+SPEC §9.3 forbids exactly that: "**Never:** … a price table". The pool is the
+only monthly figure the API states, so there is **no honest percentage**, so
+:func:`parse` emits **no monthly window** — the row is omitted entirely rather
+than rendered as a balance, a guess or 0 % — and the provider's declared
+``percent_only_note`` says so in one sentence on the card.
+
+If the vendor ever states the grant, this is where it lands: a third ``Window``
+under ``windowLimits`` with a real ``cap``, which needs no renderer change
+(§9.3's "the unit stays ``usd`` on the window data; the percentage is a
+rendering of ``used``/``cap``").
 """
 
 import time

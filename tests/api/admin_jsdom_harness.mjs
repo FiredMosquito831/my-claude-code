@@ -5024,6 +5024,17 @@ if (process.env.MCC_JSDOM_SCENARIO === "usage_layouts") {
   );
   scenario = prepareUsageLayoutsScenario({ window, ROUTES, fetchBodies });
 }
+/* MCC_JSDOM_SCENARIO=usage_non_commandcode (8.11.1): every provider's rendered
+   block per layout, for SPEC §9.1's "every other provider keeps its money
+   exactly as it is today". The SAME file runs on the base tree and on the
+   branch — that is what makes it a comparison between two trees rather than
+   between two fixtures — so it names nothing this release added. */
+if (process.env.MCC_JSDOM_SCENARIO === "usage_non_commandcode") {
+  const { prepareUsageNonCommandCodeScenario } = await import(
+    "./admin_jsdom_usage_non_commandcode.mjs"
+  );
+  scenario = prepareUsageNonCommandCodeScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=usage_refresh (8.6.0): the automatic refresh -- the
    cadence the SERVER reports, which providers one pass may ask, one real pass
    sending exactly one POST per due provider, a hidden tab asking nothing, and

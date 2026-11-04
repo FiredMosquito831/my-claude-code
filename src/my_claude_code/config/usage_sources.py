@@ -179,6 +179,36 @@ class UsageSource:
     #: later release that holds one of these credentials changes one string
     #: and a row moves from that state to `readable`.
     needs_credential: str = ""
+    #: **This provider's subscription windows are drawn as percentages, and
+    #: nothing else.**
+    #:
+    #: `specs/PR-USAGE-LAYOUTS-SPEC.md` §9.1 is explicit that this is a
+    #: *provider-scoped presentation rule in declared data* — a flag on the
+    #: provider's usage row — **not** an ``if provider_id == …`` in a renderer
+    #: and **not** a heuristic on the shape of the numbers. So it lives here,
+    #: beside ``needs_credential`` and ``mechanisms``, and travels to the page on
+    #: the row it already reads.
+    #:
+    #: The user's reason for the one row that sets it (2026-11-03): Command
+    #: Code's window is denominated in model-equivalent credits that move under
+    #: the same percentage whenever prices change, so a dollar figure beside it
+    #: invites a comparison with real money elsewhere on the page.
+    #:
+    #: **It covers that provider's windows and nothing else.** A balance is
+    #: money and stays money — Command Code's own ``monthlyCredits``,
+    #: ``purchased`` and ``free`` rows are outside the rule — and every other
+    #: provider's amounts render exactly as they render today (§9.1,
+    #: "do not generalise this rule"). A used/limit pair is not evidence of
+    #: anything, which is why this is a word in a table rather than a branch.
+    percent_only_windows: bool = False
+    #: One sentence the card prints beside a provider whose windows are
+    #: percentage-only, saying what that rule leaves out and why.
+    #:
+    #: §9.3: when the monthly grant is not stated by the API there is **no
+    #: honest percentage**, so there is **no monthly row at all** — and the PR
+    #: "says so in one sentence on the card rather than inventing a cap". This
+    #: is that sentence, in declared data, so no renderer invents its own.
+    percent_only_note: str = ""
 
     @property
     def supported(self) -> bool:
@@ -287,6 +317,25 @@ PROVIDER_SOURCES: tuple[UsageSource, ...] = (
         display_name="Command Code",
         mechanisms=(MECHANISM_HEADER, MECHANISM_ENDPOINT),
         detail="the x-ratelimit response headers",
+        # SPEC §9.1, the ONE row this applies to. The user's words: "the % thing
+        # only applies for the cmdc sub the other providers remain as is". Its
+        # BALANCES are outside the rule and render as money, unchanged.
+        percent_only_windows=True,
+        # SPEC §9.3, and the honest half of option (B): the monthly percentage
+        # exists only when the API states the monthly grant. Command Code's
+        # ``/alpha/billing/credits`` states ``windowLimits.fiveHour`` and
+        # ``windowLimits.weekly`` as used/cap pairs, and states the monthly
+        # figure as a REMAINING POOL (``credits.monthlyCredits``) with no
+        # denominator anywhere in the record — see the adapter's docstring for
+        # the vendor-binary evidence. So there is no honest monthly percentage,
+        # the row is omitted entirely, and this sentence says why rather than
+        # leaving a reader to wonder where the third figure went.
+        percent_only_note=(
+            "5-hour and weekly windows are percentages of the caps Command Code "
+            "reports. There is no monthly percentage: the API states what is "
+            "left of the monthly pool but never the monthly grant, and a "
+            "percentage with an invented denominator would be worse than no row."
+        ),
         endpoint=UsageEndpoint(
             adapter="commandcode",
             host="https://api.commandcode.ai",

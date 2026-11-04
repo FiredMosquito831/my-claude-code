@@ -103,6 +103,16 @@ function reading(overrides) {
   };
 }
 
+/** The one sentence §9.3 asks for when a monthly grant is not stated. Kept in
+ *  step with `config/usage_sources.py`'s `percent_only_note` by the contract
+ *  test `tests/contracts/test_usage_percent_only_declaration.py`, which reads
+ *  both and asserts they are the same words. */
+const PERCENT_ONLY_NOTE =
+  "5-hour and weekly windows are percentages of the caps Command Code " +
+  "reports. There is no monthly percentage: the API states what is " +
+  "left of the monthly pool but never the monthly grant, and a " +
+  "percentage with an invented denominator would be worse than no row.";
+
 function coverage(overrides) {
   return {
     provider_id: "deepseek",
@@ -128,6 +138,12 @@ function coverage(overrides) {
     interval_seconds: 30,
     values: {},
     endpoint: null,
+    // SPEC §9.1: the declared presentation rule, on the ROW, exactly as the
+    // route publishes it (`admin_usage_routes._provider_rows`). Absent from
+    // every row unless a test sets it, which is what "the flag is declared
+    // data, not a default" means.
+    percent_only_windows: false,
+    percent_only_note: "",
     ...overrides,
   };
 }
@@ -137,6 +153,9 @@ function fullPayload() {
   const commandcode = provider({
     provider_id: "commandcode",
     display_name: "Command Code",
+    // SPEC §9.1: the declared rule, as the ROUTE sends it.
+    percent_only_windows: true,
+    percent_only_note: PERCENT_ONLY_NOTE,
     endpoint: {
       host: "https://api.commandcode.ai",
       path: "/alpha/billing/credits",
@@ -306,6 +325,8 @@ function fullPayload() {
       coverage({
         provider_id: "commandcode",
         display_name: "Command Code",
+        percent_only_windows: true,
+        percent_only_note: PERCENT_ONLY_NOTE,
         reading: commandcode.reading,
         endpoint: commandcode.endpoint,
       }),
@@ -409,6 +430,18 @@ function noCapPayload() {
   const onlyUsed = provider({
     provider_id: "commandcode",
     display_name: "Command Code",
+    // NO FLAG HERE, and the reason matters. This fixture is SPEC §5.4's
+    // generic guard — "a cap fixture and a no-cap fixture, asserting the
+    // second shows no percentage anywhere in any layout" — and it holds that
+    // for EVERY provider, including one that was never percentage-only. Its
+    // Command Code row has been a plain used-only row since 8.7.0 and the
+    // assertion that its `12.3456` still reaches the page is a real one.
+    //
+    // §9.3's own guard — a percentage-only provider with no cap must not take
+    // the percentage branch — is measured separately, on the model, by
+    // `percentOnlyNoCap` below. Setting the flag here would have made this
+    // fixture prove one rule by breaking the other, which is the "a test that
+    // breaks because output got smaller is usually right" trap in reverse.
     reading: reading({
       windows: [
         // A `used` with NO limit: a number with no ceiling has no fraction.
@@ -523,8 +556,96 @@ function noCapPayload() {
   };
 }
 
-export function prepareUsageLayoutsScenario({ window, ROUTES, fetchBodies }) {
-  const doc = window.document;
+/** THE GRANT PAYLOAD — SPEC §9.1/§9.3's "fixture WITH a stated monthly grant".
+ *
+ *  The contract this proves is the ROW'S, not the renderer's: "monthly is a
+ *  percentage too, AND SHOWN ONLY IF that grant is actually stated by the
+ *  API". So this fixture states one — a third window under `windowLimits`
+ *  with a `used` and a real `cap`, exactly the shape the five-hour and weekly
+ *  windows already have — and the page must draw **three** percentages and no
+ *  `$`.
+ *
+ *  It is a shape assertion rather than a claim that Command Code sends one:
+ *  the adapter does NOT emit this window today (see
+ *  `core/usage/commandcode.py` — the API states no grant), which is why the
+ *  live-data proof carries two percentages and no monthly row. What this
+ *  fixture pins is that the day the vendor states the grant, the page draws it
+ *  with no code change.
+ */
+function grantPayload() {
+  const withGrant = provider({
+    provider_id: "commandcode",
+    display_name: "Command Code",
+    percent_only_windows: true,
+    percent_only_note: PERCENT_ONLY_NOTE,
+    endpoint: {
+      host: "https://api.commandcode.ai",
+      path: "/alpha/billing/credits",
+      provenance: "vendor-binary",
+      reads: "the credit pool this account has left",
+      credential: "api-key-env",
+      credential_env: "COMMANDCODE_API_KEY",
+    },
+    reading: reading({
+      windows: [
+        {
+          id: "fiveHour",
+          label: "5-hour window",
+          used: "0",
+          limit: "14",
+          remaining: "",
+          unit: "usd",
+          resets_at: "0",
+        },
+        {
+          id: "weekly",
+          label: "Weekly window",
+          used: "34.9300790367",
+          limit: "35",
+          remaining: "",
+          unit: "usd",
+          resets_at: "2026-11-03T21:55:00.000Z",
+        },
+        {
+          // THE STATED GRANT. `used` and `cap` are two numbers the API sent,
+          // so the share is the same `used / limit` arithmetic the other two
+          // windows use — never a price table and never `100 − remaining`.
+          id: "monthly",
+          label: "Monthly window",
+          used: "24.5",
+          limit: "30",
+          remaining: "",
+          unit: "usd",
+          resets_at: "2026-12-01T00:00:00.000Z",
+        },
+      ],
+      balances: [
+        { id: "monthlyCredits", label: "Monthly credits left", amount: "0.0697507979", currency: "USD", kind: "available" },
+      ],
+    }),
+  });
+  return {
+    observed_at: FIXTURE_NOW,
+    stale_after_seconds: 1800,
+    minimum_interval_seconds: 1800,
+    auto_refresh_seconds: 30,
+    read_interval_seconds: 30,
+    layout: "one_screen",
+    providers: [withGrant],
+    coverage: [
+      coverage({
+        provider_id: "commandcode",
+        display_name: "Command Code",
+        percent_only_windows: true,
+        percent_only_note: PERCENT_ONLY_NOTE,
+        reading: withGrant.reading,
+        endpoint: withGrant.endpoint,
+      }),
+    ],
+  };
+}
+
+export function prepareUsageLayoutsScenario({ window, ROUTES, fetchBodies }) {  const doc = window.document;
   const flat = (node) =>
     node ? String(node.textContent || "").replace(/\s+/g, " ").trim() : "";
   const allText = (node) => (node ? Array.from(node.querySelectorAll("*")) : []);
@@ -738,7 +859,14 @@ export function prepareUsageLayoutsScenario({ window, ROUTES, fetchBodies }) {
             // never printed — `$0.18 left of $0.20` is, which is the whole
             // point of the compaction — so a marker list of raw values would
             // fail on a page that is right.
-            "34.93": /34\.93/.test(body),
+            //
+            // `34.93` LEFT THIS LIST IN 8.11.1, and that is the release's
+            // whole subject: Command Code's weekly window is a percentage now,
+            // so `$34.93 of $35.00` is exactly what must NOT be printed beside
+            // it (SPEC §9.1). The fact it carried — "this window's real
+            // numbers reached the page" — moved to the `percentOnly` block
+            // below, which asserts the percentage is drawn and the dollars are
+            // reachable on `title` rather than printed.
             "99.8": /99\.8/.test(body),
             "0.0698": /0\.0698/.test(body),
             "0.18 left": /0\.18 left of/.test(body),
@@ -778,6 +906,209 @@ export function prepareUsageLayoutsScenario({ window, ROUTES, fetchBodies }) {
         root.remove();
       },
     );
+
+    // ── 2b. SPEC §9.1: the declared rule, measured PER LAYOUT ───────────
+    //
+    // The full payload above is re-rendered here so each layout's
+    // percentage-only surface can be read as three lists: the subscription
+    // blocks that carry a `$` (must be none), the percentage texts in those
+    // same blocks (must be exactly the two windows), and the dollars that
+    // belong to every OTHER provider (must be unchanged, byte for byte).
+    //
+    // This is measured from the LIVE DOM of the product's own renderers, not
+    // from the model, because "no `$` in the subscription block" is a claim
+    // about what a reader sees.
+    out.percentOnly = {};
+    ["one_screen", "ledger_rows", "meter_board", "dial_cards", "master_detail"].forEach(
+      (layoutId) => {
+        const root = doc.createElement("div");
+        doc.body.appendChild(root);
+        L.USAGE_LAYOUTS.find((row) => row.id === layoutId).render(root, model);
+        if (layoutId === "one_screen") {
+          Array.from(root.querySelectorAll(".usage-srow-button")).forEach((b) => b.click());
+        }
+        if (layoutId === "master_detail") {
+          const row = Array.from(root.querySelectorAll(".usage-master-row")).find(
+            (node) => node.dataset.provider === "commandcode",
+          );
+          if (row) row.click();
+        }
+        // `master_detail` draws the provider TWICE — once as a master-list
+        // button and once in the inspector — and the master row is a summary
+        // bar, not the subscription block. The proof is about the block, so it
+        // reads the inspector where there is one and the card everywhere else.
+        const card =
+          (layoutId === "master_detail"
+            ? root.querySelector(".usage-inspector")
+            : null) || root.querySelector('[data-provider="commandcode"]');
+        // Every element inside the Command Code card whose own text starts
+        // with a currency symbol, and every text node that IS a percentage.
+        const cardTexts = card
+          ? Array.from(card.querySelectorAll("*")).map((node) => flat(node))
+          : [];
+        const dollarTexts = cardTexts.filter((text) => /^[\u2212-]?\$/.test(text));
+        const percentNodes = Array.from(card ? card.querySelectorAll("*") : []).filter(
+          (node) => /^(?:[−-])?\d+(?:\.\d+)?%$/.test(flat(node)),
+        );
+        // The window rows themselves, found by the one hook all three window
+        // arrangements carry (`data-window-id`), so this does not depend on
+        // which of the three drew the row.
+        const windowNodes = Array.from(card ? card.querySelectorAll("[data-window-id]") : []);
+        out.percentOnly[layoutId] = {
+          found: Boolean(card),
+          cardText: card ? flat(card).slice(0, 900) : "",
+          dollarTexts,
+          percentTexts: percentNodes.map((node) => flat(node)),
+          windowIds: windowNodes.map((node) => node.dataset.windowId),
+          // Per window: its unit as declared, whether the rule applied, the
+          // percentage printed in it, and whether any `$` is printed in it.
+          windows: windowNodes.map((node) => ({
+            id: node.dataset.windowId,
+            unit: node.dataset.windowUnit,
+            percentOnly: node.dataset.percentOnly === "true",
+            text: flat(node),
+            hasDollar: /\$/.test(flat(node)),
+            percent: (flat(node).match(/\d+(?:\.\d+)?%/) || [null])[0],
+            // The provider's exact numbers must still be REACHABLE (§UI-QUALITY
+            // A.3), which is a `title` and never printed text. Read from the
+            // FIGURE element specifically: the window's name span also carries
+            // a `title` (its full name, for an ellipsised column), and grabbing
+            // `[title]` blindly returned the name and made this assertion pass
+            // or fail on which span came first.
+            title: (function () {
+              const value = node.querySelector(
+                ".usage-window-figure, .usage-ledger-window-figure, .usage-dial-line-figure, .usage-dial-focal-note",
+              );
+              return value ? value.getAttribute("title") || "" : "";
+            })(),
+          })),
+          // The §9.3 sentence, when the row declares one.
+          note: (function () {
+            const node = card && card.querySelector(".usage-percent-only-note");
+            return node ? flat(node) : "";
+          })(),
+          // §9.3's OMISSION, asserted as an ABSENCE rather than as an empty
+          // row: on the live payload there is no monthly window at all, so no
+          // `[data-window-id="monthly"]` exists anywhere in the card.
+          hasMonthlyWindow: Boolean(
+            card && card.querySelector('[data-window-id="monthly"]'),
+          ),
+          // The OTHER providers, for the byte-identical half of the proof.
+          otherProviders: Array.from(root.querySelectorAll("[data-provider]"))
+            .filter((node) => node.dataset.provider !== "commandcode")
+            .map((node) => ({
+              id: node.dataset.provider,
+              text: flat(node),
+            }))
+            .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+        };
+        root.remove();
+      },
+    );
+
+    // ── 2c. the STATED-GRANT fixture: three percentages, no `$` (SPEC §9.1) ─
+    //
+    // §9.3's proof: "a fixture with a stated grant → three percentages". Driven
+    // through all five renderers like 8.7.0's cross-layout proof, because the
+    // rule has to hold in every arrangement or it holds in one page five times.
+    const grant = grantPayload();
+    ROUTES["/admin/api/usage"] = grant;
+    PAGE.rememberUsageCaptured(grant);
+    await wait(60);
+    const grantModel = PAGE.usageLayoutModel();
+    out.grant = { layouts: {} };
+    ["one_screen", "ledger_rows", "meter_board", "dial_cards", "master_detail"].forEach(
+      (layoutId) => {
+        const root = doc.createElement("div");
+        doc.body.appendChild(root);
+        L.USAGE_LAYOUTS.find((row) => row.id === layoutId).render(root, grantModel);
+        if (layoutId === "one_screen") {
+          Array.from(root.querySelectorAll(".usage-srow-button")).forEach((b) => b.click());
+        }
+        if (layoutId === "master_detail") {
+          const row = Array.from(root.querySelectorAll(".usage-master-row")).find(
+            (node) => node.dataset.provider === "commandcode",
+          );
+          if (row) row.click();
+        }
+        const card =
+          (layoutId === "master_detail"
+            ? root.querySelector(".usage-inspector")
+            : null) || root.querySelector('[data-provider="commandcode"]');
+        const texts = card ? Array.from(card.querySelectorAll("*")).map((node) => flat(node)) : [];
+        const percentNodes = Array.from(card ? card.querySelectorAll("*") : []).filter(
+          (node) => /^(?:[−-])?\d+(?:\.\d+)?%$/.test(flat(node)),
+        );
+        const windowNodes = Array.from(card ? card.querySelectorAll("[data-window-id]") : []);
+        out.grant.layouts[layoutId] = {
+          found: Boolean(card),
+          // THREE percentages, and the monthly one is the third.
+          percentTexts: percentNodes.map((node) => flat(node)),
+          windowIds: windowNodes.map((node) => node.dataset.windowId),
+          windows: windowNodes.map((node) => ({
+            id: node.dataset.windowId,
+            text: flat(node),
+            hasDollar: /\$/.test(flat(node)),
+            percent: (flat(node).match(/\d+(?:\.\d+)?%/) || [null])[0],
+          })),
+          dollarTexts: texts.filter((text) => /^[−-]?\$/.test(text)),
+          // The BALANCE rows are outside the rule (§9.1) and are still money.
+          hasMonthlyCreditBalance: texts.some((text) => /^[−-]?\$0\.0698$/.test(text)),
+          cardText: card ? flat(card).slice(0, 900) : "",
+        };
+        root.remove();
+      },
+    );
+
+    // ── 4b. SPEC §9.3's own guard: no percentage when `limit` is absent ──
+    //
+    // "no percentage is ever rendered when `limit`/`cap` is absent" — measured
+    // on a window that DECLARES the percentage-only rule, which is the case a
+    // renderer could get wrong by honouring the flag before checking for a
+    // denominator. Read from the product's own formatter, one call per shape,
+    // so the guard is about the function every layout draws through.
+    out.percentOnlyNoCap = {
+      usedOnly: L.usageWindowFigure({
+        unit: "usd",
+        used: "12.3456",
+        limit: "",
+        remaining: "",
+        percent_only: true,
+      }),
+      countNoLimit: L.usageWindowFigure({
+        unit: "requests",
+        used: "345",
+        limit: "",
+        remaining: "",
+        percent_only: true,
+      }),
+      limitZero: L.usageWindowFigure({
+        unit: "usd",
+        used: "12.3456",
+        limit: "0",
+        remaining: "",
+        percent_only: true,
+      }),
+      nothing: L.usageWindowFigure({
+        unit: "usd",
+        used: "",
+        limit: "",
+        remaining: "",
+        percent_only: true,
+      }),
+      // The CONTROL: the same two numbers WITH a cap DO become a percentage, so
+      // the four cases above are the missing denominator and not the flag
+      // swallowing every figure.
+      withCap: L.usageWindowFigure({
+        unit: "usd",
+        used: "24.5",
+        limit: "30",
+        remaining: "",
+        percent_only: true,
+      }),
+      // And the flag's absence leaves every other provider's figure alone.
+      unflagged: L.usageWindowFigure({ unit: "usd", used: "12.3456", limit: "" }),
+    };
 
     // ── 3. one row at a time ────────────────────────────────────────────
     const stackHost = doc.createElement("div");

@@ -273,6 +273,12 @@ def _provider_rows(now: float, interval: float) -> list[dict[str, Any]]:
             "mechanisms": list(declared.mechanisms),
             "source": declared.source,
             "detail": declared.detail,
+            # SPEC §9.1: the declared presentation rule, carried on the row the
+            # page already reads rather than branched on by id in a renderer.
+            # Additive: a page from an older release ignores it and draws what
+            # it drew before.
+            "percent_only_windows": declared.percent_only_windows,
+            "percent_only_note": declared.percent_only_note,
             "state": state,
             "observed_at": observed_at,
             "status_code": None if snapshot is None else snapshot.status_code,
