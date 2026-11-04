@@ -114,6 +114,104 @@ def test_the_design_system_scenario_runs_clean(
         assert design_system_off["views"]
 
 
+#: The views whose READY marker the scenario does NOT wait on, because this
+#: harness's fixture leaves their container empty by construction. The
+#: scenario's own ``EMPTY_BY_FIXTURE`` names them with the reason; this is the
+#: same set, and ``test_the_empty_by_fixture_list_is_still_true`` is what keeps
+#: the two in step. They used to be waited on anyway, which is the bug this
+#: pair exists to stop recurring: three markers that could never match cost a
+#: blind 8 s each, every time the digests were taken.
+EMPTY_BY_FIXTURE = frozenset({"claude", "messaging", "web_search"})
+
+
+def test_every_ready_marker_either_resolves_or_is_declared_empty(
+    design_system, design_system_off
+) -> None:
+    """No view may hit the settle ceiling again.
+
+    A marker that times out is a page that had not drawn when its digest was
+    taken -- exactly the half-rendered capture the marker exists to prevent.
+    Before this test there were three, and nothing failed: the digest was
+    taken anyway and the run stayed green. Now a marker that cannot resolve
+    has to be either fixed or NAMED in ``EMPTY_BY_FIXTURE`` with the fixture
+    fact that makes it empty.
+    """
+
+    for payload in (design_system, design_system_off):
+        waits = payload["viewWaits"]
+        # Every view the run captured has an entry, and every entry is a view
+        # the run captured: the report cannot drift from what it reports on.
+        assert set(waits) == set(payload["views"]), (
+            "viewWaits and views disagree: "
+            f"only-waits={sorted(set(waits) - set(payload['views']))} "
+            f"only-views={sorted(set(payload['views']) - set(waits))}"
+        )
+        timed_out = sorted(view for view, info in waits.items() if info.get("timedOut"))
+        assert not timed_out, (
+            "these views' READY markers never resolved, so their digests were "
+            f"taken before the page had drawn: {timed_out}"
+        )
+        skipped = sorted(view for view, info in waits.items() if info.get("skipped"))
+        assert skipped == sorted(EMPTY_BY_FIXTURE), (
+            "the scenario skipped a different set of views than this test "
+            f"declares: scenario={skipped} test={sorted(EMPTY_BY_FIXTURE)}"
+        )
+
+
+def test_the_empty_by_fixture_list_is_still_true(design_system) -> None:
+    """The shortcut is only honest while the containers really are empty.
+
+    ``EMPTY_BY_FIXTURE`` is not a claim about the product — it is a claim
+    about THIS harness's fixture. The day the fixture grows the payload those
+    three views render from, the containers fill, the shortcut silently stops
+    waiting for content that is now arriving, and the digest could be taken
+    mid-draw. So the emptiness is re-measured on every run, in both
+    directions: a skipped view whose container has content fails, and so does
+    a view the run DID wait on whose container is empty (that one waited for
+    something that was never coming — the 8 s the set exists to avoid).
+    """
+
+    views = design_system["views"]
+    waits = design_system["viewWaits"]
+    # The set this test checks is the one the RUN used, not merely the one
+    # written here: a shortcut taken by the scenario cannot be invisible to
+    # the test that is supposed to keep it honest.
+    skipped = sorted(view for view, info in waits.items() if info.get("skipped"))
+    assert skipped == sorted(EMPTY_BY_FIXTURE), (
+        "the scenario skipped a different set of views than this test declares: "
+        f"scenario={skipped} test={sorted(EMPTY_BY_FIXTURE)}"
+    )
+    for view in skipped:
+        # Measured on the CONTAINER the view's lazy load writes into, not on
+        # the page root: every one of these three pages carries static markup
+        # of its own (the Connect cards on `claude`, the nav on `messaging`),
+        # so the root is never empty and would make this assertion vacuous.
+        entry = views[view]
+        assert entry["container"], f"{view} declares no container to measure"
+        assert entry["containerChildren"] == 0, (
+            f"{view}'s container ({entry['container']}) is declared empty by "
+            f"the fixture, but this run put {entry['containerChildren']} "
+            "children in it — drop it from EMPTY_BY_FIXTURE and let its "
+            "marker be waited on again"
+        )
+    # And the other direction: every view the run DID wait on that names a
+    # container really had content in it by the time the digest was taken, so
+    # the set cannot be widened to excuse a page that stopped drawing. A
+    # container that is missing entirely counts as empty — a waited-on view
+    # whose container cannot be found waited for nothing either way.
+    not_landed = sorted(
+        view
+        for view, info in waits.items()
+        if not info.get("skipped")
+        and views[view].get("container")
+        and not views[view]["containerChildren"]
+    )
+    assert not not_landed, (
+        "these views were waited on and still loaded nothing into their own "
+        f"container: {not_landed}"
+    )
+
+
 # ------------------------------------------------- the base-written baseline ---
 
 

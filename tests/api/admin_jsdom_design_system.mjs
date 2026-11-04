@@ -154,6 +154,19 @@ export function prepareDesignSystemScenario({ window, ROUTES }) {  const doc = w
    * has not filled in yet. Doing it per view is what makes the two trees
    * comparable: they run the same scenario in the same order and wait for the
    * same marker, so a slower machine moves both runs rather than one.
+   *
+   * A marker is a CONDITION. The wait below stops the instant the condition
+   * holds; `VIEW_SETTLE_MS` is only the ceiling for a marker that never
+   * resolves, and a marker that can never resolve is a bug in the marker, not
+   * a slow page. Three of them were exactly that (`claude`, `messaging`,
+   * `web_search`): each named a container that THIS FIXTURE leaves empty by
+   * construction, so `doc.querySelector(marker)` could not match on any
+   * machine, and each cost a blind 8 s every time the digests were taken --
+   * 24 s of a 60 s boot, spent asleep. `EMPTY_BY_FIXTURE` names them and the
+   * wait skips them instead of sleeping on them; two tests in
+   * tests/api/test_admin_design_system_jsdom.py keep that honest -- one that no
+   * marker may time out and one that every skipped view's container really is
+   * empty -- so the set cannot go stale the way the markers did.
    */
   const READY = {
     // `renderModelsTree()` always leaves SOMETHING in the tree: a
@@ -179,33 +192,102 @@ export function prepareDesignSystemScenario({ window, ROUTES }) {  const doc = w
     get_started: "#getStartedFeatures *",
     messaging: "#messagingSections *",
   };
+  /* The views whose lazy load this harness's fixture answers with nothing, so
+   * their READY marker is unsatisfiable rather than slow. Named individually,
+   * with the reason, because "the marker never matched" is a finding, not a
+   * licence to stop waiting generally. */
+  const EMPTY_BY_FIXTURE = {
+    // `/admin/api/claude-settings` is not in this harness's ROUTES (the fixture
+    // carries the older `/admin/api/claude/settings` path, which the page no
+    // longer asks for), so `state.claudeSettings` stays null and
+    // `renderClaudeSettings()` returns before writing a single child.
+    claude: "the harness answers no /admin/api/claude-settings",
+    // Messaging's container is filled by `renderSections()` from the settings
+    // payload; this harness's payload carries no `messaging` section.
+    messaging: "the harness payload carries no messaging section",
+    // `webSearchProviders()` reads `state.fields.get("WEB_SEARCH_PROVIDER")`;
+    // the fixture's fields list has no such entry, so it returns [] and the
+    // grid is cleared and left empty.
+    web_search: "the harness payload carries no WEB_SEARCH_PROVIDER field",
+  };
+  const VIEW_SETTLE_MS = 8000;
+  /* The element each view's lazy load writes into, for EVERY view that has a
+   * READY marker. A view's page root carries static markup of its own (the
+   * Connect cards on `claude`, the intro on `messaging`, the headings on
+   * `providers`), so "the root has children" cannot answer "did the load
+   * land?" — only the container the load writes into can. The emptiness guard
+   * in tests/api/test_admin_design_system_jsdom.py measures THESE elements. */
+  const CONTAINER = {
+    models: "#modelsTree",
+    docs: "#docsContent",
+    requests: "#reqLogTableWrap",
+    web_search: "#webSearchGrid",
+    providers: "#providersSections",
+    coding_agents: "#codingAgentsList",
+    limits: "#limitsSections",
+    optimizer: "#optKpis",
+    claude: "#claudeSettingsStatus",
+    model_config: "#modelConfigSections",
+    proxying: "#proxyingList",
+    marketplaces: "#marketplaceAccountBody",
+    guide: ".guide-body",
+    get_started: "#getStartedFeatures",
+    messaging: "#messagingSections",
+  };
   const captureViews = async () => {
     const out = {};
     const hosts = Array.from(doc.querySelectorAll(".admin-view[data-view]"));
+    const waits = {};
     for (const host of hosts) {
       const viewId = host.dataset.view;
       openView(viewId);
       const marker = READY[viewId];
+      const emptyByFixture = Object.hasOwn(EMPTY_BY_FIXTURE, viewId);
       const began = Date.now();
+      /* A view the fixture leaves empty is not waited on: there is nothing to
+       * arrive, and pretending to wait for it is the cost this change removes.
+       * The emptiness is re-measured below and reported, so a fixture that
+       * starts supplying the payload moves the view OUT of this set the same
+       * day rather than silently keeping the shortcut. */
       while (
         marker &&
-        Date.now() - began < 8000 &&
+        !emptyByFixture &&
+        Date.now() - began < VIEW_SETTLE_MS &&
         !doc.querySelector(marker)
       ) {
         await wait(50);
       }
+      waits[viewId] = emptyByFixture
+        ? { skipped: true, reason: EMPTY_BY_FIXTURE[viewId] }
+        : {
+            skipped: false,
+            waitedMs: Date.now() - began,
+            // True when the ceiling was hit: a marker that did NOT resolve.
+            // Reported rather than thrown, because the digest is still a real
+            // measurement of the page; the Python test is what fails on it.
+            timedOut: Boolean(marker) && !doc.querySelector(marker),
+          };
       await wait(80);
       const html = host.innerHTML.replace(/\r\n/g, "\n");
       const without = stripFreeHtml(host);
+      /* The container each view's lazy load writes INTO, so the emptiness a
+       * skipped marker asserts is measured on the element the marker names
+       * rather than on the page root (which carries static markup of its own
+       * and is never empty for any of these three). */
+      const container = CONTAINER[viewId];
+      const containerEl = container ? doc.querySelector(container) : null;
       out[viewId] = {
         children: host.children.length,
         length: html.length,
         sha256: sha256(html),
         stripFreeSha256: sha256(without),
         stripFreeLength: without.length,
+        container: container || null,
+        containerChildren: containerEl ? containerEl.children.length : null,
+        containerLength: containerEl ? containerEl.innerHTML.length : null,
       };
     }
-    return out;
+    return { views: out, waits };
   };
 
   /** Walk every page the shipped table covers and click every button. */
@@ -633,7 +715,13 @@ export function prepareDesignSystemScenario({ window, ROUTES }) {  const doc = w
       doc.querySelectorAll(CARD).forEach((node) => node.remove());
     }
 
-    out.views = await captureViews();
+    const captured = await captureViews();
+    out.views = captured.views;
+    /* What each view's READY marker did, per view: `skipped` for the fixture-
+     * empty ones, otherwise how long it took and whether it hit the ceiling.
+     * Reported so the Python test can prove the shortcut is still justified
+     * and that no OTHER marker started timing out. */
+    out.viewWaits = captured.waits;
     /* And the same views with the two features taken out of the CLONE. On the
        `disabled` run this is identical to `views` by construction; on the
        `enabled` run it is the pair the release's own delta is measured
