@@ -38,6 +38,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [7. Tutorial: connect another CLI](#7-tutorial-connect-another-cli)
   - [Media tools for an agent: the MCC media server](#media-tools-for-an-agent-the-mcc-media-server-7990)
 - [8. Providers and API keys](#8-providers-and-api-keys)
+  - [The workflow](#the-workflow)
   - [Using Claude models](#using-claude-models)
   - [OpenCode Zen and OpenCode Go: what MCC sends about itself](#opencode-zen-and-opencode-go-what-mcc-sends-about-itself)
   - [OpenCode Zen serves different models on different endpoints](#opencode-zen-serves-different-models-on-different-endpoints)
@@ -3049,10 +3050,25 @@ the rotation policy and what MCC learned about that host's reasoning dialect.
 ### The workflow
 
 1. **Find the provider** — search by name or by variable name.
-2. **Press Configure.** The card expands and opens that provider's key pool.
+2. **Press Configure, or anywhere else on the card.** The card is a summary —
+   the provider's name, its status, how many models MCC knows for it, and two
+   buttons — and its settings open in a panel over the page, the way a
+   request's detail does. Nothing expands in place, so the grid stays a grid
+   however many providers you open.
 3. **Paste your key into "Add key"** and press it. Keys are saved immediately — you do not need **Apply** for them. To add several at once, paste them separated by commas; keys you already have are skipped rather than rejecting the whole paste.
-4. **Press Refresh models.** This makes a real API call to that provider. A model count means the key works *and* MCC can read that provider's catalog.
+4. **Press Refresh models** (it stays on the card itself, and works without
+   opening anything). This makes a real API call to that provider. A model
+   count means the key works *and* MCC can read that provider's catalog. The
+   **Detect models** control beside it asks that one provider again and says
+   how many models came back.
 5. **Choose the model** on the **Model Config** tab. There is no "active provider" to select — the model ref you set there decides which provider serves a request.
+
+The panel keeps the header and **Close** in place and scrolls its own body, so
+a provider with forty settings never moves the page behind it. Everything the
+card used to hold inline is in it: the key pool, the rotation policy, the proxy
+and base-URL overrides behind **Collapse advanced**, and every help sentence.
+Edits you make and have not applied survive closing it and opening another
+provider; **Apply** in the footer saves them all.
 
 A provider holds a **pool** of keys, not a single value. Each key in the pool shows its own health (healthy, cooling down, locked out) and has its own **Remove**, which also takes effect immediately.
 
@@ -4794,6 +4810,18 @@ WEB_SEARCH_CHAIN_PAUSED=            # optional: chain entries to skip
 **The keyless DuckDuckGo hop (7.119.0).** The last hop of `auto` (and the `legacy` chain entry) reads DuckDuckGo's no-JavaScript pages with declared parser profiles — since 7.119.1 its html search form first, and its lite page only when that page has no result and no bot check (7.119.0 asked the lite page alone): each result carries its **snippet**, ads are skipped, and `DDGS_REGION` / `DDGS_TIMELIMIT` travel as the page's `kl` / `df` when set. When DuckDuckGo answers with its bot check, the search says so — `web_search rate limited by legacy: DuckDuckGo answered with its bot check instead of results (…)`, code `too_many_requests` — instead of "no results", the lite page is not asked after it, and a chain moves on to its next entry as it would for a 429. The hop sends the form's own `Referer` and `Sec-Fetch-*` headers and one static browser-class User-Agent, all declared in `config/duckduckgo_profiles.py` (headers only; certificate verification untouched). `WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS` (default `0` = back to back) spaces its requests, the html and lite requests of one search counting as two; only this hop waits. Details: [docs/WEB-SEARCH.md](WEB-SEARCH.md#the-keyless-duckduckgo-hop-71190).
 
 A missing API key on an explicitly selected provider **fails visibly** rather than silently degrading — an unconfigured provider is an operator mistake, not an outage.
+
+### The provider cards (settings moved into a panel)
+
+Each search provider is a small card: its name, its status, the variable that
+holds its key, and **Use provider** — the one decision that belongs on the
+grid, and it works without opening anything. Press the card anywhere else (or
+press **Configure**, or focus it and press Enter) and its settings open in a
+panel over the page: **Test provider**, its rotation policy
+(`EXA_API_KEY_ROTATION` and the rest), its **Advanced options** — the
+per-provider tuning such as `EXA_SEARCH_TYPE` and `SEARXNG_BASE_URL` — and
+**Manage keys** with that provider's pool. The panel scrolls its own body and
+**Close** or Escape returns you to the card you came from.
 
 ### Web fetch (7.120.0)
 

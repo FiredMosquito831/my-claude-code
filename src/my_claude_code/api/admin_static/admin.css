@@ -481,30 +481,43 @@ textarea:focus-visible,
   padding-top: 18px;
 }
 
+/* USER 2026-11-02: the card is a FACE. Its form opens in a panel over the
+   page (see .provider-detail-card below), so nothing here may grow it back to
+   a form: the five things it shows -- name, status, model count, Refresh
+   models, Configure -- are the whole card, in three tight rows. */
 .pv-card {
-  gap: 14px;
+  gap: 8px;
   justify-content: flex-start;
   min-height: 0;
+  padding: 10px 14px;
+  /* A press anywhere on it opens the dialog; the pointer says so. */
+  cursor: pointer;
 }
 
 .pv-card[hidden] {
   display: none;
 }
 
-/* An open card takes the whole row so the key pool has room to breathe. */
-.pv-card.pv-open {
-  grid-column: 1 / -1;
-  background: var(--panel-strong);
+/* The face is role="button", so it takes the same focus ring every real
+   button on the page does. */
+.pv-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A custom provider's card still renders its rail inline and has no dialog,
+   so it keeps the old turn-away-on-hover. */
+.provider-card:not(.pv-card):not(.ws-card):hover {
   border-color: var(--line-strong);
+  transform: translateY(-2px);
   box-shadow: var(--shadow-sm);
-  transform: none;
+  background: var(--card-hover);
 }
 
 /* The same rule, for every other card that shows a key rail: a custom
-   provider card, which renders its rail inline, and a web-search card while
-   its pool is open. A rail is six controls across; a `minmax(240px, 1fr)`
-   column is not. Before 7.34.1 only the built-in cards had this, which is
-   why only the built-in rail fitted. */
+   provider card, which renders its rail inline. A rail is six controls
+   across; a `minmax(240px, 1fr)` column is not. Before 7.34.1 only the
+   built-in cards had this, which is why only the built-in rail fitted. */
 .provider-card.has-key-rail {
   grid-column: 1 / -1;
 }
@@ -535,26 +548,63 @@ textarea:focus-visible,
 
 .pv-actions .test-button,
 .pv-actions .pv-configure {
-  min-height: 32px;
+  min-height: 30px;
   font-size: 12.5px;
   padding: 0 12px;
 }
 
-.pv-card-body {
-  display: none;
-  flex-direction: column;
-  gap: 18px;
-  padding-top: 16px;
-  border-top: 1px dashed var(--line);
+/* The model count / Detect models control: its own row between the title and
+   the buttons, at the smallest size a real control can be. It is a button
+   because pressing it is how you ask the provider again, and it says how many
+   models are known because that is the answer a reader wants first. Its own
+   row rather than sharing the action row: at the narrowest grid column
+   Configure and Refresh models already fill it, so a third control on that
+   line would wrap anyway -- and wrapping at an unpredictable point is how a
+   card grid stops being a grid. */
+.pv-detect {
+  align-self: flex-start;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 20px;
+  color: var(--muted);
+  /* One line, always: a count is short, and a 60-character provider name must
+     not turn it into a paragraph. `title` carries the full sentence. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.pv-card.pv-open .pv-card-body {
-  display: flex;
+.pv-detect:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
 }
 
-/* Inside an open card the summary line is redundant with the key manager. */
-.pv-card.pv-open .provider-meta {
-  display: none;
+/* The search cards are faces too, and a face has nothing to fill a 140px
+   floor with: the min height left a pocket of empty card under the status
+   line and pushed the one button down to the bottom of it. */
+.provider-card.ws-card {
+  min-height: 0;
+  justify-content: flex-start;
+  padding: 12px 14px;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.provider-card.ws-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The face's one button sits directly under the status line: `.card-actions`
+   carries a 12px top margin for the cards that grew a body below it, and this
+   one has no body to separate it from. */
+.provider-card.ws-card .card-actions {
+  margin-top: 0;
 }
 
 .pv-empty {
@@ -593,6 +643,14 @@ textarea:focus-visible,
   .pv-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+  /* `flex: 1 1 300px` is a WIDTH basis in a row, but in a column it is a
+     HEIGHT one: it made the search box 300px tall and left a ~280px hole
+     under the field at a phone width. The basis belongs to the row layout
+     only. */
+  .pv-search {
+    flex: 0 1 auto;
+    min-width: 0;
   }
 }
 
@@ -3296,6 +3354,106 @@ textarea:focus-visible,
 }
 
 /* Export window */
+/* ----------------------------------------------- the provider detail panel
+   The same `.requests-modal` chrome as a request's detail -- backdrop, card,
+   header, Escape, focus trap -- plus one thing that dialog never needed: a
+   body that scrolls INSIDE the card, so a provider with forty fields never
+   pushes the page behind it taller or scrolls it. `overscroll-behavior` stops
+   the wheel from chaining through to the page when the body bottoms out.
+
+   Declared after `.requests-modal-card` on purpose: this file cascades in
+   source order, and that rule sets the width, the max height, the overflow and
+   the padding every dialog starts from. */
+.provider-detail-card {
+  display: flex;
+  flex-direction: column;
+  /* The max height is on the card and the scrolling on the body below, so the
+     header (and Close) stay put while the form scrolls under them. */
+  overflow: hidden;
+  padding: 0;
+  width: min(880px, 94vw);
+  max-height: min(88vh, 900px);
+}
+
+.provider-detail-card .requests-modal-header {
+  flex: none;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.provider-detail-heading {
+  min-width: 0;
+}
+
+.provider-detail-heading h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.provider-detail-subtitle {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.provider-detail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 20px 24px;
+}
+
+/* The form itself: the spacing the card body had, at the dialog's width. */
+.pv-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.pv-detail .advanced-toggle {
+  margin-top: 0;
+  align-self: flex-start;
+}
+
+/* A control the dialog carries that is not a setting -- "Test provider". */
+.pv-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* The pool's own toggle is a control on a line of its own, so it lines up
+   with the settings above it rather than centring under them. */
+.pv-detail > button {
+  align-self: flex-start;
+}
+
+.pv-detail .provider-detail-summary {
+  margin: 0;
+  color: var(--text);
+}
+
+/* On a phone the panel is a bottom sheet: it takes the width it has, sits at
+   the bottom of the screen, and keeps its own header. */
+@media (max-width: 560px) {
+  .provider-detail-card {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+  #providerDetailModal {
+    align-items: flex-end;
+  }
+  .provider-detail-card .requests-modal-header,
+  .provider-detail-body {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+}
+
 .export-card {
   width: min(720px, 94vw);
   display: flex;

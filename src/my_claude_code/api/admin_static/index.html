@@ -2958,9 +2958,12 @@
                         <em>A provider MCC already knows:</em> on
                         <strong>Providers</strong>, type its name into
                         <em>Search providers</em> &mdash; the box matches the variable
-                        name too, so <code>GROQ_API_KEY</code> finds Groq. Press
-                        <em>Configure</em>, paste the key into <em>Add key</em>, press
-                        it.
+                        name too, so <code>GROQ_API_KEY</code> finds Groq. A provider's
+                        card is a summary: its name, its status, how many models MCC
+                        knows for it, and two buttons. Press <em>Configure</em> &mdash;
+                        or press anywhere else on the card &mdash; and its settings
+                        open in a panel over the page. Paste the key into
+                        <em>Add key</em>, press it, then <em>Close</em>.
                       </li>
                       <li>
                         <em>Anything else with an OpenAI-compatible endpoint:</em> press
@@ -2969,8 +2972,11 @@
                         which dialect it speaks and records what came back.
                       </li>
                     </ul>
-                    Either way, press <em>Refresh models</em> and watch the model count
-                    change. That is the only proof the key works; a card can look
+                    <em>Refresh models</em> stays on the card itself and works
+                    without opening anything. The count beside it &mdash; the
+                    <em>Detect models</em> control &mdash; does the same for this one
+                    provider and says how many models came back. That is the only proof
+                    the key works; a card can look
                     healthy on a key that cannot list models. A fresh install can skip
                     this step for Claude Code's big tiers: since 7.78.0 Mythos, Fable,
                     Opus and Sonnet start on OpenCode Zen's free model, which needs no
@@ -8114,6 +8120,30 @@ EXA_API_KEY_ROTATION=failover</code></pre>
           </section>
         </div>
       </main>
+
+      <!-- USER 2026-11-02: a provider's settings open in a panel over the page,
+           the way a request's detail does, so the card itself stays small. The
+           same `.requests-modal` chrome, the same focus trap and the same close
+           behaviour -- see dialogKit() in admin.js. Only the body differs. -->
+      <div
+        id="providerDetailModal"
+        class="requests-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="providerDetailTitle"
+        hidden
+      >
+        <div class="requests-modal-card provider-detail-card">
+          <div class="requests-modal-header">
+            <div class="provider-detail-heading">
+              <h3 id="providerDetailTitle">Provider</h3>
+              <p id="providerDetailSubtitle" class="provider-detail-subtitle"></p>
+            </div>
+            <button id="providerDetailClose" class="secondary-button" type="button">Close</button>
+          </div>
+          <div id="providerDetailBody" class="provider-detail-body"></div>
+        </div>
+      </div>
 
       <footer class="action-bar">
         <div class="action-meta">

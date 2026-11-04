@@ -321,7 +321,11 @@ def test_admin_static_exposes_professional_observability_controls():
     assert "renderWebSearchResponseSummary" in script
     assert 'params.set("include_content", "true")' in script
     assert "Full normalized provider input/output is captured" in script
-    assert "trapWebSearchDetailFocus" in script
+    # USER 2026-11-02: the three per-dialog focus traps became the one shared
+    # `trapDialogFocus`, wired through `dialogKit`, so the web-search dialog's
+    # keyboard behaviour is the same code the provider overlay uses.
+    assert "trapDialogFocus" in script
+    assert 'dialogKit({ modal: byId("webSearchDetailModal")' in script
     assert "bucket boundaries use UTC" in script
 
     # Export window + site persistence.
@@ -368,7 +372,9 @@ def test_admin_static_exposes_professional_observability_controls():
     for fn in (
         "openExportModal",
         "closeExportModal",
-        "trapExportModalFocus",
+        # USER 2026-11-02: the export dialog and the request dialog share one
+        # focus trap now (see dialogKit); it is asserted once, below.
+        "trapDialogFocus",
         "runExport",
         "downloadBlob",
         "downloadJson",
@@ -379,7 +385,7 @@ def test_admin_static_exposes_professional_observability_controls():
     assert '"mcc-dashboard-state"' in script
     assert "exportScope" in script
     assert "Group by" in html
-    assert "trapRequestDetailFocus" in script
+    assert "trapDialogFocus" in script
     assert "View request" in script
     assert "all stored rows will be deleted" in script
     assert 'clearChart(byId("reqSeriesChart"))' in script

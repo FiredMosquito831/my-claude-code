@@ -6554,30 +6554,42 @@ def test_a_keyless_zen_card_says_free_models_are_ready(rendered) -> None:
 
     assert face["pill"] == "Free models ready"
     assert face["pillClass"] == "status-pill ok"
+    # USER 2026-11-02: the server's sentence is in the dialog, at the head of
+    # its body, and is still set as prose rather than as a variable name.
     assert face["meta"] == (
         "Configured by default: free models work with no key. A key is needed "
         "only for paid models and for OpenCode Go."
     )
-    # A sentence, so it is set as prose rather than as a variable name.
-    assert face["metaClass"] == "provider-meta provider-meta-prose"
+    assert face["metaClass"] == (
+        "provider-meta provider-detail-summary provider-meta-prose"
+    )
+    assert face["onFace"] is False
     assert face["configured"] == "true"
 
 
 def test_the_opt_out_and_a_key_keep_their_old_card_faces(rendered) -> None:
+    """USER 2026-11-02: the pill is still the card's; the summary is the dialog's.
+
+    `meta` is now read from the dialog's own summary paragraph, built by the
+    same `providerSummaryText()` the card's `provider-meta` line used -- the
+    words are the assertion, and they did not change.
+    """
     faces = rendered["providerFaces"]
 
     assert faces["optedOut"] == {
         "pill": "Missing key",
         "pillClass": "status-pill warn",
         "meta": "OPENCODE_API_KEY",
-        "metaClass": "provider-meta",
+        "metaClass": "provider-meta provider-detail-summary",
+        "onFace": False,
         "configured": "false",
     }
     assert faces["keyed"] == {
         "pill": "Configured",
         "pillClass": "status-pill ok",
         "meta": "1 key",
-        "metaClass": "provider-meta",
+        "metaClass": "provider-meta provider-detail-summary",
+        "onFace": False,
         "configured": "true",
     }
 
@@ -11989,20 +12001,46 @@ def test_jsdom_with_no_chain_the_web_search_page_is_the_base_trees(
     baseline = json.loads(WS_BASELINE.read_text(encoding="utf-8"))
     assert "BASE tree 0f0d7908" in baseline["written_by"]
     unset = websearch_chain["unset"]
+    # USER 2026-11-02: a search card is a FACE now -- its advanced options, its
+    # rotation policy and its key pool live in the provider's dialog, not in
+    # the grid. So the grid itself is this PR's deliberate change and the
+    # corrected help sentences are asserted where they now render, inside the
+    # dialog (the `cards["context7"].dialogButtons` reading and the
+    # cards-overlay suite both do that). Every OTHER surface on this page is
+    # still compared to the base baseline below, unchanged.
     for pattern in WS_CORRECTED_HELP:
-        # Each corrected help text is one node of the provider grid, on both
-        # sides: the exclusion below can never quietly match nothing.
-        assert len(pattern.findall(unset["dom"]["grid"])) == 1, pattern.pattern
         assert len(pattern.findall(baseline["unset"]["dom"]["grid"])) == 1, (
             pattern.pattern
         )
     for name, base_dom in baseline["unset"]["dom"].items():
         if name == "grid":
-            # 7.122.3 (U6): two attributes per rendered card, and nothing else.
+            # USER 2026-11-02: a search card is a FACE now, so the grid is this
+            # PR's deliberate change. What must still hold is everything the
+            # grid was ABOUT: the same fourteen cards, in the same order, each
+            # down to the one control a reader makes here, and no setting left
+            # on a card for changedValues() to find.
             cards = unset["dom"][name].count("data-websearch-provider=")
             assert cards == 14, cards
             assert len(WS_HAYSTACK_ATTRS.findall(unset["dom"][name])) == cards * 2
             assert WS_HAYSTACK_ATTRS.findall(base_dom) == []
+            assert re.findall(
+                r'data-websearch-provider="([a-z0-9_]+)"', unset["dom"][name]
+            ) == re.findall(r'data-websearch-provider="([a-z0-9_]+)"', base_dom)
+            assert unset["dom"][name].count('role="button"') == cards
+            assert unset["dom"][name].count("data-key=") == 0
+            # The one control that stayed: "Use provider", once per card. The
+            # base tree had two per card ("Use provider", "Test provider"), and
+            # a disabled "Selected" one, which the count below allows for.
+            face_buttons = re.findall(
+                r"<button[^>]*>([^<]*)</button>", unset["dom"][name]
+            )
+            assert set(face_buttons) <= {"Use provider", "Selected"}, face_buttons
+            assert len(face_buttons) == cards
+            assert (
+                "Test provider" in base_dom
+                and "Test provider" not in unset["dom"][name]
+            )
+            continue
         assert _without_ux_pass_nodes(unset["dom"][name]) == (
             _without_ux_pass_nodes(base_dom)
         ), name
@@ -12182,7 +12220,13 @@ def test_jsdom_context7_has_a_card_and_auto_never_picks_it(websearch_chain) -> N
     assert card["label"] == "Context7"
     assert card["pill"] == "Configured"
     assert card["meta"] == "Library docs · never picked by Auto · CONTEXT7_API_KEY"
-    assert card["buttons"] == ["Use provider", "Test provider", "Manage keys"]
+    # USER 2026-11-02: the face keeps the one decision a reader makes here and
+    # the other two moved into the provider's dialog. The pool opens eagerly on
+    # open (managing keys is the reason to open a provider), so its button
+    # reads "Hide keys" until it is pressed.
+    assert card["buttons"] == ["Use provider"]
+    assert "Test provider" in card["dialogButtons"]
+    assert "Hide keys" in card["dialogButtons"]
     assert websearch_chain["cardOrder"][-1] == "context7"
     # Auto with Exa, Tavily and Context7 keyed: Exa, as the server resolves it.
     assert websearch_chain["autoActive"] == ["exa"]
@@ -12459,9 +12503,14 @@ def test_jsdom_coding_agents_filter_nothing_matches_and_no_control_leaves(
     # Hiding a card never detaches a control: the page's [data-key] count is
     # the same at rest, filtered and cleared, which is what keeps
     # changedValues() and every Save working.
-    assert coding_agents_filter["dataKeyCountEmpty"] == 164
-    assert coding_agents_filter["dataKeyCountFiltered"] == 164
-    assert coding_agents_filter["dataKeyCountCleared"] == 164
+    #
+    # USER 2026-11-02 moved four of them into the provider dialog (the two
+    # web-search cards this fixture draws carry no settings on the face), so
+    # the absolute number is 160. What the test is about is the INVARIANCE, and
+    # the three assertions below still hold it.
+    assert coding_agents_filter["dataKeyCountEmpty"] == 160
+    assert coding_agents_filter["dataKeyCountFiltered"] == 160
+    assert coding_agents_filter["dataKeyCountCleared"] == 160
 
 
 def test_jsdom_coding_agents_filter_typing_sends_nothing_and_clearing_restores(

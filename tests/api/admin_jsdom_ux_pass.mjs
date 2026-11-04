@@ -336,14 +336,23 @@ export function prepareUxPassScenario({ window, ROUTES }) {
     searchBox.dispatchEvent(new window.Event("input", { bubbles: true }));
     await wait(30);
 
-    // The rotation select's own "default:" line (U30).
-    const rotated = doc.querySelector('.field[data-key="TAVILY_API_KEY_ROTATION"]');
+    // The rotation select's own "default:" line (U30). USER 2026-11-02: it is
+    // in the provider's dialog now, so the card is pressed and the reading is
+    // taken there.
+    const tavilyCard = doc.querySelector('[data-websearch-provider="tavily"]');
+    if (tavilyCard) tavilyCard.click();
+    await wait(120);
+    const rotated = doc
+      .getElementById("providerDetailBody")
+      .querySelector('.field[data-key="TAVILY_API_KEY_ROTATION"]');
     out.rotationMeta = rotated
       ? {
           firstOption: flat(rotated.querySelector("select")?.options[0]),
           meta: flat(rotated.querySelector(".field-default")),
         }
       : null;
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(80);
 
     // ── U1: LINKFIX -- the rotation link lands on the card, pool open ────
     const clickPoolLink = async (credentialKey) => {
@@ -357,26 +366,41 @@ export function prepareUxPassScenario({ window, ROUTES }) {
     };
     const webPool = await clickPoolLink("TAVILY_API_KEY");
     const wsCard = doc.querySelector('[data-websearch-provider="tavily"]');
+    const wsDialog = doc.getElementById("providerDetailBody");
+    const wsDialogOpen = !doc.getElementById("providerDetailModal").hidden;
     out.linkfixWebSearch = {
       ...webPool,
       view: harness.state.activeView,
       card: Boolean(wsCard),
-      poolOpen: wsCard ? !wsCard.querySelector(".ws-key-manager").hidden : null,
+      // USER 2026-11-02: the pool is in the provider's dialog, which the link
+      // opens. "The card, with its pool open" is now "the card's dialog, with
+      // its pool open", and that is what is read.
+      dialogOpen: wsDialogOpen,
+      poolOpen: wsDialogOpen
+        ? !wsDialog.querySelector(".ws-key-manager").hidden
+        : null,
       pages: Array.from(doc.querySelectorAll(".admin-view"))
         .filter((node) => !node.hidden)
         .map((node) => node.dataset.view),
     };
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(80);
     const modelPool = await clickPoolLink("GROQ_API_KEY");
     const pvCard = doc.querySelector('.pv-card[data-provider="groq"]');
+    const pvDialog = doc.getElementById("providerDetailBody");
+    const pvDialogOpen = !doc.getElementById("providerDetailModal").hidden;
     out.linkfixModel = {
       ...modelPool,
       view: harness.state.activeView,
       card: Boolean(pvCard),
-      cardOpen: pvCard ? pvCard.classList.contains("pv-open") : null,
-      poolOpen: pvCard
-        ? !pvCard.querySelector(".key-manager-panel").hidden
+      dialogOpen: pvDialogOpen,
+      cardOpen: pvCard ? pvCard.getAttribute("role") === "button" : null,
+      poolOpen: pvDialogOpen
+        ? !pvDialog.querySelector(".key-manager-panel").hidden
         : null,
     };
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(80);
 
     // ── U18: the rail re-binds after a re-render ─────────────────────────
     harness.renderSections(

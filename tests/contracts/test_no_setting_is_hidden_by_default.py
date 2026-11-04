@@ -166,13 +166,16 @@ def test_the_show_advanced_toggle_is_gone() -> None:
 def test_the_providers_section_has_a_per_card_collapse_control() -> None:
     """The section excluded from the old toggle now grows its own.
 
-    `renderSections` still skips `providers`; what changed is that
-    `renderProviderCard` attaches a control of its own, so the 110 provider
-    fields that had no control anywhere on the dashboard now have one.
+    `renderSections` still skips `providers`; what changed is that the
+    provider's own form attaches a control of its own, so the 110 provider
+    fields that had no control anywhere on the dashboard now have one. USER
+    2026-11-02 moved that form into the card's dialog, so the host it is
+    attached to is the dialog body -- with the SAME per-provider scope key, so
+    a reader's existing choice survives the move.
     """
-    assert "attachAdvancedCollapse(card, `provider:${provider.provider_id}`" in (
+    assert "attachAdvancedCollapse(body, `provider:${provider.provider_id}`" in (
         ADMIN_JS
-    ), "a provider card no longer attaches its own advanced collapse control"
+    ), "a provider's dialog no longer attaches its own advanced collapse control"
 
 
 def test_the_collapse_choice_is_remembered_per_card_in_a_try_catch() -> None:
@@ -256,15 +259,20 @@ def test_the_grid_skips_only_the_two_kinds_another_renderer_draws() -> None:
 
 
 def test_each_skipped_kind_has_its_host() -> None:
-    """Provider rotation -> the key manager; web-search rotation -> its card;
-    web-search options -> the card's Advanced options group."""
+    """Provider rotation -> the key manager; web-search rotation -> its
+    provider's dialog; web-search options -> the dialog's Advanced group.
+
+    USER 2026-11-02 moved a search provider's settings off its card and into
+    the dialog the card opens, so the host named here moved with them. What
+    the test is about -- every skipped field is drawn SOMEWHERE, and the one
+    place that draws it is named -- is unchanged."""
 
     assert "const rotationField = state.fields.get(`${field.key}_ROTATION`);" in (
         _function_body("keyManagerForField")
     ), "keyManagerForField() no longer draws a provider pool's rotation select"
-    assert "card.appendChild(renderField(rotationField))" in (
-        _function_body("renderWebSearchProviders")
-    ), "a Web Search card no longer draws its key pool's rotation field (7.121.2)"
+    assert "body.appendChild(renderField(rotationField))" in (
+        _function_body("buildWebSearchOverlayBody")
+    ), "a Web Search dialog no longer draws its key pool's rotation field (7.121.2)"
     assert "details.appendChild(renderField(field))" in (
         _function_body("renderWebSearchAdvanced")
     ), "renderWebSearchAdvanced() no longer draws the cards' option fields"

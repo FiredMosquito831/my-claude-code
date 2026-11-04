@@ -118,10 +118,48 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     return realFetch(url, options);
   };
 
-  const controlFor = (key) =>
+  /* USER 2026-11-02: a provider's settings are edited in a dialog over the
+     page, not on the card. The dialog's controls are real, addressable
+     `[data-key]` elements -- they are only built when the dialog is opened.
+     So the one lookup every measurement in this scenario goes through opens
+     the owning provider's dialog first when the page has no control of its
+     own, and closes it again afterwards. That is what a reader does, and it
+     keeps "every setting has a control" a true statement about the page. */
+  const modalEl = () => doc.getElementById("providerDetailModal");
+  const closeDialog = () => {
+    const modal = modalEl();
+    if (modal && !modal.hidden) {
+      doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+  };
+  const directControl = (key) =>
     doc.querySelector(
       `input[data-key="${key}"], select[data-key="${key}"], textarea[data-key="${key}"]`,
     );
+  const controlFor = (key) => {
+    const direct = directControl(key);
+    if (direct) return direct;
+    // A READ-ONLY lookup: the dialog is opened to find the control and closed
+    // again, so a page-wide sweep of every setting does not leave thirty forms
+    // in the document for the next measurement to find. A caller that is about
+    // to edit the control uses `openOwningCard` instead and keeps it open.
+    const found = openOwningCard(key);
+    closeDialog();
+    return found;
+  };
+  /** Open the provider's dialog and leave it open, for a caller that is about
+   *  to edit the control it returns. */
+  const openOwningCard = (key) => {
+    const field = (payload.fields || []).find((item) => item.key === key);
+    if (!field) return null;
+    const modelCard = field.provider
+      ? doc.querySelector(`.pv-card[data-provider="${field.provider}"]`)
+      : null;
+    const card = modelCard || searchCardFor(key);
+    if (!card) return null;
+    card.click();
+    return directControl(key);
+  };
 
   const isControl = (el) => Boolean(el && el.matches("input, select, textarea"));
 
@@ -259,37 +297,102 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
    *  reach, so it is read through what it drew) -- and the control is looked
    *  up inside that page only, so a setting edited only from some other page
    *  reads as uncovered. `control` is the element's id, or null when that page
-   *  has no form control for the key. */
+   *  has no form control for the key.
+   *
+   *  USER 2026-11-02: a provider's settings are edited in a dialog over the
+   *  page rather than inline on the card. The dialog IS the page's control for
+   *  them -- opened from the card, and the only surface they are edited on --
+   *  so when the lookup finds nothing in the page as it stands, the provider's
+   *  dialog is opened and the lookup is repeated in it. The dialog element
+   *  itself lives outside every `.admin-view` on purpose (`renderSections()`
+   *  empties those containers, and a form inside one would be cleared out from
+   *  under the reader); it is still the providers page's control, which is why
+   *  it is searched here rather than reported as a missing one. */
   const captureControlMap = () => {
+    const modal = doc.getElementById("providerDetailModal");
+    const closeDialog = () => {
+      if (modal && !modal.hidden) {
+        doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      }
+    };
+    const findControl = (host, key) =>
+      host
+        ? host.querySelector(
+            `input[data-key="${key}"], select[data-key="${key}"], ` +
+              `textarea[data-key="${key}"]`,
+          )
+        : null;
     const map = {};
     payload.fields.forEach((field) => {
       const section = doc.getElementById(`section-${field.section}`);
       const host = section ? section.closest(".admin-view[data-view]") : null;
       const page = host ? host.dataset.view : null;
-      const control = host
-        ? host.querySelector(
-            `input[data-key="${field.key}"], select[data-key="${field.key}"], ` +
-              `textarea[data-key="${field.key}"]`,
-          )
-        : null;
+      let control = findControl(host, field.key);
+      if (!control && field.provider) {
+        const card = doc.querySelector(`.pv-card[data-provider="${field.provider}"]`);
+        if (card) {
+          card.click();
+          control = findControl(modal, field.key);
+          closeDialog();
+        }
+      }
+      if (!control && page === "web_search") {
+        // The search page's own dialog: a search provider's advanced options
+        // are grouped by env-key prefix (`FIRECRAWL_*` under Firecrawl), which
+        // is how the page has always decided whose group a field belongs to.
+        // So the owning card is the one whose id prefixes the key, and only
+        // failing that is every card tried.
+        const cards = Array.from(
+          doc.querySelectorAll("#webSearchGrid .ws-card[data-websearch-provider]"),
+        );
+        const byPrefix = cards.filter((card) =>
+          String(field.key).startsWith(
+            `${String(card.dataset.websearchProvider).toUpperCase()}_`,
+          ),
+        );
+        for (const card of byPrefix.length ? byPrefix : cards) {
+          card.click();
+          control = findControl(modal, field.key);
+          closeDialog();
+          if (control) break;
+        }
+      }
       map[field.key] = { page, control: control ? control.id || "" : null };
     });
     return map;
   };
 
-  /** One web-search rotation control, read where 7.121.2 puts it: inside its
-   *  provider's card on the Web Search page. */
-  const rotationControl = (key) =>
-    doc.querySelector(`#webSearchGrid [data-websearch-provider] select[data-key="${key}"]`);
+  /** One web-search rotation control, read where it is edited: in its
+   *  provider's dialog on the Web Search page (USER 2026-11-02 moved it there
+   *  from the card, which is now a face). The dialog belongs to the card whose
+   *  id prefixes the setting, so that card is what opens it. */
+  const searchCardFor = (key) =>
+    Array.from(
+      doc.querySelectorAll("#webSearchGrid .ws-card[data-websearch-provider]"),
+    ).find((card) =>
+      String(key).startsWith(`${String(card.dataset.websearchProvider).toUpperCase()}_`),
+    ) || null;
+  const rotationControl = (key) => {
+    const direct = doc.querySelector(`select[data-key="${key}"]`);
+    if (direct) return direct;
+    const card = searchCardFor(key);
+    if (!card) return null;
+    card.click();
+    const found = doc.querySelector(`select[data-key="${key}"]`);
+    closeDialog();
+    return found;
+  };
   const rotationCell = (key) => {
     const select = rotationControl(key);
     if (!select) return null;
     const chosen = select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
-    const card = select.closest("[data-websearch-provider]");
+    // The dialog's nodes are detached once it closes, so the owning card is
+    // named from the setting rather than by walking up from the control.
+    const owner = searchCardFor(key);
     return {
       id: select.id,
-      card: card ? card.dataset.websearchProvider : null,
-      view: (select.closest(".admin-view[data-view]") || { dataset: {} }).dataset.view || null,
+      card: owner ? owner.dataset.websearchProvider : null,
+      view: "web_search",
       value: select.value,
       shown: flat(chosen),
       marked: Boolean(chosen && chosen.dataset.savedValue === "true"),
@@ -344,7 +447,10 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     });
 
     out.coverage = captureCoverage(fieldKeys);
-    out.controlMap = captureControlMap();
+    // `captureControlMap` opens each provider's dialog to find its controls,
+    // which is a READ. It runs after the edit-and-Apply block below so the
+    // readings it takes cannot register as a person's edits; the map itself is
+    // unchanged either way.
     out.controlKeys = Object.keys(captureControls(fieldKeys)).filter(
       (key) => doc.querySelector(`[data-key="${key}"]`) !== null,
     ).length;
@@ -360,15 +466,22 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     await wait(400);
     out.footerAfterEmptyApply = await stableFooter();
 
-    // --- One typed edit, on a field nobody has set (so it starts empty and
-    // "uk-en" cannot collide with anything loaded).
-    const edit = controlFor(EDIT_KEY);
+    /* --- One typed edit, on a field nobody has set (so it starts empty and
+       "uk-en" cannot collide with anything loaded).
+       USER 2026-11-02: on this branch the control is in a provider's dialog.
+       It is edited with that dialog OPEN, exactly as a reader would, and the
+       dialog stays open through the footer and Apply checks -- `changedValues`
+       reads the document, and a reader who is editing is looking at an open
+       dialog. `editStillInDocument` records which case this run was, so the
+       assertions below cannot silently test a detached node. */
+    const edit = openOwningCard(EDIT_KEY);
     if (!isControl(edit)) {
       out.scenarioFatal = `no control for ${EDIT_KEY}`;
       out.scriptErrors = scriptErrors;
       out.consoleErrors = consoleErrors;
       return out;
     }
+    out.editStillInDocument = doc.contains(edit);
     edit.value = EDIT_VALUE;
     edit.dispatchEvent(new window.Event("input", { bubbles: true }));
     out.afterEdit = {
@@ -376,9 +489,15 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
       footer: await stableFooter(),
       submitted: Object.keys(submits()).sort(),
     };
+    // Apply with the dialog still open (the control is in the document, so the
+    // body is the one a reader's Apply would send), then close it: the page
+    // reloads under an open dialog, and a dialog left open would re-park the
+    // edit it is still showing.
     out.applyAfterEdit = await clickApply();
     await wait(600);
     out.afterEdit.footerAfterApply = await stableFooter();
+    closeDialog();
+    out.controlMap = captureControlMap();
 
     /* --- 7.121.3: the deliberate clear travels WITH the request. The server
        refuses to blank a setting the request did not name in `cleared`, so
@@ -513,10 +632,21 @@ export function prepareSelectBlankScenario({ window, ROUTES }) {
     if (afterPath && present.length) {
       const saved = JSON.parse(readFileSync(afterPath, "utf8"));
       out.rotation.footerBeforeEdits = await stableFooter();
+      /* The controls are edited while their dialog is OPEN (USER 2026-11-02):
+         `changedValues()` walks the document, and a detached control is not in
+         it -- which is the whole point of the dialog closing cleanly. So each
+         provider's card is pressed, its rotation select edited, and the
+         dialog closed again; the mark survives because it is on a control the
+         page's re-render has not replaced yet, exactly as a reader's edit
+         would. */
       present.forEach((key) => {
-        const select = rotationControl(key);
+        const owner = searchCardFor(key);
+        if (owner) owner.click();
+        const select = doc.querySelector(`select[data-key="${key}"]`);
+        if (!select) return;
         select.value = ROTATION_EDIT_VALUE;
         select.dispatchEvent(new window.Event("change", { bubbles: true }));
+        closeDialog();
       });
       out.rotation.footerAfterEdits = await stableFooter();
       out.rotation.submitted = submits();

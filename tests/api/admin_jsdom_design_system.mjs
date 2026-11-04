@@ -156,11 +156,18 @@ export function prepareDesignSystemScenario({ window, ROUTES }) {  const doc = w
    * same marker, so a slower machine moves both runs rather than one.
    */
   const READY = {
-    models: "#modelsTree .models-tree-row, #modelsTree .models-tree-card, #modelsTree *",
+    // `renderModelsTree()` always leaves SOMETHING in the tree: a
+    // `.models-provider` group per provider that matched, or the
+    // `.models-status` sentence when the fixture matches none. The old marker
+    // named `.models-tree-row`/`-card` classes that do not exist in admin.js
+    // at all, so it never matched and the wait was a blind 8 s: the digest
+    // could be taken before the tree had drawn, which read as `models` moving
+    // on a loaded machine and nowhere else.
+    models: "#modelsTree .models-status, #modelsTree .models-provider",
     docs: "#docsContent h1, #docsContent h2, #docsContent h3",
     requests: "#reqLogTableWrap table, #reqStatsCards *, #reqRawExportPanel *",
-    web_search: "#webSearchGrid *",
-    providers: "#providersSections .pv-card, #providersSections *",
+    web_search: "#webSearchGrid .ws-card",
+    providers: "#providersSections .pv-card",
     coding_agents: "#codingAgentsList .coding-agent-card",
     limits: "#limitsSections .settings-section",
     optimizer: "#optKpis *",
