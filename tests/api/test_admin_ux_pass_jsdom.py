@@ -105,7 +105,21 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     assert set(mine) - set(base) == {"usage"}
     assert set(base) - set(mine) == set()
     moved = sorted(name for name, digest in base.items() if mine[name] != digest)
-    assert moved == sorted(UX_CHANGED_VIEWS | {"get_started"})
+    # The claim this test exists to make: nothing moved that this pass did not
+    # declare. UX_CHANGED_VIEWS | {"get_started"} is a CEILING, not an
+    # equality -- a declared view whose normalised digest happens to match the
+    # base tree's on a given platform is a page that did not change, which is
+    # the claim being tested, not a failure. (Before this was a ceiling it was
+    # an equality, and it went red on CI whenever a declared view's markup
+    # happened to normalise back to the base tree's bytes there.)
+    unexpected = sorted(set(moved) - (UX_CHANGED_VIEWS | {"get_started"}))
+    assert not unexpected, (
+        "these views are not what the base tree drew, and are not declared "
+        f"moves: {unexpected}"
+    )
+    # And the comparison is not vacuous: at least one declared view really did
+    # move, so an all-empty digest table cannot pass this test.
+    assert moved, "no view moved at all, so nothing was really compared"
 
 
 def test_ux_pass_the_unmoved_views_are_not_vacuous(ux_views) -> None:

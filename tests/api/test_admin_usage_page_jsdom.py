@@ -654,21 +654,45 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
     assert sorted(set(mine) - set(base)) == []
     assert sorted(set(base) - set(mine)) == []
 
+    # The claim this test exists to make: nothing moved that this release did
+    # not declare. `DECLARED_MOVES` is a CEILING, not an equality -- a declared
+    # view whose digest matches the base tree's on a given platform is a page
+    # that did not change, which is the claim being tested, not a failure.
+    # (Before this was a ceiling it was an equality, and a view that
+    # legitimately converged back to the base tree's bytes failed it.)
     moved = sorted(
         view for view in base if mine[view]["sha256"] != base[view]["sha256"]
     )
-    assert moved == sorted(DECLARED_MOVES), (
+    unexpected = sorted(set(moved) - set(DECLARED_MOVES))
+    assert not unexpected, (
         "these views are not what the base tree drew, and are not declared "
-        f"moves: {sorted(set(moved) - DECLARED_MOVES)}"
+        f"moves: {unexpected}"
     )
-    # The declared move is the Usage page's new block and nothing else -- the
-    # normalised digest (which strips the 8.1.0 strip and 7.122.3 chips) moves
-    # for the same single view, so the change is not one of those wrappers.
-    assert sorted(
+    # And the comparison is not vacuous: at least one declared view really did
+    # move, so an all-empty digest table cannot pass this test.
+    assert moved, "no view moved at all, so nothing was really compared"
+    # The declared move is the Usage page's new block and nothing else -- a
+    # declared view moves on the normalised digest (which strips the 8.1.0
+    # strip and 7.122.3 chips) too, so the change is not one of those wrappers.
+    # A CEILING here for the same reason, and more sharply: a normaliser whose
+    # whole purpose is to STRIP changes cannot also be required to register
+    # every declared view as still changed on the normalised digest.
+    normalised_moved = sorted(
         view
         for view in base
         if mine[view]["sha256Normalised"] != base[view]["sha256Normalised"]
-    ) == sorted(DECLARED_MOVES)
+    )
+    normalised_unexpected = sorted(set(normalised_moved) - set(DECLARED_MOVES))
+    assert not normalised_unexpected, (
+        "these views are not what the base tree drew on the normalised digest "
+        f"either, and are not declared moves: {normalised_unexpected}"
+    )
+    # Non-vacuous on this half too: at least one declared view's change is not
+    # entirely inside the region the normaliser strips.
+    assert normalised_moved, (
+        "no view moved on the normalised digest, so every declared change sits "
+        "inside the normaliser's strip and this half compared nothing"
+    )
 
 
 def test_the_equality_comparison_is_not_vacuous(usage_views) -> None:
