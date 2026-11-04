@@ -107,6 +107,14 @@ const state = {
   webSearchLastRoute: null,
   webSearchDetailReturnFocus: null,
   customProviders: [],
+  // CARDS-FIX-2: which custom providers have answered a model list of their
+  // own. The listing payload's `model_count` is 0 both for "answered none" and
+  // for "nobody has asked", and this card has no `state.modelOptions` refs to
+  // tell them apart (a built-in card does -- see providerModelCountLabel). The
+  // two controls that carry the provider's own answer, Refresh models and
+  // Detect models, write here; a listing load never does. IV.16: unknown is
+  // not the same fact as zero, and this is what keeps them apart.
+  customProviderDetections: new Set(),
   editingCustomProviderId: null,
   versionInfo: null,
   versionUpgrading: false,
@@ -16075,6 +16083,16 @@ function closeProviderDialog(anchor) {
 }
 
 function closeProviderOverlay() {
+  // A custom provider's card is found by its own attribute -- the Providers
+  // card carries `data-provider` too, but on this card that name is `undefined`
+  // and would anchor focus on nothing.
+  if (providerOverlayOpen && providerOverlayOpen.kind === "custom") {
+    const id = providerOverlayOpen.provider.provider_id;
+    closeProviderDialog(
+      `[data-custom-provider="${goToSelectorPart(id)}"]`,
+    );
+    return;
+  }
   const id = providerOverlayOpen ? providerOverlayOpen.provider.provider_id : "";
   closeProviderDialog(`.pv-card[data-provider="${goToSelectorPart(id)}"]`);
 }
@@ -16103,6 +16121,10 @@ function closeWebSearchOverlay() {
 function refreshProviderOverlay() {
   const { modal, subtitle, body } = providerOverlayElements();
   if (!modal || modal.hidden) return;
+  // A panel on screen whose provider this rebuild cannot find is closed rather
+  // than left editing something that no longer exists: the card grid was just
+  // replaced, so "the entry is gone" is a real answer here (Delete, or an edit
+  // that renamed it away).
   const open = providerOverlayOpen;
   const ws = webSearchOverlayOpen;
   if (!open && !ws) return;
@@ -16113,7 +16135,24 @@ function refreshProviderOverlay() {
   const active = document.activeElement;
   const focusedKey =
     active && body.contains(active) ? active.dataset.key || active.id : null;
-  if (open) {
+  if (open && open.kind === "custom") {
+    // A custom provider is drawn from `/admin/api/custom-providers`, not from
+    // `state.config.provider_status`, so its own payload is what it is rebuilt
+    // from. `state.customProviders` is replaced by every `loadCustomProviders`
+    // -- Refresh models, Save dialect, Enable/Disable, key add/remove all call
+    // it -- so this reads the list as it stands rather than a stale copy.
+    const fresh =
+      (state.customProviders || []).find(
+        (candidate) => candidate.provider_id === open.provider.provider_id,
+      ) || open.provider;
+    open.provider = fresh;
+    subtitle.textContent = customProviderStatusLine(fresh);
+    body.textContent = "";
+    body.appendChild(buildCustomProviderOverlayBody(fresh));
+    // The per-key health rail is a second request, fire-and-forget; the body
+    // above draws the masked keys from the listing.
+    loadCustomProviderKeyHealth(fresh.provider_id);
+  } else if (open) {
     // Re-resolve the provider from the freshly loaded payload, so a status
     // that changed while the dialog was open is the status shown.
     const fresh =
@@ -26603,11 +26642,32 @@ function renderCustomProviders() {
     empty.className = "cp-note";
     empty.textContent = "No custom providers yet.";
     grid.appendChild(empty);
-    return;
+  } else {
+    state.customProviders.forEach((provider) => {
+      grid.appendChild(customProviderCard(provider));
+    });
   }
-  state.customProviders.forEach((provider) => {
-    grid.appendChild(customProviderCard(provider));
-  });
+  // Every card was just replaced. A panel opened from one of them is drawn
+  // from `state.customProviders`, which this render was handed -- so it is
+  // rebuilt from the new list here. That is what makes "add a key while the
+  // panel is open" show the new key, and it is the same contract
+  // `renderSections` keeps for a built-in card.
+  const open =
+    providerOverlayOpen && providerOverlayOpen.kind === "custom"
+      ? providerOverlayOpen
+      : null;
+  if (open) {
+    // A provider that no longer exists has no panel: an entry deleted from
+    // another surface must not leave a dialog editing it.
+    const still = (state.customProviders || []).some(
+      (entry) => entry.provider_id === open.provider.provider_id,
+    );
+    if (still) {
+      refreshProviderOverlay();
+    } else {
+      closeProviderOverlay();
+    }
+  }
 }
 
 function customProviderDetailsText(provider) {
@@ -26744,10 +26804,49 @@ function customProviderMediaOperationsValue() {
     .map((box) => box.value);
 }
 
+/* ---------------------------------------------- a custom provider is a FACE
+   USER 2026-11-04: "also i noticed that custom providers didn't get the same
+   benefits that normal providers and websearch providers did."
+
+   So this card gets exactly what `renderProviderCard` got in 8.10.0: a small
+   face and a panel over the page. The face carries the same five decisions a
+   built-in card's does -- name, status, model count, Refresh models,
+   Configure -- and everything else moves into the shared
+   `#providerDetailModal`. USER Q2 (`all rec`): Configure opens the panel and
+   **Edit stays inside it**, so the two card types read the same.
+
+   The panel body is NOT built into the card. `changedValues()` walks every
+   `[data-key]` in the document and Apply posts what it finds, and the key
+   health listing is one request per provider. See the note above
+   `providerOverlayElements`.
+
+   Nine controls live in the body now, and all nine still exist:
+     1 Delete · 2 Enable/Disable · 3 Edit · 4 per-key Remove · 5 Add-key
+     6 Dialect Save · 7 Probe reasoning dialect · 8 Probe capabilities
+     9 Forget everything learned
+   `tests/api/admin_jsdom_custom_cards.mjs` reads all nine off the rendered
+   body, and `test_admin_custom_cards_jsdom.py` compares that reading against a
+   written-down list, so a control dropped here fails a test rather than being
+   quietly removed from the expectation too. */
+
 function customProviderCard(provider) {
   const card = document.createElement("article");
-  card.className = "provider-card";
+  card.className = "provider-card pv-card";
   card.dataset.customProvider = provider.provider_id;
+  // The Providers page's "Only configured" box filters `.pv-card` by these two
+  // attributes. A custom card is on the same grid and answers the same
+  // question, so it carries them too -- before this, filtering left every
+  // custom card visible beside a filtered built-in grid.
+  card.dataset.pvConfigured =
+    provider.status === "configured" || provider.status === "free_ready"
+      ? "true"
+      : "false";
+  card.dataset.pvSearch = customProviderHaystack(provider);
+  makeCardAFace(card);
+  card.setAttribute(
+    "aria-label",
+    `${provider.display_name || provider.provider_id} settings`,
+  );
 
   const title = document.createElement("div");
   title.className = "provider-title";
@@ -26761,17 +26860,183 @@ function customProviderCard(provider) {
   pill.textContent =
     CUSTOM_PROVIDER_STATUS_LABELS[provider.status] || provider.status;
   title.appendChild(pill);
+  card.appendChild(title);
 
-  const meta = document.createElement("div");
-  meta.className = "provider-meta";
+  // Same endpoint, same label as a static remote provider card. It used to
+  // read "Test", so the one affordance that re-runs discovery was invisible to
+  // anyone hunting for a refresh. A custom provider is always remote, so
+  // "Test connection" -- which stays on local static cards -- never applies.
+  const testButton = document.createElement("button");
+  testButton.type = "button";
+  testButton.className = "ghost-button test-button";
+  testButton.textContent = "Refresh models";
+  testButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    refreshCustomProviderModels(provider, testButton);
+  });
+
+  const configure = document.createElement("button");
+  configure.type = "button";
+  configure.className = "secondary-button pv-configure";
+  configure.textContent = "Configure";
+  configure.setAttribute("aria-expanded", "false");
+  configure.setAttribute("aria-haspopup", "dialog");
+  configure.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openCustomProviderOverlay(provider, card);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "pv-actions";
+  actions.append(faceControl(configure), faceControl(testButton));
+  card.appendChild(actions);
+
+  // The third tight row, the same control a built-in card's face carries. It
+  // reads `provider.model_count` -- the listing payload's own number -- which
+  // is where this card's count has always come from. It is NOT derived from
+  // `state.modelOptions` the way a built-in card's is (CARDS-FIX-1): a custom
+  // provider's catalogue is not merged into the shared list under the same
+  // rule, and `refreshCustomProviderModels` already answers with its own
+  // count. `updateCustomProviderCard` is what repaints it.
+  const detect = document.createElement("button");
+  detect.type = "button";
+  detect.className = "ghost-button pv-detect";
+  detect.textContent = customProviderCountLabel(provider);
+  detect.title =
+    `Detect models for ${provider.display_name || provider.provider_id}. ` +
+    "Press to ask the provider again.";
+  detect.setAttribute(
+    "aria-label",
+    `Detect models for ${provider.display_name || provider.provider_id}`,
+  );
+  detect.addEventListener("click", (event) => {
+    event.stopPropagation();
+    refreshCustomProviderModels(provider, detect, "Detecting");
+  });
+  card.appendChild(faceControl(detect));
+
+  card.addEventListener("click", (event) => {
+    if (pressIsOnACardControl(event)) return;
+    openCustomProviderOverlay(provider, card);
+  });
+  card.addEventListener("keydown", (event) => {
+    if (event.target !== card || !cardKeyOpens(event)) return;
+    // Space scrolls the page by default; a focused button does not.
+    event.preventDefault();
+    openCustomProviderOverlay(provider, card);
+  });
+
+  return card;
+}
+
+/** The words the face's third row reads for this provider's model count.
+ *
+ * Three states, three sentences, and ONE source: `provider.model_count` in the
+ * listing payload. There is no fourth.
+ *
+ * A built-in card reads its count off `state.modelOptions` (CARDS-FIX-1) and
+ * uses `state.modelDetections` to separate "answered none" from "never asked".
+ * A custom provider's catalogue is not merged into that shared list under the
+ * same prefix rule, so its count is the number its own answer carried --
+ * and the set above is what separates the two zeroes, written only by that
+ * answer.
+ */
+function customProviderCountLabel(provider) {
+  const count = Number(provider.model_count) || 0;
+  if (count) return count === 1 ? "1 model" : `${count.toLocaleString()} models`;
+  return state.customProviderDetections.has(provider.provider_id)
+    ? "No models detected"
+    : "Not detected yet";
+}
+
+/** What the Providers page's find box is allowed to match for a custom card. */
+function customProviderHaystack(provider) {
+  return [
+    provider.display_name,
+    provider.provider_id,
+    provider.base_url,
+    ...(provider.masked_keys || []),
+    ...(provider.surfaces || []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+/** Open the shared provider panel for a custom provider.
+ *
+ * `providerOverlayOpen` is the same holder a built-in card uses, so
+ * `refreshProviderOverlay()` -- already called by `renderSections` and
+ * `refreshConfigState` -- rebuilds this body too, and there is one dialog, one
+ * focus trap and one scroll lock in the dashboard rather than two. `kind` is
+ * what tells the rebuilder which body builder to run. */
+function openCustomProviderOverlay(provider, card) {
+  const { modal, title, subtitle, body } = providerOverlayElements();
+  if (!modal) return;
+  // One open takes one scroll lock; see openProviderOverlay.
+  if (!modal.hidden) {
+    modal.hidden = true;
+    unlockBackgroundScroll();
+  }
+  webSearchOverlayOpen = null;
+  providerOverlayOpen = {
+    kind: "custom",
+    provider,
+    card,
+    returnFocus: card || document.activeElement,
+  };
+  title.textContent = provider.display_name || provider.provider_id;
+  subtitle.textContent = customProviderStatusLine(provider);
+  body.textContent = "";
+  body.appendChild(buildCustomProviderOverlayBody(provider));
+  applyParkedEdits(body);
+  modal.hidden = false;
+  lockBackgroundScroll();
+  // The key pool is the reason to open a provider, exactly as on a built-in
+  // card: the panel opens with the rail in front of the reader.
+  loadCustomProviderKeyHealth(provider.provider_id);
+  const close = byId("providerDetailClose");
+  if (close) close.focus();
+}
+
+/** The panel's caption: status, keys, rotation and the model count. */
+function customProviderStatusLine(provider) {
+  return [
+    CUSTOM_PROVIDER_STATUS_LABELS[provider.status] || provider.status,
+    customProviderDetailsText(provider),
+  ].join(" · ");
+}
+
+/** Build the panel's body: the three regions and all nine controls.
+ *
+ * `.cp-details`, `.cp-dialect` and the key rail keep their own classes and
+ * their own places -- they are what the card used to hold, moved rather than
+ * rewritten, which is what makes the completeness proof a count instead of a
+ * judgement call.
+ *
+ * ORDER MATTERS: Delete and Disable are the last thing in the body, after the
+ * dialect block and its own destructive control ("Forget everything learned"),
+ * and the only control near the top is settings. A mis-click on Delete inside
+ * a panel is a data loss, so the two are nowhere near the dialog's primary
+ * position (top-left of the body, where the first control sits) and nowhere
+ * near each other. `tests/api/test_admin_custom_cards_jsdom.py` asserts the
+ * distance in the rendered body. */
+function buildCustomProviderOverlayBody(provider) {
+  const body = document.createElement("section");
+  body.className = "pv-detail cp-detail";
+
+  const meta = document.createElement("p");
+  meta.className = "provider-meta provider-detail-summary cp-base-url";
   meta.textContent = provider.base_url;
+  body.appendChild(meta);
 
   const details = document.createElement("div");
   details.className = "cp-details";
   details.textContent = customProviderDetailsText(provider);
+  body.appendChild(details);
 
   const keyList = keyRailList("cp-key-list");
-  provider.masked_keys.forEach((masked, index) => {
+  (provider.masked_keys || []).forEach((masked, index) => {
     const row = keyRailRow("cp-key-row");
     const label = keyRailLabel("cp-key-label");
     label.textContent = masked;
@@ -26795,24 +27060,16 @@ function customProviderCard(provider) {
       addCustomProviderKey(provider, secret, button, name),
   });
   keyList.appendChild(addForm.element);
-  // A custom card renders its rail inline and never behind a Configure
-  // toggle, so it declares itself a rail host the moment it is built.
-  card.classList.add("has-key-rail");
+  // The rail is inside a `.pv-detail`, not a `.provider-card`, so the grid rule
+  // `.provider-card.has-key-rail` has nothing to widen here -- the panel is
+  // already wide and the card is an ordinary cell. `markKeyRailHost` is
+  // therefore deliberately NOT called; it marks a CARD, and there is none.
+  body.appendChild(keyList);
+
+  body.appendChild(customProviderDialect(provider));
 
   const actions = document.createElement("div");
-  actions.className = "card-actions";
-
-  // Same endpoint, same label as a static remote provider card. It used to
-  // read "Test", so the one affordance that re-runs discovery was invisible to
-  // anyone hunting for a refresh. A custom provider is always remote, so
-  // "Test connection" -- which stays on local static cards -- never applies.
-  const testButton = document.createElement("button");
-  testButton.type = "button";
-  testButton.className = "test-button";
-  testButton.textContent = "Refresh models";
-  testButton.addEventListener("click", () =>
-    refreshCustomProviderModels(provider, testButton),
-  );
+  actions.className = "pv-detail-actions cp-actions";
 
   const editButton = document.createElement("button");
   editButton.type = "button";
@@ -26823,18 +27080,10 @@ function customProviderCard(provider) {
   editButton.textContent = "Edit";
   editButton.addEventListener("click", () => openCustomProviderForm(provider));
 
-  const deleteButton = document.createElement("button");
-  deleteButton.type = "button";
-  deleteButton.className = "secondary-button danger";
-  deleteButton.textContent = "Delete";
-  deleteButton.addEventListener("click", () =>
-    deleteCustomProvider(provider, deleteButton),
-  );
-
-  // Enable/disable lives on the card, not only in the API. Disabling a
-  // provider a MODEL* route names used to take the whole Settings object
-  // down; it now pauses those chain entries, and the gesture that does it has
-  // to be reachable for anyone to find out.
+  // Enable/disable lives here, not only in the API. Disabling a provider a
+  // MODEL* route names used to take the whole Settings object down; it now
+  // pauses those chain entries, and the gesture that does it has to be
+  // reachable for anyone to find out.
   const toggleButton = document.createElement("button");
   toggleButton.type = "button";
   toggleButton.className = "secondary-button cp-toggle";
@@ -26843,10 +27092,17 @@ function customProviderCard(provider) {
     setCustomProviderEnabled(provider, !provider.enabled, toggleButton),
   );
 
-  actions.append(testButton, toggleButton, editButton, deleteButton);
-  card.append(title, meta, details, customProviderDialect(provider), keyList, actions);
-  loadCustomProviderKeyHealth(provider.provider_id);
-  return card;
+  const deleteButton = document.createElement("button");
+  deleteButton.type = "button";
+  deleteButton.className = "secondary-button danger cp-delete";
+  deleteButton.textContent = "Delete";
+  deleteButton.addEventListener("click", () =>
+    deleteCustomProvider(provider, deleteButton),
+  );
+
+  actions.append(editButton, toggleButton, deleteButton);
+  body.appendChild(actions);
+  return body;
 }
 
 /**
@@ -26989,7 +27245,14 @@ function probeExitSentence(exit) {
   return ` Sent through ${exit}.`;
 }
 
-/** Per-key health for a custom pool, in the static pool's own badges. */
+/** Per-key health for a custom pool, in the static pool's own badges.
+ *
+ * The rail lives in one of two places now: the panel's body when it is open,
+ * and nowhere else -- the face carries no rail (CARDS-FIX-2). So the host is
+ * the open panel for this provider, or the request is dropped: drawing health
+ * into a card that has no rows would be a silent no-op, which is how a broken
+ * rail looks exactly like a healthy one.
+ */
 async function loadCustomProviderKeyHealth(providerId) {
   let info;
   try {
@@ -26997,7 +27260,12 @@ async function loadCustomProviderKeyHealth(providerId) {
   } catch (error) {
     return;
   }
-  const card = document.querySelector(`[data-custom-provider="${providerId}"]`);
+  const open =
+    providerOverlayOpen && providerOverlayOpen.kind === "custom"
+      ? providerOverlayOpen
+      : null;
+  if (!open || open.provider.provider_id !== providerId) return;
+  const card = byId("providerDetailBody");
   if (!card) return;
   const rows = card.querySelectorAll(".cp-key-row");
   const list = card.querySelector(".cp-key-list");
@@ -27129,42 +27397,98 @@ function describeCustomProviderRoutes(result, enabled) {
   return `${verb} ${result.display_name}; ${what} ${touched.length} chain entry(s): ${refs}.`;
 }
 
+/** Repaint one custom provider's card face and its open panel, in place.
+ *
+ * The count on this card comes from `provider.model_count` -- the listing
+ * payload, NOT `state.modelOptions` the way a built-in card's does (CARDS-FIX-1
+ * is a different fix for a different source). `refreshCustomProviderModels`
+ * is the loader that produces it, and it calls this with the number the
+ * provider's own answer carried.
+ *
+ * USER 2026-11-04: the three surfaces that display that number are the face's
+ * control, the panel's `.cp-details` line, and the panel's subtitle. None of
+ * them may be a second owner, so all three are repainted here from the one
+ * copy this function writes into `state.customProviders`, and the middle of
+ * a request is never stomped: a control that is `disabled` is mid-call and
+ * keeps its own text.
+ */
 function updateCustomProviderCard(providerId, status, label, metaText, modelCount) {
-  const card = document.querySelector(`[data-custom-provider="${providerId}"]`);
-  if (!card) return;
-  const pill = card.querySelector(".status-pill");
-  pill.className = `status-pill ${statusClass(status)}`;
-  pill.textContent = label;
-  if (metaText) {
-    card.querySelector(".provider-meta").textContent = metaText;
-  }
-  // The count line used to be written once, at render time, and never again --
-  // so a card could read "0 models" directly under a refresh that had just
-  // returned 44.
-  if (typeof modelCount !== "number") return;
-  const provider = state.customProviders.find(
+  const provider = (state.customProviders || []).find(
     (entry) => entry.provider_id === providerId,
   );
-  if (!provider) return;
-  provider.model_count = modelCount;
-  const details = card.querySelector(".cp-details");
-  if (details) details.textContent = customProviderDetailsText(provider);
+  if (provider && typeof modelCount === "number") {
+    provider.model_count = modelCount;
+  }
+  const card = document.querySelector(`[data-custom-provider="${providerId}"]`);
+  if (card) {
+    const pill = card.querySelector(".status-pill");
+    if (pill) {
+      pill.className = `status-pill ${statusClass(status)}`;
+      pill.textContent = label;
+    }
+    const detect = card.querySelector(".pv-detect");
+    if (detect && !detect.disabled && provider) {
+      detect.textContent = customProviderCountLabel(provider);
+    }
+    if (provider) card.dataset.pvConfigured =
+      provider.status === "configured" || provider.status === "free_ready"
+        ? "true"
+        : "false";
+  }
+  // The card's old `provider-meta` line is inside the panel now. `metaText`
+  // (the first three model names, or the upstream's error) had nowhere else
+  // to live: it is the answer's own words, so it becomes the control's
+  // tooltip rather than a line the face cannot afford.
+  if (card && typeof metaText === "string") {
+    const meta = card.querySelector(".pv-detect");
+    if (meta) {
+      meta.title =
+        `${provider ? provider.display_name || provider.provider_id : providerId}: ` +
+        `${metaText}`;
+    }
+  }
+  const open =
+    providerOverlayOpen && providerOverlayOpen.kind === "custom"
+      ? providerOverlayOpen
+      : null;
+  if (open && provider && open.provider.provider_id === providerId) {
+    open.provider = provider;
+    const details = document.querySelector("#providerDetailBody .cp-details");
+    if (details) details.textContent = customProviderDetailsText(provider);
+    const subtitle = byId("providerDetailSubtitle");
+    if (subtitle) subtitle.textContent = customProviderStatusLine(provider);
+  }
 }
 
-async function refreshCustomProviderModels(provider, button) {
+/** Ask the provider for its model list -- the call behind both face controls.
+ *
+ * One route, two controls: "Refresh models" and the count itself are the same
+ * request, exactly as on a built-in card, and they differ only in the word
+ * they show while they are running. `busy` is that word.
+ *
+ * The pill is a STATUS, never a number (USER 2026-11-04, Q1 on CARDS-FIX-1,
+ * and the same rule holds on this face): the count belongs to the control
+ * that asks for it and to the panel's details line, so a card cannot read
+ * "3 models" twice from two owners of one fact.
+ */
+async function refreshCustomProviderModels(provider, button, busy = "Refreshing") {
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = "Refreshing";
+  button.textContent = busy;
   try {
     const result = await api(
       `/admin/api/providers/${provider.provider_id}/test`,
       { method: "POST", body: "{}" },
     );
     if (result.ok) {
+      // The provider's own answer, so it is a detection -- which is what lets
+      // a provider that answered "none" read differently from one nobody has
+      // asked (see customProviderCountLabel).
+      state.customProviderDetections.add(provider.provider_id);
       updateCustomProviderCard(
         provider.provider_id,
         "reachable",
-        `${result.models.length} models`,
+        "Reachable",
         result.models.slice(0, 3).join(", ") || "No models returned",
         result.models.length,
       );

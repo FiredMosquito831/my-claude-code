@@ -61,6 +61,11 @@ _SUITES = (
     # the boundary table (a calendar month resolved per boundary, so October
     # 2026 is 745 hours), the three sentences, and the wide-search warning.
     "tests/api/test_admin_range_windows_jsdom.py",
+    # 8.11.0 (CARDS-FIX-2): a custom provider's card is a face too -- all nine
+    # controls it carried, the three regions, Delete/Disable by position, the
+    # model count from its own source, a re-render while the panel is open,
+    # the whole-view ceiling, and two mutation controls.
+    "tests/api/test_admin_custom_cards_jsdom.py",
     "tests/contracts/test_admin_static_xss.py",
 )
 _JOB_ID = "jsdom"

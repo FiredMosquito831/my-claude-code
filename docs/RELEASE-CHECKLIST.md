@@ -261,6 +261,8 @@ not worth a re-shoot. These were re-captured:
   agents step added in 6.39.1.
 - `admin-providers.png`, `admin-custom-provider.png` — the provider grid, and a
   custom provider's card with its base URL, key pool and **Refresh models**.
+  8.11.0: a custom card is a face now, so this shot is the card **and its open
+  panel**, not a card with an inline key pool.
 - `admin-models.png`, `admin-models-bulk.png`, `admin-model-config.png` — the
   Models page with per-model sources and tier chips, the bulk visibility
   controls, and the tier mapping.
