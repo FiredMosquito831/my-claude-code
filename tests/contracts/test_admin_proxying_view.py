@@ -78,9 +78,20 @@ def test_escape_clears_the_selection_only_when_no_modal_is_open() -> None:
     escape = _slice("function initProxyingSelection()", "initProxyingSelection();")
     assert "proxyModalIsOpen()" in escape
     assert "clearProxyCandidateSelection()" in escape
-    modals = _slice("function proxyModalIsOpen()", "/* Escape anywhere")
-    for modal in ("webSearchDetailModal", "exportModal", "reqDetailModal"):
-        assert modal in modals
+    # USER 2026-11-02: the three-modals-inline-list became one shared list in
+    # the dialogs section of admin.js, so that adding the provider overlay
+    # could not silently leave a page answering Escape behind it.
+    assert "dashboardDialogIsOpen()" in _slice(
+        "function proxyModalIsOpen()", "/* Escape anywhere"
+    )
+    dialogs = _slice("const DASHBOARD_DIALOG_IDS = [", "];")
+    for modal in (
+        "webSearchDetailModal",
+        "exportModal",
+        "reqDetailModal",
+        "providerDetailModal",
+    ):
+        assert modal in dialogs
 
 
 def test_the_outcome_is_reported_through_the_one_status_panel() -> None:

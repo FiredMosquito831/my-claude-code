@@ -4798,12 +4798,10 @@ function syncProxyCandidateSelectionUi() {
 }
 
 /* Escape belongs to whichever modal is open; only when none is does it mean
-   "drop this selection". The same three modals the Models page and the route
-   rails check, because they are the dashboard's only modal surfaces. */
+   "drop this selection". One list, read by every page that asks this --
+   DASHBOARD_DIALOG_IDS in the dialogs section below. */
 function proxyModalIsOpen() {
-  return ["webSearchDetailModal", "exportModal", "reqDetailModal"]
-    .map(byId)
-    .some((modal) => modal && !modal.hidden);
+  return dashboardDialogIsOpen();
 }
 
 /* Escape anywhere on the Proxying page, not only on a checkbox: a selection is
@@ -9544,9 +9542,12 @@ function updateProviderCard(providerId, status, label, metaText) {
   const pill = card.querySelector(".status-pill");
   pill.className = `status-pill ${statusClass(status)}`;
   pill.textContent = label;
+  // The face has no `provider-meta` line any more (USER 2026-11-02 moved it
+  // into the dialog), so a test answer says what it found in the Detect
+  // models control instead -- which is the row that exists to carry it.
   if (metaText) {
-    const meta = card.querySelector(".provider-meta");
-    if (meta) meta.textContent = metaText;
+    const detect = card.querySelector(".pv-detect");
+    if (detect) detect.title = `${label}: ${metaText}`;
   }
 }
 
@@ -10317,33 +10318,45 @@ function goTo(target) {
 
 /** Open the key pool for `credentialKey` inside `root`, when it has one.
  *
- * 7.122.3 (U1). A provider card builds its pool lazily on "Manage keys", and
- * a web-search card does the same with its own button; both are opened here
- * by the affordance the card itself offers, so the page arrives in exactly the
- * state a click on that control would leave it in. */
+ * USER 2026-11-02. A provider's form is in a dialog now, so "land on the card
+ * with the pool open" means "open the card's dialog with the pool open" -- the
+ * pool is opened by the same affordance the dialog itself uses, so the page
+ * arrives in exactly the state a press on the card would leave it in. */
 function openPoolInElement(root, credentialKey) {
   if (!root) return;
-  // A provider card keeps its whole form behind Configure; an unopened card
-  // has no visible field to scroll to and its pool is still display:none.
+  // A provider card is a face with no fields on it at all: its pool lives in
+  // the dialog, which is not a descendant. Opening the card is what makes the
+  // pool exist.
   if (root.classList && root.classList.contains("pv-card")) {
     const configure = root.querySelector(".pv-configure");
-    if (configure && configure.getAttribute("aria-expanded") === "false") {
-      configure.click();
-    }
+    if (configure) configure.click();
   }
-  const wrapper = Array.from(root.querySelectorAll(".field[data-key]")).find(
-    (node) => node.dataset.key === credentialKey,
-  );
+  if (root.classList && root.classList.contains("ws-card")) {
+    root.click();
+  }
+  // The dialog's controls are outside `root`, so search from the dialog when
+  // this card opened one.
+  const scope = byId("providerDetailModal");
+  const search =
+    scope && !scope.hidden
+      ? [
+          ...Array.from(scope.querySelectorAll(".field[data-key]")),
+          ...Array.from(root.querySelectorAll(".field[data-key]")),
+        ]
+      : Array.from(root.querySelectorAll(".field[data-key]"));
+  const wrapper = search.find((node) => node.dataset.key === credentialKey);
   const manager = wrapper ? wrapper.querySelector(".key-manager") : null;
   if (manager && typeof manager.openKeyPool === "function") {
     manager.openKeyPool();
     return;
   }
-  const panel = root.querySelector(".ws-key-manager");
+  const panel =
+    (scope && !scope.hidden ? scope.querySelector(".ws-key-manager") : null) ||
+    root.querySelector(".ws-key-manager");
   if (panel && panel.hidden) {
-    const button = Array.from(root.querySelectorAll("button")).find(
-      (candidate) => candidate.textContent === "Manage keys",
-    );
+    const button = Array.from(
+      (scope && !scope.hidden ? scope : root).querySelectorAll("button"),
+    ).find((candidate) => candidate.textContent === "Manage keys");
     if (button) button.click();
   }
 }
@@ -10373,13 +10386,18 @@ function openCredentialPool(credentialKey) {
     });
     return;
   }
-  // A model credential lives on a provider card. The card is found by the
-  // field it renders, which is how a shared credential (two providers, one
-  // variable) resolves to whichever card actually carries the control.
-  const wrapper = document.querySelector(
-    `.pv-card .field[data-key="${goToSelectorPart(key)}"]`,
+  // A model credential belongs to a provider card. USER 2026-11-02: the card
+  // no longer renders its fields (they are in the dialog), so the card cannot
+  // be found by a `[data-key]` it carries. The provider whose status names
+  // that variable is the one that owns it -- the same key the server sends in
+  // `provider_status[].credential_env`, which is also how a shared credential
+  // (two providers, one variable) resolves to its owner.
+  const owner = (state.config?.provider_status || []).find(
+    (provider) => provider.credential_env === key,
   );
-  const card = wrapper ? wrapper.closest(".pv-card") : null;
+  const card = owner
+    ? document.querySelector(`.pv-card[data-provider="${owner.provider_id}"]`)
+    : null;
   if (card && card.dataset.provider) {
     goTo({
       view: "providers",
@@ -13223,13 +13241,13 @@ function openProviderCard(providerId) {
   setActiveView("providers", { scroll: true });
   const card = document.querySelector(`.pv-card[data-provider="${providerId}"]`);
   if (!card) return;
-  const configure = card.querySelector(".pv-configure");
-  if (configure && configure.getAttribute("aria-expanded") === "false") {
-    configure.click();
-  }
   if (typeof card.scrollIntoView === "function") {
     card.scrollIntoView({ block: "start" });
   }
+  // Opened AFTER the scroll, so the dialog is measured against the page the
+  // reader is now looking at rather than the one they came from.
+  const configure = card.querySelector(".pv-configure");
+  if (configure) configure.click();
 }
 
 function syncRouteCredentialHints() {
@@ -15049,6 +15067,13 @@ function renderSections(sections, fields) {
     });
   });
 
+  // Every card was replaced just now. A dialog opened from one of them is
+  // drawn from `state.fields`, which the same rebuild re-read, so it is
+  // rebuilt from the new payload here -- otherwise its controls would be the
+  // previous payload's while the page's are the new ones, and Apply posts
+  // whichever it happens to walk to. It keeps its scroll offset and focus.
+  refreshProviderOverlay();
+
   // The limits rail's targets are rendered, not static markup, so the observer
   // cannot be set up at script evaluation time the way the guide's is.
   // 7.122.3 (U18): re-bound on every render rather than once. A Save or "Add
@@ -15480,16 +15505,179 @@ function applyProviderFilter(wrap, query, configuredOnly, countEl) {
   }
 }
 
+/** Close whatever this card opened.
+ *
+ * `applyProviderFilter` calls this for a card the filter just hid: a dialog
+ * left open for a provider nobody can see is a form with no visible owner.
+ * The dialog is not per-card any more, so the only card-scoped state left is
+ * the Configure button's own `aria-expanded`. */
 function closeProviderCard(card) {
-  card.classList.remove("pv-open");
   const configure = card.querySelector(".pv-configure");
   if (configure) {
     configure.textContent = "Configure";
     configure.setAttribute("aria-expanded", "false");
   }
+  if (providerOverlayOpen && providerOverlayOpen.card === card) {
+    closeProviderOverlay();
+  }
 }
 
-/** One provider: a summary face, and its whole form behind Configure. */
+/* ------------------------------------------- the provider detail overlay
+   USER 2026-11-02, said again on 2026-11-03 because it had not been built:
+   "instead of extending the cards we could just make a tab appear like it
+   happens when we open a request to view its data ... and open that small
+   tab/card when we press anywhere on the card of the provider (but keep the
+   refresh model buttons and configure button and configured status and detect
+   models count)".
+
+   So a card is now a FACE -- name, status, model count, Refresh models,
+   Configure -- and everything else is in a dialog over the page, the way a
+   request's detail already worked. Two consequences worth stating, because
+   they are the whole design:
+
+   1. The card body is NOT hidden with CSS. It is never built into the card at
+      all; it is built into the dialog, on open.
+      `changedValues()` finds every setting by walking `[data-key]` across the
+      document and `apply` posts what it finds, so a body left in the card
+      behind `display: none` would still be saved -- and the key pool is
+      lazily loaded, which would mean one request per provider on every page
+      load. Building the dialog's body on open is also what keeps the pool from
+      being fetched for 35 providers nobody opened.
+
+   2. The dialog is rebuilt and repainted when the page re-renders under it
+      (`refreshProviderOverlay`), because `renderSections()` clears every
+      settings container and draws new cards. A dialog holding nodes from the
+      replaced tree would keep working until you clicked Delete in it; then it
+      would report the change and save nothing. See refreshProviderOverlay. */
+
+/** The dialog, created once and kept. */
+function providerOverlayElements() {
+  return {
+    modal: byId("providerDetailModal"),
+    title: byId("providerDetailTitle"),
+    subtitle: byId("providerDetailSubtitle"),
+    body: byId("providerDetailBody"),
+  };
+}
+
+/** What the open dialog is showing, so a re-render can put it back. */
+let providerOverlayOpen = null;
+
+/** Where the card face says how many models this provider has.
+ *
+ * Read off the same list the Models page renders from: every discovered model
+ * arrives prefixed (`provider/model`), so counting prefixes is counting this
+ * provider's models without a route of its own. The configured refs are
+ * merged into that list by the same endpoint, so a provider whose catalogue
+ * was never refreshed but whose model you set still counts as one. */
+function providerModelCount(providerId) {
+  if (!providerId) return 0;
+  const prefix = `${providerId}/`;
+  return (state.modelOptions || []).filter((ref) =>
+    String(ref).startsWith(prefix),
+  ).length;
+}
+
+function providerModelCountLabel(providerId) {
+  const count = providerModelCount(providerId);
+  if (!count) return "No models detected";
+  return count === 1 ? "1 model" : `${count.toLocaleString()} models`;
+}
+
+/** The one control that answers what a provider's model list actually is.
+ *
+ * It is the same call the Models page's own refresh makes, narrowed to this
+ * provider, so it costs one request rather than one per provider and it
+ * cannot disagree with the catalogue: the names it returns are merged into
+ * the same prefixed list the count is read from. */
+function buildDetectModelsButton(provider) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost-button pv-detect";
+  button.textContent = providerModelCountLabel(provider.provider_id);
+  // The title leads with a plain phrase, because this is the one documented
+  // control whose visible text is a count rather than a name: USAGE and the
+  // Guide call it "Detect models", and the label contract pins that phrase.
+  button.title =
+    "Detect models for " +
+    (provider.display_name || provider.provider_id) +
+    ". Press to ask the provider again.";
+  button.setAttribute(
+    "aria-label",
+    `Detect models for ${provider.display_name || provider.provider_id}`,
+  );
+  button.addEventListener("click", async (event) => {
+    // A control on a card must not also be a press on the card.
+    event.stopPropagation();
+    if (button.disabled) return;
+    const before = button.textContent;
+    button.disabled = true;
+    button.textContent = "Detecting";
+    try {
+      const result = await api(`/admin/api/providers/${provider.provider_id}/test`, {
+        method: "POST",
+        body: "{}",
+      });
+      if (result.ok) {
+        setModelOptions([
+          ...(state.modelOptions || []),
+          ...(result.models || []).map(
+            (model) => `${provider.provider_id}/${model}`,
+          ),
+        ]);
+        button.textContent = providerModelCountLabel(provider.provider_id);
+        // The count is the answer, so it is what the card says; the names
+        // themselves go in the control's tooltip rather than onto the face.
+        const names = result.models || [];
+        if (names.length) {
+          button.title =
+            `${provider.display_name || provider.provider_id}: ` +
+            `${names.length === 1 ? "1 model" : `${names.length.toLocaleString()} models`} ` +
+            `found (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""}).`;
+        }
+        refreshProviderOverlay();
+      } else {
+        button.textContent = before;
+        showMessage(
+          `Could not detect ${provider.display_name || provider.provider_id} models: ${
+            result.message || result.error_type
+          }`,
+          "error",
+        );
+      }
+    } catch (error) {
+      button.textContent = before;
+      showMessage(`Could not detect models: ${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
+/** Refresh models, on the face, without opening anything. */
+function buildRefreshModelsButton(provider) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost-button test-button";
+  button.textContent =
+    provider.kind === "local" ? "Test connection" : "Refresh models";
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    testProvider(provider.provider_id, button);
+  });
+  return button;
+}
+
+/** The card, front and centre. Everything it does not show, the dialog does.
+ *
+ * The face carries exactly five things, and no sixth: the name, the configured
+ * status, the model count, Refresh models and Configure. The key count and the
+ * rotation policy used to be a `provider-meta` line here; USER 2026-11-02 asked
+ * for a compact card, and rotation is a thing you set once, in the dialog,
+ * next to the keys it applies to -- so it moved there rather than being
+ * squeezed to a second line that would put the card back where it started.
+ */
 function renderProviderCard(provider, fields) {
   const card = document.createElement("article");
   card.className = "provider-card pv-card";
@@ -15510,6 +15698,16 @@ function renderProviderCard(provider, fields) {
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
+  // The face is a button in everything but tag: it is focusable, it answers
+  // Enter and Space, and it says out loud that it opens something. A real
+  // `<button>` cannot hold the five controls this face carries (a button may
+  // not contain interactive content), which is why the card takes the role
+  // instead and each control keeps its own.
+  makeCardAFace(card);
+  card.setAttribute(
+    "aria-label",
+    `${provider.display_name || provider.provider_id} settings`,
+  );
 
   const title = document.createElement("div");
   title.className = "provider-title";
@@ -15522,15 +15720,6 @@ function renderProviderCard(provider, fields) {
   title.appendChild(pill);
   card.appendChild(title);
 
-  const meta = document.createElement("div");
-  meta.className = "provider-meta";
-  meta.textContent = providerSummaryText(provider);
-  // The server's own sentence is prose, not a variable name (7.78.0).
-  if (Number(provider.key_count || 0) === 0 && provider.summary) {
-    meta.classList.add("provider-meta-prose");
-  }
-  card.appendChild(meta);
-
   const actions = document.createElement("div");
   actions.className = "pv-actions";
 
@@ -15539,35 +15728,83 @@ function renderProviderCard(provider, fields) {
   configure.className = "secondary-button pv-configure";
   configure.textContent = "Configure";
   configure.setAttribute("aria-expanded", "false");
-  actions.appendChild(configure);
+  configure.setAttribute("aria-haspopup", "dialog");
+  configure.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openProviderOverlay(provider, fields, card);
+  });
+  actions.appendChild(faceControl(configure));
 
   if (provider.custom !== true) {
-    const testButton = document.createElement("button");
-    testButton.type = "button";
-    testButton.className = "ghost-button test-button";
-    testButton.textContent =
-      provider.kind === "local" ? "Test connection" : "Refresh models";
-    testButton.addEventListener("click", () =>
-      testProvider(provider.provider_id, testButton),
-    );
-    actions.appendChild(testButton);
+    actions.appendChild(faceControl(buildRefreshModelsButton(provider)));
   }
   card.appendChild(actions);
+  // The model count / Detect models control gets its own row between the
+  // title and the buttons -- see `.pv-detect` in admin.css for why it is not
+  // sharing the action row.
+  card.appendChild(faceControl(buildDetectModelsButton(provider)));
+  // The dialog's body is not built here -- see the note above the overlay.
+  // Neither is the summary line: `providerSummaryText()` (the key count and
+  // the rotation policy) and the server's own sentence for a keyless provider
+  // both show in the dialog's subtitle and its first paragraph, so the card
+  // spends its height on the five things the reader asked to keep.
 
-  // Every field the provider owns, primary and advanced alike, lives here.
-  // renderField() attaches the multi-key manager and its rotation select for a
-  // credential field, so opening a card gives the whole key pool -- add,
-  // remove, per-key health and rotation policy -- not a single input.
-  const body = document.createElement("div");
-  body.className = "pv-card-body";
+  card.addEventListener("click", (event) => {
+    // Anything that is a control in its own right belongs to itself.
+    if (pressIsOnACardControl(event)) return;
+    openProviderOverlay(provider, fields, card);
+  });
+  card.addEventListener("keydown", (event) => {
+    if (event.target !== card || !cardKeyOpens(event)) return;
+    // Space scrolls the page by default; a focused button does not.
+    event.preventDefault();
+    openProviderOverlay(provider, fields, card);
+  });
+
+  return card;
+}
+
+/** Build the dialog's body for one provider: everything the card used to hold. */
+function buildProviderOverlayBody(provider, fields) {
+  const body = document.createElement("section");
+  body.className = "pv-detail";
+
+  // What the face used to say in a `provider-meta` line: the key count and the
+  // rotation policy in force (`providerSummaryText`), and the server's own
+  // sentence for a keyless provider. Both belong next to the pool they
+  // describe, which is here.
+  const meta = document.createElement("p");
+  meta.className = "provider-meta provider-detail-summary";
+  meta.textContent = providerSummaryText(provider);
+  if (Number(provider.key_count || 0) === 0 && provider.summary) {
+    // A sentence the server wrote is prose, not a variable name (7.78.0).
+    meta.classList.add("provider-meta-prose");
+  }
+  body.appendChild(meta);
+
   const ordered = advancedLast(fields);
-  ordered.forEach((field) => body.appendChild(renderField(field)));
+  // Every field the provider owns, primary and advanced alike.
+  // renderField() attaches the multi-key manager and its rotation select for a
+  // credential field, so the dialog gives the whole key pool -- add, remove,
+  // per-key health and rotation policy -- not a single input.
+  //
+  // A payload that lists the same variable twice for one provider is rendered
+  // ONCE: `buildFieldControl` ids every control `field-<key>`, so a second copy
+  // is a duplicate element id and a second answer to "what is this set to".
+  // The credential-owner rule below handles the shared-credential case; this
+  // handles the payload repeating a key.
+  const rendered = new Set();
+  ordered.forEach((field) => {
+    if (rendered.has(field.key)) return;
+    rendered.add(field.key);
+    body.appendChild(renderField(field));
+  });
   // Two providers can be one account behind two endpoints (OpenCode Zen and
   // OpenCode Go). Only one of them owns the credential input, because a second
   // control bound to the same variable would be two ways to write one value.
-  // Without the block below the other card has nothing to configure at all,
+  // Without the block below the other dialog has nothing to configure at all,
   // which is indistinguishable from broken. The key pool is addressed by
-  // variable rather than by provider, so add and remove work from either card.
+  // variable rather than by provider, so add and remove work from either one.
   const owner = provider.credential_owner_id;
   if (owner && owner !== provider.provider_id) {
     const shared = state.fields?.get(provider.credential_env);
@@ -15579,27 +15816,283 @@ function renderProviderCard(provider, fields) {
   // `display: none`, and this section was explicitly excluded from the
   // section-wide toggle -- so no control anywhere in the dashboard could
   // reveal them. They render now; the collapse is the reader's choice and is
-  // remembered for this card alone.
+  // remembered for this provider alone. The scope key is unchanged, so a
+  // reader's existing choice survives this move.
   if (ordered.some((field) => field.advanced)) {
-    attachAdvancedCollapse(card, `provider:${provider.provider_id}`, body);
+    attachAdvancedCollapse(body, `provider:${provider.provider_id}`, body);
+    // The control sits under the last field, which is where it was in the
+    // card; `attachAdvancedCollapse` appends to its host, so re-append the
+    // toggle explicitly to keep it last.
+    const toggle = body.querySelector(".advanced-toggle");
+    if (toggle) body.appendChild(toggle);
   }
-  card.appendChild(body);
+  return body;
+}
 
-  configure.addEventListener("click", () => {
-    if (card.classList.toggle("pv-open")) {
-      configure.textContent = "Done";
-      configure.setAttribute("aria-expanded", "true");
-      // Managing keys IS the reason to open a provider, so go straight there
-      // rather than making Configure reveal a second button to press.
-      card.querySelectorAll(".key-manager").forEach((manager) => {
-        if (typeof manager.openKeyPool === "function") manager.openKeyPool();
-      });
-    } else {
-      closeProviderCard(card);
+/** Controls on the face of a card: they act, and they do not open the dialog.
+ *
+ * `stopPropagation` inside each handler keeps the card's own click listener
+ * from seeing the press. A keyboard activation is a click too, so it is
+ * covered by the same event -- but Enter on a focused button also bubbles a
+ * keydown first, which the card's own keydown listener would answer, so a
+ * control stops that too. There is one test per face control asserting both
+ * that its own effect happened AND that the dialog stayed shut. */
+function faceControl(control) {
+  control.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+      event.stopPropagation();
     }
   });
+  return control;
+}
 
+/** A card is focusable and says what it is.
+ *
+ * It is a `div`-role button rather than a `<button>` wrapper on purpose: a
+ * button may not contain interactive content, and every card holds real
+ * buttons. The card's own handlers ignore presses that land on a control, so
+ * the face's controls act as themselves.
+ */
+function makeCardAFace(card) {
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-haspopup", "dialog");
   return card;
+}
+
+/** A press on any of these belongs to the control, not to the card. */
+const CARD_CONTROL_SELECTOR =
+  "button, a, input, select, textarea, label, summary";
+
+/** True when `event` landed on (or inside) a control on the card's face. */
+function pressIsOnACardControl(event) {
+  const target = event.target;
+  return Boolean(
+    target && target.closest && target.closest(CARD_CONTROL_SELECTOR),
+  );
+}
+
+/** The keyboard activation a focusable card has to answer itself. */
+function cardKeyOpens(event) {
+  return (
+    event.key === "Enter" || event.key === " " || event.key === "Spacebar"
+  );
+}
+
+/** Open the overlay for one provider.
+ *
+ * `card` is the face that opened it; it is what gets focus back on close, and
+ * `provider`/`fields` are kept so `refreshProviderOverlay()` can rebuild the
+ * body after `renderSections()` has replaced every card on the page.
+ */
+function openProviderOverlay(provider, fields, card, { focusPool = true } = {}) {
+  const { modal, title, subtitle, body } = providerOverlayElements();
+  if (!modal) return;
+  // Opening a dialog that is already open does not take a second scroll lock:
+  // the pair is (open, close), and a second open with one close would leave
+  // the page permanently frozen behind the next dialog.
+  if (!modal.hidden) {
+    modal.hidden = true;
+    unlockBackgroundScroll();
+  }
+  webSearchOverlayOpen = null;
+  providerOverlayOpen = {
+    provider,
+    fields,
+    card,
+    returnFocus: card || document.activeElement,
+  };
+  title.textContent = provider.display_name || provider.provider_id;
+  subtitle.textContent = providerStatusLine(provider);
+  body.textContent = "";
+  body.appendChild(buildProviderOverlayBody(provider, fields));
+  // An edit this provider's dialog already carries -- or any other dialog
+  // closed without applying -- is put back before anything reads a control.
+  applyParkedEdits(body);
+  modal.hidden = false;
+  lockBackgroundScroll();
+  if (focusPool) {
+    // Managing keys IS the reason to open a provider, so go straight to the
+    // pool rather than making Configure reveal a second button to press --
+    // the behaviour Configure has had since it existed.
+    body.querySelectorAll(".key-manager").forEach((manager) => {
+      if (typeof manager.openKeyPool === "function") manager.openKeyPool();
+    });
+  }
+  const close = byId("providerDetailClose");
+  if (close) close.focus();
+}
+
+/** What the dialog's subtitle says: the same facts the face spells out. */
+function providerStatusLine(provider) {
+  const parts = [];
+  if (provider.label || provider.status) parts.push(provider.label || provider.status);
+  if (provider.credential_env) parts.push(provider.credential_env);
+  // The key count and the rotation policy the face used to show in a
+  // `provider-meta` line, next to the pool they describe.
+  parts.push(providerSummaryText(provider));
+  parts.push(providerModelCountLabel(provider.provider_id));
+  return parts.join(" · ");
+}
+
+/** Edits made in the dialog that nobody has applied yet, keyed by setting.
+ *
+ * `changedValues()` only sees controls that are in the document, and a dialog
+ * is opened and closed per provider. So an edit made in one provider's dialog
+ * would be invisible to Apply the moment its nodes go -- "edit two providers,
+ * press Apply, lose the first". The value is remembered by SETTING here (not
+ * by control, and not by provider), so the same answer comes back whichever
+ * dialog shows it, and the dialog that closes cannot take it with it.
+ */
+let providerOverlayParked = new Map();
+
+/** Take back every unapplied edit the dialog is currently showing.
+ *
+ * Called before a rebuild and on close, so a value a person typed but has not
+ * applied is carried across rather than reverted to the server's. The wrapper
+ * and the control both carry `data-key`; only the control has a value, so the
+ * control is what is read.
+ */
+function parkEditedControls(body) {
+  if (!body) return;
+  body
+    .querySelectorAll("input[data-key], select[data-key], textarea[data-key]")
+    .forEach((control) => {
+      if (control.dataset.userEdited !== "true") return;
+      providerOverlayParked.set(control.dataset.key, {
+        value: readFieldValue(control),
+        cleared: control.dataset.userCleared === "true",
+      });
+    });
+}
+
+/** Write parked edits back into a freshly built dialog body. */
+function applyParkedEdits(body) {
+  if (!body || providerOverlayParked.size === 0) return;
+  providerOverlayParked.forEach((edit, key) => {
+    const control = body.querySelector(
+      `input[data-key="${key}"], select[data-key="${key}"], textarea[data-key="${key}"]`,
+    );
+    if (!control || !("value" in control)) return;
+    control.value = edit.value;
+    control.dataset.userEdited = "true";
+    if (edit.cleared) control.dataset.userCleared = "true";
+  });
+}
+
+/** Close the dialog, whichever kind of provider opened it.
+ *
+ * `anchor` names the attribute the opening card carries, so a card the page
+ * has since replaced can still be found: a Providers card is found by
+ * `data-provider`, a Web Search card by `data-websearch-provider`.
+ */
+function closeProviderDialog(anchor) {
+  const { modal, body } = providerOverlayElements();
+  if (!modal || modal.hidden) return;
+  const open = providerOverlayOpen;
+  providerOverlayOpen = null;
+  webSearchOverlayOpen = null;
+  // Anything a reader changed and did not apply is remembered by setting, not
+  // by node, so closing the dialog cannot lose it (see parkEditedControls).
+  parkEditedControls(body);
+  modal.hidden = true;
+  unlockBackgroundScroll();
+  // The body is dropped rather than left hidden: it holds the live controls
+  // for this provider's settings, and a stale copy of a `[data-key]` control
+  // is a second answer to "what is this set to" that Apply would find and
+  // post. Clearing it keeps exactly one of each setting in the document.
+  body.textContent = "";
+  const back = open && open.returnFocus;
+  // A card the page has since replaced with a re-render is no longer in the
+  // document; focusing it would move focus nowhere and lose it entirely, so
+  // the next best anchor is the card that now stands for the same provider.
+  const target =
+    back instanceof HTMLElement && document.contains(back)
+      ? back
+      : document.querySelector(anchor);
+  if (target instanceof HTMLElement) target.focus();
+}
+
+function closeProviderOverlay() {
+  const id = providerOverlayOpen ? providerOverlayOpen.provider.provider_id : "";
+  closeProviderDialog(`.pv-card[data-provider="${goToSelectorPart(id)}"]`);
+}
+
+function closeWebSearchOverlay() {
+  const id = webSearchOverlayOpen ? webSearchOverlayOpen.provider.id : "";
+  closeProviderDialog(`.ws-card[data-websearch-provider="${goToSelectorPart(id)}"]`);
+}
+
+/** Rebuild the open dialog from the current payload, keeping the reader's place.
+ *
+ * This is where these bugs actually live: `renderSections()` clears every
+ * settings container and draws new cards, and `refreshConfigState()` re-reads
+ * the config the dialog is drawn from, so a Save elsewhere or a poll tick can
+ * replace the tree a dialog was built from while it is still on screen. The
+ * dialog's own nodes sit outside those containers and are therefore never
+ * cleared -- but their `[data-key]` controls would then be the PREVIOUS
+ * payload's values while the page's are the new ones, and Apply posts whichever
+ * it walks to. Two saves, one of them old, is the failure this prevents.
+ *
+ * So: rebuild from the new state, then put the reader back where they were --
+ * the dialog body's own scroll offset, and the control that had focus. An edit
+ * nobody has applied yet is carried across first, so a background refresh
+ * cannot quietly revert a half-typed value.
+ */
+function refreshProviderOverlay() {
+  const { modal, subtitle, body } = providerOverlayElements();
+  if (!modal || modal.hidden) return;
+  const open = providerOverlayOpen;
+  const ws = webSearchOverlayOpen;
+  if (!open && !ws) return;
+  // The dialog's own edits go into the same store as the ones from dialogs
+  // that have already closed, so a rebuild has one place to restore from.
+  parkEditedControls(body);
+  const scrollTop = body.scrollTop;
+  const active = document.activeElement;
+  const focusedKey =
+    active && body.contains(active) ? active.dataset.key || active.id : null;
+  if (open) {
+    // Re-resolve the provider from the freshly loaded payload, so a status
+    // that changed while the dialog was open is the status shown.
+    const fresh =
+      (state.config?.provider_status || []).find(
+        (candidate) => candidate.provider_id === open.provider.provider_id,
+      ) || open.provider;
+    const freshFields = Array.from(state.fields?.values() || []).filter(
+      (field) =>
+        field.provider === fresh.provider_id &&
+        // A rotation policy is rendered by the key manager beside the pool it
+        // governs, exactly as `renderProviderGroups` excludes it from the
+        // card's own field list. Including it here drew the same select twice.
+        !field.key.endsWith("_ROTATION"),
+    );
+    open.provider = fresh;
+    if (freshFields.length) open.fields = freshFields;
+    subtitle.textContent = providerStatusLine(open.provider);
+    body.textContent = "";
+    body.appendChild(buildProviderOverlayBody(open.provider, open.fields));
+  } else {
+    const fresh =
+      webSearchProviders().find((entry) => entry.id === ws.provider.id) ||
+      ws.provider;
+    ws.provider = fresh;
+    subtitle.textContent = webSearchOverlaySubtitle(fresh);
+    body.textContent = "";
+    body.appendChild(buildWebSearchOverlayBody(fresh));
+  }
+  body.scrollTop = scrollTop;
+  applyParkedEdits(body);
+  updateDirtyState();
+  if (focusedKey) {
+    const again =
+      body.querySelector(
+        `input[data-key="${focusedKey}"], select[data-key="${focusedKey}"], ` +
+          `textarea[data-key="${focusedKey}"], .field[data-key="${focusedKey}"] input, ` +
+          `.field[data-key="${focusedKey}"] select`,
+      ) || byId(focusedKey);
+    if (again instanceof HTMLElement) again.focus();
+  }
 }
 
 /** Manage a credential this provider borrows from another provider's card. */
@@ -16402,10 +16895,12 @@ function keyRailLabel(legacy) {
 
 /** Say that this card is showing a rail, so the stylesheet can widen it.
  *
- * A rail is six controls across and a provider-grid column is 240px. A
- * built-in card has always taken the whole grid row while its pool is open
- * (`.pv-card.pv-open`, "so the key pool has room to breathe"); this is the
- * same rule, said once, for every card that opens a pool. */
+ * A rail is six controls across and a provider-grid column is 240px. A custom
+ * provider's card renders its rail inline and still takes the whole grid row
+ * for it; a built-in card used to do the same while its pool was open
+ * (`.pv-card.pv-open`) until USER 2026-11-02 moved that pool into the dialog,
+ * so there is no longer a row for it to widen. Kept because the custom card
+ * still needs it. */
 function markKeyRailHost(node, showing) {
   const card = node && node.closest ? node.closest(".provider-card") : null;
   if (!card) return;
@@ -16495,10 +16990,13 @@ async function renderKeyManager(panel, field) {
     list.appendChild(empty);
   }
   // `rows` is the structured listing; `keys` is the pre-7.29.0 shape, still
-  // sent, and still all a dashboard from before this release needs.
+  // sent, and still all a dashboard from before this release needs. An answer
+  // with neither (an older or a stub server) is "no keys", not a crash: this
+  // runs inside a keydown-triggered open now, so throwing here would take the
+  // whole page's event dispatch with it.
   const entries = Array.isArray(info.rows)
     ? info.rows
-    : info.keys.map((masked, index) => ({
+    : (Array.isArray(info.keys) ? info.keys : []).map((masked, index) => ({
         index,
         id: "",
         masked,
@@ -17592,6 +18090,13 @@ function clearedKeys(values = changedValues()) {
     if ((values || {})[input.dataset.key] !== "") return;
     cleared.push(input.dataset.key);
   });
+  // Same reason as the tail of `changedValues()`: a clear made inside a dialog
+  // that has since closed is still a clear this page owes the server.
+  providerOverlayParked.forEach((edit, key) => {
+    if (!edit.cleared || edit.value !== "") return;
+    if (document.querySelector(`[data-key="${key}"]`)) return;
+    if (!cleared.includes(key)) cleared.push(key);
+  });
   return cleared;
 }
 
@@ -17632,6 +18137,22 @@ function changedValues() {
     if (value !== input.dataset.original) {
       values[input.dataset.key] = value;
     }
+  });
+  // USER 2026-11-02: a provider's settings are edited in a dialog, and the
+  // dialog closes when the reader moves to the next provider. Their edit is
+  // remembered by setting (parkEditedControls) rather than by node, so it has
+  // to be read from there too -- otherwise "edit two providers, press Apply"
+  // would silently save only the second. A parked value that the document no
+  // longer holds a control for wins; one the document does hold is already in
+  // `values` from the walk above.
+  providerOverlayParked.forEach((edit, key) => {
+    if (Object.prototype.hasOwnProperty.call(values, key)) return;
+    if (document.querySelector(`[data-key="${key}"]`)) return;
+    if (edit.value === "") {
+      // A cleared setting travels in `cleared`, not in `values`.
+      return;
+    }
+    values[key] = edit.value;
   });
   return values;
 }
@@ -17719,6 +18240,18 @@ async function apply() {
     showValidationResult(result);
     return;
   }
+  // Everything the page was holding has just been written, so nothing is
+  // waiting to be applied any more -- including a dialog that is still open
+  // with the reader's edit in it. Its marks are cleared as well, and ONLY its
+  // own: the reload below rebuilds the dialog from the saved payload, and a
+  // control still marked "edited" would park the very value that was just
+  // saved and make the page read dirty again the moment it came back.
+  providerOverlayParked.clear();
+  byId("providerDetailBody")
+    ?.querySelectorAll("[data-user-edited]")
+    .forEach((control) => {
+      delete control.dataset.userEdited;
+    });
   const restart = result.restart || {};
   if (restart.required && restart.automatic) {
     // Name the fields that caused it: since 7.48.0 almost every field applies
@@ -23880,6 +24413,106 @@ function renderWebSearchAdvanced(provider) {
   return details;
 }
 
+/** What the open web-search dialog is showing, for the same re-render reason. */
+let webSearchOverlayOpen = null;
+
+/** The dialog's body for one search provider: everything the card used to hold.
+ *
+ * The same three things moved out of the card as on the Providers page --
+ * the rotation policy (7.121.2 put it on the card because it had no home),
+ * the advanced options group (7.122.3 said the group opens by default, and it
+ * still does, inside the dialog), and the key pool behind Manage keys.
+ */
+function buildWebSearchOverlayBody(provider) {
+  const body = document.createElement("section");
+  body.className = "pv-detail";
+  // The one search control that was on the card's action row and is not a
+  // setting: "Test provider" calls the provider with a real query. It moved
+  // here with the rest, and it comes first because it is the quick answer to
+  // "does this key work at all".
+  const actions = document.createElement("div");
+  actions.className = "pv-detail-actions";
+  const testButton = document.createElement("button");
+  testButton.type = "button";
+  testButton.className = "test-button";
+  testButton.textContent = "Test provider";
+  testButton.addEventListener("click", () =>
+    testWebSearchProvider(provider, testButton),
+  );
+  actions.appendChild(testButton);
+  body.appendChild(actions);
+  // 7.121.2: the key pool's rotation policy, in the dialog whose pool it is.
+  // The generic grid skips every `_ROTATION` field because this dialog hosts
+  // its own; renderField gives it what every field has -- its source, its
+  // default, "Use default", its help -- and the same dirty/apply wiring.
+  const rotationField = provider.rotationKey
+    ? state.fields.get(provider.rotationKey)
+    : null;
+  if (rotationField) body.appendChild(renderField(rotationField));
+  const advanced = renderWebSearchAdvanced(provider);
+  if (advanced) body.appendChild(advanced);
+  if (provider.envKey) {
+    const manageButton = document.createElement("button");
+    manageButton.type = "button";
+    manageButton.className = "ghost-button";
+    manageButton.textContent = "Manage keys";
+    const panel = document.createElement("div");
+    panel.className = "ws-key-manager";
+    panel.hidden = true;
+    manageButton.addEventListener("click", () =>
+      toggleKeyManager(provider, panel, manageButton),
+    );
+    body.append(manageButton, panel);
+    // Managing keys IS the reason to open a provider, exactly as on the
+    // Providers page: open the pool rather than making the reader press a
+    // second button.
+    toggleKeyManager(provider, panel, manageButton);
+  }
+  return body;
+}
+
+function openWebSearchOverlay(provider, active, effectiveProvider, card) {
+  const { modal, title, subtitle, body } = providerOverlayElements();
+  if (!modal) return;
+  // Same guard as openProviderOverlay: one open takes one lock, and one close
+  // gives it back.
+  if (!modal.hidden) {
+    modal.hidden = true;
+    unlockBackgroundScroll();
+  }
+  providerOverlayOpen = null;
+  webSearchOverlayOpen = {
+    provider,
+    card,
+    returnFocus: card || document.activeElement,
+  };
+  title.textContent = provider.label;
+  subtitle.textContent = webSearchOverlaySubtitle(provider, active, effectiveProvider);
+  body.textContent = "";
+  body.appendChild(buildWebSearchOverlayBody(provider));
+  applyParkedEdits(body);
+  modal.hidden = false;
+  lockBackgroundScroll();
+  const close = byId("providerDetailClose");
+  if (close) close.focus();
+}
+
+/** The dialog's caption for a search provider: status, then the key's name. */
+function webSearchOverlaySubtitle(provider, active, effectiveProvider) {
+  const selection =
+    active === undefined ? state.fields.get("WEB_SEARCH_PROVIDER")?.value || "auto" : active;
+  const effective =
+    effectiveProvider === undefined
+      ? effectiveWebSearchProvider(webSearchProviders(), selection)
+      : effectiveProvider;
+  return [
+    provider.configured ? "Configured" : "Missing key",
+    webSearchProviderMeta(provider, selection, effective),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 // Only the effective provider needs to compete for attention; the rest of
 // the strip stays legible but visibly secondary. Shared with
 // updateWebSearchCardsFromState() so a live selection change re-applies the
@@ -23909,12 +24542,16 @@ function renderWebSearchProviders() {
   renderWebSearchRouteSummary(providers, active, effectiveProvider);
   providers.forEach((provider) => {
     const card = document.createElement("article");
-    card.className = "provider-card";
+    card.className = "provider-card ws-card";
     card.dataset.websearchProvider = provider.id;
     // U6: what the find box is allowed to match (see
     // webSearchProviderHaystack); the card's rendered text is not in it.
     card.dataset.wsSearch = webSearchProviderHaystack(provider);
     card.dataset.wsConfigured = provider.configured ? "true" : "false";
+    // The same face contract as a model provider's card: focusable, acts as a
+    // button, says it opens something.
+    makeCardAFace(card);
+    card.setAttribute("aria-label", `${provider.label} settings`);
 
     const title = document.createElement("div");
     title.className = "provider-title";
@@ -23936,56 +24573,38 @@ function renderWebSearchProviders() {
     const actions = document.createElement("div");
     actions.className = "card-actions";
 
+    // "Use provider" stays on the face: it is the one decision a reader makes
+    // here, and it costs no height the card did not already have.
     const selectButton = document.createElement("button");
     selectButton.type = "button";
     selectButton.className = "ghost-button";
     selectButton.textContent =
       active === provider.id ? "Selected" : "Use provider";
     selectButton.disabled = active === provider.id || !provider.configured;
-    selectButton.addEventListener("click", () =>
-      selectWebSearchProvider(provider.id),
-    );
-    actions.appendChild(selectButton);
-
-    const testButton = document.createElement("button");
-    testButton.type = "button";
-    testButton.className = "test-button";
-    testButton.textContent = "Test provider";
-    testButton.addEventListener("click", () =>
-      testWebSearchProvider(provider, testButton),
-    );
-    actions.appendChild(testButton);
+    selectButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectWebSearchProvider(provider.id);
+    });
+    actions.appendChild(faceControl(selectButton));
 
     card.append(title, meta, actions);
     setWebSearchCardEffective(card, effectiveProvider === provider.id);
-    // 7.121.2: the key pool's rotation policy, on the card whose pool it is.
-    // The generic grid skips every `_ROTATION` field because a provider card
-    // hosts its own (keyManagerForField); a web-search card never hosted one,
-    // so these settings could be saved in .env and seen nowhere. renderField
-    // gives it what every field has -- its source, its default, "Use default",
-    // its help -- and the same dirty/apply wiring.
-    const rotationField = provider.rotationKey
-      ? state.fields.get(provider.rotationKey)
-      : null;
-    if (rotationField) card.appendChild(renderField(rotationField));
-    const advanced = renderWebSearchAdvanced(provider);
-    if (advanced) {
-      card.appendChild(advanced);
-    }
-    if (provider.envKey) {
-      const manageButton = document.createElement("button");
-      manageButton.type = "button";
-      manageButton.className = "ghost-button";
-      manageButton.textContent = "Manage keys";
-      const panel = document.createElement("div");
-      panel.className = "ws-key-manager";
-      panel.hidden = true;
-      manageButton.addEventListener("click", () =>
-        toggleKeyManager(provider, panel, manageButton),
-      );
-      actions.appendChild(manageButton);
-      card.appendChild(panel);
-    }
+    // Everything below is the dialog's now: the rotation policy, the advanced
+    // options group and the key pool. Nothing is built here -- a `[data-key]`
+    // control left on the page behind `display: none` is still found by
+    // changedValues() and posted by Apply (see the note above the provider
+    // overlay), and a pool built here would be one request per search
+    // provider on every page load.
+    card.addEventListener("click", (event) => {
+      if (pressIsOnACardControl(event)) return;
+      openWebSearchOverlay(provider, active, effectiveProvider, card);
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.target !== card || !cardKeyOpens(event)) return;
+      // Space scrolls the page by default; a focused button does not.
+      event.preventDefault();
+      openWebSearchOverlay(provider, active, effectiveProvider, card);
+    });
     grid.appendChild(card);
   });
   ["WEB_SEARCH_PROVIDER", "WEB_SEARCH_FALLBACK_POLICY"].forEach((key) => {
@@ -24000,6 +24619,9 @@ function renderWebSearchProviders() {
   });
   applyWebSearchProviderFilter(byId("webSearchProviderSearch")?.value.trim().toLowerCase() || "");
   wireWebSearchProviderSearch();
+  // The grid was just rebuilt; a dialog opened from one of its cards is
+  // rebuilt from the same state for the same reason as the Providers grid.
+  refreshProviderOverlay();
 }
 
 // Filters by hiding (not detaching), same reasoning as the Providers tab's
@@ -24434,6 +25056,10 @@ async function refreshConfigState() {
     }
   });
   updateWebSearchCardsFromState();
+  // A dialog open over the page holds `[data-key]` controls drawn from the
+  // payload just replaced; rebuild it from the new one before anything reads
+  // a control (see refreshProviderOverlay).
+  refreshProviderOverlay();
   // The pause lists came with it; a row must not keep showing the old ones.
   syncRoutePauseUi();
   // state.fields is the calculator's fallback when a control has not been
@@ -24519,6 +25145,10 @@ async function loadKeyManager(provider, panel) {
       entry,
     ]),
   );
+  // A server (or a stub) that answers without a `keys` array means "no keys",
+  // not a broken page: this runs from a press inside the provider dialog now,
+  // and throwing here would take the caller's event dispatch with it.
+  const keys = Array.isArray(result.keys) ? result.keys : [];
   // 7.113.0: why each key is benched, and which pool serves today's route.
   const keyHealth = result.key_health || null;
   const factsByIndex = new Map(
@@ -24537,7 +25167,7 @@ async function loadKeyManager(provider, panel) {
           "Test provider and by searches when no chain is set.";
     panel.insertBefore(note, list);
   }
-  if (result.keys.length === 0) {
+  if (keys.length === 0) {
     const empty = document.createElement("div");
     empty.className = "ws-key-empty";
     empty.textContent =
@@ -24557,7 +25187,7 @@ async function loadKeyManager(provider, panel) {
   };
   // `rows` carries the id and the name; `keys` is the pre-7.29.0 shape and
   // is still what the add and delete responses return.
-  const wsEntries = Array.isArray(result.rows) ? result.rows : result.keys;
+  const wsEntries = Array.isArray(result.rows) ? result.rows : keys;
   wsEntries.forEach((entry, index) => {
     const row = keyRailRow("ws-key-row");
     const label = keyRailLabel("ws-key-label");
@@ -25771,29 +26401,6 @@ function closeWebSearchDetail() {
     state.webSearchDetailReturnFocus.focus();
   }
   state.webSearchDetailReturnFocus = null;
-}
-
-function trapWebSearchDetailFocus(event) {
-  const modal = byId("webSearchDetailModal");
-  if (event.key !== "Tab" || modal.hidden) return;
-  const focusable = Array.from(
-    modal.querySelectorAll(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter((element) => element instanceof HTMLElement && !element.hidden);
-  if (focusable.length === 0) {
-    event.preventDefault();
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }
 
 function webSearchAnalyticsParams({ includePeriod = false, limit = null } = {}) {
@@ -31254,15 +31861,7 @@ byId("webSearchClearButton").addEventListener("click", () =>
   clearWebSearchAnalytics().catch((error) => showMessage(error.message, "error")),
 );
 byId("webSearchDetailClose").addEventListener("click", closeWebSearchDetail);
-byId("webSearchDetailModal").addEventListener("click", (event) => {
-  if (event.target === byId("webSearchDetailModal")) closeWebSearchDetail();
-});
-document.addEventListener("keydown", (event) => {
-  trapWebSearchDetailFocus(event);
-  if (event.key === "Escape" && !byId("webSearchDetailModal").hidden) {
-    closeWebSearchDetail();
-  }
-});
+dialogKit({ modal: byId("webSearchDetailModal"), close: closeWebSearchDetail });
 document.addEventListener("pointerdown", (event) => {
   state.modelComboboxes.forEach((combobox) => {
     if (combobox.isOpen && !combobox.element.contains(event.target)) combobox.close();
@@ -31271,18 +31870,10 @@ document.addEventListener("pointerdown", (event) => {
 
 // Export window.
 byId("exportClose").addEventListener("click", closeExportModal);
-byId("exportModal").addEventListener("click", (event) => {
-  if (event.target === byId("exportModal")) closeExportModal();
-});
+dialogKit({ modal: byId("exportModal"), close: closeExportModal });
 byId("exportDownloadButton").addEventListener("click", () =>
   runExport().catch((error) => showMessage(error.message, "error")),
 );
-document.addEventListener("keydown", (event) => {
-  trapExportModalFocus(event);
-  if (event.key === "Escape" && !byId("exportModal").hidden) {
-    closeExportModal();
-  }
-});
 document.querySelectorAll('input[name="exportScope"]').forEach((radio) => {
   radio.addEventListener("change", () => {
     const scope = exportScope();
@@ -40474,6 +41065,137 @@ function clearChart(canvas) {
   context.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+/* -------------------------------------------------- the dashboard's dialogs
+   Three modals already existed when the provider overlay needed a fourth, and
+   each carried its own copy of the same three behaviours: the backdrop click
+   that closes, the Escape that closes, and the Tab that wraps inside. Writing
+   a fourth copy is how three copies became four; more to the point, the
+   provider overlay has to behave *exactly* like the request detail, and two
+   copies of "exactly" drift apart.
+
+   So those behaviours live here once and every dialog -- the three that
+   predate it and the overlay that does not -- goes through them.
+
+   The scroll lock is the one NEW behaviour, and it is deliberately not part of
+   the kit: a dialog takes it in its own opener and gives it back in its own
+   closer, which is where the (open, close) pair actually is. The three older
+   dialogs do not take it, so they keep the behaviour they shipped with.
+
+   The dialogs are also named in ONE list, because three separate places ask
+   "is a dialog open?" before acting on Escape, and a fourth dialog that none
+   of them knows about would quietly let the page behind answer Escape too. */
+const DASHBOARD_DIALOG_IDS = [
+  "webSearchDetailModal",
+  "exportModal",
+  "reqDetailModal",
+  "providerDetailModal",
+];
+
+/* Everything Tab may reach inside an open dialog, in document order.
+ *
+ * The selector is the request dialog's own, which is the widest of the three:
+ * it names `summary` explicitly, because a fold is tabbable without carrying a
+ * tabindex attribute. For the two dialogs that used a narrower selector the
+ * only elements this adds are ones that were already reachable, so their
+ * keyboard behaviour is unchanged. */
+function dialogFocusable(modal) {
+  return Array.from(
+    modal.querySelectorAll(
+      'button:not([disabled]), summary, [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter(
+    (element) =>
+      element instanceof HTMLElement &&
+      !element.hidden &&
+      element.closest("[hidden]") === null,
+  );
+}
+
+/** Keep Tab inside `modal`, wrapping at both ends. Returns true when it moved focus. */
+function trapDialogFocus(modal, event) {
+  if (event.key !== "Tab") return false;
+  const focusable = dialogFocusable(modal);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    return true;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return true;
+  }
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+    return true;
+  }
+  return false;
+}
+
+/** Freeze the page behind an open dialog.
+ *
+ * Two things happen together, because either alone fails:
+   - the body gets `overflow: hidden`, so the wheel and the scrollbar cannot
+     move the page; and
+   - it is padded by the width the scrollbar gave back, so the page behind
+     does not jump sideways when the bar disappears.
+   The lock is counted, because a dialog can be opened from a page that
+   already has one open. */
+let dialogScrollLocks = 0;
+let dialogScrollPad = "";
+let dialogScrollOverflow = "";
+
+function lockBackgroundScroll() {
+  dialogScrollLocks += 1;
+  if (dialogScrollLocks > 1) return;
+  const gap = window.innerWidth - document.documentElement.clientWidth;
+  dialogScrollPad = document.body.style.paddingRight;
+  dialogScrollOverflow = document.body.style.overflow;
+  if (gap > 0) {
+    const current = parseFloat(getComputedStyle(document.body).paddingRight) || 0;
+    document.body.style.paddingRight = `${current + gap}px`;
+  }
+  document.body.style.overflow = "hidden";
+}
+
+function unlockBackgroundScroll() {
+  if (dialogScrollLocks === 0) return;
+  dialogScrollLocks -= 1;
+  if (dialogScrollLocks > 0) return;
+  document.body.style.overflow = dialogScrollOverflow;
+  document.body.style.paddingRight = dialogScrollPad;
+  dialogScrollPad = "";
+  dialogScrollOverflow = "";
+}
+
+/** The three shared dialog behaviours, wired once per dialog.
+ *
+ * `close()` is that dialog's own closer, so each keeps its own effects
+ * (returning focus, stopping a stream, clearing a player). The scroll lock is
+ * NOT here: a dialog that wants it takes it in its own opener and releases it
+ * in its own closer, which is where the (open, close) pair actually is.
+ */
+function dialogKit({ modal, close }) {
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (modal.hidden) return;
+    if (event.key === "Escape") {
+      close();
+      return;
+    }
+    trapDialogFocus(modal, event);
+  });
+}
+
+/** True while any dashboard dialog is on screen. */
+function dashboardDialogIsOpen() {
+  return DASHBOARD_DIALOG_IDS.map(byId).some((modal) => modal && !modal.hidden);
+}
+
 function closeRequestDetail() {
   byId("reqDetailModal").hidden = true;
   // An answer still on its way about this request paints nothing now.
@@ -40488,37 +41210,6 @@ function closeRequestDetail() {
     reqState.detailReturnFocus.focus();
   }
   reqState.detailReturnFocus = null;
-}
-
-function trapRequestDetailFocus(event) {
-  const modal = byId("reqDetailModal");
-  if (event.key !== "Tab" || modal.hidden) return;
-  const focusable = Array.from(
-    modal.querySelectorAll(
-      // `summary` is tabbable without carrying a tabindex attribute, so it has
-      // to be named explicitly or the reasoning pane becomes unreachable.
-      'button:not([disabled]), summary, [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter(
-    (element) =>
-      element instanceof HTMLElement &&
-      !element.hidden &&
-      // Panes are hidden when the turn had no reasoning or no tool calls.
-      element.closest("[hidden]") === null,
-  );
-  if (focusable.length === 0) {
-    event.preventDefault();
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }
 
 /* ------------------------------------------------------------- export window */
@@ -40701,32 +41392,6 @@ function closeExportModal() {
     exportReturnFocus.focus();
   }
   exportReturnFocus = null;
-}
-
-function trapExportModalFocus(event) {
-  const modal = byId("exportModal");
-  if (event.key !== "Tab" || modal.hidden) return;
-  const focusable = Array.from(
-    modal.querySelectorAll(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  ).filter(
-    (element) =>
-      element instanceof HTMLElement && !element.hidden && element.closest("[hidden]") === null,
-  );
-  if (focusable.length === 0) {
-    event.preventDefault();
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
 }
 
 /* RANGE: `exportPeriodSeconds()`, `exportCustomSince()` and
@@ -40925,18 +41590,16 @@ document.addEventListener("visibilitychange", () => {
 });
 
 byId("reqDetailClose").addEventListener("click", closeRequestDetail);
-byId("reqDetailModal").addEventListener("click", (event) => {
-  if (event.target === byId("reqDetailModal")) closeRequestDetail();
-});
+dialogKit({ modal: byId("reqDetailModal"), close: closeRequestDetail });
+// The provider overlay: the same kit, and one closer that knows which kind of
+// provider opened it -- the two surfaces share one dialog.
+const closeProviderDetail = () =>
+  providerOverlayOpen ? closeProviderOverlay() : closeWebSearchOverlay();
+byId("providerDetailClose").addEventListener("click", closeProviderDetail);
+dialogKit({ modal: byId("providerDetailModal"), close: closeProviderDetail });
 byId("reqRawExportToggle").addEventListener("click", toggleRawExportPanel);
 byId("reqRawExportDownload").addEventListener("click", () => {
   runRawRequestExport();
-});
-document.addEventListener("keydown", (event) => {
-  trapRequestDetailFocus(event);
-  if (event.key === "Escape" && !byId("reqDetailModal").hidden) {
-    closeRequestDetail();
-  }
 });
 /**
  * Re-run the analytics query from page 1 and remember the filters.
@@ -48263,12 +48926,7 @@ function initModelsView() {
     if (event.key !== "Escape") return;
     // Escape belongs to whichever modal is open; only when none is does it
     // mean "drop this selection".
-    const modals = [
-      "webSearchDetailModal",
-      "exportModal",
-      "reqDetailModal",
-    ].map(byId);
-    if (modals.some((modal) => modal && !modal.hidden)) return;
+    if (dashboardDialogIsOpen()) return;
     if (modelsState.selected.size) {
       clearModelsSelection();
       return;
@@ -48835,8 +49493,7 @@ function initRouteRails() {
       return;
     }
     if (event.key !== "Escape") return;
-    const modals = ["webSearchDetailModal", "exportModal", "reqDetailModal"].map(byId);
-    if (modals.some((modal) => modal && !modal.hidden)) return;
+    if (dashboardDialogIsOpen()) return;
     if (state.routeDrag) {
       // Abandoned, not applied: the target is dropped so endRouteDrag has
       // nothing to act on.

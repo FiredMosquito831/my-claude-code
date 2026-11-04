@@ -115,6 +115,11 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
   const buttonIn = (root, text) =>
     Array.from((root || doc).querySelectorAll("button")).find((button) => flat(button) === text) || null;
   const card = (id) => doc.querySelector(`[data-websearch-provider="${id}"]`);
+  const closeDialog = () => {
+    if (!doc.getElementById("providerDetailModal").hidden) {
+      doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+  };
   const chainCard = () => doc.querySelector(".ws-chain-card");
   const chainRows = () => Array.from(doc.querySelectorAll(".ws-chain-card .model-chain-row"));
   const chainInput = () => doc.querySelector('input[data-key="WEB_SEARCH_CHAIN"]');
@@ -182,15 +187,15 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
   }
 
   async function openKeys(providerId) {
+    /* USER 2026-11-02: the key pool lives in the provider's dialog now, and
+       the dialog opens it eagerly (managing keys is the reason to open a
+       provider). So a press on the card is the whole gesture; the returned
+       panel is the dialog's own `.ws-key-manager`. */
     const host = card(providerId);
-    const manage = buttonIn(host, "Manage keys") || buttonIn(host, "Hide keys");
-    if (manage && flat(manage) === "Hide keys") {
-      press(manage);
-      await settle();
-    }
-    press(buttonIn(host, "Manage keys"));
+    if (host) press(host);
+    await settle();
     await wait(400);
-    return host.querySelector(".ws-key-manager");
+    return doc.getElementById("providerDetailBody").querySelector(".ws-key-manager");
   }
 
   function describeKeys(panel) {
@@ -359,7 +364,9 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     press(words.querySelector(".ws-key-reset"));
     await wait(500);
     out.resetPosts = posts.filter((post) => /\/reset/.test(post.path)).slice(resetsBefore);
-    out.afterReset = describeKeys(card("exa").querySelector(".ws-key-manager"));
+    out.afterReset = describeKeys(
+      doc.getElementById("providerDetailBody").querySelector(".ws-key-manager"),
+    );
 
     // ----------------------------- WEB_SEARCH_PROVIDER=disabled still wins
     fieldsMode = "fields_chain_disabled";
@@ -378,6 +385,16 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
           pill: flat(c7.querySelector(".status-pill")),
           meta: flat(c7.querySelector(".provider-meta")),
           buttons: Array.from(c7.querySelectorAll(".card-actions button")).map(flat),
+          // USER 2026-11-02: "Test provider" and "Manage keys" moved into the
+          // provider's dialog with the rest of the form, so the face carries
+          // "Use provider" and those two are read where they now live.
+          dialogButtons: (() => {
+            press(c7);
+            const body = doc.getElementById("providerDetailBody");
+            const names = Array.from(body.querySelectorAll("button")).map(flat);
+            closeDialog();
+            return names;
+          })(),
         }
       : null;
     out.cardOrder = Array.from(doc.querySelectorAll("#webSearchGrid .provider-card")).map(

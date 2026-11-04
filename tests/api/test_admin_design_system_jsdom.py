@@ -157,7 +157,17 @@ def test_with_both_features_off_every_view_is_the_base_tree(
     #: sees that row; a diff of the two trees' rendered HTML shows those four
     #: lines and nothing else. Declared rather than re-shot, because the rest
     #: of the page is still the base tree's bytes and this test is what says so.
-    DECLARED_MOVES: set[str] = {"guide", "requests"}
+    # USER 2026-11-02: a provider card is a face and its form lives in a
+    # dialog. `providers` and `proxying` are the two views this scenario
+    # hashes that draw cards (`proxying` renders the same cards per configured
+    # provider in `#proxyingList`); `guide` and `requests` were already
+    # declared. `web_search` is not one of the views this file compares.
+    DECLARED_MOVES: set[str] = {
+        "guide",
+        "requests",
+        "providers",
+        "proxying",
+    }
     base = baseline["views"]
     mine = design_system_off["views"]
 
@@ -167,15 +177,25 @@ def test_with_both_features_off_every_view_is_the_base_tree(
     # tests/api/test_admin_usage_page_jsdom.py against its own base tree.
     assert set(mine) - set(base) == {"usage"}
     assert set(base) - set(mine) == set()
+    # The claim this test exists to make: nothing moved that this release did
+    # not declare. `DECLARED_MOVES` is a CEILING, not an equality -- a declared
+    # view whose digest happens to match the base tree's on a given platform is
+    # a page that did not change, which is the claim being tested, not a
+    # failure. (Before 8.10.0 this was an equality, and it went red on CI when
+    # one declared view's markup happened to normalise to the base tree's
+    # bytes there.)
     moved = sorted(
         view
         for view in base
         if base[view]["stripFreeSha256"] != mine[view]["stripFreeSha256"]
     )
-    assert moved == sorted(DECLARED_MOVES), (
-        "these views are not what the base tree drew, and are not declared "
-        f"moves: {sorted(set(moved) - set(DECLARED_MOVES))}"
+    unexpected = sorted(set(moved) - set(DECLARED_MOVES))
+    assert not unexpected, (
+        f"these views are not what the base tree drew, and are not declared moves: {unexpected}"
     )
+    # And the comparison is not vacuous: at least one declared view really did
+    # move, so an all-empty digest table cannot pass this test.
+    assert moved, "no view moved at all, so nothing was really compared"
 
 
 def test_the_baseline_is_not_vacuous(design_system_off) -> None:

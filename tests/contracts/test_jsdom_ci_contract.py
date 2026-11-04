@@ -35,6 +35,11 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "tests.yml"
 _SUITES = (
     "tests/api/test_admin_static_jsdom.py",
+    # 8.10.0 (CARDS-OVERLAY): a provider card is a face and its form lives in
+    # a dialog -- the five controls, field-by-field completeness, keyboard and
+    # focus, the page-behind scroll lock, a re-render while it is open, and a
+    # base-written DOM baseline for both surfaces.
+    "tests/api/test_admin_cards_overlay_jsdom.py",
     "tests/api/test_admin_ux_pass_jsdom.py",
     "tests/api/test_admin_design_system_jsdom.py",
     "tests/api/test_admin_design_shell_jsdom.py",

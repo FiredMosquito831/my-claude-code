@@ -1,0 +1,64 @@
+{
+ "base_commit": "32109387",
+ "cards": {
+  "provider": {
+   "children": [
+    "provider-title",
+    "provider-meta",
+    "pv-actions",
+    "pv-card-body"
+   ],
+   "controls": [
+    "Configure",
+    "Refresh models",
+    "Manage keys",
+    "Collapse advanced"
+   ],
+   "dataKeys": 5,
+   "pill": "Configured",
+   "role": null,
+   "tabIndex": -1
+  },
+  "webSearch": {
+   "children": [
+    "provider-title",
+    "provider-meta",
+    "card-actions",
+    "ws-advanced",
+    "ws-key-manager"
+   ],
+   "controls": [
+    "Use provider",
+    "Test provider",
+    "Manage keys"
+   ],
+   "dataKeys": 2,
+   "role": null
+  }
+ },
+ "overlay": {
+  "ariaModal": null,
+  "closeable": false,
+  "present": false,
+  "role": null
+ },
+ "views": {
+  "claude": "7ff95fd0cfaec08b",
+  "coding_agents": "48ec14bd253324b0",
+  "docs": "1f281c94bfe6a10c",
+  "get_started": "b5daa7ee5cbe6fbc",
+  "guide": "061fd618ac34f194",
+  "limits": "b468bdc668c2513e",
+  "marketplaces": "890238af8383889b",
+  "messaging": "de6133f1edf1a3af",
+  "model_config": "1eab790179d96294",
+  "models": "e1ceb81a63eee0c3",
+  "optimizer": "c7e382f349abe795",
+  "providers": "94cf5eea8f0415a6",
+  "proxying": "fdb59a90ea825424",
+  "requests": "bfe1d125f283877d",
+  "usage": "828d918661c197bc",
+  "web_search": "9618ab6a9f6d5b87"
+ },
+ "written_by": "BASE tree 32109387 (v8.9.0), scenario cards_overlay"
+}

@@ -30,6 +30,12 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     "Remove",
     "Rotation",
     "Refresh models",
+    # USER 2026-11-02: the Guide and USAGE both name the count control on a
+    # provider's card, so a rename of it must fail here rather than quietly
+    # make the walkthrough wrong. Its visible text is the count ("No models
+    # detected", "1,250 models"), so the phrase the docs write — "Detect
+    # models" — is the one carried in its `aria-label`.
+    "Detect models",
     "Test connection",
     "Validate",
     "Apply",

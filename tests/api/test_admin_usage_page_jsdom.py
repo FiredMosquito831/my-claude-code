@@ -644,7 +644,11 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
     #: picker is inside that view's DOM and gained one checkbox for the new
     #: "Provider raw output" kind. A diff of the two trees' rendered HTML shows
     #: those four lines and nothing else on the page.
-    DECLARED_MOVES = {"guide", "requests", "usage"}
+    #: 8.10.0 adds `providers` on the same terms: a provider card is a face
+    #: now and its form lives in a dialog over the page (USER 2026-11-02), so
+    #: that view's card markup is deliberately different. Nothing else on the
+    #: page moves.
+    DECLARED_MOVES = {"guide", "requests", "usage", "providers"}
 
     # No view is new and none was removed: 8.3.0 already had the page.
     assert sorted(set(mine) - set(base)) == []

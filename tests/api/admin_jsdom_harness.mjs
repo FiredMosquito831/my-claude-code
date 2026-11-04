@@ -7208,16 +7208,21 @@ const metaTextIn = (key) => {
    rather than Limits, because the whole point of 7.34.0's switch is that an
    operator finds it on the card whose key it decides the spending of. */
 const providersView = doc.querySelector('.admin-view[data-view="providers"]');
+/* USER 2026-11-02: a provider's settings are in its dialog, built on open.
+   The Zen card is pressed the way a reader presses it, and the reading below
+   is taken from the dialog's body. */
 const opencodeCard = providersView
-  ? Array.from(providersView.querySelectorAll(".provider-card")).find((card) =>
-      card.querySelector('[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]'),
+  ? Array.from(providersView.querySelectorAll(".pv-card")).find(
+      (card) => card.dataset.provider === "opencode",
     )
   : null;
-const opencodeCredentialControl = opencodeCard
-  ? opencodeCard.querySelector('select[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]')
+if (opencodeCard) opencodeCard.click();
+const opencodeDetail = doc.getElementById("providerDetailBody");
+const opencodeCredentialControl = opencodeDetail
+  ? opencodeDetail.querySelector('select[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]')
   : null;
-const opencodeCredentialRow = opencodeCard
-  ? opencodeCard.querySelector('.field[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]')
+const opencodeCredentialRow = opencodeDetail
+  ? opencodeDetail.querySelector('.field[data-key="OPENCODE_FREE_TIER_CREDENTIAL"]')
   : null;
 const opencodeCredential = opencodeCredentialControl
   ? {
@@ -7233,12 +7238,15 @@ const opencodeCredential = opencodeCredentialControl
       help: opencodeCredentialRow
         ? (opencodeCredentialRow.textContent || "").replace(/\s+/g, " ").trim()
         : "",
-      // The key it is an alternative to spending is on the same card.
+      // The key it is an alternative to spending is in the same dialog.
       cardHasApiKey: Boolean(
-        opencodeCard.querySelector('[data-key="OPENCODE_API_KEY"]'),
+        opencodeDetail.querySelector('[data-key="OPENCODE_API_KEY"]'),
       ),
     }
   : null;
+if (opencodeCard) {
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+}
 
 const unsetSelect = describeControl(controlIn("FALLBACK_BENCH_ENABLED"));
 const setSelect = describeControl(controlIn("LOG_LEVEL"));
@@ -12668,27 +12676,41 @@ const advancedFields = (() => {
   ];
   const host = doc.createElement("div");
   doc.body.appendChild(host);
-  host.appendChild(window.eval("renderProviderGroups")(providerFields));
+  const grid = window.eval("renderProviderGroups")(providerFields);
+  host.appendChild(grid);
+  /* USER 2026-11-02: the card is a face and its fields live in the dialog.
+     The dialog is opened the way a reader opens it, and the readings below
+     are taken from its body -- the same fields, the same order, the same
+     advanced tag, the same fold, moved one surface over. */
   const pv = host.querySelector(".pv-card");
+  if (pv) pv.click();
+  const detailHost = doc.getElementById("providerDetailBody");
+  // The fields live in a `.pv-detail` section inside the dialog body, and that
+  // section is what carries `collapse-advanced` -- the same element the card
+  // body used to be.
+  const detail = detailHost.querySelector(".pv-detail") || detailHost;
   out.provider = pv
     ? {
-        order: keysIn(pv),
-        shownOnLoad: shownIn(pv),
-        tagged: Array.from(pv.querySelectorAll(".field"))
+        order: keysIn(detail),
+        shownOnLoad: shownIn(detail),
+        tagged: Array.from(detail.querySelectorAll(".field"))
           .filter((f) => f.querySelector(".advanced-tag"))
           .map((f) => f.dataset.key),
-        collapsedOnLoad: pv.classList.contains("collapse-advanced"),
-        toggleLabel: (pv.querySelector(".advanced-toggle")?.textContent || "").trim(),
+        collapsedOnLoad: detail.classList.contains("collapse-advanced"),
+        toggleLabel: (detail.querySelector(".advanced-toggle")?.textContent || "").trim(),
       }
     : null;
-  const pvToggle = pv ? pv.querySelector(".advanced-toggle") : null;
+  const pvToggle = detail ? detail.querySelector(".advanced-toggle") : null;
   if (pvToggle) {
     pvToggle.click();
     out.providerAfterCollapse = {
-      collapsed: pv.classList.contains("collapse-advanced"),
-      shown: shownIn(pv),
+      collapsed: detail.classList.contains("collapse-advanced"),
+      shown: shownIn(detail),
       stored: read("mcc.advancedCollapsed.provider:harness_provider"),
     };
+  }
+  if (pv) {
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   }
   host.remove();
   return out;
@@ -12850,13 +12872,21 @@ const providerFaces = {};
     const card = window.eval("renderProviderCard")(provider, []);
     wrap.appendChild(card);
     const pill = card.querySelector(".status-pill");
+    // USER 2026-11-02: the summary line moved off the face into the dialog, so
+    // both are read. The pill stays where it was, because the status is one
+    // of the five things the card keeps.
+    card.click();
+    const detail = doc.getElementById("providerDetailBody");
+    const summary = detail.querySelector(".provider-detail-summary");
     providerFaces[name] = {
       pill: pill ? pill.textContent : null,
       pillClass: pill ? pill.className : null,
-      meta: card.querySelector(".provider-meta")?.textContent ?? null,
-      metaClass: card.querySelector(".provider-meta")?.className ?? null,
+      meta: summary ? summary.textContent : null,
+      metaClass: summary ? summary.className : null,
+      onFace: Boolean(card.querySelector(".provider-meta")),
       configured: card.dataset.pvConfigured,
     };
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   }
   const count = doc.createElement("span");
   window.eval("applyProviderFilter")(wrap, "", true, count);
@@ -12866,7 +12896,547 @@ const providerFaces = {};
   providerFaces.onlyConfiguredCount = count.textContent;
   window.eval("applyProviderFilter")(wrap, "", false, count);
   providerFaces.allCount = count.textContent;
+  // USER 2026-11-02: the summary line and the rotation policy left the face
+  // for the dialog. What is left on it, in order, is the contract.
+  providerFaces.freeReadyFace = Array.from(
+    wrap.querySelectorAll(".pv-card")[0].children,
+  ).map((node) => node.className.split(" ")[0]);
+  providerFaces.freeReadyControls = Array.from(
+    wrap.querySelectorAll(".pv-card")[0].querySelectorAll("button"),
+  ).map((button) => button.textContent);
+  providerFaces.freeReadyMeta = Boolean(
+    wrap.querySelectorAll(".pv-card")[0].querySelector(".provider-meta"),
+  );
   wrap.remove();
+}
+
+/* ------------------------------------------- the provider dialog (11-02)
+   USER 2026-11-02: "instead of extending the cards we could just make a tab
+   appear like it happens when we open a request". A card is a face; its form
+   opens over the page in the same `.requests-modal` chrome the request detail
+   uses, with the same focus trap, Escape and return-focus.
+
+   Everything here is measured on the real page: the five controls are pressed
+   one at a time and each is asked both "did your own job happen" and "did the
+   dialog stay shut"; the dialog's own text is then compared field by field
+   against the payload the card was drawn from, because the one thing this
+   move must not do is lose a setting. */
+const providerDialog = {};
+{
+  const host = doc.createElement("div");
+  doc.body.appendChild(host);
+  const fields = [
+    {
+      key: "DIALOG_API_KEY",
+      label: "Dialog API key",
+      section: "providers",
+      provider: "dialog_provider",
+      type: "text",
+      value: "",
+      default: "",
+      configured: true,
+      secret: true,
+      advanced: false,
+      description: "One key per line, comma separated.",
+      options: [],
+    },
+    {
+      key: "DIALOG_API_KEY_ROTATION",
+      label: "Dialog rotation",
+      section: "providers",
+      provider: "dialog_provider",
+      type: "select",
+      value: "round_robin",
+      default: "single",
+      configured: true,
+      secret: false,
+      advanced: false,
+      description: "How the pool is used.",
+      options: [
+        { value: "single", label: "Single key" },
+        { value: "round_robin", label: "Round robin" },
+      ],
+    },
+    {
+      key: "DIALOG_API_KEY_PROXY",
+      label: "Dialog proxy",
+      section: "providers",
+      provider: "dialog_provider",
+      type: "text",
+      value: "",
+      default: "",
+      configured: false,
+      secret: false,
+      advanced: true,
+      description: "A proxy this provider leaves through, host:port.",
+      options: [],
+    },
+  ];
+  const provider = {
+    provider_id: "dialog_provider",
+    display_name: "Dialog Provider",
+    group: "cloud",
+    kind: "remote",
+    status: "configured",
+    label: "Configured",
+    key_count: 2,
+    credential_env: "DIALOG_API_KEY",
+    credential_owner_id: "dialog_provider",
+    credential_owner_name: "Dialog Provider",
+    credential_shared_with: [],
+  };
+  // The dialog's field list comes from `state.fields`, so the payload has to
+  // be adopted the same way a real config answer is -- and a credential only
+  // becomes a key POOL (with its rotation select) when `state.credentialEnvs`
+  // names it, which is the set `load()` builds from `provider_status`.
+  const page = window.eval("uxPassHarness")();
+  const fieldMap = page.state.fields;
+  fields.forEach((field) => fieldMap.set(field.key, field));
+  page.state.credentialEnvs = page.state.credentialEnvs || new Set();
+  page.state.credentialEnvs.add("DIALOG_API_KEY");
+  // The key pool is loaded through a real fetch, so its route has to answer in
+  // the shape the server sends: `rows` (the structured listing) plus `keys`
+  // (the pre-7.29.0 mask list the same handler still emits).
+  ROUTES["/admin/api/credentials/DIALOG_API_KEY/keys"] = {
+    count: 2,
+    locked: false,
+    rows: [
+      {
+        index: 0,
+        id: "sha256:cccccccccccccccccccc",
+        masked: "dlg-…1111",
+        key_label: "dlg-…1111",
+        name: "",
+        health: { state: "healthy", requests: 12, failures: 0 },
+      },
+      {
+        index: 1,
+        id: "sha256:dddddddddddddddddddd",
+        masked: "dlg-…2222",
+        key_label: "dlg-…2222",
+        name: "Work laptop, the long key name a person types",
+        health: null,
+      },
+    ],
+    keys: ["dlg-…1111", "dlg-…2222"],
+    health: { keys: [{ index: 0, state: "healthy", requests: 12, failures: 0 }] },
+  };
+
+  const card = window.eval("renderProviderCard")(
+    provider,
+    // `renderProviderGroups()` hands a card every field the provider owns
+    // EXCEPT the rotation policies, which render inside the key manager
+    // beside the pool they govern. Handing them in here as well is what a
+    // payload looks like before that filter, and it is how the double select
+    // this test caught appeared in the first place.
+    fields.filter((field) => !field.key.endsWith("_ROTATION")),
+  );
+  host.appendChild(card);
+
+  const modal = doc.getElementById("providerDetailModal");
+  const body = doc.getElementById("providerDetailBody");
+  const isOpen = () => modal.hidden === false;
+  const closeDialog = () => {
+    if (isOpen()) {
+      doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+  };
+
+  providerDialog.cardIsAFace = {
+    role: card.getAttribute("role"),
+    ariaHaspopup: card.getAttribute("aria-haspopup"),
+    tabIndex: card.tabIndex,
+    label: card.getAttribute("aria-label"),
+    // The five things, and nothing else.
+    children: Array.from(card.children).map((node) => node.className.split(" ")[0]),
+    controls: Array.from(card.querySelectorAll("button")).map((button) => button.textContent),
+    dataKeysOnTheFace: card.querySelectorAll("[data-key]").length,
+  };
+
+  // ---- five controls, five proofs ---------------------------------------
+  const press = (selector) => {
+    closeDialog();
+    const control = card.querySelector(selector);
+    const restingLabel = control.textContent;
+    const before = isOpen();
+    control.click();
+    // The label DURING the call is the busy state ("Testing", "Detecting"),
+    // which is proof the call really started; the resting label is what the
+    // card goes back to.
+    const busyLabel = control.textContent;
+    const result = { wasClosed: !before, openedTheDialog: isOpen(), busyLabel };
+    closeDialog();
+    return result;
+  };
+
+  providerDialog.configure = press(".pv-configure");
+  providerDialog.configure.labelled = "Configure";
+  providerDialog.configure.opensTheDialog = true;
+
+  // The face's Refresh models is the one `.test-button` on the card; the
+  // dialog's own "Test provider" lives in another dialog entirely.
+  providerDialog.refreshModels = press(".pv-actions .test-button");
+  providerDialog.refreshModels.labelled = "Refresh models";
+
+  providerDialog.detectModels = press(".pv-detect");
+  providerDialog.detectModels.labelled = "No models detected";
+
+  // The status pill is not a control: it is part of the card's own press
+  // target, so pressing it opens the dialog (it is not a dead spot).
+  closeDialog();
+  card.querySelector(".status-pill").click();
+  providerDialog.statusPill = {
+    text: card.querySelector(".status-pill").textContent,
+    className: card.querySelector(".status-pill").className,
+    openedTheDialog: isOpen(),
+  };
+  closeDialog();
+
+  // ---- and the card's own press ------------------------------------------
+  card.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+  providerDialog.cardPress = {
+    openedTheDialog: isOpen(),
+    title: doc.getElementById("providerDetailTitle").textContent,
+    subtitle: doc.getElementById("providerDetailSubtitle").textContent,
+    role: modal.getAttribute("role"),
+    ariaModal: modal.getAttribute("aria-modal"),
+    // Every field the card used to be able to carry, by key.
+    fieldKeys: Array.from(body.querySelectorAll("input[data-key], select[data-key]"))
+      .map((node) => node.dataset.key),
+    labels: Array.from(body.querySelectorAll(".field > label span"))
+      .map((node) => node.textContent)
+      .filter((text) => text !== "advanced"),
+    descriptions: Array.from(body.querySelectorAll(".field-description"))
+      .map((node) => node.textContent),
+    advancedToggle: Boolean(body.querySelector(".advanced-toggle")),
+    keyManagers: body.querySelectorAll(".key-manager").length,
+    rotationSelects: body.querySelectorAll(".key-manager-rotation select").length,
+  };
+  providerDialog.dialogIsNotInsideASettingsContainer = Boolean(
+    modal.closest("#providersSections"),
+  );
+
+  // Escape closes and gives focus back to the card that opened it.
+  card.focus();
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  providerDialog.escape = {
+    closed: !isOpen(),
+    focusReturned: doc.activeElement === card,
+    bodyCleared: body.textContent.trim().length === 0,
+  };
+
+  // Keyboard: Enter and Space open it.
+  card.focus();
+  card.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  providerDialog.enterOpened = isOpen();
+  closeDialog();
+  card.dispatchEvent(new window.KeyboardEvent("keydown", { key: " ", bubbles: true }));
+  providerDialog.spaceOpened = isOpen();
+  closeDialog();
+
+  // The focus trap: Tab off the last control wraps to the first.
+  card.click();
+  const focusable = Array.from(
+    modal.querySelectorAll(
+      'button:not([disabled]), summary, [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((node) => !node.hidden && node.closest("[hidden]") === null);
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  last.focus();
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  const wrappedForward = doc.activeElement === first;
+  first.focus();
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }));
+  providerDialog.trap = {
+    count: focusable.length,
+    wrappedForward,
+    wrappedBackward: doc.activeElement === last,
+  };
+
+  // The page behind: locked, and the dialog body scrolls instead.
+  const bodyStyle = doc.body.style;
+  providerDialog.scrollLock = {
+    duringOverflow: bodyStyle.overflow,
+    bodyScrollsInternally: bodyStyle.overflow !== "" ? true : null,
+  };
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  providerDialog.scrollLock.afterOverflow = bodyStyle.overflow;
+  providerDialog.scrollLock.afterPadding = bodyStyle.paddingRight;
+  host.remove();
+}
+
+/* The same dialog, rebuilt while it is open. `renderSections()` clears every
+   settings container and draws new cards, and `refreshConfigState()` re-reads
+   the payload the dialog is drawn from -- this is the path a poll tick or a
+   Save elsewhere takes, and the one that used to leave a dialog holding a
+   stale copy of the form. */
+const providerDialogReRender = {};
+{
+  const host = doc.createElement("div");
+  doc.body.appendChild(host);
+  const fieldMap = window.eval("uxPassHarness")().state.fields;
+  const provider = {
+    provider_id: "rerender_provider",
+    display_name: "Re-render Provider",
+    group: "cloud",
+    kind: "remote",
+    status: "configured",
+    label: "Configured",
+    key_count: 1,
+    credential_env: "RERENDER_API_KEY",
+    credential_owner_id: "rerender_provider",
+    credential_owner_name: "Re-render Provider",
+    credential_shared_with: [],
+  };
+  const field = {
+    key: "RERENDER_API_KEY_PROXY",
+    label: "Re-render proxy",
+    section: "providers",
+    provider: "rerender_provider",
+    type: "text",
+    value: "",
+    default: "",
+    configured: false,
+    secret: false,
+    advanced: false,
+    description: "",
+    options: [],
+  };
+  fieldMap.set(field.key, field);
+  const card = window.eval("renderProviderCard")(provider, [field]);
+  host.appendChild(card);
+  card.click();
+  const body = doc.getElementById("providerDetailBody");
+  const control = body.querySelector('input[data-key="RERENDER_API_KEY_PROXY"]');
+  providerDialogReRender.controlFound = Boolean(control);
+  if (control) {
+    control.value = "typed-but-not-applied";
+    control.dispatchEvent(new window.Event("input", { bubbles: true }));
+    providerDialogReRender.userEdited = control.dataset.userEdited;
+    providerDialogReRender.changedValues = Object.keys(
+      window.eval("changedValues")(),
+    );
+  }
+
+  providerDialogReRender.dirtyBefore = doc.getElementById("dirtyState").textContent;
+  window.eval("refreshProviderOverlay")();
+  const again = doc.getElementById("providerDetailBody")
+    .querySelector('input[data-key="RERENDER_API_KEY_PROXY"]');
+  providerDialogReRender.stillOpen = !doc.getElementById("providerDetailModal").hidden;
+  providerDialogReRender.titleKept =
+    doc.getElementById("providerDetailTitle").textContent;
+  providerDialogReRender.typedSurvived = again ? again.value : null;
+  providerDialogReRender.rebuiltControls = doc
+    .getElementById("providerDetailBody")
+    .querySelectorAll('input[data-key="RERENDER_API_KEY_PROXY"]').length;
+  providerDialogReRender.duplicateControls = Array.from(
+    doc.querySelectorAll('[data-key="RERENDER_API_KEY_PROXY"]'),
+  ).filter((node) => node.matches("input, select, textarea")).length;
+  providerDialogReRender.dirtyAfter = doc.getElementById("dirtyState").textContent;
+  doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  providerDialogReRender.closed = doc.getElementById("providerDetailModal").hidden;
+  host.remove();
+}
+
+/* The Web Search cards: the same face contract, Use provider still working
+   from the card, and the rotation select / advanced group / key pool in the
+   dialog rather than on the card.
+
+   The harness's config payload carries no `websearch` section (nothing before
+   this PR drew one), so the five fields the grid is built from are added to
+   `state.fields` here and the grid is redrawn by the real renderer. */
+const webSearchFaces = {};
+{
+  const page = window.eval("uxPassHarness")();
+  const add = (field) => page.state.fields.set(field.key, field);
+  add({
+    key: "WEB_SEARCH_PROVIDER",
+    label: "Web search provider",
+    section: "websearch",
+    provider: null,
+    type: "select",
+    value: "auto",
+    default: "auto",
+    configured: true,
+    secret: false,
+    advanced: false,
+    description: "",
+    options: [
+      { value: "auto", label: "Auto (first configured)" },
+      { value: "exa", label: "Exa" },
+      { value: "searxng", label: "SearXNG (self-hosted)" },
+    ],
+  });
+  add({
+    key: "EXA_API_KEY",
+    label: "Exa API Key",
+    section: "websearch",
+    provider: null,
+    type: "text",
+    value: "ws-eeee1111",
+    default: "",
+    configured: true,
+    secret: true,
+    advanced: false,
+    description: "Your Exa key.",
+    options: [],
+  });
+  add({
+    key: "EXA_API_KEY_ROTATION",
+    label: "Exa rotation",
+    section: "websearch",
+    provider: null,
+    type: "select",
+    value: "round_robin",
+    default: "single",
+    configured: true,
+    secret: false,
+    advanced: false,
+    description: "",
+    options: [
+      { value: "single", label: "Single key" },
+      { value: "round_robin", label: "Round robin" },
+    ],
+  });
+  add({
+    key: "EXA_MAX_RESULTS",
+    label: "EXA max results",
+    section: "websearch",
+    provider: null,
+    type: "number",
+    value: "8",
+    default: "8",
+    configured: true,
+    secret: false,
+    advanced: true,
+    description: "How many results this provider returns per search.",
+    options: [],
+  });
+  add({
+    key: "SEARXNG_BASE_URL",
+    label: "SearXNG base URL",
+    section: "websearch",
+    provider: null,
+    type: "text",
+    value: "",
+    default: "",
+    configured: false,
+    secret: false,
+    advanced: true,
+    description: "The address of the SearXNG instance MCC should query.",
+    options: [],
+  });
+  add({
+    key: "WEB_SEARCH_FALLBACK_POLICY",
+    label: "Fallback policy",
+    section: "websearch",
+    provider: null,
+    type: "select",
+    value: "legacy",
+    default: "legacy",
+    configured: true,
+    secret: false,
+    advanced: false,
+    description: "",
+    options: [{ value: "legacy", label: "Try each provider in turn" }],
+  });
+  window.eval("renderWebSearchProviders")();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  // The dialog opens the pool eagerly (managing keys is the reason to open a
+  // provider), so its own route has to answer before the card is pressed.
+  ROUTES["/admin/api/websearch/credentials/EXA_API_KEY/keys"] = {
+    locked: false,
+    keys: [
+      { index: 0, id: "sha256:eeeeeeeeeeeeeeeeeeee", key_label: "ws-e…1111" },
+    ],
+    health: { keys: [{ index: 0, state: "healthy", requests: 4, failures: 0 }] },
+  };
+
+  // The real `WEB_SEARCH_PROVIDER` select lives in the config grid, which this
+  // harness's payload does not carry. `selectWebSearchProvider()` writes to
+  // it, so it is placed here in the shape the grid builds: one `[data-key]`
+  // select whose change event is what the cards listen for.
+  const providerSelect = doc.createElement("select");
+  providerSelect.dataset.key = "WEB_SEARCH_PROVIDER";
+  const autoOption = doc.createElement("option");
+  autoOption.value = "auto";
+  autoOption.textContent = "Auto";
+  const exaOption = doc.createElement("option");
+  exaOption.value = "exa";
+  exaOption.textContent = "Exa";
+  providerSelect.append(autoOption, exaOption);
+  providerSelect.value = "auto";
+  const selectHost = doc.createElement("div");
+  selectHost.appendChild(providerSelect);
+  doc.body.appendChild(selectHost);
+
+  const list = Array.from(doc.querySelectorAll("#webSearchGrid .ws-card"));
+  webSearchFaces.cards = list.map((card) => ({
+    id: card.dataset.websearchProvider,
+    role: card.getAttribute("role"),
+    tabIndex: card.tabIndex,
+    controls: Array.from(card.querySelectorAll("button")).map((b) => b.textContent),
+    dataKeys: card.querySelectorAll("[data-key]").length,
+    hasAdvancedGroup: Boolean(card.querySelector(".ws-advanced")),
+    hasKeyPool: Boolean(card.querySelector(".ws-key-manager")),
+  }));
+  const withKeys = list.find((card) =>
+    Array.from(card.querySelectorAll("button")).some(
+      (b) => b.textContent === "Use provider" && !b.disabled,
+    ),
+  );
+  if (withKeys) {
+    const useProvider = Array.from(withKeys.querySelectorAll("button")).find(
+      (b) => b.textContent === "Use provider",
+    );
+    const wasOpen = !doc.getElementById("providerDetailModal").hidden;
+    useProvider.click();
+    webSearchFaces.useProvider = {
+      openedTheDialog: !doc.getElementById("providerDetailModal").hidden,
+      wasClosedBefore: !wasOpen,
+      selection: doc.querySelector('select[data-key="WEB_SEARCH_PROVIDER"]').value,
+      providerId: withKeys.dataset.websearchProvider,
+    };
+  } else {
+    webSearchFaces.useProvider = null;
+  }
+  // The card itself opens it too, and the dialog's contents are read from
+  // there: "Use provider" re-renders the grid, which is what the config-change
+  // path does anyway, so the dialog is opened fresh afterwards.
+  if (withKeys) {
+    withKeys.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    webSearchFaces.cardPress = {
+      openedTheDialog: !doc.getElementById("providerDetailModal").hidden,
+      title: doc.getElementById("providerDetailTitle").textContent,
+    };
+    if (!doc.getElementById("providerDetailModal").hidden) {
+      const body = doc.getElementById("providerDetailBody");
+      webSearchFaces.dialog = {
+        rotation: body.querySelectorAll('[data-key$="_ROTATION"]').length,
+        advancedGroups: body.querySelectorAll(".ws-advanced").length,
+        advancedOpen: Array.from(body.querySelectorAll(".ws-advanced")).map(
+          (node) => node.open,
+        ),
+        // `[data-key]` lands on the `.field` wrapper AND on the control inside
+        // it; the real controls are the second count.
+        advancedFields: body.querySelectorAll(
+          ".ws-advanced input[data-key], .ws-advanced select[data-key]",
+        ).length,
+        manageKeys: Boolean(
+          Array.from(body.querySelectorAll("button")).find(
+            (b) => b.textContent === "Manage keys" || b.textContent === "Hide keys",
+          ),
+        ),
+      };
+      doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    } else {
+      webSearchFaces.dialog = null;
+    }
+  } else {
+    webSearchFaces.cardPress = null;
+    webSearchFaces.dialog = null;
+  }
 }
 
 /* The tools array a request carried (7.40.0): the modal shows the catalogue
@@ -15098,6 +15668,9 @@ console.log(
       sharedRail,
       capabilityRow,
       providerFaces,
+      providerDialog,
+      providerDialogReRender,
+      webSearchFaces,
       keyNames,
       dialectPanels,
       docs,
