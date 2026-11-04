@@ -34,6 +34,7 @@ from my_claude_code.application.model_metadata import (
     ResponseSurfaceSource,
 )
 from my_claude_code.core.anthropic import (
+    ContentChunk,
     ContentType,
     HeuristicToolParser,
     ThinkTagParser,
@@ -1767,6 +1768,51 @@ def _legacy_function_call_chars(call: object) -> int:
     )
 
 
+def _iter_chat_content(
+    content: Any,
+    think_parser: ThinkTagParser,
+) -> Iterator[ContentChunk]:
+    """Yield text and native thinking text from Chat Completions content.
+
+    Most OpenAI-compatible hosts stream ``delta.content`` as a string. Mistral
+    can stream it as typed chunks while reasoning is enabled: ``thinking``
+    chunks contain nested text chunks, and answer text can arrive beside them
+    in the transition frame.
+    """
+    if isinstance(content, str):
+        yield from think_parser.feed(content)
+        return
+    if not isinstance(content, list):
+        return
+
+    for item in content:
+        if isinstance(item, str):
+            yield from think_parser.feed(item)
+            continue
+        if not isinstance(item, Mapping):
+            continue
+
+        item_type = item.get("type")
+        if item_type == "text":
+            text = item.get("text")
+            if isinstance(text, str):
+                yield from think_parser.feed(text)
+        elif item_type == "thinking":
+            thinking = item.get("thinking")
+            if isinstance(thinking, str):
+                yield ContentChunk(ContentType.THINKING, thinking)
+            elif isinstance(thinking, list):
+                for part in thinking:
+                    if isinstance(part, str):
+                        yield ContentChunk(ContentType.THINKING, part)
+                    elif (
+                        isinstance(part, Mapping)
+                        and part.get("type") == "text"
+                        and isinstance(part.get("text"), str)
+                    ):
+                        yield ContentChunk(ContentType.THINKING, part["text"])
+
+
 class _OpenAIChatStreamRunner:
     """Own one OpenAI-chat request's stream, parsing, and recovery state."""
 
@@ -1992,7 +2038,10 @@ class _OpenAIChatStreamRunner:
                                 yield out_event
 
                         if delta.content:
-                            for part in think_parser.feed(delta.content):
+                            for part in _iter_chat_content(
+                                delta.content,
+                                think_parser,
+                            ):
                                 if part.type == ContentType.THINKING:
                                     if not output_reasoning:
                                         continue
