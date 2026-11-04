@@ -71,6 +71,7 @@ def _make_settings(**overrides):
     mock.nvidia_nim_api_key = "test_key"
     mock.open_router_api_key = "test_openrouter_key"
     mock.mistral_api_key = "test_mistral_key"
+    mock.mistral_vibe_api_key = "test_mistral_vibe_key"
     mock.codestral_api_key = "test_codestral_key"
     mock.deepseek_api_key = "test_deepseek_key"
     mock.wafer_api_key = "test_wafer_key"
@@ -535,6 +536,8 @@ def test_create_provider_instantiates_each_builtin():
         "openai": ChatGPTOAuthProvider,
         "open_router": OpenRouterProvider,
         "mistral": MistralProvider,
+        # 8.12.0: the second Mistral credential constructs the same class.
+        "mistral_vibe": MistralProvider,
         "mistral_codestral": OpenAIChatProvider,
         "deepseek": DeepSeekProvider,
         "kimi": OpenAIChatProvider,

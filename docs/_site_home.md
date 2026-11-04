@@ -40,7 +40,7 @@ provenance, and a full request log — in front of 57 model providers.
 
 **Your models. Your keys. Your machine.**
 
-![The Providers page of the My Claude Code dashboard: a searchable grid of provider cards reading "57 providers · 14 configured", each card badged Configured or Missing key and naming the environment variable that holds its key](../assets/admin-providers.png)
+![The Providers page of the My Claude Code dashboard: a searchable grid of provider cards, each badged Configured or Missing key and naming the environment variable that holds its key](../assets/admin-providers.png)
 
 *The dashboard's Providers page. Every key stays in your own `.env`, on your own machine.*{ .caption }
 

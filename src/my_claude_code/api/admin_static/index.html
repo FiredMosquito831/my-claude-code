@@ -3305,6 +3305,71 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   subscription, and use <code>mcc-claude</code> for everything else.
                 </p>
 
+                <h3 id="guide-mistral-models">Use Mistral models</h3>
+                <p>
+                  There are two Mistral providers, and the difference is
+                  <strong>money, not address</strong>. Both authenticate to
+                  <code>api.mistral.ai/v1</code> with the same request shape.
+                </p>
+                <p>
+                  <strong>Mistral Studio (API)</strong> is the general developer
+                  API, keyed by <code>MISTRAL_API_KEY</code> from
+                  <a href="https://console.mistral.ai/" target="_blank" rel="noreferrer noopener">console.mistral.ai</a>
+                  and billed against the plan&rsquo;s API allowance. It is the card
+                  that has always existed; its <code>mistral/&hellip;</code> refs and
+                  its transcription surface are unchanged.
+                </p>
+                <p>
+                  <strong>Mistral Vibe (subscription)</strong> is a Vibe plan key,
+                  created under <em>Vibe Code &rarr; Extensions &rarr; Advanced</em>,
+                  stored as <code>MISTRAL_VIBE_KEY</code>. It draws on the
+                  subscription&rsquo;s coding budget instead of the API allowance.
+                </p>
+                <div class="guide-note">
+                  <p>
+                    <strong>The two keys are separate pools and MCC never
+                    substitutes one for the other.</strong> A missing
+                    <code>MISTRAL_VIBE_KEY</code> reads <em>Missing key</em> on the
+                    Vibe card; it never borrows the Studio key. A request the Vibe
+                    plan does not cover is refused on its own terms &mdash; that is
+                    an entitlement answer, not a bad key and not a host outage, and
+                    Mistral&rsquo;s own sentence reaches you unchanged. MCC has not
+                    captured Mistral&rsquo;s refusal wording, so it does not guess
+                    at it.
+                  </p>
+                  <p>
+                    <strong>Neither card shows a balance, because neither can.</strong>
+                    No documented key-authenticated Mistral route returns a remaining
+                    allowance for either pool, and the Vibe percentage lives only
+                    inside Mistral&rsquo;s own dashboard behind a browser session MCC
+                    will not ask you for. Both cards say so in one sentence and carry
+                    no number, no bar and no retry. Your own spend from MCC&rsquo;s
+                    traffic is on <strong>Analytics</strong>, labelled as MCC&rsquo;s
+                    traffic rather than as the provider&rsquo;s allowance.
+                  </p>
+                  <p>
+                    <strong>Plan rules.</strong> Rate limits still apply on top of
+                    any allowance &mdash; per-model requests per second and tokens per
+                    minute, plus monthly limits; the dashboard&rsquo;s
+                    <em>API &rarr; Limits</em> page is authoritative. Pay-as-you-go is
+                    off by default, and with it off usage may simply stop at the plan
+                    limit; some partner-purchased Pro plans cannot enable it at all.
+                    The Vibe web environment&rsquo;s session limits (a 24-hour maximum
+                    session, 100 daily sessions) are managed-session rules for the web
+                    product and are <em>not</em> API limits.
+                  </p>
+                  <p>
+                    <strong>Thinner metadata on the Vibe card is deliberate.</strong>
+                    models.dev publishes no bucket for the Vibe product, so a Vibe
+                    model&rsquo;s price and limits come from the cross-provider vote,
+                    which needs three agreeing rows before it will state a number.
+                    Where only one row exists &mdash; Mistral&rsquo;s own &mdash; the
+                    Models page reads <em>withheld: 1 of the required 3 rows reported
+                    one</em> rather than borrowing the Studio card&rsquo;s prices,
+                    which the Vibe pool may not be billed at.
+                  </p>
+                </div>
+
                 <h3 id="guide-models">Map model tiers</h3>
                 <p>
                   Routing is by <strong>tier</strong>: Mythos, Fable, Opus, Sonnet, Haiku

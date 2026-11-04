@@ -434,13 +434,41 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         provider_id="mistral",
         # Mistral documents SSE on its transcription endpoint.
         media_surfaces=(transcription_surface(stream=True),),
-        display_name="Mistral",
+        display_name="Mistral Studio (API)",
         credential_env="MISTRAL_API_KEY",
         credential_url="https://console.mistral.ai/",
         credential_attr="mistral_api_key",
         default_base_url=MISTRAL_DEFAULT_BASE,
         proxy_attr="mistral_proxy",
         group="direct",
+    ),
+    # The second Mistral credential. Both keys authenticate to the same host
+    # (``MISTRAL_DEFAULT_BASE``) and differ in what they draw on, not in where
+    # they dial: a Studio key spends the API allowance, a Vibe plan key spends
+    # the subscription's coding budget. That is why this is a provider of its
+    # own rather than a second key on ``mistral`` -- one descriptor carries one
+    # credential, one rotation policy and one pool, and spreading requests
+    # across two budgets is not rotation.
+    #
+    # No ``media_surfaces``: nothing outside chat completions and the model
+    # list is established as chargeable to the Vibe pool, so declaring one
+    # would advertise a route this credential may be refused.
+    #
+    # No models.dev alias either -- deliberately, and it is the single most
+    # important defensive decision here. models.dev publishes no bucket for
+    # this product, so the ladder answers from the cross-provider vote at the
+    # numeric quorum of three. An alias onto ``mistral`` would hand every Vibe
+    # model the Studio bucket's prices, which is the OpenCode Go defect
+    # (7.113.5) in a new place.
+    "mistral_vibe": ProviderDescriptor(
+        provider_id="mistral_vibe",
+        display_name="Mistral Vibe (subscription)",
+        credential_env="MISTRAL_VIBE_KEY",
+        credential_url="https://chat.mistral.ai/code/extensions",
+        credential_attr="mistral_vibe_api_key",
+        default_base_url=MISTRAL_DEFAULT_BASE,
+        proxy_attr="mistral_vibe_proxy",
+        group="subscription",
     ),
     "mistral_codestral": ProviderDescriptor(
         provider_id="mistral_codestral",

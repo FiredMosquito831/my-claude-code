@@ -3032,11 +3032,11 @@ permission prompt, and says why.
 
 ## 8. Providers and API keys
 
-Open the **Providers** tab. Every provider is one card in a single searchable grid — there are 56 of them, so start by typing in **Search providers**. It matches the provider's name, its id and its environment variable, so `groq`, `GROQ_API_KEY` and `alibaba` all find what you would expect. **Only configured** hides everything you have not set up yet.
+Open the **Providers** tab. Every provider is one card in a single searchable grid — there are dozens of them, so start by typing in **Search providers**. It matches the provider's name, its id and its environment variable, so `groq`, `GROQ_API_KEY` and `alibaba` all find what you would expect. **Only configured** hides everything you have not set up yet.
 
 <div align="center">
   <img src="../assets/admin-providers.png" alt="A searchable grid of provider cards, each badged Configured or Missing key and naming the environment variable that holds its key" width="860">
-  <p><em>The provider grid: 57 providers, 14 configured. A card that needs a key names the variable instead of a key count.</em></p>
+  <p><em>The provider grid: every provider MCC supports, 14 of them configured here. A card that needs a key names the variable instead of a key count.</em></p>
 </div>
 
 Providers you add yourself get their own card above the grid, with the key pool,
@@ -3126,6 +3126,67 @@ If a refresh reports that Anthropic is **rate-limiting** (a 429), that means wai
 **Read [ANTHROPIC-SUBSCRIPTION.md](ANTHROPIC-SUBSCRIPTION.md) first.** It is the full disclaimer, the settings, and the credential handling.
 
 Claude models also reach you through `bedrock`, `vertex`, and gateways such as `kilo`, `nous_portal` and `cline` — all pay-per-token, none with a policy question attached.
+
+<a id="using-mistral-models"></a>
+
+### Using Mistral models
+
+There are two Mistral providers, and the difference between them is money, not
+address.
+
+**`mistral` — Mistral Studio (API).** The general developer API at
+`api.mistral.ai/v1`, keyed by `MISTRAL_API_KEY` from
+[console.mistral.ai](https://console.mistral.ai/), billed against the plan's
+API allowance. This is the card that has existed all along; its id, its
+`mistral/…` refs and its transcription surface are unchanged.
+
+**`mistral_vibe` — Mistral Vibe (subscription).** A Vibe plan key, created under
+Vibe Code → Extensions → Advanced (`chat.mistral.ai/code/extensions`), stored as
+`MISTRAL_VIBE_KEY`. It dials **the same host** with the same request shape and
+draws on the subscription's coding budget instead of the API allowance.
+
+Three things follow from that, and they are the whole reason there are two
+cards rather than one key field with two values:
+
+- **They are separate pools.** One `MISTRAL_VIBE_KEY` is not a second key for
+  the Studio card, and MCC never substitutes one credential for the other. If
+  the Vibe key is missing, the Vibe card reads *Missing key* and says which
+  variable it wants; it does not quietly borrow `MISTRAL_API_KEY`.
+- **A refusal is not a bad key.** Which models and which operations a Vibe plan
+  covers is Mistral's decision and is not published. A request the plan does
+  not cover is refused on its own terms — it does not mean the key is wrong,
+  and it does not mean the host is down. Mistral's exact refusal wording is not
+  something MCC has captured, so MCC does not guess at it: the provider's own
+  sentence reaches you unchanged.
+- **Neither card shows a balance, because neither can.** No documented
+  Bearer-authenticated Mistral route returns a remaining allowance for either
+  pool. The Vibe percentage exists only inside Mistral's own dashboard, behind a
+  browser session MCC will not ask you for. Both cards say so in one sentence
+  and carry no number, no bar and no retry — your own spend from MCC's traffic
+  is on **Analytics**, labelled as MCC's traffic rather than as the provider's
+  allowance.
+
+**The plan rules worth knowing before you spend** (documented on the card's
+help text too):
+
+- **Rate limits still apply on top of any allowance** — per-model requests per
+  second and tokens per minute, plus monthly limits. The dashboard's
+  API → Limits page is authoritative.
+- **Pay-as-you-go is off by default.** With it off, usage may simply stop at
+  the plan limit. Some partner-purchased Pro plans cannot enable PAYG at all.
+- **The Vibe web environment's session limits are not API limits.** Its 24-hour
+  maximum session and 100 daily sessions are managed-session rules for the web
+  product; they say nothing about how many API requests you may make.
+
+Model metadata on the Vibe card is deliberately thinner than on the Studio
+card. models.dev publishes no bucket for the Vibe product, so a Vibe model's
+price and limits come from the cross-provider vote, which needs three agreeing
+rows before it will state a number. Where only one row exists — Mistral's own —
+the Models page reads *withheld: 1 of the required 3 rows reported one* rather
+than borrowing the Studio card's prices, which the Vibe pool may not be billed
+at. That is the honest answer, not a gap to be filled by an alias.
+
+<a id="reading-a-failed-refresh-models"></a>
 
 ### Reading a failed Refresh models
 

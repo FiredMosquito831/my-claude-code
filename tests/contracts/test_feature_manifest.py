@@ -105,6 +105,11 @@ def test_provider_and_platform_registries_include_advertised_builtins() -> None:
         "kilo": KiloProvider,
         "commandcode": CommandCodeProvider,
         "mistral": MistralProvider,
+        # 8.12.0: the second Mistral credential is the same class under its own
+        # id. It is a specialist here rather than a profile entry because it
+        # shares ``MistralProvider``'s reasoning shape and its once-only
+        # rejection retry, which no profile encoder can express.
+        "mistral_vibe": MistralProvider,
         "deepseek": DeepSeekProvider,
         "cloudflare": CloudflareProvider,
         "lmstudio": LMStudioProvider,

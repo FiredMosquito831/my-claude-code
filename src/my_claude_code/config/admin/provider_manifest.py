@@ -28,9 +28,30 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
         ),
     },
     "MISTRAL_API_KEY": {
-        "label": "Mistral API Key",
+        "label": "Mistral Studio API Key",
         "description": (
-            "Mistral La Plateforme (api.mistral.ai); Experiment plan is free tier with rate limits."
+            "Mistral Studio (api.mistral.ai) — the general developer API, "
+            "billed against the plan's API allowance. A Vibe plan key is a "
+            "different credential for a different pool: use "
+            "``MISTRAL_VIBE_KEY`` on the Mistral Vibe card. Rate limits still "
+            "apply on top of any allowance (per-model requests/second and "
+            "tokens/minute, plus monthly limits; the dashboard's API → Limits "
+            "page is authoritative). Pay-as-you-go is off by default: with it "
+            "off, usage may stop at the plan limit, and some partner-purchased "
+            "Pro plans cannot enable it at all."
+        ),
+    },
+    "MISTRAL_VIBE_KEY": {
+        "label": "Mistral Vibe Key",
+        "description": (
+            "Mistral Vibe plan key (Vibe Code → Extensions → Advanced) — a "
+            "subscription credential that draws on the plan's coding budget "
+            "rather than the Studio API allowance. Same host as Mistral "
+            "Studio, separate pool: MCC never substitutes one key for the "
+            "other. Which models and operations the plan covers is decided by "
+            "Mistral, not published; a refusal means this key's entitlement "
+            "does not cover that request. The Vibe web environment's session "
+            "limits (24 h, 100/day) are not API limits."
         ),
     },
     "CODESTRAL_API_KEY": {
