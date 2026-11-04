@@ -3060,7 +3060,14 @@ the rotation policy and what MCC learned about that host's reasoning dialect.
    opening anything). This makes a real API call to that provider. A model
    count means the key works *and* MCC can read that provider's catalog. The
    **Detect models** control beside it asks that one provider again and says
-   how many models came back.
+   how many models came back. The count on the card is that answer, and it is
+   repainted after every load, so it follows the catalog rather than the moment
+   the page was drawn. It reads one of three things: **N models** once the
+   provider's list is known, **No models detected** once this provider has been
+   asked and offered none, and **Not detected yet** before anything has asked
+   it — a provider nobody has queried has an unknown list, which is not the
+   same fact as an empty one. The status pill beside the card's name says
+   **Reachable** or **Configured**; it never carries a number.
 5. **Choose the model** on the **Model Config** tab. There is no "active provider" to select — the model ref you set there decides which provider serves a request.
 
 The panel keeps the header and **Close** in place and scrolls its own body, so

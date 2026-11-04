@@ -2975,7 +2975,12 @@
                     <em>Refresh models</em> stays on the card itself and works
                     without opening anything. The count beside it &mdash; the
                     <em>Detect models</em> control &mdash; does the same for this one
-                    provider and says how many models came back. That is the only proof
+                    provider and says how many models came back. It is a live reading,
+                    repainted after every load and every refresh, so it follows the
+                    catalog instead of the moment the page was drawn. Before anything
+                    has asked that provider it reads <em>Not detected yet</em>;
+                    <em>No models detected</em> means the provider was asked and
+                    offered none. That is the only proof
                     the key works; a card can look
                     healthy on a key that cannot list models. A fresh install can skip
                     this step for Claude Code's big tiers: since 7.78.0 Mythos, Fable,
