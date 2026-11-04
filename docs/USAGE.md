@@ -5037,11 +5037,11 @@ because a layout is a view — a stale `.env` must still serve a page.
 - **A bar or a percentage only where the provider sent a percentage or a cap.**
   A window with a `used` and no `limit` has no fraction and is drawn as words;
   a window nobody measured is a hatched, fill-less track, never a `0%` bar.
-- **A used/limit pair becomes a bar with a percentage.** Command Code's
-  `34.9300790367` against a `35` cap is `99.8%`; OpenRouter's `0.184` left of
-  `0.2` is `8%` consumed. Both halves are printed as money beside the bar
-  (`$34.93 of $35.00`), and the provider's exact strings are on the element's
-  tooltip.
+- **A used/limit pair becomes a bar with a percentage.** OpenRouter's `0.184`
+  left of `0.2` is `8%` consumed. Both halves are printed as money beside the
+  bar (`$0.18 left of $0.20`), and the provider's exact strings are on the
+  element's tooltip. **The one exception is Command Code**, below: its
+  subscription windows show the percentage and nothing else.
 - **Money is money.** `$34.93`, `$0.0698`, `−$0.01` — never `0.1840009580000002`,
   and never rounded to a figure that changes what it says. A **negative**
   balance is real data (an account in arrears) and keeps its own tone rather
@@ -5053,6 +5053,37 @@ because a layout is a view — a stale `.env` must still serve a page.
 - **A block where nothing was measured says so once**, with the field names it
   would report behind a disclosure — not eight identical lines.
 - **Windows and balances are two blocks and are never added together.**
+
+### Command Code's windows are percentages, and nothing else (8.11.1)
+
+Command Code's 5-hour and weekly windows are denominated in
+**model-equivalent credits**, not cash: the same percentage can move under a
+different dollar figure whenever prices change, so a `$34.93 of $35.00` beside
+the bar invites a comparison with real money elsewhere on the page that does not
+hold. Both of its windows therefore show **the percentage alone** — `99.8%` and
+`0%` on the live data — with the provider's own two numbers reachable on the
+element's tooltip.
+
+This is a **declared rule on that provider's usage row**
+(`config/usage_sources.py`, `UsageSource.percent_only_windows`), not a special
+case in a renderer: there is no place in the page that asks what provider it is
+drawing. It applies to **that provider's subscription windows and nowhere
+else**:
+
+- **Every other provider keeps its money exactly as it did.** OpenRouter still
+  reads `$0.18 left of $0.20`, DeepSeek still reads `−$0.01`, Claude's
+  extra-usage cap still reads `$50.00`.
+- **Command Code's own balance rows are untouched.** *Monthly credits left*,
+  *Purchased credits left* and *Free credits left* are money, sit in the
+  separate Balance block, and are not part of this rule.
+
+**There is no monthly percentage, and the card says why.** The monthly figure
+would only be honest if the API stated the monthly **grant** — the denominator.
+Command Code's `/alpha/billing/credits` states what is *left* of the monthly
+pool and never the grant, so the row is **omitted entirely** rather than shown
+as a balance, a guess or `0%`, and the card carries one sentence explaining it.
+A percentage whose denominator was not published is worse than no row at all.
+If the API ever states the grant, the row appears with no change to the page.
 
 ### Every configured provider, including your own (8.7.0)
 

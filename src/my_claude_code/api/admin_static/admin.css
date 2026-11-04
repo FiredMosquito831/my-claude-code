@@ -13715,6 +13715,20 @@ audio.req-media-preview {
   line-height: 1.5;
 }
 
+/* SPEC §9.1/§9.3 — the sentence a percentage-only provider prints under its
+   allowance block. Deliberately the block note's own voice: it is an
+   explanation of the block, not a warning, and it must not read as an error.
+   `overflow-wrap: anywhere` is A.3's rule for provider-supplied prose, which
+   this is (it comes from the declared row, not from the renderer). */
+.usage-percent-only-note {
+  margin: 10px 0 0;
+  max-width: 60ch;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .usage-account-name {
   margin: 8px 0 4px;
   font-size: 12.5px;

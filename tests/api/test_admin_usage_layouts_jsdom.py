@@ -36,7 +36,9 @@ Both runs are ``MCC_JSDOM_SCENARIO=usage_layouts``, through
 ``tests/contracts/test_jsdom_ci_contract.py``.
 """
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -98,6 +100,11 @@ EXPECTED_STATES = {
 @pytest.fixture(scope="module")
 def layouts() -> dict:
     return _run(MCC_JSDOM_SCENARIO="usage_layouts")
+
+
+@pytest.fixture(scope="module")
+def non_commandcode() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="usage_non_commandcode")
 
 
 # ---------------------------------------------------------------- clean run ---
@@ -200,9 +207,14 @@ def test_one_payload_reaches_all_five_layouts(layouts) -> None:
 #: `one_screen` measured with every row open, `master_detail` with every
 #: provider selected in turn. A layout may hide a figure behind an expansion; it
 #: may not drop one.
+#:
+#: `34.93` is GONE from this list as of 8.11.1, and its removal IS the release:
+#: that window is a percentage now, so `$34.93 of $35.00` is the string SPEC
+#: §9.1 forbids in Command Code's subscription block. The fact it stood for
+#: ("the real numbers reached the page") is asserted by
+#: ``test_commandcode_windows_are_percentage_only_in_every_layout``.
 EVERY_FACT = (
-    "34.93",  # CommandCode's weekly window: 34.9300790367 of 35
-    "99.8",  # ... and the share those two numbers add up to
+    "99.8",  # CommandCode's weekly window, now drawn as the percentage itself
     "0.0698",  # its monthly credits left — never rounded to $0.07
     "0.18 left",  # OpenRouter's key ceiling, from limit_remaining
     "negative",  # DeepSeek's negative balance: an account in arrears is real data
@@ -218,6 +230,22 @@ EVERY_FACT = (
     "expired/unavailable",
     "free tier note",
 )
+
+#: The two windows Command Code's own API states a cap for, and therefore the
+#: only two that may carry a percentage on the live payload (§9.3: a third
+#: would need a stated monthly grant, which the API does not send).
+#:
+#: Compared as a SET, never as a sequence: `dial_cards` leads with the focal
+#: (worst) window and `meter_board` / `ledger_rows` keep the provider's order,
+#: and both are correct. Asserting an order here would pin an arrangement the
+#: layouts are entitled to choose.
+COMMANDCODE_WINDOW_IDS = {"fiveHour", "weekly"}
+
+#: The declared sentence the server publishes for Command Code
+#: (`config/usage_sources.py`, `percent_only_note`). Spelled here rather than
+#: fetched so a change to the words is a visible diff in two places, the same
+#: discipline ``DECLARED_MOVES`` follows.
+PERCENT_ONLY_NOTE_START = "5-hour and weekly windows are percentages"
 
 
 def test_all_five_layouts_carry_every_fact(layouts) -> None:
@@ -295,7 +323,209 @@ def test_one_screen_expands_one_row_at_a_time(layouts) -> None:
     assert opening["afterClose"] == "false"
 
 
+# ----------------------------------- SPEC §9.1/§9.3: the declared rule, per layout ---
+
+
+def test_commandcode_windows_are_percentage_only_in_every_layout(layouts) -> None:
+    """**THE RELEASE'S HEADLINE CLAIM.** §9.1: the 5-hour and weekly windows
+    show the percentage **and nothing else**.
+
+    Measured on the LIVE DOM of each of the five renderers, for the provider's
+    own block only: the two windows are there, each carries a percentage, and
+    **no window carries a `$`**.
+    """
+
+    for layout_id, measured in layouts["percentOnly"].items():
+        assert measured["found"], layout_id
+        assert set(measured["windowIds"]) == COMMANDCODE_WINDOW_IDS, layout_id
+        assert len(measured["windowIds"]) == 2, (layout_id, measured["windowIds"])
+        for window in measured["windows"]:
+            assert window["percentOnly"] is True, (layout_id, window)
+            assert window["hasDollar"] is False, (layout_id, window["text"])
+            assert window["percent"], (layout_id, window)
+
+
+def test_the_weekly_window_reads_99_8_percent(layouts) -> None:
+    """The user's own figure: `34.9300790367 / 35` is **99.8 %**, in all five."""
+
+    for layout_id, measured in layouts["percentOnly"].items():
+        weekly = next(win for win in measured["windows"] if win["id"] == "weekly")
+        assert weekly["percent"] == "99.8%", (layout_id, weekly)
+        # And the dollars that would have said `$34.93 of $35.00` are gone from
+        # the printed text.
+        assert "$34.93" not in weekly["text"], (layout_id, weekly["text"])
+
+
+def test_the_providers_own_numbers_stay_reachable_on_the_title(layouts) -> None:
+    """§UI-QUALITY A.3: a shortened figure keeps the exact one on `title`.
+
+    A percentage-only window may not PRINT `34.9300790367 of 35`, but it must
+    not LOSE it either — shortening without saying what was shortened is the
+    defect A.3 exists to prevent.
+
+    **Where it is reachable differs by layout, and each difference is a
+    decision rather than a gap:** `meter_board`, `one_screen` and
+    `master_detail` put the raw pair on the figure's `title`; `ledger_rows`
+    prints the percentage in a column with no room for a hover and
+    `dial_cards`' focal ring labels its arc — and in both of those the exact
+    values are still on the page in the "every figure, exactly as the provider
+    sent it" disclosure inside the expansion / inspector. So the assertion is:
+    at least three layouts carry the pair on a title, and every layout states
+    the percentage itself.
+    """
+
+    titles_with_pair = 0
+    for layout_id, measured in layouts["percentOnly"].items():
+        weekly = next(win for win in measured["windows"] if win["id"] == "weekly")
+        assert weekly["percent"] == "99.8%", (layout_id, weekly)
+        if weekly["title"]:
+            assert "34.9300790367" in weekly["title"], (layout_id, weekly)
+            titles_with_pair += 1
+    # The anti-vacuity guard: a title that existed on no layout would make the
+    # loop above assert nothing.
+    assert titles_with_pair >= 3, titles_with_pair
+
+
+def test_no_dollar_sign_reaches_the_commandcode_subscription_block(layouts) -> None:
+    """**No `$` anywhere in the two window rows**, in all five layouts.
+
+    The card's BALANCE rows are outside the rule (§9.1) and still carry money —
+    `$0.0698`, `$0.00`, `$0.00` — so the claim is scoped to the subscription
+    block, which is where §9.1's rule lives. Asserting "no `$` on the card"
+    would fail on a correct page and, worse, would invite somebody to delete
+    the balances to make it pass.
+    """
+
+    for layout_id, measured in layouts["percentOnly"].items():
+        for window in measured["windows"]:
+            assert "$" not in window["text"], (layout_id, window["text"])
+
+
+def test_the_balance_rows_are_untouched(layouts) -> None:
+    """§9.1: *including CommandCode's own balance figures* — money, unchanged.
+
+    Three balances, `$0.0698`, `$0.00`, `$0.00`. The count differs by layout
+    because `dial_cards` and `one_screen` draw one money block and
+    `ledger_rows` / `meter_board` draw each with its kind; the FACT is that
+    money is still money and the exact provider string is still printed at the
+    page's own precision.
+    """
+
+    for layout_id, measured in layouts["percentOnly"].items():
+        joined = " ".join(measured["dollarTexts"])
+        assert "$0.0698" in joined, (layout_id, measured["dollarTexts"])
+        assert "$0.00" in joined, (layout_id, measured["dollarTexts"])
+
+
+def test_no_monthly_row_exists_when_the_api_states_no_grant(layouts) -> None:
+    """**§9.3, the omission, asserted as an ABSENCE rather than an empty row.**
+
+    Command Code's API states ``windowLimits.fiveHour`` and
+    ``windowLimits.weekly`` and states the monthly figure only as what is LEFT
+    of the pool. There is therefore no honest monthly percentage, and the
+    proof requires the row to be absent — not a balance, not a guess, not 0 %.
+    """
+
+    for layout_id, measured in layouts["percentOnly"].items():
+        assert measured["hasMonthlyWindow"] is False, layout_id
+        assert "monthly" not in measured["windowIds"], layout_id
+        # Not vacuous: the other two windows really are there, so the absence
+        # is the monthly row's and not the whole card's.
+        assert set(measured["windowIds"]) == COMMANDCODE_WINDOW_IDS, layout_id
+
+
+def test_the_card_says_why_there_is_no_monthly_row(layouts) -> None:
+    """§9.3: "the PR says so in one sentence on the card rather than inventing
+    a cap". The sentence is DECLARED DATA, and it is on the card in all five."""
+
+    for layout_id, measured in layouts["percentOnly"].items():
+        assert measured["note"].startswith(PERCENT_ONLY_NOTE_START), (
+            layout_id,
+            measured["note"],
+        )
+
+
+def test_a_stated_grant_yields_three_percentages_and_no_dollars(layouts) -> None:
+    """**§9.3's second proof: a fixture WITH a stated monthly grant.**
+
+    The rule is "monthly is a percentage too, AND SHOWN ONLY IF that grant is
+    actually stated". So this fixture states one — a third window with a real
+    `used` and `cap`, the shape the other two already have — and every layout
+    must draw **three** percentages and no `$` in any of them. The day the
+    vendor states the grant, the page draws it with no code change; this test
+    is that promise, measured.
+    """
+
+    for layout_id, measured in layouts["grant"]["layouts"].items():
+        assert measured["found"], layout_id
+        assert sorted(measured["windowIds"]) == ["fiveHour", "monthly", "weekly"], (
+            layout_id
+        )
+        # THREE percentages: 0 %, 99.8 % and the monthly 24.5 of 30.
+        assert set(measured["percentTexts"]) == {"0%", "99.8%", "81.7%"}, (
+            layout_id,
+            measured["percentTexts"],
+        )
+        for window in measured["windows"]:
+            assert window["hasDollar"] is False, (layout_id, window)
+            assert window["percent"], (layout_id, window)
+
+
+def test_a_stated_grant_keeps_the_balance_rows_as_money(layouts) -> None:
+    """Even with a monthly WINDOW, the monthly BALANCE is still money (§9.1:
+    the balance rows are outside the percentage rule)."""
+
+    for layout_id, measured in layouts["grant"]["layouts"].items():
+        assert measured["hasMonthlyCreditBalance"] is True, (
+            layout_id,
+            measured["dollarTexts"],
+        )
+
+
+def test_the_omission_sentence_is_withheld_once_a_grant_is_stated(layouts) -> None:
+    """A card must not say "there is no monthly percentage" beside one.
+
+    The sentence describes an ABSENCE. With a stated grant the third
+    percentage speaks for itself, and printing both would have the page
+    contradict itself in two adjacent lines.
+    """
+
+    for layout_id, measured in layouts["grant"]["layouts"].items():
+        assert "There is no monthly percentage" not in measured["cardText"], layout_id
+
+
 # ------------------------------------------------------ the no-cap fixture ---
+
+
+def test_a_percentage_only_window_with_no_cap_gets_no_percentage(layouts) -> None:
+    """**§9.3's central guard, on the product's own formatter.**
+
+    "no percentage is ever rendered when `limit`/`cap` is absent". Measured on
+    a window that DECLARES ``percent_only`` — the case a renderer gets wrong by
+    honouring the flag before checking for a denominator — and in four shapes:
+    a used with no limit, a count with no limit, a limit of exactly ``0`` (a
+    zero is not a ceiling to divide by), and nothing at all.
+
+    The CONTROL matters as much as the guard: the same flag WITH a cap does
+    produce a percentage, so the four `None`s are the missing denominator and
+    not the flag swallowing every figure.
+    """
+
+    guard = layouts["percentOnlyNoCap"]
+    for name in ("usedOnly", "countNoLimit", "limitZero", "nothing"):
+        figure = guard[name]
+        assert figure is not None, name
+        assert figure["percent"] is None, (name, figure)
+        # And the visible text is a sentence, never a fabricated `0 %` and
+        # never a `$` — §9.1's block stays free of dollars even when it has no
+        # percentage to show.
+        assert "%" not in figure["text"], (name, figure["text"])
+        assert "$" not in figure["text"], (name, figure["text"])
+    # The control.
+    assert guard["withCap"]["percent"] is not None
+    assert guard["withCap"]["text"] == "81.7%"
+    # And a row that does not declare the rule keeps today's text exactly.
+    assert guard["unflagged"]["text"] == "$12.35 used"
 
 
 def test_the_no_cap_fixture_renders_no_percentage_anywhere(layouts) -> None:
@@ -304,6 +534,13 @@ def test_the_no_cap_fixture_renders_no_percentage_anywhere(layouts) -> None:
     "No percentage" is measured three ways, because each catches a different
     mistake: no filled meter (a bar drawn for a window with no ceiling), no ring
     arc, and no text node that IS a percentage.
+
+    **Since 8.11.1 this is also §9.3's third guard**, and sharply so: the
+    fixture's Command Code row DECLARES ``percent_only_windows``, so a renderer
+    that honoured the flag without checking for a denominator would print a
+    percentage for `12.3456` used against nothing. "No percentage when `limit`
+    is absent" is the sentence the spec asks for, and this is it — over a row
+    that would otherwise take the percentage branch.
     """
 
     for layout_id in LAYOUT_IDS:
@@ -512,3 +749,136 @@ def test_every_layout_paints_into_the_one_root(layouts) -> None:
         assert page["nodes"] > 0, layout_id
     # The count line names what it is counting, in the same words everywhere.
     assert "configured" in counts.pop() or True
+
+
+# ------------------------- SPEC §9.1: every OTHER provider, byte-identical ---
+
+#: The base tree's own render of every provider's block in all five layouts,
+#: written by running `MCC_JSDOM_SCENARIO=usage_non_commandcode` against the
+#: v8.11.0 release worktree (`56a8a7ab`) with its own `admin_static` — see
+#: `tests/api/admin_jsdom_usage_non_commandcode.mjs`, whose fixture uses only
+#: fields that tree already understands, so both sides draw from byte-identical
+#: input.
+#:
+#: Re-taken from 56a8a7ab rather than from an older tag because the Usage page's
+#: LAST change before this release is 8.11.0's own; comparing against anything
+#: earlier would report releases this one did not make.
+BASE_BLOCKS = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "usage_non_commandcode_dom_8_11_0.json"
+)
+
+#: The ONE provider whose block may move, and the ONE part of it that may: the
+#: user's rule is about Command Code's SUBSCRIPTION WINDOWS, so its window rows
+#: are excluded from the comparison and measured by the tests above. Its balance
+#: rows are NOT excluded — §9.1 says they are outside the rule — which is why
+#: the comparison below compares the whole block minus the window rows.
+DECLARED_MOVE = "commandcode"
+
+
+def _blocks_without_window_rows(text: str) -> str:
+    """A provider's block, with the parts §9.1 lets move removed.
+
+    The window rows are the block's `data-window-id` rows and their content;
+    the assertion about the rest of the block is textual, so the removal is
+    textual too: every rendering of the two windows' own figures. Anything
+    else that changed — a balance, a label, a note, a state sentence — survives
+    into the comparison and fails it.
+    """
+
+    for needle in (
+        "5-hour window",
+        "Weekly window",
+        "0%",
+        "99.8%",
+        "no cap reported",
+        "percentages of the caps",
+        "There is no monthly percentage",
+        "Monthly window",
+    ):
+        text = text.replace(needle, "")
+    return " ".join(text.split())
+
+
+def test_every_other_provider_renders_byte_identically_in_every_layout(
+    non_commandcode,
+) -> None:
+    """**THE EQUALITY PROOF.** §9.1: every other provider keeps its money as it
+    is today, in all five layouts.
+
+    Five layouts, nine providers each, compared against a baseline the BASE
+    tree wrote. The providers §9.1 names by hand are all in the fixture and all
+    in the comparison: OpenRouter's `$0.18 left of $0.20`, DeepSeek's arrear
+    (`U+2212` then `$0.01`), Anthropic's `$50.00` extra-usage cap, and OpenCode
+    Go's `7 / 32 / 39` as the provider sent them.
+    """
+
+    baseline = json.loads(BASE_BLOCKS.read_text(encoding="utf-8"))
+    assert baseline["base_commit"] == "56a8a7ab"
+    assert "56a8a7ab" in baseline["written_by"]
+    base = baseline["layouts"]
+    mine = non_commandcode["layouts"]
+
+    # The run is not vacuous: the same providers, drawn by the same model.
+    assert non_commandcode["scriptErrors"] == []
+    assert non_commandcode["consoleErrors"] == []
+    assert non_commandcode["model"]["ids"] == baseline["model"]["ids"]
+
+    moved: list[tuple[str, str]] = []
+    compared = 0
+    layout_keys = 0
+    for layout_id, provider_blocks in base.items():
+        if layout_id.endswith("__inspectors"):
+            # The inspectors are `master_detail`'s own rendering of the same
+            # blocks the master-list comparison above already covers; they are
+            # kept in the fixture for a reader, not compared twice.
+            continue
+        layout_keys += 1
+        assert layout_id in mine, layout_id
+        assert set(mine[layout_id]) == set(provider_blocks), (
+            layout_id,
+            sorted(set(mine[layout_id]) ^ set(provider_blocks)),
+        )
+        for provider_id, base_text in provider_blocks.items():
+            if provider_id == DECLARED_MOVE:
+                # The window rows are this release's subject and are asserted
+                # by the tests above; the rest of the block is still compared.
+                base_text = _blocks_without_window_rows(base_text)
+                mine_text = _blocks_without_window_rows(mine[layout_id][provider_id])
+            else:
+                mine_text = mine[layout_id][provider_id]
+            compared += 1
+            if mine_text != base_text:
+                moved.append((layout_id, provider_id))
+    assert not moved, f"these provider blocks moved and are not declared: {moved}"
+    # Every provider in every layout really was compared, so an empty baseline
+    # or an empty run cannot pass this test. Five layouts, not six: the
+    # `__inspectors` key is `master_detail`'s per-provider snapshot and is
+    # skipped above.
+    assert layout_keys == len(LAYOUT_IDS), layout_keys
+    assert compared == layout_keys * len(baseline["model"]["ids"]), compared
+
+
+def test_the_named_money_figures_are_still_there(non_commandcode) -> None:
+    """§9.1 names four figures by hand. They are on the page, unchanged.
+
+    Read from the RENDERED blocks rather than from the baseline, so this test
+    fails if the page stops drawing them *and* fails if the baseline stops
+    containing them — the two together are the claim.
+    """
+
+    one_screen = " ".join(non_commandcode["layouts"]["one_screen"].values())
+    assert "$0.18 left of $0.20" in one_screen, "OpenRouter's key ceiling"
+    # U+2212 MINUS SIGN is what the page draws (it is what a reader reads as
+    # "minus" and what aligns under a tabular figure); spelled as an escape
+    # because the ruff gate refuses an ambiguous character in source, exactly
+    # as ``MINUS`` at the top of this file does.
+    assert f"{MINUS}$0.01" in one_screen, "DeepSeek's arrear"
+    assert "$12.50 of $50.00" in one_screen, "Anthropic's extra-usage cap"
+    assert "7%" in one_screen, "OpenCode Go's rolling window, as sent"
+    # And Command Code's BALANCE rows are money, untouched (§9.1's "including
+    # CommandCode's own balance figures").
+    commandcode = non_commandcode["layouts"]["one_screen"]["commandcode"]
+    assert "$0.0698" in commandcode
+    assert "$0.00" in commandcode
