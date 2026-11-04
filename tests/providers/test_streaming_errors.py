@@ -470,6 +470,113 @@ class TestStreamingExceptionHandling:
         assert "answer" in event_text
 
     @pytest.mark.asyncio
+    async def test_stream_with_native_thinking_and_text_content_parts(self):
+        """Mistral-style chunk lists preserve thinking and answer text."""
+        provider = _make_provider()
+        request = _make_request()
+        stream_mock = AsyncStreamMock(
+            [
+                _make_chunk(
+                    content=[
+                        {
+                            "type": "thinking",
+                            "thinking": [{"type": "text", "text": "reasoning start"}],
+                        }
+                    ]
+                ),
+                _make_chunk(
+                    content=[
+                        {
+                            "type": "thinking",
+                            "thinking": [{"type": "text", "text": "reasoning end"}],
+                        },
+                        {"type": "text", "text": "transition answer"},
+                    ]
+                ),
+                _make_chunk(content=" tail"),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
+
+        with (
+            patch.object(
+                provider._client.chat.completions,
+                "create",
+                new_callable=AsyncMock,
+                return_value=stream_mock,
+            ),
+            patch.object(
+                provider._rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            events = await _collect_stream(provider, request)
+
+        parsed = parse_sse_text("".join(events))
+        thinking = "".join(
+            event.data["delta"]["thinking"]
+            for event in parsed
+            if event.event == "content_block_delta"
+            and event.data["delta"]["type"] == "thinking_delta"
+        )
+        answer = "".join(
+            event.data["delta"]["text"]
+            for event in parsed
+            if event.event == "content_block_delta"
+            and event.data["delta"]["type"] == "text_delta"
+        )
+        assert thinking == "reasoning startreasoning end"
+        assert answer == "transition answer tail"
+        assert parsed[-1].event == "message_stop"
+
+    @pytest.mark.asyncio
+    async def test_native_thinking_content_parts_are_suppressed_when_disabled(self):
+        """Native reasoning chunks obey the client's reasoning policy."""
+        provider = _make_provider()
+        request = _make_request()
+        stream_mock = AsyncStreamMock(
+            [
+                _make_chunk(
+                    content=[
+                        {
+                            "type": "thinking",
+                            "thinking": [{"type": "text", "text": "do not expose"}],
+                        },
+                        {"type": "text", "text": "visible answer"},
+                    ]
+                ),
+                _make_chunk(finish_reason="stop"),
+            ]
+        )
+
+        with (
+            patch.object(
+                provider._client.chat.completions,
+                "create",
+                new_callable=AsyncMock,
+                return_value=stream_mock,
+            ),
+            patch.object(
+                provider._rate_limiter,
+                "wait_if_blocked",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            events = await _collect_stream(
+                provider,
+                request,
+                reasoning=REASONING_OFF,
+            )
+
+        event_text = "".join(events)
+        assert "do not expose" not in event_text
+        assert "thinking_delta" not in event_text
+        assert "visible answer" in event_text
+
+    @pytest.mark.asyncio
     async def test_stream_with_reasoning_content_field(self):
         """reasoning_content delta field is emitted as thinking block."""
         provider = _make_provider()
