@@ -61,6 +61,15 @@ const state = {
   fields: new Map(),
   localStatus: new Map(),
   modelOptions: [],
+  // 8.10.1: the providers that have answered a detection of their own -- from
+  // "Detect models" or "Refresh models", the two controls that carry a
+  // provider-scoped `models` array. A catalogue load is NOT a detection of any
+  // one provider, so this set is written only from those two. It exists to
+  // separate "the provider said none" from "nobody has asked it yet" (IV.16):
+  // a provider with no refs in the catalogue has an UNKNOWN list until one of
+  // its own controls answers -- and "no models detected" is a claim about the
+  // provider, not about the catalogue.
+  modelDetections: new Set(),
   // 7.78.2: ref -> the kinds it is stated to be ("chat", "image", "tts",
   // "asr", "video"), from /admin/api/models. A ref with no entry is of
   // unknown kind, which is never the same as "not chat".
@@ -9544,7 +9553,11 @@ function updateProviderCard(providerId, status, label, metaText) {
   pill.textContent = label;
   // The face has no `provider-meta` line any more (USER 2026-11-02 moved it
   // into the dialog), so a test answer says what it found in the Detect
-  // models control instead -- which is the row that exists to carry it.
+  // models control's tooltip. The control's VISIBLE text is not written here:
+  // in 8.10.0 this branch was the only writer of the count on a refresh, and
+  // it wrote a tooltip -- so the pill turned green and the label beside it
+  // still read "No models detected". `setModelOptions` owns the text now, via
+  // `repaintProviderModelCounts`, and every loader ends there.
   if (metaText) {
     const detect = card.querySelector(".pv-detect");
     if (detect) detect.title = `${label}: ${metaText}`;
@@ -15580,8 +15593,50 @@ function providerModelCount(providerId) {
 
 function providerModelCountLabel(providerId) {
   const count = providerModelCount(providerId);
-  if (!count) return "No models detected";
-  return count === 1 ? "1 model" : `${count.toLocaleString()} models`;
+  if (count) return count === 1 ? "1 model" : `${count.toLocaleString()} models`;
+  // 8.10.1: three states, three sentences. "No models detected" is a claim
+  // about the provider -- it answered and offered none -- and it is only true
+  // once one of this provider's own controls has asked. Before that the
+  // catalogue simply has no refs for it, which is not the same fact (IV.16:
+  // unknown is not unsupported), and the control said the strong version of
+  // it on every page load for that reason.
+  return state.modelDetections.has(providerId)
+    ? "No models detected"
+    : "Not detected yet";
+}
+
+/** Record what a provider's OWN answer said about its model list.
+ *
+ * Called only where the code holds a provider-scoped `models` array --
+ * `testProvider` (Refresh models / Test connection) and the Detect models
+ * control -- never from a catalogue load, which is not a detection of any one
+ * provider. Writing it is what turns the face's "Not detected yet" into the
+ * measured "N models" / "No models detected"; the paint itself is
+ * `repaintProviderModelCounts`, called by `setModelOptions`.
+ */
+function rememberProviderDetection(providerId) {
+  if (providerId) state.modelDetections.add(providerId);
+}
+
+/** Repaint every card's model count from the one list they are all derived from.
+ *
+ * 8.10.1: the count had no owner. `buildDetectModelsButton` wrote the label
+ * once, at `renderSections` time, when `state.modelOptions` was still empty --
+ * `hydrateModelOptions` runs eleven lines later -- and nothing repainted it, so
+ * every card read the empty state for the life of the page while the pill
+ * beside it reported a successful refresh. Every loader goes through
+ * `setModelOptions`, so repainting there covers all of them at once.
+ *
+ * A control that is mid-request keeps its own text: `button.disabled` is true
+ * while "Detecting" / "Refreshing" / "Testing" is showing, and stomping that
+ * would leave a reader unable to tell a running call from a finished one.
+ */
+function repaintProviderModelCounts() {
+  document.querySelectorAll(".pv-card[data-provider]").forEach((card) => {
+    const detect = card.querySelector(".pv-detect");
+    if (!detect || detect.disabled) return;
+    detect.textContent = providerModelCountLabel(card.dataset.provider);
+  });
 }
 
 /** The one control that answers what a provider's model list actually is.
@@ -15619,6 +15674,12 @@ function buildDetectModelsButton(provider) {
         body: "{}",
       });
       if (result.ok) {
+        // 8.10.1: this is the provider's own answer, so it is a detection --
+        // which is what lets a provider that answered "none" read differently
+        // from one nobody has asked. The label below stays because it is the
+        // resting text for THIS control as soon as the call returns; the
+        // repaint in `setModelOptions` then agrees with it.
+        rememberProviderDetection(provider.provider_id);
         setModelOptions([
           ...(state.modelOptions || []),
           ...(result.models || []).map(
@@ -18301,10 +18362,19 @@ async function testProvider(providerId, button) {
       body: "{}",
     });
     if (result.ok) {
+      // 8.10.1 (USER Q1): the pill is a STATUS, not a count. It was given the
+      // model count in 8.10.0 only because the count had nowhere else to live;
+      // the card's own Detect models control carries the number now, and a
+      // pill reading "3 models" beside a control reading "3 models" is the
+      // same fact written twice by two owners -- the disagreement this PR is
+      // fixing. The count itself reaches the control through the `title` here
+      // and through `setModelOptions` below, which is the one writer of its
+      // text.
+      rememberProviderDetection(providerId);
       updateProviderCard(
         providerId,
         "reachable",
-        `${result.models.length} models`,
+        "Reachable",
         result.models.slice(0, 3).join(", ") || "No models returned",
       );
       setModelOptions([
@@ -24037,6 +24107,12 @@ function setModelOptions(models) {
   state.modelComboboxes.forEach((combobox) => {
     if (combobox.isOpen) combobox.render(combobox.query);
   });
+  // 8.10.1: the card face reads this same list, so this is the one place every
+  // loader of it ends at -- `loadModelOptions`/`refreshModelOptions`,
+  // `testProvider`, the Detect models control, `refreshCustomProviderModels`
+  // and the add-provider flow. The cards were drawn before the first load, so
+  // without this the face kept the label it was built with forever.
+  repaintProviderModelCounts();
 }
 
 /* 7.78.2: what kind of model each ref is stated to be -- by its provider's

@@ -2003,6 +2003,17 @@ const ROUTES = {
     ok: true,
     models: ["m1", "m2", "m3"],
   },
+  /* 8.10.1: the Dialog Provider's own Detect models / Refresh models answer.
+     This is deliberately the ONLY place these two models come from: the shared
+     `/admin/api/models` route stays empty, because seeding it moved the Models
+     page's digest and the design-system baseline is compared against it. A
+     provider that has answered two models is what the face has to show, and
+     the provider's own route is the honest way to say so. */
+  "/admin/api/providers/dialog_provider/test": {
+    provider_id: "dialog_provider",
+    ok: true,
+    models: ["one", "two"],
+  },
   /* The Server responsiveness card reads this: what the last gestures
      cost the event loop. Two entries, one of them over the busy
      threshold, so both the ordinary row and the late one are rendered. */
@@ -13042,6 +13053,15 @@ const providerDialog = {};
     }
   };
 
+  // 8.10.1: the pill as the CARD was drawn, read before any control is
+  // pressed. The press blocks below answer a "Refresh models" and a "Detect
+  // models" for this provider, and 8.10.0's own `testProvider` answered with
+  // `"${n} models"` on the pill -- so a reading taken afterwards depended on
+  // whether that answer's microtasks had drained. This one cannot: nothing has
+  // been called yet.
+  const pillAsDrawn = card.querySelector(".status-pill").textContent;
+  const pillClassAsDrawn = card.querySelector(".status-pill").className;
+
   providerDialog.cardIsAFace = {
     role: card.getAttribute("role"),
     ariaHaspopup: card.getAttribute("aria-haspopup"),
@@ -13049,8 +13069,12 @@ const providerDialog = {};
     label: card.getAttribute("aria-label"),
     // The five things, and nothing else.
     children: Array.from(card.children).map((node) => node.className.split(" ")[0]),
-    controls: Array.from(card.querySelectorAll("button")).map((button) => button.textContent),
     dataKeysOnTheFace: card.querySelectorAll("[data-key]").length,
+    // 8.10.1: the label the card was BUILT with, before anything on it is
+    // pressed. On 8.10.0 this was the only label it ever had.
+    controlsAsDrawn: Array.from(card.querySelectorAll("button")).map(
+      (button) => button.textContent,
+    ),
   };
 
   // ---- five controls, five proofs ---------------------------------------
@@ -13079,16 +13103,44 @@ const providerDialog = {};
   providerDialog.refreshModels.labelled = "Refresh models";
 
   providerDialog.detectModels = press(".pv-detect");
-  providerDialog.detectModels.labelled = "No models detected";
+  // 8.10.1: read, not written. This used to be assigned the literal
+  // "No models detected", which made the assertion below check a constant
+  // against a constant. `press()` reads the control at the moment its handler
+  // first awaits -- for this control that is the busy label, because the call
+  // has not answered yet. The resting label is what it settles on afterwards,
+  // so it is read again once the answer is in.
+  providerDialog.detectModels.labelled = card.querySelector(".pv-detect").textContent;
+  {
+    const control = card.querySelector(".pv-detect");
+    const deadline = Date.now() + 5000;
+    while (control.disabled && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    providerDialog.detectModels.afterTheCall = control.textContent;
+  }
+
+  // 8.10.1: the face AFTER this provider's own two calls have answered. The
+  // count it now carries is what the card must keep showing -- a face that
+  // only ever reads its build-time label is the defect this release fixes.
+  providerDialog.cardIsAFace.controls = Array.from(
+    card.querySelectorAll("button"),
+  ).map((button) => button.textContent);
 
   // The status pill is not a control: it is part of the card's own press
   // target, so pressing it opens the dialog (it is not a dead spot).
   closeDialog();
   card.querySelector(".status-pill").click();
   providerDialog.statusPill = {
-    text: card.querySelector(".status-pill").textContent,
-    className: card.querySelector(".status-pill").className,
+    // As the card was drawn (see `pillAsDrawn` above), which is the status the
+    // card is BUILT with; and as it stands after the two calls above, which is
+    // the status it must still read -- a count is the defect.
+    text: pillAsDrawn,
+    className: pillClassAsDrawn,
+    textAfterTheCalls: card.querySelector(".status-pill").textContent,
     openedTheDialog: isOpen(),
+    // 8.10.1 (USER Q1): the pill is a STATUS. A number here is the defect.
+    isANumber: /^\d/.test(card.querySelector(".status-pill").textContent),
+    wasANumberAsDrawn: /^\d/.test(pillAsDrawn),
   };
   closeDialog();
 
@@ -13238,6 +13290,12 @@ const providerDialogReRender = {};
   providerDialogReRender.closed = doc.getElementById("providerDetailModal").hidden;
   host.remove();
 }
+
+/* The model count on a card's face (CARDS-FIX-1) is measured by
+   `admin_jsdom_model_count.mjs`, not here: it has to be read on the page
+   load the browser performs, where `renderSections` draws the cards before
+   `hydrateModelOptions` fills the list -- the order that was the defect.
+   Rendering a card directly, as the blocks above do, cannot see it. */
 
 /* The Web Search cards: the same face contract, Use provider still working
    from the card, and the rotation select / advanced group / key pool in the
