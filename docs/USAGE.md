@@ -3043,8 +3043,8 @@ Providers you add yourself get their own card above the grid, with the key pool,
 the rotation policy and what MCC learned about that host's reasoning dialect.
 
 <div align="center">
-  <img src="../assets/admin-custom-provider.png" alt="Two custom provider cards with base URLs, key pools showing masked fingerprints marked Healthy, and the reasoning dialect each host was measured to accept" width="860">
-  <p><em>Custom providers: three keys on round-robin and two on failover, each with its own health, and the effort words each host was learned to accept.</em></p>
+  <img src="../assets/admin-custom-provider.png" alt="A custom provider card showing its name and detected model count, beside the panel it opens: the base URL, the masked key pool with per-key health, and the reasoning dialect each host was measured to accept" width="860">
+  <p><em>Custom providers: the card carries the count and Refresh models; the panel carries the keys, their health and the effort words each host was learned to accept.</em></p>
 </div>
 
 ### The workflow
@@ -3825,6 +3825,10 @@ These take no credentials — the key field stays empty and validation just chec
 ### Custom providers
 
 Any OpenAI-compatible endpoint that is not one of the 56 built-in cards can be added by hand. Press **Add custom provider** on the **Providers** tab and give it a display name, a base URL and one API key.
+
+**The card is a face, and its form is a panel** (8.11.0). Exactly like a built-in provider's card since 8.10.0: the card shows the name, the status, the detected model count, **Refresh models** and **Configure**, and everything else — the key pool, the reasoning dialect, Edit, Disable and Delete — opens in the same panel a built-in card uses, by pressing anywhere else on the card or **Configure**. The panel body scrolls inside itself, Escape closes it, focus goes back to the card, and the key pool is open when it appears, because managing keys is what a provider's panel is for. Nothing was removed in the move: every control the card carried is in the panel, in the same order.
+
+The count on the card is the number this provider's own last discovery returned. It reads **Not detected yet** until one of the card's own controls has asked, and **No models detected** once the host has answered with none — two different facts, never one number.
 
 **The base URL must include `/v1` (or whatever path segment your gateway uses).** MCC calls the URL you typed, verbatim — it does not append `/v1` for you. `https://api.example.com/v1` is right; `https://api.example.com` is refused by the gateway on every request — measured against one real host, that is a **403** naming the paths it does serve, not a silent 404, and it surfaces immediately as a red card because the create route probes `/models` before it answers you. Check the gateway's own `curl` example: whatever comes before `/chat/completions` is your base URL.
 

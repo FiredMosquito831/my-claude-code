@@ -2290,13 +2290,22 @@ def test_custom_provider_card_labels_its_refresh_and_updates_the_count(
     It read "Test" while the identical call on a static remote card read
     "Refresh models", and the count line was written once at render time -- so
     the card could say "0 models" straight after a refresh that returned three.
+
+    CARDS-FIX-2 moved that line into the provider panel, so the readings are
+    taken there; the claim is unchanged and so is the source of the number
+    (`provider.model_count` in the listing payload). The pill is a STATUS and
+    never a number -- USER 2026-11-04, Q1, the rule CARDS-FIX-1 gave the
+    built-in card.
     """
     card = rendered["customProviders"]
     assert card["present"] is True
+    assert card["aPanelCarriesTheDetails"] is True
     assert card["buttonLabel"] == "Refresh models"
     assert card["detailsBefore"].endswith("0 models")
     assert card["detailsAfter"].endswith("3 models")
-    assert card["pillAfter"] == "3 models"
+    assert card["pillAfter"] == "Reachable"
+    # The number is on the control that asked for it, one owner per fact.
+    assert card["detectAfter"] == "3 models"
 
 
 def test_a_create_with_a_failed_discovery_does_not_render_a_healthy_card(
@@ -6495,14 +6504,24 @@ def test_every_key_pool_row_carries_the_reorder_controls(rendered) -> None:
 
 
 def test_a_custom_card_showing_a_rail_says_so(rendered) -> None:
-    """`has-key-rail` is what gives the card the whole grid row.
+    """The rail is still the shared rail; the CARD no longer claims the row.
 
-    A `minmax(240px, 1fr)` column cannot hold six controls; a built-in card
-    has taken the whole row since `.pv-card.pv-open` existed, and this is the
-    same rule for the card that renders its rail inline.
+    A `minmax(240px, 1fr)` column cannot hold six controls, which is why the
+    rule `.provider-card.has-key-rail { grid-column: 1 / -1 }` exists. Until
+    CARDS-FIX-2 the custom card rendered its rail INLINE and took the whole
+    grid row for it, and that is what this reading asserted.
+
+    Since CARDS-FIX-2 the rail is inside the provider panel, which is already
+    wider than the rail needs, so there is no grid column to widen: the card is
+    an ordinary cell again. The rail itself is unchanged -- same four
+    `keyRail*` builders, same `.cp-*` aliases, same order (`sharedRail.custom`
+    and `customRowOrder` below prove that) -- so this test now asserts the two
+    halves separately: the rail renders, and the card stopped claiming the row.
     """
 
-    assert rendered["sharedRail"]["customIsRailHost"] is True
+    rail = rendered["sharedRail"]
+    assert rail["custom"] is not None, "the rail did not render in the panel"
+    assert rail["customCardIsRailHost"] is False
 
 
 def test_the_health_badge_sits_where_it_does_on_a_built_in_row(rendered) -> None:

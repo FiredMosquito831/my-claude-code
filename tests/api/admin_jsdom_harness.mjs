@@ -10837,22 +10837,72 @@ if (routingLink) {
 
 /* ------------------------------------------------------ custom providers
    The card's refresh affordance and its model-count line. jsdom cannot say
-   whether the extra text fits; it can say what the card claims. */
+   whether the extra text fits; it can say what the card claims.
+
+   CARDS-FIX-2 (USER 2026-11-04): the custom card is a FACE now, and the body
+   it used to carry -- `.cp-details`, the dialect block, the key rail and the
+   nine controls -- lives in the shared `#providerDetailModal`. Every reading
+   below that used to look at the card looks at the panel instead, opened the
+   way a reader opens it. Nothing was removed: this block asks the same
+   questions of the same controls in their new place. */
 const customProviders = {};
 {
   const providersLink = navLinks.find((link) => link.dataset.view === "providers");
   if (providersLink) providersLink.click();
   await new Promise((resolve) => setTimeout(resolve, 200));
+  const panel = () => doc.getElementById("providerDetailBody");
+  const panelIsOpen = () => !doc.getElementById("providerDetailModal").hidden;
+  const closePanel = () => {
+    if (panelIsOpen()) {
+      doc.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    }
+  };
+  /* The panel is opened by a press on the card FACE -- never on a control, and
+   * never while it is already open: `openCustomProviderOverlay` closes and
+   * re-locks an already-open dialog, and a press on a control belongs to the
+   * control. */
+  const openPanel = async (node) => {
+    if (panelIsOpen()) closePanel();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    node.click();
+    await new Promise((resolve) => setTimeout(resolve, 260));
+  };
+  // The face: the five things, the role, and no body of its own.
   const card = doc.querySelector('[data-custom-provider="custom_acme"]');
   customProviders.present = Boolean(card);
   if (card) {
+    customProviders.faceChildren = Array.from(card.children).map(
+      (node) => node.className.split(" ")[0],
+    );
+    customProviders.faceControls = Array.from(card.querySelectorAll("button")).map(
+      (node) => node.textContent,
+    );
+    customProviders.faceClass = card.className;
+    customProviders.faceRole = card.getAttribute("role");
+    customProviders.faceDataKeys = card.querySelectorAll("[data-key]").length;
     const button = card.querySelector(".test-button");
     customProviders.buttonLabel = button.textContent;
-    customProviders.detailsBefore = card.querySelector(".cp-details").textContent;
+    // The count and the details line are read from the panel, where they now
+    // live. Refresh models changes the control on the face; `.cp-details` in
+    // the panel is refreshed with it.
+    await openPanel(card);
+    customProviders.panelOpened = panelIsOpen();
+    customProviders.aPanelCarriesTheDetails = Boolean(
+      panel() && panel().querySelector(".cp-details"),
+    );
+    customProviders.detailsBefore = panel().querySelector(".cp-details").textContent;
+    closePanel();
+    await new Promise((resolve) => setTimeout(resolve, 120));
     button.click();
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    customProviders.detailsAfter = card.querySelector(".cp-details").textContent;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await openPanel(card);
+    customProviders.detailsAfter = panel().querySelector(".cp-details").textContent;
+    closePanel();
+    await new Promise((resolve) => setTimeout(resolve, 120));
     customProviders.pillAfter = card.querySelector(".status-pill").textContent;
+    customProviders.detectAfter = card.querySelector(".pv-detect").textContent;
   }
 
   // A create whose discovery failed must not settle into a healthy card.
@@ -10870,31 +10920,42 @@ const customProviders = {};
   customProviders.failedPill = failedCard
     ? failedCard.querySelector(".status-pill").textContent
     : null;
+  // `provider-meta` is the panel's base-URL line; the failure's own sentence
+  // is the Detect control's tooltip on the face.
   customProviders.failedMeta = failedCard
-    ? failedCard.querySelector(".provider-meta").textContent
+    ? failedCard.querySelector(".pv-detect").title
     : null;
-  customProviders.failedDetails = failedCard
-    ? failedCard.querySelector(".cp-details").textContent
-    : null;
+  if (failedCard) {
+    await openPanel(failedCard);
+    customProviders.failedDetails = panel().querySelector(".cp-details").textContent;
+    closePanel();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  } else {
+    customProviders.failedDetails = null;
+  }
   const banner = doc.getElementById("messageArea");
   customProviders.message = banner ? banner.textContent : "";
 
   // The learned dialect, the hand-edit field, and the per-key health a custom
-  // pool has always had and never showed.
+  // pool has always had and never showed -- all in the panel now.
   const acme = doc.querySelector('[data-custom-provider="custom_acme"]');
   if (acme) {
-    customProviders.dialectLabel = textOf(acme, ".cp-dialect-label");
-    const edit = acme.querySelector(".cp-dialect-edit");
+    await openPanel(acme);
+    const body = panel();
+    customProviders.dialectLabel = textOf(body, ".cp-dialect-label");
+    const edit = body.querySelector(".cp-dialect-edit");
     customProviders.dialectValue = edit ? edit.value : null;
-    customProviders.probeButton = textOf(acme, ".cp-dialect-probe");
-    customProviders.toggleLabel = textOf(acme, ".cp-toggle");
+    customProviders.probeButton = textOf(body, ".cp-dialect-probe");
+    customProviders.toggleLabel = textOf(body, ".cp-toggle");
     customProviders.keyHealthStates = Array.from(
-      acme.querySelectorAll(".cp-key-health .key-health-badge"),
+      body.querySelectorAll(".cp-key-health .key-health-badge"),
     ).map((el) => el.textContent);
     customProviders.keyBenches = Array.from(
-      acme.querySelectorAll(".cp-key-health .key-model-benches"),
+      body.querySelectorAll(".cp-key-health .key-model-benches"),
     ).map((el) => el.textContent);
-    customProviders.keyRowCount = acme.querySelectorAll(".cp-key-row").length;
+    customProviders.keyRowCount = body.querySelectorAll(".cp-key-row").length;
+    closePanel();
+    await new Promise((resolve) => setTimeout(resolve, 120));
   }
 
   // The 7.33.0 control: which wire APIs this host serves. The create above
@@ -10909,11 +10970,17 @@ const customProviders = {};
     );
     return sent.length ? sent[sent.length - 1].body.surfaces : null;
   })();
-  const acmeEdit = doc.querySelector(
-    '[data-custom-provider="custom_acme"] .cp-edit',
-  );
-  if (acmeEdit) acmeEdit.click();
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The Edit control lives in the panel (USER Q2: it is not a face control),
+  // so the panel is opened and Edit is pressed inside it. Edit still opens the
+  // same shared add/edit form it always did, at the top of the page.
+  const acmeCard = doc.querySelector('[data-custom-provider="custom_acme"]');
+  if (acmeCard) {
+    await openPanel(acmeCard);
+    const acmeEdit = panel().querySelector(".cp-edit");
+    if (acmeEdit) acmeEdit.click();
+    closePanel();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
   customProviders.surfaceLabels = Array.from(
     doc.querySelectorAll("#cpSurfaces .cp-surface span"),
   ).map((el) => el.textContent);
@@ -12799,19 +12866,36 @@ const sharedRail = {};
   await window.eval(`loadCustomProviders`)();
   await new Promise((resolve) => setTimeout(resolve, 250));
   const customCard = doc.querySelector('[data-custom-provider="custom_acme"]');
-  sharedRail.custom = customCard ? describe(customCard) : null;
-  // The card says it is showing a rail, which is what widens it to the whole
-  // grid row -- the rule `.pv-card.pv-open` has always had.
-  sharedRail.customIsRailHost = customCard
+  /* CARDS-FIX-2: the rail is in the panel now, not on the card. It is still
+   * built by the same four `keyRail*` builders with the same `.cp-*` aliases,
+   * which is the property this block exists to prove -- so the reading is
+   * taken from the panel body, opened the way a reader opens it. */
+  if (customCard) {
+    customCard.click();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  const customRailRoot = doc.getElementById("providerDetailBody");
+  sharedRail.custom = customCard ? describe(customRailRoot) : null;
+  // The rail is inside the panel, which is already wider than the six controls
+  // need, so nothing has to widen a grid column for it: the CARD is an
+  // ordinary cell again and no longer claims the whole row. The rail itself
+  // still exists and is still the shared one -- that is the reading above.
+  sharedRail.customCardIsRailHost = customCard
     ? customCard.classList.contains("has-key-rail")
     : null;
   // The health badge sits between the key and the Move buttons, the way it
   // does on an env-key row. It used to land after Move down.
   sharedRail.customRowOrder = customCard
-    ? Array.from(customCard.querySelector(".key-manager-row")?.children || []).map(
+    ? Array.from(customRailRoot.querySelector(".key-manager-row")?.children || []).map(
         (node) => node.className.split(" ")[0],
       )
     : null;
+  if (customCard && !doc.getElementById("providerDetailModal").hidden) {
+    doc.dispatchEvent(
+      new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
   sharedRail.envRowOrder = Array.from(
     envPanel.querySelector(".key-manager-row")?.children || [],
   ).map((node) => node.className.split(" ")[0]);

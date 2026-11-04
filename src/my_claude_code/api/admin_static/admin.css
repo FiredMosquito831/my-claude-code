@@ -505,19 +505,20 @@ textarea:focus-visible,
   outline-offset: 2px;
 }
 
-/* A custom provider's card still renders its rail inline and has no dialog,
-   so it keeps the old turn-away-on-hover. */
-.provider-card:not(.pv-card):not(.ws-card):hover {
-  border-color: var(--line-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
-  background: var(--card-hover);
-}
+/* USER 2026-11-04 (CARDS-FIX-2): there is no card left that is not a face.
+   A built-in provider card and a web-search card became `.pv-card` / `.ws-card`
+   in 8.10.0, and the custom-provider card -- the last `.provider-card` with no
+   dialog -- followed in 8.11.0. The rule that used to live here existed to
+   give that one card a hover, and the rule's own comment said to delete it the
+   moment every custom card carried `.pv-card`. `test_admin_custom_cards_jsdom`
+   pins that: every card the three renderers produce carries one of the two
+   face classes. */
 
-/* The same rule, for every other card that shows a key rail: a custom
-   provider card, which renders its rail inline. A rail is six controls
-   across; a `minmax(240px, 1fr)` column is not. Before 7.34.1 only the
-   built-in cards had this, which is why only the built-in rail fitted. */
+/* `.provider-card.has-key-rail` used to give a custom card the whole grid row
+   for its inline six-control rail. The rail is in the panel now, so a custom
+   card is an ordinary grid cell again; the rule stays because `markKeyRailHost`
+   still marks a rail host -- inside a panel, where the grid does not apply --
+   and a future inline rail would need exactly this rule back. */
 .provider-card.has-key-rail {
   grid-column: 1 / -1;
 }
@@ -3434,6 +3435,111 @@ textarea:focus-visible,
 .pv-detail .provider-detail-summary {
   margin: 0;
   color: var(--text);
+}
+
+/* --- the custom provider's panel (CARDS-FIX-2) ---------------------------
+   The same `.pv-detail` body, holding the three regions the card used to draw
+   inline: the base URL, `.cp-details`, the key rail and `.cp-dialect`. They
+   keep their own classes and their own rules; what follows is the spacing a
+   panel needs that a 240px card column did not.
+
+   The action row is LAST in the body on purpose: Delete and Disable sit in it,
+   and Delete is the last control of the three, so it is the furthest thing
+   from the panel's first control and from the model list a reader is reading.
+   A mis-click on Delete inside a panel is a data loss. */
+
+/* A mono line, wrapped anywhere: a base URL is one unbreakable token. */
+.cp-detail .cp-base-url {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+/* The details line reads as a sentence in the panel, not as a 12px footnote. */
+.cp-detail .cp-details {
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* The rail takes the panel's width, so the six controls a row carries fit on
+   one line at every panel width and wrap where the shared rule says they do
+   rather than because the column is 240px. */
+.cp-detail .key-manager-list,
+.cp-detail .cp-key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* A key's health slot carries the badge AND, under it, the models that key is
+   rate-limited for -- a "COOLDOWN (1 model)" badge beside a 56-character model
+   id is 568 px of unshrinkable content in a 352 px panel, and `flex-shrink: 0`
+   made the whole rail set the panel's scroll width (measured: rail
+   scrollWidth 568 / clientWidth 352 at 390 px).
+
+   Inside the panel the slot is allowed to shrink and to drop the bench line to
+   its own row, so the id ellipsises instead of pushing the rail sideways. The
+   card's old inline rail had the same 568 px row and spilled the PAGE to
+   624 px at a 390 px viewport; this is the fix the move makes possible.
+   Scoped to `.cp-detail` so the same rail rendered anywhere else keeps the
+   behaviour it shipped with. */
+.cp-detail .cp-key-health {
+  min-width: 0;
+  flex-shrink: 1;
+  flex-wrap: wrap;
+}
+
+.cp-detail .cp-key-health .key-health-badge {
+  flex: 0 0 auto;
+}
+
+/* The bench line is the widest thing in the slot and the least urgent: it
+   takes a row of its own and ellipsises what it cannot fit. */
+.cp-detail .cp-key-health .key-model-benches {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The learned dialect on a line of its own, its label above its controls. */
+.cp-detail .cp-dialect {
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.cp-detail .cp-dialect-label {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+/* Delete and Disable are a pair, separated from the settings above by a rule
+   so neither reads as "the next thing to press" after a form field. */
+.cp-detail .cp-actions {
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+/* Delete is its own colour and its own end of the row: never the control a
+   thumb lands on while reaching for Enable/Disable or Edit. */
+.cp-detail .cp-actions .cp-delete {
+  margin-left: auto;
+}
+
+@media (max-width: 560px) {
+  /* On a phone the row wraps, and Delete keeps the end of it rather than
+     joining the middle -- `margin-left: auto` alone would put it beside Edit
+     on a wrapped second line, which is the adjacency this rule prevents. */
+  .cp-detail .cp-actions .cp-delete {
+    margin-left: 0;
+    order: 10;
+    flex-basis: 100%;
+  }
 }
 
 /* On a phone the panel is a bottom sheet: it takes the width it has, sits at
