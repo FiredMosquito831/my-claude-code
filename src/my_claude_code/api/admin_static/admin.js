@@ -22045,6 +22045,10 @@ function usageResetNode(value) {
  *  the `title` so nothing is lost. A window whose provider sent no percentage
  *  and no cap returns `null`, and the caller draws words instead — never a
  *  zero.
+ *
+ *  **ONE provider is the exception, and it is declared rather than branched
+ *  on**: a window carrying `percent_only` (stamped from the provider's own row)
+ *  draws its percentage and no money at all — see the branch below.
  */
 function usageWindowFigure(win) {
   const unit = String(win.unit || "");
