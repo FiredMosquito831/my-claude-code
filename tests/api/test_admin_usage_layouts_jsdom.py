@@ -104,7 +104,20 @@ def layouts() -> dict:
 
 @pytest.fixture(scope="module")
 def non_commandcode() -> dict:
-    return _run(MCC_JSDOM_SCENARIO="usage_non_commandcode")
+    """Compare visible text in the timezone the BASE-written fixture used.
+
+    Reset timestamps are intentionally rendered in the viewer's local time.
+    The base-written `usage_non_commandcode_dom_8_11_0.json` was captured in
+    Europe/Sofia (UTC+2 on the fixture date), while GitHub's runner is UTC.
+    Without pinning this scenario, all five layouts' window rows differ only
+    in those local clock strings, even though the provider text and figures are
+    byte-identical. Node honours `TZ` on both Windows and the Linux CI runner;
+    this was measured on the base tree in both zones before adding the pin.
+    This affects only this comparison scenario: it does not change the product
+    timezone or mask/normalise any rendered text.
+    """
+
+    return _run(MCC_JSDOM_SCENARIO="usage_non_commandcode", TZ="Europe/Sofia")
 
 
 # ---------------------------------------------------------------- clean run ---
