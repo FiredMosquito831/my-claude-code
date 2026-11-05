@@ -607,15 +607,17 @@ def _inlining_complete(media: MediaRuntimePort) -> Complete:
 
 
 def _parse_images(response: MediaResponse) -> MediaOutputs:
-    return parse_images_response(response.body)
+    return _with_leaf_measures(parse_images_response(response.body), response)
 
 
 def _with_leaf_measures(outputs: MediaOutputs, response: MediaResponse) -> MediaOutputs:
     """What the leaf measured while translating a native answer.
 
-    Only a Gemini native answer carries any (token usage its body cannot
-    hold, raw PCM's length, fields its surface did not take); every other
-    answer comes back unchanged.
+    Only a translated answer carries any: a Gemini native answer (token usage
+    its body cannot hold, raw PCM's length, fields its surface did not take),
+    and since 8.14.0 a Mistral tool answer (the chat usage block, the prose
+    around the tool call, the fields a chat call has no place for). Every
+    other answer comes back unchanged -- all three are empty on it.
     """
     changes: dict[str, Any] = {}
     if response.usage is not None:
@@ -630,6 +632,11 @@ def _with_leaf_measures(outputs: MediaOutputs, response: MediaResponse) -> Media
         changes["audio_seconds"] = response.audio_seconds
     if response.not_forwarded:
         changes["not_forwarded"] = outputs.not_forwarded + response.not_forwarded
+    if outputs.text is None and response.text is not None:
+        # 8.14.0: prose an answer carried that its shape has no field for (a
+        # chat answer's ``message.content`` around the image tool call). It
+        # goes on the row's ``output_text`` and nowhere else (user decision Q3).
+        changes["text"] = response.text
     return dataclasses.replace(outputs, **changes) if changes else outputs
 
 

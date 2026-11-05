@@ -30,6 +30,7 @@ although the host has usually billed the picture it could not deliver.
 import asyncio
 import dataclasses
 import json
+import time
 from collections.abc import AsyncIterator, Mapping
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -49,7 +50,10 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
+    MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MISTRAL_IMAGE_FILE_CONTENT_PATH,
     MediaSurface,
+    job_path,
     media_url,
     model_path,
     surface_for,
@@ -60,6 +64,11 @@ from my_claude_code.core.gemini_native_media import (
     GeminiAnswerError,
     speech_answer,
     transcript_answer,
+)
+from my_claude_code.core.mistral_media import (
+    MistralAnswerError,
+    images_answer,
+    parse_image_tool_answer,
 )
 from my_claude_code.core.openai_images import inline_image_urls, url_only_images
 from my_claude_code.core.openai_videos import parse_job
@@ -408,6 +417,10 @@ class MediaLeaf:
                     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
                 ):
                     answer = await self._translated(surface, attempt, answer, body)
+                elif surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
+                    answer = await self._mistral_image_answer(
+                        attempt, answer, body, request_id=request_id
+                    )
                 elif attempt.request.inline_urls:
                     answer = await self._inlined(answer)
                 # 8.8.0: a successful answer is a metadata line too, and never
@@ -471,6 +484,108 @@ class MediaLeaf:
             audio_seconds=translated.audio_seconds,
             not_forwarded=body.not_forwarded,
         )
+
+    async def _mistral_image_answer(
+        self,
+        attempt: MediaAttempt,
+        answer: MediaResponse,
+        body: WireBody,
+        *,
+        request_id: str | None,
+    ) -> MediaResponse:
+        """A chat answer carrying the ``image_generation`` tool, as an Images answer.
+
+        The bytes are a SECOND call, made here -- inside the attempt, before
+        the answer is yielded, and unconditionally (user decision Q4): a
+        Mistral answer has no picture in it, so there is nothing the client
+        could fall back to. The fetch is ``self.request`` on THIS leaf -- the
+        key that answered the chat call, on the proxy leg that answered it,
+        through this key's own retry ladder, and never another (spec §4.3,
+        IV.5).
+
+        A fetch that fails fails the attempt: the model is charged and the
+        chain moves on. The message says the host produced the picture it could
+        not deliver, which is the honest sentence -- the image has usually been
+        billed by then.
+        """
+
+        try:
+            parsed = await asyncio.to_thread(parse_image_tool_answer, answer.body)
+        except MistralAnswerError as error:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=f"{self._provider_id} answered {error}",
+                retryable=False,
+            ) from error
+        data = parsed.inline_bytes
+        if not data and parsed.file_id is not None:
+            data = await self._file_bytes(
+                media_url(
+                    self._config.base_url,
+                    job_path(MISTRAL_IMAGE_FILE_CONTENT_PATH, parsed.file_id),
+                ),
+                request_id=request_id,
+            )
+        if not data and parsed.url is not None:
+            # A URL is a CDN's, not the provider's: ``_download`` sends the key
+            # only to the provider's own host (``same_host``) and masks a
+            # transport error's text, because a signed address is a credential
+            # of its own. Its 429 says nothing about this key, so it is not
+            # allowed to bench one -- which is exactly what ``_download``'s
+            # flatten-to-502 already does.
+            data = await self._download(parsed.url)
+        if not data:  # pragma: no cover - the parser refuses this first
+            raise self._undownloadable("the answer named no picture")
+        rendered = await asyncio.to_thread(
+            images_answer,
+            created=parsed.created if parsed.created is not None else int(time.time()),
+            data=data,
+        )
+        return MediaResponse(
+            status_code=answer.status_code,
+            content_type="application/json",
+            body=rendered,
+            headers={**answer.headers, "content-type": "application/json"},
+            usage=parsed.usage,
+            not_forwarded=body.not_forwarded,
+            text=parsed.text,
+        )
+
+    async def _file_bytes(self, url: str, *, request_id: str | None) -> bytes:
+        """One file's bytes from the provider's OWN endpoint, classified.
+
+        The same ``self.request`` the video job calls use -- this key, this
+        proxy leg, this retry ladder -- and the same classification the POST
+        gets, so a second call that answers 429 is a rate-limit failure that
+        benches the key and routes around, exactly as a first call's 429 is
+        (parity contract P2/P3). The message keeps the host's own words and
+        says in front of them what the operator needs to know: the picture was
+        produced, and the host has usually billed it (user decision Q4).
+        """
+
+        try:
+            response = await self._rate_limiter.execute_with_retry(
+                self.request, "GET", url, auth=True, stream=False
+            )
+        except Exception as error:
+            failure = classify_provider_failure(
+                error,
+                provider_name=self._provider_id.upper(),
+                read_timeout_s=self._config.http_read_timeout,
+                request_id=request_id,
+                mark_rate_limited=self._rate_limiter.extend_reactive_block,
+                cooldown=self._config.rate_limit_cooldown(),
+                mark_rate_limited_enabled=not self._config.routes_around_model,
+            )
+            raise dataclasses.replace(
+                failure,
+                message=(
+                    f"{self._provider_id} produced the image but it could not be "
+                    f"downloaded: {failure.message}"
+                ),
+            ) from error
+        return response.content
 
     async def _inlined(self, answer: MediaResponse) -> MediaResponse:
         """The answer with every URL-only picture downloaded and inlined.

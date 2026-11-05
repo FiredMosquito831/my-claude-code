@@ -20,6 +20,7 @@ from my_claude_code.application.media import schemas
 from my_claude_code.application.media.schemas import (
     DOOR_FIELDS,
     GEMINI_NATIVE_FORWARDED,
+    MISTRAL_IMAGE_TOOL_FORWARDED,
     STATE_NOT_FORWARDED,
     STATE_NOT_KNOWN,
     STATE_REFUSED_LEARNED,
@@ -27,6 +28,7 @@ from my_claude_code.application.media.schemas import (
     STATE_REQUIRED_LEARNED,
     STATE_REQUIRED_STATED,
     STATE_STATED,
+    TRANSLATED_SHAPES,
     field_acceptance,
     request_schema,
     request_schemas,
@@ -39,11 +41,13 @@ from my_claude_code.config.media_request_fields import (
 from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
+    MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MediaSurface,
     custom_media_surfaces,
     gemini_speech_surface,
     gemini_transcription_surface,
     image_generation_surface,
+    mistral_image_tool_surface,
     speech_surface,
     video_surfaces,
 )
@@ -439,6 +443,43 @@ def test_gemini_native_forwarded_mirrors_the_adapter() -> None:
     asr = _schema(gemini_transcription_surface(), "transcribe", model_ref="gemini/asr")
     assert _state(asr, "language") == STATE_NOT_KNOWN
     assert _state(asr, "temperature") == STATE_NOT_FORWARDED
+
+
+def test_mistral_image_tool_forwarded_mirrors_the_adapter() -> None:
+    """8.14.0: the same mirror, for the shape that sends only the prompt."""
+
+    assert MISTRAL_IMAGE_TOOL_FORWARDED[MEDIA_SHAPE_MISTRAL_IMAGE_TOOL] == (
+        adapters._MISTRAL_IMAGE_USED
+    )
+    assert frozenset({"prompt"}) == adapters._MISTRAL_IMAGE_USED
+
+
+def test_a_mistral_image_schema_says_every_other_field_is_not_forwarded() -> None:
+    """IV.16: "not forwarded" is a FACT about MCC's adapter, not a guess."""
+
+    schema = _schema(
+        mistral_image_tool_surface(), "image_generate", model_ref="mistral/m"
+    )
+    for name in ("n", "size", "quality", "response_format", "style", "user"):
+        assert _state(schema, name) == STATE_NOT_FORWARDED, name
+    # A field MCC has never heard of is not forwarded either: the body is
+    # MCC's own construction, so nothing is passed through.
+    assert schema["additionalProperties"]["x-mcc"]["state"] == STATE_NOT_FORWARDED
+
+
+def test_the_two_mirror_tables_are_the_one_translated_set() -> None:
+    """One table, so a new translated shape cannot be added to one reader only."""
+
+    assert TRANSLATED_SHAPES == {
+        **GEMINI_NATIVE_FORWARDED,
+        **MISTRAL_IMAGE_TOOL_FORWARDED,
+    }
+    assert schemas.forwarded_fields(MEDIA_SHAPE_MISTRAL_IMAGE_TOOL) == frozenset(
+        {"prompt"}
+    )
+    # A passthrough shape is not in it, so its schema still says "sent
+    # unchanged" -- every existing provider's published schema is unchanged.
+    assert schemas.forwarded_fields(image_generation_surface().shape) is None
 
 
 def test_the_fact_kind_names_match_the_store() -> None:

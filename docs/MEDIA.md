@@ -193,13 +193,33 @@ and **not charged** a failure -- the request log shows it as `unsupported`.
 | Agnes AI | `images/generations` | -- |
 | SiliconFlow | `images/generations` | -- |
 | ZenMux | `images/generations` | -- |
+| Mistral Studio | `chat/completions` carrying the `image_generation` built-in tool, then `files/{id}/content` | -- |
 
 An edit on the Image rail therefore skips every model whose provider declares no edit endpoint,
 uncharged, and is served by the first one that does.
 
-The body the client sent is forwarded field for field, with `model` replaced by the rail's
-model id, so a parameter only one host understands still reaches it. What the host answers is
-what the client receives -- `b64_json` or `url`, exactly as the host returned it.
+**Two of these are translated, not passed through, and the difference is worth knowing before
+you pick a model.** For the OpenAI-shaped providers above, the body the client sent is forwarded
+field for field, with `model` replaced by the rail's model id, so a parameter only one host
+understands still reaches it, and what the host answers is what the client receives -- `b64_json`
+or `url`, exactly as the host returned it. Gemini's native speech and transcription surfaces and
+**Mistral's image surface are not that**: MCC builds their request itself, so a field it has no
+place for is **not sent** and is listed under `not_forwarded` on the request row rather than
+translated by guess. A Mistral image forwards **only your `prompt`** -- `n`, `size`, `quality`,
+`response_format`, `style` and the rest are recorded as not forwarded, because a chat call
+carrying a built-in tool has nowhere to put them. The Models page says the same thing per model,
+field by field.
+
+**Mistral images** (8.14.0) are worth one more sentence, because the wire is unusual: Mistral
+does not document `POST /v1/images/generations` at all. MCC asks for the picture on
+`chat/completions` with the `image_generation` built-in tool, and then fetches the result with a
+**second call**, `GET {base}/files/{file_id}/content`, made on the same key and through the same
+proxy exit that answered the first. If that fetch fails the attempt fails -- the model is
+charged and the chain moves to the next one -- because the host has usually billed the picture by
+then. A `mistral_vibe` model is **not** offered on this rail: the image charge's pool is not
+established as the Vibe subscription's, so a Vibe ref is skipped uncharged. The image itself is
+recorded **unpriced**: neither models.dev nor LiteLLM publishes a per-image rate for Mistral, and
+MCC never invents a price.
 
 **Edits** are forwarded in the client's own encoding. A multipart upload (`image`, `image[]`,
 `mask` and the text fields) goes out as multipart, streamed from the server's spooled copy of

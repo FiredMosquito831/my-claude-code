@@ -5724,6 +5724,26 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <img class="guide-shot" src="/admin/img/admin-media-analytics.png"
                      alt="The Analytics Media card: a By rail table with one Image request, one Speech request and one failed Transcription request, and a By provider and model table"
                      loading="lazy">
+                <p id="guide-media-translated-providers">
+                  <strong>Not every provider takes the body you sent (since 8.14.0).</strong>
+                  Most hosts on the Image rail are OpenAI-shaped: your body goes out field for
+                  field and their answer comes back as they sent it. Two are <em>translated</em>
+                  instead, and the Models page says which per model, field by field. Gemini's
+                  native speech and transcription surfaces build their own request. So does
+                  <strong>Mistral</strong>, whose image generation is the
+                  <code>image_generation</code> built-in tool on Chat Completions &mdash; it does
+                  not document <code>/v1/images/generations</code> at all &mdash; with the picture
+                  then fetched by a second call, <code>GET {base}/files/{id}/content</code>, on the
+                  same key and the same proxy exit. For a Mistral image <strong>only your
+                  <code>prompt</code> is forwarded</strong>: <code>n</code>, <code>size</code>,
+                  <code>quality</code>, <code>response_format</code> and the rest are recorded as
+                  <em>not forwarded</em> on the request row rather than guessed at. A failed fetch
+                  fails the attempt and the chain moves on, because the host has usually billed
+                  the picture by then. The image is recorded <em>unpriced</em> unless Mistral
+                  reports its own cost &mdash; no catalogue publishes a per-image rate for it, and
+                  MCC never invents a price. A <code>mistral_vibe</code> ref is skipped uncharged
+                  on this rail: which budget an image spends is not published.
+                </p>
                 <p>
                   An empty rail answers <code>404</code> &mdash; <em>No model is
                   configured for the Image rail</em> &mdash; on purpose: the OpenAI SDKs

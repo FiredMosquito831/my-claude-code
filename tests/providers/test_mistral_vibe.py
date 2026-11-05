@@ -140,10 +140,21 @@ def test_the_vibe_provider_declares_no_media_surface() -> None:
     ``mistral``'s streaming transcription surface is untouched -- it is pinned
     by its own test in ``tests/api/test_media_transcriptions.py`` and by the
     catalogue's own contract.
+
+    8.14.0 moves the Studio count from one to two: the image surface is
+    ADDED, and this assertion now names both surfaces instead of counting them,
+    so the next addition is a deliberate edit here rather than a number that
+    quietly changes. The Vibe half is unchanged and is the whole point.
     """
 
     assert PROVIDER_CATALOG[VIBE].media_surfaces == ()
-    assert len(PROVIDER_CATALOG[STUDIO].media_surfaces) == 1
+    assert [
+        (surface.operation, surface.shape)
+        for surface in PROVIDER_CATALOG[STUDIO].media_surfaces
+    ] == [
+        ("transcribe", "openai_transcriptions"),
+        ("image_generate", "mistral_image_tool"),
+    ]
 
 
 def test_each_provider_has_exactly_one_construction_owner() -> None:

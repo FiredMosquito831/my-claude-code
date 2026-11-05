@@ -59,6 +59,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_OPERATION_VIDEO_RETRIEVE,
     image_generation_surface,
+    mistral_image_tool_surface,
     video_surfaces,
 )
 from my_claude_code.config.reasoning import ReasoningPreference
@@ -1426,3 +1427,455 @@ def test_pinned_poll_charges_key_books_like_a_chat_attempt(refusal: Outcome) -> 
     else:
         assert chat_books[0][6] is True, "a 401 locks the key out on both books"
         assert [call[2] for call in chat_script.calls] == [0, 1]
+
+
+# ------------------------------- the Mistral second call (8.14.0, spec §7.2)
+
+
+class MistralWorld:
+    """A scripted upstream that answers a chat call AND a file fetch.
+
+    The chat side reuses :class:`Script` unchanged, so a scenario's chat
+    answers are written exactly as every other scenario's are. The file side
+    is its own queue: a 200 answers the picture's bytes, anything else the
+    outcome's status. Every call is recorded in ONE list, in order, with the
+    key and the leg it went out on -- which is what P5 reads.
+    """
+
+    def __init__(
+        self,
+        chat: Script | None = None,
+        content: dict[str, list[Outcome]] | None = None,
+    ) -> None:
+        self.chat = chat or Script()
+        #: The file fetch's answers, per provider; a provider absent here
+        #: answers the picture. A queue answers in order and repeats its last.
+        self.content = dict(content or {})
+        #: ``(kind, provider, key, leg, authorization)`` -- ``kind`` is
+        #: "chat" or "file". The header is recorded because the key and the
+        #: leg are bound to the leaf that dials: a fetch that moved to another
+        #: key would still be recorded on the same closure, so the credential
+        #: the request actually carried is what P5 must read.
+        self.calls: list[tuple[str, str, int, str, str]] = []
+        self._served: dict[str, int] = {}
+
+    def next_content(self, provider: str) -> Outcome:
+        queue = self.content.get(provider)
+        if not queue:
+            return OK
+        served = self._served.get(provider, 0)
+        self._served[provider] = served + 1
+        return queue[min(served, len(queue) - 1)]
+
+    def fresh(self) -> MistralWorld:
+        return MistralWorld(chat=self.chat.fresh(), content=self.content)
+
+
+#: A one-pixel PNG: what the file fetch answers with.
+_MISTRAL_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+def _mistral_tool_answer() -> dict[str, Any]:
+    """A chat answer naming the file the picture was written to."""
+
+    return {
+        "id": "cmpl-parity",
+        "created": 1_700_000_000,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Here is your image.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "image_generation",
+                                "arguments": json.dumps({"file_id": "file_parity_1"}),
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+
+def _mistral_transport(
+    world: MistralWorld, provider: str, key: int, leg: str
+) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            world.calls.append(
+                ("file", provider, key, leg, request.headers.get("authorization", ""))
+            )
+            outcome = world.next_content(provider)
+            if outcome.kind == "connect":
+                raise httpx.ConnectError("connection refused", request=request)
+            if outcome.kind == "status":
+                return httpx.Response(
+                    outcome.status,
+                    json={"error": {"message": outcome.message}},
+                    headers=dict(outcome.headers),
+                )
+            return httpx.Response(
+                200, content=_MISTRAL_PNG, headers={"content-type": "image/png"}
+            )
+        world.calls.append(
+            ("chat", provider, key, leg, request.headers.get("authorization", ""))
+        )
+        model = json.loads(request.content)["model"]
+        outcome = world.chat.respond(provider, model, key, leg)
+        if outcome.kind == "connect":
+            raise httpx.ConnectError("connection refused", request=request)
+        if outcome.kind == "status":
+            return httpx.Response(
+                outcome.status,
+                json={"error": {"message": outcome.message}},
+                headers=dict(outcome.headers),
+            )
+        return httpx.Response(200, json=_mistral_tool_answer())
+
+    return httpx.MockTransport(handler)
+
+
+def _mistral_leaf(
+    world: MistralWorld,
+    provider: str,
+    config: ProviderConfig,
+    key: int,
+    leg: str,
+    proxied: bool,
+    plan: ProxyChainPlan | None = None,
+) -> MediaLeaf:
+    limiter = _leaf_limiter(config, proxied_leg=proxied)
+    if (
+        plan is not None
+        and plan.until_served
+        and isinstance(limiter, ProxiedLegRateLimiter)
+    ):
+        limiter.arm_exit_stops(transport=True, rate_limit="rate_limit" in plan.on)
+    return MediaLeaf(
+        provider_id=provider,
+        config=config,
+        surfaces=(mistral_image_tool_surface(),),
+        rate_limiter=limiter,
+        transport=_mistral_transport(world, provider, key, leg),
+    )
+
+
+def _mistral_node(
+    world: MistralWorld, provider: str, config: ProviderConfig, key: int
+) -> MediaNode:
+    plan = config.proxy_chain
+    if plan is None or len(plan.legs) < 2:
+        return _mistral_leaf(world, provider, config, key, "-", False)
+    legs = plan.legs
+    labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
+
+    def build(index: int) -> MediaNode:
+        url = legs[index].url if index < len(legs) else ""
+        leg_config = dataclasses.replace(config, proxy=url, proxy_chain=None)
+        leg = labels[index] if index < len(legs) else DIRECT_PROXY_LABEL
+        return _mistral_leaf(world, provider, leg_config, key, leg, bool(url), plan)
+
+    state = MediaProxyRotationState(
+        len(legs),
+        plan.policy,
+        labels=labels,
+        provider_id=provider,
+        scope=plan.scope,
+        until_served=plan.until_served,
+        credential=f"{provider}-key-{key}",
+    )
+    return MediaProxyPool(
+        build,
+        state,
+        labels=labels,
+        plan=plan,
+        provider_id=provider,
+        max_live_failures=_LIVE_FAILURES.get(provider, 0),
+    )
+
+
+def _mistral_provider(world: MistralWorld, provider: str, spec: ProviderSpec):
+    _LIVE_FAILURES[provider] = spec.max_live_failures
+    config = _config(provider, spec)
+    if len(config.api_keys) <= 1:
+        return _mistral_node(world, provider, config, 0), None
+    nodes = [
+        _mistral_node(world, provider, sub, index)
+        for index, sub in enumerate(_per_key(config))
+    ]
+    state = _key_state(config, len(nodes))
+    return (
+        MediaKeyPool(
+            nodes,
+            state,
+            key_labels=tuple(f"k{index}" for index in range(len(nodes))),
+            provider_id=provider,
+            routes_around_model=config.routes_around_model,
+        ),
+        state,
+    )
+
+
+@dataclass
+class MistralScenario:
+    """A parity scenario whose media side makes a SECOND call.
+
+    ``chat`` is the equivalent single-call scenario: the same providers, the
+    same chain, and a script in which the FIRST call carries the failure the
+    Mistral world puts on its file fetch. So "a second call that fails" and
+    "a first call that fails" are compared decision for decision.
+    """
+
+    name: str
+    providers: dict[str, ProviderSpec]
+    chain: tuple[tuple[str, str], ...]
+    world: MistralWorld
+    chat: Scenario
+    requests: int = 1
+    probes: dict[str, str] = field(default_factory=dict)
+    retry_first: str = "skip"
+    policy: RouteExecutionPolicy = field(default_factory=RouteExecutionPolicy)
+
+
+def _run_mistral(scenario: MistralScenario) -> dict[str, Any]:
+    _reset_chat_proxy_books()
+    media_proxy_pool.reset_media_proxy_books()
+    world = scenario.world.fresh()
+    built = {
+        name: _mistral_provider(world, name, spec)
+        for name, spec in scenario.providers.items()
+    }
+    chat_for_probe = {
+        name: _chat_provider(world.chat, name, spec)[0]
+        for name, spec in scenario.providers.items()
+    }
+
+    def resolver(provider_id: str):
+        return built[provider_id][0]
+
+    health = scenario.chat.health()
+    executor = MediaExecutor(
+        resolver,
+        policy=scenario.policy,
+        health=health,
+        retry_first=scenario.retry_first,
+        provider_lookup=lambda provider_id: resolver(provider_id).throttle_remaining(),
+        chat_provider_resolver=lambda provider_id: chat_for_probe[provider_id],
+    )
+    request = MediaRequest(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        rail=MediaRail.IMAGE,
+        model="client-model",
+        body={"prompt": "p"},
+    )
+    plan = MediaPlan(
+        attempts=tuple(
+            MediaAttempt(request, _resolved(p, m)) for p, m in scenario.chain
+        ),
+        paused_refs=frozenset(),
+        paused_env_var="MODEL_PAUSED",
+        probe_candidates={p: _resolved(p, m) for p, m in scenario.probes.items()},
+    )
+    outcomes: list[tuple[Any, ...]] = []
+    ledgers: list[list[tuple[Any, ...]]] = []
+
+    async def one() -> None:
+        install_attribution()
+        records: list[RouteAttemptRecord] = []
+        error: BaseException | None = None
+        try:
+            stream = executor.execute(
+                plan, request_id="parity", on_attempt_result=records.append
+            )
+            async for _chunk in stream:
+                pass
+        except Exception as exc:
+            error = exc
+        outcomes.append(_outcome(error))
+        ledgers.append(_ledger(records))
+
+    books: dict[str, Any] = {}
+
+    async def run() -> None:
+        for _ in range(scenario.requests):
+            await one()
+        books.update({name: _key_books(state) for name, (_p, state) in built.items()})
+
+    asyncio.run(run())
+    return {
+        "calls": world.calls,
+        "outcomes": outcomes,
+        "ledgers": ledgers,
+        "benched": {ref: health.is_ejected(ref) for ref in plan.model_refs()},
+        "keys": books,
+    }
+
+
+def _mistral_scenarios() -> list[MistralScenario]:
+    one = ProviderSpec()
+    two_keys = ProviderSpec(keys=2)
+    return [
+        # P1: a first call that answers 200 and a second call that answers 500
+        # charges the model ONCE and moves the chain on, exactly as a
+        # single-call 500 does.
+        MistralScenario(
+            "P1: a 500 on the file fetch falls back exactly as a first-call 500",
+            {"a": one, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            MistralWorld(content={"a": [status(500)]}),
+            Scenario(
+                "chat",
+                {"a": one, "b": one},
+                (("a", "m1"), ("b", "m2")),
+                Script({("a", None, None, None): [status(500)]}),
+            ),
+        ),
+        # P2: a second call that answers 429 does what a single 429 does --
+        # including the route-around to the same provider's next model.
+        MistralScenario(
+            "P2: a 429 on the file fetch routes around exactly as a first-call 429",
+            {"a": ProviderSpec(cooldown=0.05), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            MistralWorld(content={"a": [status(429, "slow down")]}),
+            Scenario(
+                "chat",
+                {"a": ProviderSpec(cooldown=0.05), "b": one},
+                (("a", "m1"), ("b", "m2")),
+                Script({("a", None, None, None): [status(429, "slow down")]}),
+            ),
+        ),
+        # P3: the credential probe after a 429 is still a CHAT question --
+        # a probe that generated an image would be billed as one.
+        MistralScenario(
+            "P3: the probe after a file-fetch 429 is a chat question",
+            {"a": ProviderSpec(cooldown=0.05), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            MistralWorld(content={"a": [status(429, "slow down")]}),
+            Scenario(
+                "chat",
+                {"a": ProviderSpec(cooldown=0.05), "b": one},
+                (("a", "m1"), ("b", "m2")),
+                Script({("a", None, None, None): [status(429, "slow down")]}),
+            ),
+            probes={"a": "probe"},
+        ),
+        # P4: a second call that fails leaves the KEY BOOKS exactly as a
+        # first-call failure would -- compared on every scenario above, and
+        # here on a two-key pool, where a charge on the wrong key would show.
+        MistralScenario(
+            "P4: a failed file fetch leaves the key books as a first-call failure does",
+            {"a": two_keys, "b": one},
+            (("a", "m1"), ("b", "m2")),
+            MistralWorld(content={"a": [status(500)]}),
+            Scenario(
+                "chat",
+                {"a": two_keys, "b": one},
+                (("a", "m1"), ("b", "m2")),
+                Script({("a", None, None, None): [status(500)]}),
+            ),
+        ),
+        # P5: the second call never goes out on another key or another leg.
+        # Two keys and two exits, so a fetch that picked either wrongly shows.
+        MistralScenario(
+            "P5: the file fetch stays on the key and the exit that answered",
+            {"a": ProviderSpec(keys=2, legs=2), "b": one},
+            (("a", "m1"), ("b", "m2")),
+            MistralWorld(content={"a": [status(500)]}),
+            Scenario(
+                "chat",
+                {"a": ProviderSpec(keys=2, legs=2), "b": one},
+                (("a", "m1"), ("b", "m2")),
+                Script({("a", None, None, None): [status(500)]}),
+            ),
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "scenario", _mistral_scenarios(), ids=lambda scenario: scenario.name
+)
+def test_a_second_call_decides_exactly_as_a_single_call(
+    scenario: MistralScenario,
+) -> None:
+    """P1-P4: the file fetch changes no decision the frozen rules make."""
+
+    chat = _run_chat(scenario.chat)
+    media = _run_mistral(scenario)
+    # The chat calls the media side made, in order, are the chat run's calls.
+    assert [call[1:4] for call in media["calls"] if call[0] == "chat"] == [
+        (provider, key, leg) for provider, _model, key, leg in chat["calls"]
+    ], "the chat calls diverged"
+    assert media["outcomes"] == chat["outcomes"], "final outcome diverged"
+    # Every ledger verdict but the message: the media side's sentence names
+    # the second call ("produced the image but it could not be downloaded"),
+    # which is the one thing that legitimately differs. Its KIND, status and
+    # bench flag must be the chat run's, and are compared below.
+    assert _verdicts(media["ledgers"]) == _verdicts(chat["ledgers"]), (
+        "ledger verdicts diverged"
+    )
+    assert media["benched"] == chat["benched"], "route-health benches diverged"
+    assert media["keys"] == chat["keys"], "key health books diverged"
+
+
+def _verdicts(ledgers: list[list[tuple[Any, ...]]]) -> list[list[tuple[Any, ...]]]:
+    """A ledger with the free-text message dropped (see the test above)."""
+
+    return [[row[:5] + row[6:] for row in ledger] for ledger in ledgers]
+
+
+@pytest.mark.parametrize(
+    "scenario", _mistral_scenarios(), ids=lambda scenario: scenario.name
+)
+def test_the_file_fetch_never_moves_key_or_exit(scenario: MistralScenario) -> None:
+    """P5: every fetch went out on the key and the leg that answered before it."""
+
+    media = _run_mistral(scenario)
+    answering: tuple[str, int, str, str] | None = None
+    fetches = 0
+    for kind, provider, key, leg, auth in media["calls"]:
+        if kind == "chat":
+            answering = (provider, key, leg, auth)
+            continue
+        assert answering is not None, "a file fetch with no chat call before it"
+        assert (provider, key, leg, auth) == answering, "the fetch moved key or exit"
+        # And the credential really was on the request, not merely implied by
+        # the leaf: the chat call carried a key and so must the fetch.
+        assert auth.startswith("Bearer "), "the fetch carried no key"
+        fetches += 1
+    # The scenarios really do exercise it: at least one fetch went out.
+    assert fetches >= 1
+
+
+def test_the_mistral_scenarios_actually_make_two_calls() -> None:
+    """A parity test over scenarios that never fetch proves nothing."""
+
+    for scenario in _mistral_scenarios():
+        media = _run_mistral(scenario)
+        kinds = [call[0] for call in media["calls"]]
+        assert "file" in kinds, scenario.name
+        assert kinds[0] == "chat", scenario.name
+
+
+def test_the_probe_after_a_file_fetch_429_is_a_chat_call() -> None:
+    """P3, read directly: the probe never becomes an image request.
+
+    The probe is asked through the CHAT stack (``chat_provider_resolver``), so
+    it lands in the chat script's own call list as a plain chat call on the
+    same key -- and it makes no file fetch, because a probe that generated an
+    image would be billed as one.
+    """
+
+    scenario = next(s for s in _mistral_scenarios() if s.name.startswith("P3"))
+    media = _run_mistral(scenario)
+    kinds = [call[0] for call in media["calls"]]
+    # Two chat calls (a's, which 200s, and b's, which answers) and one file
+    # fetch for each -- never a fetch for the probe.
+    assert kinds == ["chat", "file", "chat", "file"]
+    assert [call[1] for call in media["calls"]] == ["a", "a", "b", "b"]
