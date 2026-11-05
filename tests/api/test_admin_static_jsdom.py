@@ -1165,6 +1165,64 @@ def test_a_measured_body_with_no_instruction_still_reads_as_not_sent(
     assert rendered["requestDetail"]["wireVerdictNothing"] == "not sent"
 
 
+def test_the_adaptive_badge_names_what_each_door_actually_sent(rendered) -> None:
+    """8.13.0, the page half of the per-door matrix.
+
+    The same ADAPTIVE policy produces three different bodies, and a user
+    reading Analytics must be able to tell them apart. Before 8.13.0 the Chat
+    door's body carried no reasoning key at all, so this badge read "no
+    reasoning instruction sent" for a request the user had set to Adaptive --
+    the silent degradation the whole PR exists to end.
+
+    The Python half of the same table is
+    ``tests/providers/test_adaptive_per_door_matrix.py``.
+    """
+
+    detail = rendered["requestDetail"]
+    assert detail["adaptiveMessages"]["reasoningBadge"] == (
+        "reasoning sent: type=adaptive"
+    )
+    assert detail["adaptiveResponses"]["reasoningBadge"] == (
+        "reasoning sent: effort=medium, summary=auto"
+    )
+    assert detail["adaptiveChat"]["reasoningBadge"] == "reasoning sent: max"
+
+
+def test_the_adaptive_badge_never_reads_as_nothing_sent(rendered) -> None:
+    """Requirement 4, as a guard rather than three literal strings."""
+
+    detail = rendered["requestDetail"]
+    for name in ("adaptiveMessages", "adaptiveResponses", "adaptiveChat"):
+        assert "no reasoning instruction sent" not in detail[name]["reasoningBadge"], (
+            name
+        )
+        assert "no reasoning instruction sent" not in detail[name]["text"], name
+
+
+def test_a_substituted_adaptive_request_shows_the_adaptation_beside_the_badge(
+    rendered,
+) -> None:
+    """Requirement 5: the record carries the adaptation AND the badge the wire.
+
+    A user must never see "adaptive" and have no way to tell what went out.
+    On the two doors that cannot express it, both halves are on screen: the
+    sentence saying what was substituted, and the measured body.
+    """
+
+    detail = rendered["requestDetail"]
+    for name in ("adaptiveResponses", "adaptiveChat"):
+        assert "REASONING ADAPTIVE SUBSTITUTED" in detail[name]["metaText"], name
+        assert "Reasoning adaptation" in detail[name]["metaText"], name
+    # The Messages door expressed the request, so it records no adaptation --
+    # and its badge still says what left.
+    assert (
+        "REASONING ADAPTIVE SUBSTITUTED" not in detail["adaptiveMessages"]["metaText"]
+    )
+    assert detail["adaptiveMessages"]["reasoningBadge"] == (
+        "reasoning sent: type=adaptive"
+    )
+
+
 def test_an_explicitly_disabled_effort_is_not_an_instruction(rendered) -> None:
     """``effort: "none"`` says reasoning was not requested, not that it was."""
     assert (

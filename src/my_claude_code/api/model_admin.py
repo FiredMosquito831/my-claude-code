@@ -145,9 +145,12 @@ from my_claude_code.core.model_visibility import (
     is_glob,
 )
 from my_claude_code.core.reasoning import (
+    AdaptiveExpression,
     ReasoningDialect,
     ReasoningDialectOrigin,
     ReasoningEffort,
+    adaptive_expression,
+    top_stated_effort,
 )
 from my_claude_code.core.tier_refs import TIER_PROMPT_CACHE_TTL_SETTINGS
 from my_claude_code.core.wire_capture import redact_wire_value
@@ -703,9 +706,26 @@ MANDATORY_OFF_NOTE = (
     "this model cannot run with thinking disabled; an Off here would be "
     "rewritten to its lowest rung"
 )
-NO_ADAPTIVE_NOTE = (
-    "this host has no adaptive channel; nothing would be sent and the model's "
-    "own default would apply"
+# Adaptive is offered on every host that can reason, because since 8.13.0
+# every door either expresses it or says what it sent instead -- so these four
+# notes describe an OUTCOME rather than a reason to withdraw the option. They
+# are derived from the same ``adaptive_expression`` the encoders read, so the
+# page and the wire cannot disagree about what "Adaptive" will do here.
+ADAPTIVE_NATIVE_NOTE = (
+    "this host has its own adaptive channel; it is asked to think as much as "
+    "it decides it needs, with no level and no budget"
+)
+ADAPTIVE_BARE_ON_NOTE = (
+    "this host can be told to reason without naming a level, which is what "
+    "adaptive asks for; it is switched on and the model picks the amount"
+)
+ADAPTIVE_TOP_RUNG_NOTE = (
+    "this host can only be told a level, so it is sent its highest published "
+    "rung ({word}); the request log records the substitution"
+)
+ADAPTIVE_NOTHING_NOTE = (
+    "this host parses no reasoning field; nothing is sent and the model's own "
+    "default applies, which is what adaptive asks for"
 )
 NO_REASONING_NOTE = "this model does not reason; a preference here would be suppressed"
 MAX_WIRE_NOTE = (
@@ -2504,6 +2524,58 @@ def _option(
     return {"value": value, "label": label, "available": available, "reason": reason}
 
 
+def _dialect_from_payload(payload: Mapping[str, Any]) -> ReasoningDialect | None:
+    """Rebuild the declared dialect a page payload carries, or ``None``.
+
+    ``None`` -- not an empty dialect -- when nothing published one, because
+    "unknown" must keep reading as unknown: a page that treated silence as
+    "no channel" would withdraw a control the pipeline still honours.
+    """
+
+    if not payload.get("known"):
+        return None
+    values = payload.get("effort_values")
+    return ReasoningDialect(
+        effort_values=(
+            None
+            if values is None
+            else frozenset(ReasoningEffort(word) for word in values)
+        ),
+        toggle=bool(payload.get("toggle")),
+        budget=bool(payload.get("budget")),
+        off=bool(payload.get("off")),
+        adaptive=bool(payload.get("adaptive")),
+        effort_field=payload.get("effort_field") or "",
+        toggle_field=payload.get("toggle_field") or "",
+        budget_field=payload.get("budget_field") or "",
+    )
+
+
+def _adaptive_note(dialect_payload: Mapping[str, Any]) -> str:
+    """What selecting Adaptive actually sends on this host.
+
+    The same ``adaptive_expression`` the encoders read, so the sentence on the
+    page is a statement about the wire rather than a second opinion about it.
+    """
+
+    dialect = _dialect_from_payload(dialect_payload)
+    if dialect is None:
+        # Nothing declared: the encoder still has its own vocabulary, and the
+        # request log records whatever it sends. Saying "unknown" here would
+        # be honest but useless; this says what the pipeline promises.
+        return ADAPTIVE_TOP_RUNG_NOTE.format(word="its highest published rung")
+    expression = adaptive_expression(dialect)
+    if expression is AdaptiveExpression.NATIVE:
+        return ADAPTIVE_NATIVE_NOTE
+    if expression is AdaptiveExpression.BARE_ON:
+        return ADAPTIVE_BARE_ON_NOTE
+    if expression is AdaptiveExpression.TOP_RUNG:
+        top = top_stated_effort(dialect.effort_values)
+        word = top.value if top is not None else "its highest published rung"
+        return ADAPTIVE_TOP_RUNG_NOTE.format(word=word)
+    return ADAPTIVE_NOTHING_NOTE
+
+
 def max_wire_word(provider_id: str) -> str | None:
     """The word this host spells for ``max``, when it spells a different one.
 
@@ -2583,12 +2655,12 @@ def reasoning_preference_options(
         _option(
             ReasoningPreference.ADAPTIVE.value,
             REASONING_CONTROL_LABELS[ReasoningPreference.ADAPTIVE.value],
-            available=not dialect_known or bool(dialect.get("adaptive")),
-            reason=(
-                None
-                if not dialect_known or dialect.get("adaptive")
-                else NO_ADAPTIVE_NOTE
-            ),
+            # Offered everywhere since 8.13.0. Withdrawing it was the page
+            # agreeing with a hole: the option was greyed on every host
+            # without a native adaptive channel, and on those hosts selecting
+            # it through the settings page or a tier sent nothing at all. The
+            # note now states what will actually leave.
+            reason=_adaptive_note(dialect),
         ),
     ]
 

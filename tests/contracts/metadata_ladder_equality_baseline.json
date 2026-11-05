@@ -22836,6 +22836,10 @@
   "v7.113.5": {
    "bytes": 227092,
    "sha256": "977ad2c3ad5c9361716434a9b3541a4b35c33ae1c869ab622aa26056e9758147"
+  },
+  "v8.13.0": {
+   "bytes": 227751,
+   "sha256": "f8c950e67b253acd0c077232d73172c92bed82f801081a6156d3edc36a5c71ad"
   }
  },
  "kor-live/page-diff": {
@@ -24273,6 +24277,10 @@
   "v7.113.5": {
    "bytes": 201586,
    "sha256": "6dd05ff92c90870a8db0c352015c2dbafe0e8987c2d4140c400136e628de1013"
+  },
+  "v8.13.0": {
+   "bytes": 202245,
+   "sha256": "7a8761c42cd6b9eaafaccef6a7e75a9f834a6c1ce1ccbd1777ff1511c8038ace"
   }
  },
  "picker-kinds": {

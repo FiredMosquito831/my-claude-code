@@ -38647,6 +38647,32 @@ async function openRequestDetail(requestId) {
   reqState.detailReturnFocus = document.activeElement;
   const row = await api(`/admin/api/requests/${requestId}`);
   byId("reqDetailTitle").textContent = `Request ${row.id}`;
+  renderRequestMeta(row);
+  appendCancelReasonDetail(byId("reqDetailMeta"), row);
+  appendSuccessReasonDetail(byId("reqDetailMeta"), row);
+  appendRequestCostDetail(byId("reqDetailMeta"), row);
+  appendToolCatalogueDetail(byId("reqDetailMeta"), row);
+  renderRequestRouteTrace(row);
+  renderRequestImages(row);
+  renderRequestDetailMedia(row);
+  renderRequestChain(row);
+  renderWireRequest(row);
+  renderTurnTranscript(row);
+  // 7.121.0: the very last thing in the card. Paints its boxes when the log
+  // files have been read, so the rest of the detail never waits for them.
+  renderRawDiagnostics(row);
+  byId("reqDetailModal").hidden = false;
+  byId("reqDetailClose").focus();
+}
+
+/* The modal's label/value list, split out of ``openRequestDetail`` in 8.13.0
+   so the jsdom harness can drive it with a fixture row. The wire pane and the
+   meta list are two different panes, and a test that only drives
+   ``renderWireRequest`` cannot see a row that lives here -- which is exactly
+   the "Reasoning adaptation" row an adaptive request now carries. Splitting
+   it changed no value and no order: ``openRequestDetail`` calls it first,
+   where the list was built first. */
+function renderRequestMeta(row) {
   const meta = byId("reqDetailMeta");
   meta.innerHTML = "";
   const fields = [
@@ -38721,21 +38747,6 @@ async function openRequestDetail(requestId) {
     dd.textContent = value;
     meta.append(dt, dd);
   });
-  appendCancelReasonDetail(meta, row);
-  appendSuccessReasonDetail(meta, row);
-  appendRequestCostDetail(meta, row);
-  appendToolCatalogueDetail(meta, row);
-  renderRequestRouteTrace(row);
-  renderRequestImages(row);
-  renderRequestDetailMedia(row);
-  renderRequestChain(row);
-  renderWireRequest(row);
-  renderTurnTranscript(row);
-  // 7.121.0: the very last thing in the card. Paints its boxes when the log
-  // files have been read, so the rest of the detail never waits for them.
-  renderRawDiagnostics(row);
-  byId("reqDetailModal").hidden = false;
-  byId("reqDetailClose").focus();
 }
 
 /* Which tools array this request carried (7.40.0). The log keeps one hash per
@@ -40231,7 +40242,20 @@ function formatWireFacts(attempt) {
 }
 
 function wireValueText(value) {
-  return typeof value === "string" ? value : JSON.stringify(value);
+  if (typeof value === "string") return value;
+  /* A reasoning field is usually a small flat object -- ``{type: "adaptive"}``,
+     ``{effort: "medium", summary: "auto"}``, ``{type: "enabled",
+     budget_tokens: 48616}`` -- and JSON.stringify rendered those as one
+     unreadable blob on the badge. "type=adaptive" says what went out; the
+     braces and quotes did not. Anything that is not a flat object of scalars
+     still falls back to JSON, because a badge is a label and not a pane. */
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const parts = Object.entries(value)
+      .filter(([, item]) => item == null || typeof item !== "object")
+      .map(([key, item]) => `${key}=${item === null ? "null" : String(item)}`);
+    if (parts.length === Object.keys(value).length) return parts.join(", ");
+  }
+  return JSON.stringify(value);
 }
 
 /* Every parameter of the captured body, read from params.wire, which is never

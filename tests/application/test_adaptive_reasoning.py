@@ -31,6 +31,7 @@ from my_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from my_claude_code.core.wire_capture import is_reasoning_key
 from my_claude_code.providers.anthropic_messages.request import (
     build_anthropic_messages_body,
 )
@@ -130,6 +131,41 @@ NON_ANTHROPIC_ENCODERS = (
 )
 
 
+def _emitted_reasoning_keys(body: dict[str, Any]) -> set[str]:
+    """The top-level reasoning keys one body carries, ``extra_body`` unwrapped.
+
+    Compared at the first path segment because that is the granularity a
+    dialect field and a body key share: ``chat_template_kwargs.thinking`` is
+    declared as a path and written as the ``chat_template_kwargs`` key.
+    """
+
+    keys = {str(key) for key in body if is_reasoning_key(str(key))}
+    extra = body.get("extra_body")
+    if isinstance(extra, dict):
+        keys |= {str(key) for key in extra if is_reasoning_key(str(key))}
+        # The Google encoder nests the literal ``extra_body`` one level deeper
+        # (the SDK's own object plus the gateway's), so unwrap once more.
+        inner = extra.get("extra_body")
+        if isinstance(inner, dict):
+            keys |= {str(key) for key in inner if is_reasoning_key(str(key))}
+    return keys
+
+
+def _declared_reasoning_keys(label: str) -> set[str]:
+    """The fields this encoder's own dialect says it can write, top segment."""
+
+    if label == "vertex":
+        dialect = VertexReasoningEncoder().dialect
+    else:
+        dialect = OPENAI_CHAT_PROFILES[label].reasoning.dialect
+    declared = {
+        dialect.effort_field,
+        dialect.toggle_field,
+        dialect.budget_field,
+    }
+    return {field.split(".", 1)[0] for field in declared if field}
+
+
 # ---------------------------------------------------------------------------
 # Settings -> resolved policy
 # ---------------------------------------------------------------------------
@@ -200,16 +236,37 @@ def test_anthropic_messages_sends_adaptive_thinking(shape: str) -> None:
 
 
 @pytest.mark.parametrize("encoder", NON_ANTHROPIC_ENCODERS, ids=lambda item: item[0])
-def test_non_anthropic_providers_emit_no_new_field_for_adaptive(
+def test_non_anthropic_providers_express_adaptive_or_say_they_cannot(
     encoder: tuple[str, Any],
 ) -> None:
-    """Adaptive is an Anthropic concept: everyone else sends their own default."""
+    """Changed in 8.13.0, deliberately; this test used to pin the hole.
+
+    It asserted ``adaptive == provider_default`` for every non-Anthropic
+    encoder -- i.e. that an ADAPTIVE choice left no trace on the wire. That is
+    exactly the silent degradation the user reported ("adaptive as a whole
+    should fully function"): the setting was selectable, the request log said
+    ``control=adaptive``, and the body carried nothing.
+
+    The rule now: a door either expresses adaptive in its own vocabulary or
+    sends nothing *and* records that it sent nothing. Never a fabricated
+    field, and never a silent nothing.
+    """
 
     label, build = encoder
     adaptive = build(label, ReasoningPolicy.adaptive())
     provider_default = build(label, ReasoningPolicy.provider_default())
 
-    assert adaptive == provider_default
+    if adaptive == provider_default:
+        # Nothing was expressible. That is allowed only where the door has no
+        # reasoning channel at all -- where sending nothing IS the adaptive
+        # answer -- and the encoder must not have invented a field either.
+        assert _emitted_reasoning_keys(adaptive) == _emitted_reasoning_keys(
+            provider_default
+        ), label
+        return
+    # Something went out, and it is a value the host declared: either its
+    # level-less on or one of its own effort rungs.
+    assert _emitted_reasoning_keys(adaptive) <= _declared_reasoning_keys(label), label
 
 
 # ---------------------------------------------------------------------------
@@ -305,14 +362,22 @@ def test_unknown_capability_leaves_an_adaptive_policy_untouched() -> None:
 
 
 @pytest.mark.parametrize("capability", [EFFORT_ONLY, TOGGLE_ONLY, BUDGET_ONLY])
-def test_adaptive_is_never_translated_into_a_fabricated_control(
+def test_gating_leaves_an_adaptive_policy_for_the_encoder_to_express(
     capability: ModelReasoningCapability,
 ) -> None:
-    """An effort-, toggle-, or budget-only model gets the provider default.
+    """Changed in 8.13.0, deliberately; the second half used to pin the hole.
 
-    Adaptive names no level, so there is nothing to clamp and nothing honest to
-    substitute; inventing an effort here would send a request the user never
-    asked for.
+    ``adapt_reasoning_policy`` is right to leave ADAPTIVE untouched -- it names
+    no level and no budget, so there is nothing for the *gate* to clamp, and
+    that half of the old assertion still holds and is still asserted here.
+
+    What was wrong was the conclusion drawn from it: that every encoder must
+    therefore send the provider default. Gating deciding nothing is not the
+    same fact as the door being unable to express the request, and conflating
+    the two is what made an ADAPTIVE tier a no-op on every non-Anthropic
+    provider. The encoder is now the layer that answers it, which is why the
+    per-door matrix in ``tests/providers/test_adaptive_per_door_matrix.py``
+    is the acceptance criterion rather than this function.
     """
 
     adapted, _adaptation = adapt_reasoning_policy(
@@ -324,10 +389,7 @@ def test_adaptive_is_never_translated_into_a_fabricated_control(
     )
 
     assert adapted == ReasoningPolicy.adaptive()
-    for profile_id in REPRESENTATIVE_PROFILES:
-        assert _openai_body(profile_id, adapted) == _openai_body(
-            profile_id, ReasoningPolicy.provider_default()
-        )
+    assert adapted.control is ReasoningControl.ADAPTIVE
 
 
 # ---------------------------------------------------------------------------

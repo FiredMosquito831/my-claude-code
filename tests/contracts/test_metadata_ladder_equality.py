@@ -899,6 +899,31 @@ def _is_k4_entry(value: Any) -> bool:
     return isinstance(value, dict) and set(value) == {BEFORE_K4, AFTER_K4}
 
 
+#: 8.13.0 (ADAPTIVE-EVERY-DOOR) moves exactly two entries, and both are the
+#: Models page: ``page`` and ``kor-live/page``. The Models page used to grey
+#: out the Adaptive option on every host without a native adaptive channel, and
+#: its note said "nothing would be sent" -- which was true, and was the bug.
+#: Every door now either expresses adaptive or says what it sent instead, so
+#: the option is offered everywhere a model can reason and the note describes
+#: the outcome: ``available`` false -> true plus a per-host ``reason``.
+#:
+#: Measured on this tree against the v7.113.5 answer: ``page`` 201586 -> 202245
+#: bytes and ``kor-live/page`` 227092 -> 227751, both +659, and a leaf diff of
+#: the two payloads is 56 changed lines, every one of them an
+#: ``adaptive.available``/``adaptive.reason`` cell. No other entry moved.
+#: Recorded as a third version-keyed answer rather than by rewriting the
+#: historical one, exactly as ``AFTER_K4`` and ``AFTER_OCGO1`` are.
+ADAPTIVE_PAGE = "v8.13.0"
+
+
+def _is_adaptive_page_entry(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {
+        BEFORE_OCGO1,
+        AFTER_OCGO1,
+        ADAPTIVE_PAGE,
+    }
+
+
 def _is_ocgo1_entry(value: Any) -> bool:
     return isinstance(value, dict) and set(value) == {BEFORE_OCGO1, AFTER_OCGO1}
 
@@ -914,6 +939,8 @@ def _is_ocgo3_entry(value: Any) -> bool:
 
 
 def _expected(key: str, value: Any) -> Any:
+    if _is_adaptive_page_entry(value):
+        return value[ADAPTIVE_PAGE]
     if _is_ocgo2_entry(value):
         return value[AFTER_OCGO2]
     if _is_ocgo1_entry(value):
@@ -934,6 +961,14 @@ def _current_answer(group: str, key: str, value: Any) -> Any:
     correction's ``before`` be the 7.113.5 answer.
     """
 
+    if _is_adaptive_page_entry(value):
+        # 8.13.0's third answer, resolved here for the same reason the 7.113.5
+        # one is: the entry carries its own newest answer, so the corrections
+        # file must not be consulted for it. (The ``page`` entries still in
+        # ``opencode_go_reasoning_expectations.json`` describe the 7.113.2 move
+        # and have been dead since 7.113.5 gave the baseline its own version
+        # keys; leaving them alone keeps this change to the two cells it owns.)
+        return value[ADAPTIVE_PAGE]
     if _is_ocgo1_entry(value):
         return value[AFTER_OCGO1]
     return corrected_expectation(group, key, _expected(key, value))
@@ -1616,7 +1651,15 @@ def test_7_113_5_moves_only_the_opencode_go_registry_answers() -> None:
     """
 
     baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    moved = {key: value for key, value in baseline.items() if _is_ocgo1_entry(value)}
+    # 8.13.0 added a third answer to the two page entries, so they are no
+    # longer two-answer dicts. They are still entries 7.113.5 moved, and the
+    # set this test pins is unchanged -- only the predicate that recognises
+    # them had to learn the newer shape.
+    moved = {
+        key: value
+        for key, value in baseline.items()
+        if _is_ocgo1_entry(value) or _is_adaptive_page_entry(value)
+    }
     assert set(moved) == set(OCGO1_MOVED) | {KOR_PREFIX + key for key in OCGO1_MOVED}, (
         sorted(moved)
     )

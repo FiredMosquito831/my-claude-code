@@ -7753,11 +7753,18 @@ if (masterButton) {
 function driveDetail(row) {
   window.eval(
     `renderWireRequest(${JSON.stringify(row)});` +
-      `renderRequestChain(${JSON.stringify(row)});`,
+      `renderRequestChain(${JSON.stringify(row)});` +
+      // 8.13.0: the "Reasoning adaptation" row lives in the modal's meta
+      // list, not in the wire pane, so a test that only drives the wire
+      // renderers cannot see it. Rendering the meta list here is the same
+      // call openRequestDetail() makes, with the same fixture row.
+      `renderRequestMeta(${JSON.stringify(row)});`,
   );
   const wire = doc.getElementById("reqDetailWire");
   const chain = doc.getElementById("reqDetailChain");
+  const meta = doc.getElementById("reqDetailMeta");
   return {
+    metaText: (meta.textContent || "").replace(/\s+/g, " ").trim(),
     hidden: wire.hidden,
     text: (wire.textContent || "").replace(/\s+/g, " ").trim(),
     knobs: Array.from(wire.querySelectorAll(".req-wire-knobs dd")).map(
@@ -8003,6 +8010,73 @@ const requestDetail = {
         wire_body: { model: "m" },
         reasoning_emitted: 0,
         params: { wire: { model: "m", max_tokens: 4096 } },
+      }),
+    ],
+  }),
+  /* 8.13.0, the per-door adaptive matrix seen from the page. Three doors, the
+     same ADAPTIVE policy, three different bodies -- and the badge must name
+     what each one actually sent. Before 8.13.0 the Chat door's body carried no
+     reasoning key at all, so its badge read "no reasoning instruction sent"
+     for a request the user had set to Adaptive. */
+  adaptiveMessages: driveDetail({
+    reasoning: "control=adaptive",
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "deepseek-v4.1-flash" },
+        reasoning_emitted: 1,
+        params: {
+          wire: {
+            model: "deepseek-v4.1-flash",
+            max_tokens: 65000,
+            reasoning: { thinking: { type: "adaptive" } },
+          },
+        },
+      }),
+    ],
+  }),
+  adaptiveResponses: driveDetail({
+    reasoning: "control=adaptive",
+    reasoning_adaptation:
+      "REASONING ADAPTIVE SUBSTITUTED: 'gpt-x' has no adaptive channel on the " +
+      "Responses door; sending effort 'medium' via `reasoning.effort` -- the " +
+      "endpoint's own default rung -- because a host that can only be told a " +
+      "level cannot be told to choose one",
+    reasoning_adaptation_kind: "substituted",
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "gpt-x" },
+        reasoning_emitted: 1,
+        params: {
+          wire: {
+            model: "gpt-x",
+            reasoning: { reasoning: { effort: "medium", summary: "auto" } },
+          },
+        },
+      }),
+    ],
+  }),
+  adaptiveChat: driveDetail({
+    reasoning: "control=adaptive",
+    reasoning_adaptation:
+      "REASONING ADAPTIVE SUBSTITUTED: 'deepseek-v4.1-flash' has no adaptive " +
+      "channel; sending effort 'max' via `reasoning_effort` -- its highest " +
+      "published rung -- because a host that can only be told a level cannot " +
+      "be told to choose one. Adaptive asks to let the host think as much as " +
+      "it decides it needs.",
+    reasoning_adaptation_kind: "substituted",
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "deepseek-v4.1-flash" },
+        reasoning_emitted: 1,
+        params: {
+          wire: {
+            model: "deepseek-v4.1-flash",
+            max_tokens: 65000,
+            reasoning: { reasoning_effort: "max" },
+          },
+        },
       }),
     ],
   }),

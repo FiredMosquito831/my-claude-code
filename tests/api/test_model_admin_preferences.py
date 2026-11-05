@@ -9,6 +9,10 @@ wrong on most rows; that is what is being guarded.
 """
 
 from my_claude_code.api.model_admin import (
+    ADAPTIVE_BARE_ON_NOTE,
+    ADAPTIVE_NATIVE_NOTE,
+    ADAPTIVE_NOTHING_NOTE,
+    ADAPTIVE_TOP_RUNG_NOTE,
     MANDATORY_OFF_NOTE,
     MAX_WIRE_NOTE,
     NO_EFFORT_FIELD_NOTE,
@@ -159,10 +163,47 @@ def test_max_names_the_hosts_own_word_when_the_host_published_one():
     assert by_value(options, "max")["reason"] == 'max is sent as "ultra" on this host'
 
 
-def test_a_host_without_an_adaptive_channel_greys_adaptive():
+def test_a_host_without_an_adaptive_channel_still_offers_adaptive_and_says_what_it_sends():
+    """Changed in 8.13.0, deliberately.
+
+    The option used to be greyed on every host with no native adaptive
+    channel, and the note said "nothing would be sent". That was the page
+    agreeing with a hole: selecting Adaptive through the settings page or a
+    tier on those hosts sent nothing at all, silently. Every door now either
+    expresses adaptive or says what it sent instead, so the option is offered
+    everywhere a model can reason and the note describes the outcome.
+    """
+
     options = reasoning_preference_options(capability(), dialect(adaptive=False))
 
-    assert by_value(options, "adaptive")["available"] is False
+    adaptive = by_value(options, "adaptive")
+    assert adaptive["available"] is True
+    # This host declares an effort vocabulary and a toggle that IS the effort
+    # field, so it can only be told a level: the top rung it publishes.
+    assert adaptive["reason"] == ADAPTIVE_TOP_RUNG_NOTE.format(word="high")
+
+
+def test_a_host_with_a_native_adaptive_channel_says_it_is_sent_as_asked():
+    options = reasoning_preference_options(capability(), dialect(adaptive=True))
+
+    assert by_value(options, "adaptive")["reason"] == ADAPTIVE_NATIVE_NOTE
+
+
+def test_a_host_with_a_level_less_on_says_it_is_switched_on():
+    options = reasoning_preference_options(
+        capability(), dialect(adaptive=False, toggle_field="thinking")
+    )
+
+    assert by_value(options, "adaptive")["reason"] == ADAPTIVE_BARE_ON_NOTE
+
+
+def test_a_host_that_parses_no_reasoning_field_says_nothing_is_sent():
+    options = reasoning_preference_options(
+        capability(),
+        dialect(adaptive=False, toggle=False, off=False, effort_values=None),
+    )
+
+    assert by_value(options, "adaptive")["reason"] == ADAPTIVE_NOTHING_NOTE
 
 
 def test_the_output_control_carries_the_limit_and_its_ladder_tier():

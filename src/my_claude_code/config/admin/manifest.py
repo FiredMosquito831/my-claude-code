@@ -1357,8 +1357,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         default="client",
         options=_reasoning_options(ROOT_REASONING_PREFERENCES),
         description=(
-            "From client preserves CLI effort. Providers translate only the controls "
-            "their API supports."
+            "From client preserves CLI effort. Adaptive asks the provider to think "
+            "as much as it decides it needs -- no level and no budget. Providers "
+            "translate only the controls their API supports, and where a host has "
+            "no adaptive channel the request log records what was sent instead."
         ),
     ),
     ConfigFieldSpec(
@@ -1372,9 +1374,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Thinking effort MCC asks for on the Mythos tier. inherit keeps the Default "
             "Reasoning policy, client preserves whatever the CLI asked for, off "
-            "suppresses thinking, and minimal..max pin a level. A provider translates "
-            "only the levels its own API supports, so a pinned level can arrive rounded "
-            "rather than refused."
+            "suppresses thinking, adaptive lets the provider decide how much to think, "
+            "and minimal..max pin a level. A provider translates only the levels its own "
+            "API supports, so a pinned level can arrive rounded rather than refused, and "
+            "the request log records what an adaptive choice was sent instead."
         ),
     ),
     ConfigFieldSpec(
@@ -1388,9 +1391,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Thinking effort MCC asks for on the Fable tier. inherit keeps the Default "
             "Reasoning policy, client preserves whatever the CLI asked for, off "
-            "suppresses thinking, and minimal..max pin a level. A provider translates "
-            "only the levels its own API supports, so a pinned level can arrive rounded "
-            "rather than refused."
+            "suppresses thinking, adaptive lets the provider decide how much to think, "
+            "and minimal..max pin a level. A provider translates only the levels its own "
+            "API supports, so a pinned level can arrive rounded rather than refused, and "
+            "the request log records what an adaptive choice was sent instead."
         ),
     ),
     ConfigFieldSpec(
@@ -1404,9 +1408,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Thinking effort MCC asks for on the Opus tier. inherit keeps the Default "
             "Reasoning policy, client preserves whatever the CLI asked for, off "
-            "suppresses thinking, and minimal..max pin a level. A provider translates "
-            "only the levels its own API supports, so a pinned level can arrive rounded "
-            "rather than refused."
+            "suppresses thinking, adaptive lets the provider decide how much to think, "
+            "and minimal..max pin a level. A provider translates only the levels its own "
+            "API supports, so a pinned level can arrive rounded rather than refused, and "
+            "the request log records what an adaptive choice was sent instead."
         ),
     ),
     ConfigFieldSpec(
@@ -1420,9 +1425,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Thinking effort MCC asks for on the Sonnet tier. inherit keeps the Default "
             "Reasoning policy, client preserves whatever the CLI asked for, off "
-            "suppresses thinking, and minimal..max pin a level. A provider translates "
-            "only the levels its own API supports, so a pinned level can arrive rounded "
-            "rather than refused."
+            "suppresses thinking, adaptive lets the provider decide how much to think, "
+            "and minimal..max pin a level. A provider translates only the levels its own "
+            "API supports, so a pinned level can arrive rounded rather than refused, and "
+            "the request log records what an adaptive choice was sent instead."
         ),
     ),
     ConfigFieldSpec(
@@ -1436,9 +1442,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description=(
             "Thinking effort MCC asks for on the Haiku tier. inherit keeps the Default "
             "Reasoning policy, client preserves whatever the CLI asked for, off "
-            "suppresses thinking, and minimal..max pin a level. A provider translates "
-            "only the levels its own API supports, so a pinned level can arrive rounded "
-            "rather than refused."
+            "suppresses thinking, adaptive lets the provider decide how much to think, "
+            "and minimal..max pin a level. A provider translates only the levels its own "
+            "API supports, so a pinned level can arrive rounded rather than refused, and "
+            "the request log records what an adaptive choice was sent instead."
         ),
     ),
     # The "Prompt cache lifetime" subheading of the Reasoning section

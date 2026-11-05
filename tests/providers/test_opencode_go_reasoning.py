@@ -115,11 +115,24 @@ def test_go_effort_mapping_retains_every_other_rung(effort: str, wire: str) -> N
         ReasoningPolicy.off(),
         ReasoningPolicy.on(),
         ReasoningPolicy.provider_default(),
-        ReasoningPolicy.adaptive(),
     ],
 )
 def test_go_does_not_invent_an_off_or_default_rung(policy: ReasoningPolicy) -> None:
     assert "reasoning_effort" not in _body(policy)
+
+
+def test_go_answers_adaptive_with_its_own_top_published_rung() -> None:
+    """Changed in 8.13.0, deliberately.
+
+    Go's Chat door has no adaptive channel, and until 8.13.0 an ADAPTIVE
+    request left with no reasoning field at all -- the same silent nothing the
+    user reported. The honest nearest instruction on a host whose only word
+    for "reason" is a rung is the highest rung it publishes, read from
+    ``_OPENCODE_GO_EFFORTS`` rather than hard-coded, and recorded as an
+    adaptation so the request log says so.
+    """
+
+    assert _body(ReasoningPolicy.adaptive())["reasoning_effort"] == "max"
 
 
 @pytest.mark.parametrize(
