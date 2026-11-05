@@ -42,6 +42,7 @@ from .facts import (
     ALLOWED_FACT_KINDS,
     DOCUMENT_VERSION,
     FACT_EFFORT_VALUE_REJECTED,
+    FACT_HISTORY_THINKING_REJECTED,
     FACT_MODEL_WITHHELD,
     FACT_MODELS_ETAG,
     FACT_OUTPUT_CAP,
@@ -594,6 +595,8 @@ class LearnedFactStore:
                     ).setdefault(field_name, set()).add(value)
             elif fact.fact_kind == FACT_STREAM_USAGE_UNSUPPORTED:
                 memory.stream_usage_unsupported.add(fact.model_id)
+            elif fact.fact_kind == FACT_HISTORY_THINKING_REJECTED:
+                memory.history_thinking_rejected.add(fact.model_id)
             elif fact.fact_kind == FACT_RESPONSES_TOOL_NAME_MAX_LENGTH and isinstance(
                 fact.value, int
             ):
@@ -638,6 +641,7 @@ class LearnedFactStore:
             memory.rejected_reasoning_fields.clear()
             memory.rejected_effort_values.clear()
             memory.stream_usage_unsupported.clear()
+            memory.history_thinking_rejected.clear()
             memory.responses_tool_name_max_length = None
             memory.responses_tools_max_count = None
             memory.responses_tool_choice_auto_only.clear()

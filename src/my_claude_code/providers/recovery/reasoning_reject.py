@@ -162,6 +162,72 @@ def complaint_is_about_the_body(complaint: str, field: str) -> bool:
     return re.search(nested_extra, text) is not None
 
 
+#: A complaint naming a thinking block. ``\b`` on both sides on purpose: in
+#: ``redacted_thinking`` the underscore is a word character, so the boundary
+#: before ``thinking`` is absent and that block is NOT matched. It must not be:
+#: a ``redacted_thinking`` block carries opaque ``data`` and no signature, so
+#: dropping the host's unsigned ``thinking`` blocks would not answer a refusal
+#: of one.
+_THINKING_BLOCK_NAMED = re.compile(r"\bthinking\b")
+
+
+def complaint_refuses_a_history_thinking_block(complaint: str) -> bool:
+    """Whether a 400 is the host refusing a thinking block in the history.
+
+    The one piece of evidence 8.12.3 acts on, and it is deliberately two
+    conditions rather than one:
+
+    * the fault is **located in the conversation history** -- ``messages.N.``,
+      the spelling Anthropic's validator uses (``messages.1.content.0: Invalid
+      `signature` in `thinking` block``). A 400 that names ``thinking`` at the
+      top level is a refusal of the *field*, which the strip ladder already
+      answers; only a history location says the block itself is the problem;
+    * that complaint **names a thinking block**.
+
+    Reads lowercased text, so it serves a stored fact's evidence excerpt as
+    well as a live complaint -- the same contract
+    :func:`complaint_is_about_the_body` keeps.
+    """
+
+    text = complaint.lower()
+    if not _HISTORY_LOCATION.search(text):
+        return False
+    return _THINKING_BLOCK_NAMED.search(text) is not None
+
+
+def history_carries_unsigned_thinking(messages: Any) -> bool:
+    """Whether this body's history replays a thinking block with no signature.
+
+    The third piece of evidence, and the one that keeps the fact honest: a host
+    can name ``thinking`` at a history location for the opposite complaint
+    (``messages.1.content.0.type: Expected `thinking` but found `text```), and
+    dropping blocks is not the answer to that. Requiring the block to actually
+    be there makes the fact mean "this deployment refused a block MCC sent it",
+    never "this deployment said the word".
+
+    ``True`` for an absent, non-string or blank ``signature`` -- the same test
+    :func:`~my_claude_code.providers.anthropic_messages.request.drop_foreign_thinking`
+    applies, read here on the body that was actually sent. ``redacted_thinking``
+    is not looked at: it is dropped for every host regardless of signature.
+    """
+
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, Mapping) or message.get("role") != "assistant":
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, Mapping) or block.get("type") != "thinking":
+                continue
+            signature = block.get("signature")
+            if not isinstance(signature, str) or not signature.strip():
+                return True
+    return False
+
+
 def clone_body_without_reasoning_field(
     body: dict[str, Any], field: str
 ) -> dict[str, Any] | None:
