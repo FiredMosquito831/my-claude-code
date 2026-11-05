@@ -7934,6 +7934,78 @@ const requestDetail = {
     reasoning_adaptation_kind: "clamped",
     route_attempts: [detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 })],
   }),
+  /* The live Go shape that made the badge lie: ``thinking`` was suppressed on
+     a tool follow-up, so no ``_REASONING_KEYS`` field went out and
+     ``reasoning_emitted`` is 0 -- but the client's own ``output_config``
+     effort did go out, and the request detail said "no reasoning instruction
+     sent (model default applies)". 4,434 of 16,783 Messages-door requests on
+     the live log. The badge must name the field that carried it, because this
+     body never carried a thinking block. */
+  outputConfigOnly: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "deepseek-v4.1-flash", output_config: { effort: "max" } },
+        reasoning_emitted: 0,
+        params: {
+          wire: {
+            model: "deepseek-v4.1-flash",
+            max_tokens: 65000,
+            output_config: { effort: "max" },
+          },
+        },
+      }),
+    ],
+  }),
+  /* The other 12,349: thinking AND output_config both went out. The reasoning
+     keys win, so this reads exactly as it did before the change. */
+  outputConfigWithThinking: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "deepseek-v4.1-flash" },
+        reasoning_emitted: 1,
+        params: {
+          wire: {
+            model: "deepseek-v4.1-flash",
+            max_tokens: 65000,
+            reasoning: { thinking: { type: "enabled", budget_tokens: 48616 } },
+            output_config: { effort: "max" },
+          },
+        },
+      }),
+    ],
+  }),
+  /* An explicitly disabled effort is the provider's way of saying reasoning
+     was not requested -- the same rule ``_looks_enabled`` applies in Python.
+     It must not turn "nothing sent" into "sent". */
+  outputConfigDisabled: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "m", output_config: { effort: "none" } },
+        reasoning_emitted: 0,
+        params: { wire: { model: "m", output_config: { effort: "none" } } },
+      }),
+    ],
+  }),
+  /* A measured body that carried neither a reasoning key nor an effort. This
+     is the IV.16 guard at its narrowest: the snapshot exists, it was read, and
+     it says nothing was sent. */
+  measuredNothing: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "m" },
+        reasoning_emitted: 0,
+        params: { wire: { model: "m", max_tokens: 4096 } },
+      }),
+    ],
+  }),
   suppressed: driveDetail({
     reasoning_adaptation: "REASONING SUPPRESSED: ...",
     reasoning_adaptation_kind: "suppressed",
@@ -10692,6 +10764,21 @@ const keyNames = {};
 
 requestDetail.reasoningRow = window.eval(
   `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0}]})`,
+);
+/* The same row field and its wire twin, on the Go shape: no reasoning key went
+   out, an ``output_config`` effort did. Both must stop saying "not sent", and
+   both must name the field that carried it. */
+requestDetail.reasoningRowOutputConfig = window.eval(
+  `formatRequestReasoningEmitted({route_attempts:[{outcome:"succeeded",reasoning_emitted:0,` +
+    `params:{wire:{model:"deepseek-v4.1-flash",output_config:{effort:"max"}}}}]})`,
+);
+requestDetail.wireVerdictOutputConfig = window.eval(
+  `formatWireVerdict({route_attempts:[{outcome:"succeeded",reasoning_emitted:0,` +
+    `params:{wire:{model:"deepseek-v4.1-flash",output_config:{effort:"max"}}}}]})`,
+);
+requestDetail.wireVerdictNothing = window.eval(
+  `formatWireVerdict({route_attempts:[{outcome:"succeeded",reasoning_emitted:0,` +
+    `params:{wire:{model:"m",max_tokens:4096}}}]})`,
 );
 requestDetail.unmeasuredNumber = window.eval(`formatOptionalNumber(null)`);
 

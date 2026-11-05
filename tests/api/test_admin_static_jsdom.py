@@ -1116,6 +1116,63 @@ def test_an_unmeasured_number_is_a_dash_not_a_zero(rendered) -> None:
     )
 
 
+def test_an_output_config_effort_reads_as_sent_and_names_its_field(rendered) -> None:
+    """The live Go shape that made the badge lie (8.12.4).
+
+    ``thinking`` was suppressed on a tool follow-up, so no ``_REASONING_KEYS``
+    field went out and ``reasoning_emitted`` is 0 -- but the body still told
+    the host ``output_config: {"effort": "max"}``. The badge said "no reasoning
+    instruction sent (model default applies)", which is the half-truth IV.16
+    exists to stop. It must read as sent, and it must name the field, because
+    this body never carried a thinking block.
+
+    ``reasoning_emitted`` itself is untouched: this is a label read off the
+    attempt's own recorded snapshot, and no stored row changes meaning.
+    """
+    detail = rendered["requestDetail"]["outputConfigOnly"]
+    assert detail["reasoningBadge"] == "reasoning sent: output_config.effort max"
+    assert "no reasoning instruction sent" not in detail["text"]
+
+
+def test_an_output_config_effort_reaches_the_row_fields_too(rendered) -> None:
+    """The log row and the modal must not disagree about the same attempt."""
+    detail = rendered["requestDetail"]
+    assert detail["reasoningRowOutputConfig"] == "sent (output_config.effort max)"
+    assert detail["wireVerdictOutputConfig"] == "sent (output_config.effort max)"
+
+
+def test_a_body_that_sent_thinking_and_an_effort_reads_as_it_always_did(
+    rendered,
+) -> None:
+    """The 12,349 shape: the reasoning keys win, so the headline is unchanged."""
+    badge = rendered["requestDetail"]["outputConfigWithThinking"]["reasoningBadge"]
+    assert badge.startswith("reasoning sent: ")
+    assert "output_config" not in badge
+
+
+def test_a_measured_body_with_no_instruction_still_reads_as_not_sent(
+    rendered,
+) -> None:
+    """The IV.16 guard, at its narrowest: the snapshot was read and it is empty.
+
+    A body that genuinely sent nothing must keep saying so. This is the case a
+    predicate that simply returned "sent" would break.
+    """
+    assert (
+        rendered["requestDetail"]["measuredNothing"]["reasoningBadge"]
+        == "no reasoning instruction sent (model default applies)"
+    )
+    assert rendered["requestDetail"]["wireVerdictNothing"] == "not sent"
+
+
+def test_an_explicitly_disabled_effort_is_not_an_instruction(rendered) -> None:
+    """``effort: "none"`` says reasoning was not requested, not that it was."""
+    assert (
+        rendered["requestDetail"]["outputConfigDisabled"]["reasoningBadge"]
+        == "no reasoning instruction sent (model default applies)"
+    )
+
+
 def test_the_dialect_panel_renders_the_origin_pill(rendered) -> None:
     """Provenance is on the panel, in the operator's words, for all three.
 
@@ -1629,6 +1686,11 @@ def test_the_pressed_button_is_disabled_and_busy_while_the_write_is_pending(
 #: The views whose bytes this release changes on purpose, and why.
 MOVED_VIEWS = {
     "models": "the bulk bar's no-op label and the receipt's new sentences",
+    # 8.12.4: the Reasoning guide section gained two sentences explaining that
+    # an ``output_config`` effort counts as an instruction that went out and
+    # that the badge names the field when it carried the only one. Prose only;
+    # no control, id or anchor moved.
+    "guide": "the Reasoning section explains the output_config badge wording",
 }
 
 #: The base-written per-view digests. Recorded by running THIS harness against

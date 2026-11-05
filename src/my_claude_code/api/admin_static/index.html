@@ -3937,7 +3937,11 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   when both are true. When they disagree the nearest thing both can
                   express is sent instead, and when nothing can be, nothing is sent and
                   the request detail says so in those words &mdash;
-                  <em>no reasoning instruction sent (model default applies)</em>. Each
+                  <em>no reasoning instruction sent (model default applies)</em>. A
+                  client's own <code>output_config</code> effort counts as an
+                  instruction that went out, and the badge names it
+                  (<em>reasoning sent: output_config.effort max</em>) rather than
+                  claiming nothing was asked. Each
                   model on the Models page states which dialect its host speaks and
                   where that came from: <em>default OpenAI dialect</em>,
                   <em>declared by this provider</em>, or <em>learned from the host's own
@@ -6207,8 +6211,11 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                      loading="lazy">
                 <p>
                   Reasoning reads as one of three honest states: <strong>reasoning
-                  sent</strong> with the value carried, <strong>no reasoning instruction
-                  sent (model default applies)</strong>, or <strong>not measured</strong>
+                  sent</strong> with the value carried &mdash; naming the field when
+                  <code>output_config</code> carried the only effort, so a body with no
+                  thinking block never reads as though it had one &mdash; <strong>no
+                  reasoning instruction sent (model default applies)</strong>, or
+                  <strong>not measured</strong>
                   where that provider has no instrumented commit boundary &mdash; the
                   pane is never hidden, because a hidden pane reads as "no body was
                   sent". A badge marks the one real contradiction: reasoning was resolved

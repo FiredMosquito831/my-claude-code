@@ -39063,7 +39063,15 @@ function formatRequestReasoningEmitted(row) {
   // predates the column" used to render exactly like "nothing to say" -- i.e.
   // as no row at all. Not measured is a fact and gets a line of its own.
   if (!answered || answered.reasoning_emitted == null) return NOT_MEASURED;
-  return answered.reasoning_emitted ? "sent" : "not sent (model default applies)";
+  if (answered.reasoning_emitted) return "sent";
+  // An effort carried in ``output_config`` is an instruction that went out even
+  // though no ``_REASONING_KEYS`` field did. Name the field rather than saying
+  // "sent": this body never carried a thinking block, and the badge must not
+  // imply one.
+  const effort = wireOutputConfigEffort(answered);
+  return effort
+    ? `sent (output_config.effort ${effort})`
+    : "not sent (model default applies)";
 }
 
 /* The attempt whose verdict the request row describes: the one that answered,
@@ -39099,7 +39107,9 @@ function chainAttempts(row) {
 function formatWireVerdict(row) {
   const answered = answeringAttempt(row);
   if (!answered || answered.reasoning_emitted == null) return NOT_MEASURED;
-  return answered.reasoning_emitted ? "sent" : "not sent";
+  if (answered.reasoning_emitted) return "sent";
+  const effort = wireOutputConfigEffort(answered);
+  return effort ? `sent (output_config.effort ${effort})` : "not sent";
 }
 
 /* What the model's thinking came to (7.103.0). "No thinking text" is two
@@ -40333,7 +40343,8 @@ function wireContradicts(row, attempt) {
 // "reasoning was off", which is the exact confusion this field exists to end.
 function wireReasoningState(attempt) {
   if (attempt.reasoning_emitted == null) return "unknown";
-  return attempt.reasoning_emitted ? "on" : "off";
+  if (attempt.reasoning_emitted) return "on";
+  return wireOutputConfigEffort(attempt) ? "on" : "off";
 }
 
 function formatReasoningEmitted(attempt) {
@@ -40349,15 +40360,62 @@ function formatReasoningEmitted(attempt) {
   return "no reasoning instruction sent (model default applies)";
 }
 
-/** What params.wire.reasoning actually carried, for the badge headline. */
+/* The words that mean "no reasoning", mirrored from ``_DISABLED_VALUES`` in
+   ``core/wire_capture.py`` -- the same way ``WIRE_SAMPLING_FIELDS`` mirrors
+   ``_SAMPLING_FIELDS``. An explicitly disabled field is the provider's way of
+   saying reasoning was not requested. */
+const WIRE_DISABLED_VALUES = ["none", "disabled", "off", "false", "0", ""];
+
+/** The effort an ``output_config`` block carried, or "" when it carried none.
+ *
+ * ``output_config: {"effort": "max"}`` is a real reasoning instruction on the
+ * Anthropic Messages door: it is how a client asks a host to think harder, and
+ * a body carrying only that one still asked for reasoning. It is deliberately
+ * NOT in the fleet's ``_REASONING_KEYS``: that tuple also feeds
+ * ``is_reasoning_key``, which is the 400-strip ladder's candidate set
+ * (``providers/recovery/reasoning_reject.py``) -- adding it there would let a
+ * host's 400 strip the field and retry, i.e. change what a provider is sent,
+ * and it would also move the stored wire snapshot's layout.
+ *
+ * So ``reasoning_emitted`` keeps meaning exactly what it always meant ("a
+ * ``_REASONING_KEYS`` field was emitted"), no stored row is rewritten or
+ * re-read differently, and the badge reads the attempt's own recorded
+ * snapshot instead. This is a label, never a request.
+ *
+ * On the live log this is the difference between 4,434 Go requests reporting
+ * "no reasoning instruction sent (model default applies)" when the body had
+ * in fact told the host ``output_config: {"effort": "max"}``, and reporting
+ * what went out.
+ */
+function wireOutputConfigEffort(attempt) {
+  const wire = attempt && attempt.params && attempt.params.wire;
+  const config = wire && wire.output_config;
+  if (!config || typeof config !== "object") return "";
+  const effort = config.effort;
+  if (typeof effort !== "string") return "";
+  const word = effort.trim();
+  if (!word || WIRE_DISABLED_VALUES.includes(word.toLowerCase())) return "";
+  return word;
+}
+
+/** What the body actually carried, for the badge headline.
+ *
+ * The reasoning keys win when there are any, so a body that sent both a
+ * ``thinking`` block and an ``output_config`` reads exactly as it always did.
+ * When ``output_config`` is the only thing that went out the value names that
+ * field: "reasoning sent: max" alone would imply a thinking block this body
+ * never had.
+ */
 function wireReasoningValue(attempt) {
   const reasoning = (attempt.params && attempt.params.wire &&
     attempt.params.wire.reasoning) || null;
-  if (!reasoning) return "";
-  const keys = Object.keys(reasoning);
-  if (!keys.length) return "";
-  if (keys.length === 1) return wireValueText(reasoning[keys[0]]);
-  return keys.join(", ");
+  if (reasoning) {
+    const keys = Object.keys(reasoning);
+    if (keys.length === 1) return wireValueText(reasoning[keys[0]]);
+    if (keys.length) return keys.join(", ");
+  }
+  const effort = wireOutputConfigEffort(attempt);
+  return effort ? `output_config.effort ${effort}` : "";
 }
 
 /**
