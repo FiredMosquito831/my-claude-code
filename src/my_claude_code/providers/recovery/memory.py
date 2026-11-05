@@ -21,6 +21,7 @@ from datetime import date
 
 from .facts import (
     FACT_EFFORT_VALUE_REJECTED,
+    FACT_HISTORY_THINKING_REJECTED,
     FACT_OUTPUT_CAP,
     FACT_REASONING_FIELD_REJECTED,
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
@@ -83,6 +84,17 @@ class RecoveryMemory:
     #: or ``None`` when it has never said. Host-wide, like the tool-name
     #: ceiling: the validator that states it sits in front of the deployment.
     responses_tools_max_count: int | None = None
+
+    #: Bare model ids whose host refused a replayed ``thinking`` block in the
+    #: conversation history (8.12.3). While a model is here its host is treated
+    #: as one that signs, so its unsigned blocks are left out of the history
+    #: again -- the pre-8.12.2 body -- and the tool-follow-up suppression that
+    #: depends on the drop fires with it.
+    #:
+    #: Per model, and read only where the profile declares that this host signs
+    #: nothing: a host that signs already drops those blocks, so the row could
+    #: not change anything there.
+    history_thinking_rejected: set[str] = field(default_factory=set)
 
     #: Where a newly learned fact is written through to, or ``None`` for a
     #: memory that persists nothing.
@@ -286,6 +298,37 @@ class RecoveryMemory:
                 detail,
                 evidence,
             )
+        return not already_known
+
+    def history_thinking_refused_for(self, model: str) -> bool:
+        """Whether this model's host refused a replayed history thinking block.
+
+        The reader 8.12.3 adds. ``False`` for every model that has never
+        refused one, which is every model on every host that signs -- so the
+        history trim is asked this only where the profile already says the host
+        signs nothing, and a host that never refuses is byte-identical.
+        """
+
+        return model in self.history_thinking_rejected
+
+    def remember_history_thinking_refusal(
+        self, model: str, *, evidence: str = ""
+    ) -> bool:
+        """Record a refused history thinking block; ``False`` when known.
+
+        Written from the host's own 400 the moment it arrives, not from a retry
+        that succeeded: unlike :meth:`remember_rejection` there is no retry that
+        can prove it, because the strip ladder rewrites the *field* and never
+        the history. The evidence is the 400 itself -- a fault located at
+        ``messages.N.`` that names a thinking block, on a request whose history
+        actually carried one -- and the row expires on the inferred clock so a
+        host that changes its mind is re-asked.
+        """
+
+        already_known = model in self.history_thinking_rejected
+        self.history_thinking_rejected.add(model)
+        if self.sink is not None:
+            self.sink(FACT_HISTORY_THINKING_REJECTED, model, True, "", evidence)
         return not already_known
 
     def stream_usage_refused(self, model: str) -> bool:

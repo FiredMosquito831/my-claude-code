@@ -252,6 +252,10 @@ FACT_KIND_LABELS: dict[str, str] = {
     # 7.104.0, labelled in the commit that introduces it, by the same rule: a
     # prompt-cache lifetime this model's host refused; ``detail`` names it.
     "prompt_cache_lifetime_refused": "cache lifetime refused",
+    # 8.12.3, labelled in the commit that introduces it, by the same rule: this
+    # model's host refused a thinking block replayed in the conversation
+    # history, so its unsigned blocks are left out again.
+    "history_thinking_rejected": "history thinking refused",
 }
 
 #: Kinds whose label the Models page payload's ``fact_labels`` table does not
@@ -260,7 +264,12 @@ FACT_KIND_LABELS: dict[str, str] = {
 #: while no such fact exists), and nothing on the page reads it: a learned row
 #: carries its own ``fact_label`` from the full table above.
 PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
-    {"media_param_required", "media_param_refused", "prompt_cache_lifetime_refused"}
+    {
+        "media_param_required",
+        "media_param_refused",
+        "prompt_cache_lifetime_refused",
+        "history_thinking_rejected",
+    }
 )
 
 #: What the Models page says for a provider with no declared lifetime list.

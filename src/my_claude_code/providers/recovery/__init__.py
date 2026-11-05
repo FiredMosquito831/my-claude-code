@@ -32,6 +32,7 @@ from .facts import (
     FACT_CLIENT_IDENTITY_REQUIRED,
     FACT_EFFORT_ENUM,
     FACT_EFFORT_VALUE_REJECTED,
+    FACT_HISTORY_THINKING_REJECTED,
     FACT_MEDIA_PARAM_REFUSED,
     FACT_MEDIA_PARAM_REQUIRED,
     FACT_MODEL_WITHHELD,
@@ -81,6 +82,8 @@ from .output_cap import (
 from .reasoning_reject import (
     clone_body_without_reasoning_field,
     complaint_is_about_the_body,
+    complaint_refuses_a_history_thinking_block,
+    history_carries_unsigned_thinking,
     rejected_reasoning_field,
 )
 from .responses_refusals import (
@@ -150,6 +153,7 @@ __all__ = [
     "FACT_CLIENT_IDENTITY_REQUIRED",
     "FACT_EFFORT_ENUM",
     "FACT_EFFORT_VALUE_REJECTED",
+    "FACT_HISTORY_THINKING_REJECTED",
     "FACT_MEDIA_PARAM_REFUSED",
     "FACT_MEDIA_PARAM_REQUIRED",
     "FACT_MODELS_ETAG",
@@ -210,9 +214,11 @@ __all__ = [
     "clone_body_without_tool_choice",
     "complaint_evidence_snippet",
     "complaint_is_about_the_body",
+    "complaint_refuses_a_history_thinking_block",
     "describe_removals",
     "effective_tools_max_count",
     "forced_tool_names",
+    "history_carries_unsigned_thinking",
     "history_tool_names",
     "is_bad_request",
     "is_echo_key",

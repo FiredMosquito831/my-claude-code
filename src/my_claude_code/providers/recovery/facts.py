@@ -146,6 +146,29 @@ FACT_MEDIA_PARAM_REQUIRED = "media_param_required"
 #: on a request that carried it. ``detail`` and value as
 #: :data:`FACT_MEDIA_PARAM_REQUIRED`; shown only, by the same decision.
 FACT_MEDIA_PARAM_REFUSED = "media_param_refused"
+#: This model's host refused a replayed ``thinking`` block in the conversation
+#: history (8.12.3), in a 400 whose own words were located in that history
+#: (``messages.N.``) and named the block. Value: ``True``.
+#:
+#: The net under 8.12.2. That release stopped dropping a non-signing host's
+#: unsigned thinking from the history, on the premise that "the existing
+#: reasoning-strip ladder handles" a host that refuses a replayed block. It
+#: does not: :func:`~my_claude_code.providers.recovery.reasoning_reject.clone_body_without_reasoning_field`
+#: pops a **top-level body key**, so the retry re-sends the same history block
+#: and 400s again. This fact is what makes the next request drop it.
+#:
+#: Per ``(provider, model)``, because the refusal is a statement about one
+#: deployment's history validator, and a gateway reselling twenty models does
+#: not owe them all the same one -- the same scope, and the same reason, as
+#: :data:`FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY`.
+#:
+#: Read only by the history trim: while it is fresh this model's host is
+#: treated as one that signs, so its unsigned blocks are left out again,
+#: exactly as every release before 8.12.2 did. Nothing about the refused
+#: request changes -- no retry is added and it fails over exactly as any 400
+#: does (IV.8).
+FACT_HISTORY_THINKING_REJECTED = "history_thinking_rejected"
+
 #: A prompt-cache lifetime this model's host refused (7.104.0), in a 400 whose
 #: own words named the lifetime field of a marker carrying the lifetime MCC had
 #: chosen -- or the top-level marker MCC had added. ``detail`` is the lifetime
@@ -181,6 +204,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_MEDIA_PARAM_REQUIRED,
         FACT_MEDIA_PARAM_REFUSED,
         FACT_PROMPT_CACHE_LIFETIME_REFUSED,
+        FACT_HISTORY_THINKING_REJECTED,
     }
 )
 
@@ -251,6 +275,14 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # six weeks), so this sits on the weaker clock on purpose.
     FACT_RESPONSE_SURFACE: INFERRED_FACT_TTL_SECONDS,
     FACT_REASONING_FIELD_REJECTED: INFERRED_FACT_TTL_SECONDS,
+    # A refusal, like the field rejection beside it, and on the same clock for
+    # the same reason: the host's sentence is evidence, but what MCC writes
+    # down ("this deployment will not take the block back") is an inference
+    # from it. Deliberately not the stated clock: the cost of a wrong row here
+    # is that this model's own reasoning stops being replayed for the length of
+    # the TTL, which is the benefit 8.12.2 measured -- so it expires on the
+    # shorter clock, and the next real refusal re-confirms it.
+    FACT_HISTORY_THINKING_REJECTED: INFERRED_FACT_TTL_SECONDS,
     # The same clock as the field rejection it narrows, deliberately: both are
     # inferences proven by a retry, and a coarse fact that outlived the fine
     # one would silently re-take the whole channel.

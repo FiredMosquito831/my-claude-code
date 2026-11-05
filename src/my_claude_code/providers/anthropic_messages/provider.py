@@ -64,7 +64,11 @@ from my_claude_code.providers.recovery import (
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
+    complaint_evidence_snippet,
     complaint_is_about_the_body,
+    complaint_refuses_a_history_thinking_block,
+    history_carries_unsigned_thinking,
+    is_bad_request,
     learned_fact_store,
     upstream_complaint,
 )
@@ -297,6 +301,77 @@ class AnthropicMessagesProvider(BaseProvider):
             ),
         )
 
+    def _signs_thinking_for(self, model: str) -> bool:
+        """Whether the history trim must treat this model's host as signing.
+
+        The declaration alone, unless the host has refused a replayed block
+        (8.12.3). ``self._signs_thinking`` is read first and short-circuits, so
+        every host that signs -- ``api.anthropic.com``, the Claude
+        subscription, Command Code, every custom Messages door -- never touches
+        the learned table and builds exactly the body 8.12.2 built.
+
+        The other half is the net 8.12.2 assumed was already there. A host
+        declared as signing nothing keeps its own unsigned thinking, and if it
+        then refuses one of those blocks in the history, the strip ladder
+        cannot help: it removes a top-level body key and the block is in
+        ``messages[].content[]``. So one real 400 is remembered for this
+        model, and from the next request on the host is treated as signing --
+        its unsigned blocks are left out again, which is the body every release
+        before 8.12.2 sent it.
+        """
+
+        if self._signs_thinking:
+            return True
+        return self._recovery_memory.history_thinking_refused_for(model)
+
+    def _remember_refused_history_thinking(
+        self, error: Exception, body: dict[str, Any]
+    ) -> None:
+        """Learn, from the host's own 400, that it will not take a block back.
+
+        Called on every failed try, before the recovery ladder is consulted, so
+        it can neither add a retry nor change one: what it writes changes the
+        *next* request's history, never this one's.
+
+        Four conditions, all of them evidence and none of them a guess:
+
+        * the host answered a request-validation rejection (400/422);
+        * its words are located in the conversation history (``messages.N.``);
+        * those words name a thinking block;
+        * the history MCC actually sent carried an unsigned one -- which rules
+          out the opposite complaint (``Expected `thinking` but found
+          `text```), where dropping blocks is not the fix;
+        * and this host declares that it signs nothing, which is the only case
+          where keeping the block was MCC's decision to make in the first
+          place. A host that signs already drops them, so a row for it could
+          not change a byte.
+        """
+
+        if self._signs_thinking:
+            return
+        if not is_bad_request(error):
+            return
+        complaint = upstream_complaint(error)
+        if not complaint_refuses_a_history_thinking_block(complaint):
+            return
+        if not history_carries_unsigned_thinking(body.get("messages")):
+            return
+        model = body.get("model")
+        if not isinstance(model, str) or not model:
+            return
+        learned = self._recovery_memory.remember_history_thinking_refusal(
+            model, evidence=complaint_evidence_snippet(complaint)
+        )
+        if learned:
+            logger.warning(
+                "{}_STREAM: {} refused a replayed thinking block in the history; "
+                "later requests to it leave their unsigned thinking blocks out, "
+                "as every release before 8.12.2 did: {}",
+                self._provider_name,
+                model,
+                complaint_evidence_snippet(complaint),
+            )
+
     def preflight_stream(
         self,
         request: MessagesRequest,
@@ -307,7 +382,7 @@ class AnthropicMessagesProvider(BaseProvider):
             request,
             reasoning=reasoning,
             forward_thinking_display=self._forward_thinking_display,
-            signs_thinking=self._signs_thinking,
+            signs_thinking=self._signs_thinking_for(request.model),
         )
 
     async def probe(self, model_id: str) -> None:
@@ -548,7 +623,7 @@ class AnthropicMessagesProvider(BaseProvider):
             wire_notes=wire_notes,
             forward_thinking_display=self._forward_thinking_display,
             prompt_cache=prompt_cache,
-            signs_thinking=self._signs_thinking,
+            signs_thinking=self._signs_thinking_for(request.model),
         )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what
@@ -692,6 +767,12 @@ class AnthropicMessagesProvider(BaseProvider):
                             note=wire_notes.get(PROMPT_CACHE_TTL_NOTE),
                         )
                     if not stream_opened:
+                        # 8.12.3: what the host said about the HISTORY, read
+                        # before the ladder is consulted so it can neither add
+                        # a retry nor change one. The ladder below does exactly
+                        # what it did before; this only decides what the next
+                        # request leaves out.
+                        self._remember_refused_history_thinking(error, body)
                         recovered = self._recovery_ladder.next_body(
                             error, body, used_retry_kinds
                         )
