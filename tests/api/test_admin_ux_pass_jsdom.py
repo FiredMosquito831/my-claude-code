@@ -363,6 +363,12 @@ def test_the_summary_band_carries_a_cost_tile_first(ux_pass) -> None:
     (the owner's own dashboard: $0.7097 against $4,050.2926 estimated). What it
     prints now is ``total_usd``: both halves, summed by the server, with each
     half still named in the small print so the estimate stays labelled.
+
+    The naming moved from the visible line to the tile's ``title`` in 8.14.2
+    (ANALYTICS-OVERFLOW, USER Q3): the words repeated what the two positions
+    already say, and on a real log they made the line four deep. Every number
+    is still on the tile, and the full sentence is one hover away -- asserted
+    in ``test_the_cost_tile_keeps_every_number_and_moves_the_two_words``.
     """
 
     tile = ux_pass["analytics"]["costTile"]
@@ -370,7 +376,7 @@ def test_the_summary_band_carries_a_cost_tile_first(ux_pass) -> None:
     assert tile["first"] is True
     assert tile["label"] == "Cost"
     assert tile["value"] == "$1.7500"
-    assert tile["note"] == "7 of 7 priced · $1.5000 reported + $0.2500 est."
+    assert tile["note"] == "7 of 7 priced · $1.5000 + $0.2500"
 
 
 def test_the_four_summary_charts_are_drawn_and_readable(ux_pass) -> None:
@@ -428,3 +434,63 @@ def test_an_empty_log_says_what_to_do_next(ux_pass) -> None:
     assert "No requests yet" in empty["text"]
     # A filter is a different question, and its answer is the table's own.
     assert empty["filtered"]["visible"] is False
+
+
+# ---------------------------------------------------------------- 8.14.2
+# ANALYTICS-OVERFLOW: a tile's figure that is too wide for its card shrinks
+# instead of spilling out of it. jsdom has no layout, so the fit itself is
+# measured in a browser (the table is in the release report); what is proved
+# here is the structure the browser proof depends on.
+
+
+def test_the_digit_class_is_written_only_where_a_rule_exists(ux_pass) -> None:
+    """A tile that already fits keeps the DOM it had.
+
+    The class table starts at 13 digits, so 12 and below must carry no
+    attribute at all -- that is what makes the rendered tile byte-identical to
+    the base tree below the first rung. `4,050.2926 ms` counts eight digits and
+    is deliberately below the rung: the measured guard is what catches it.
+    """
+
+    tiles = {tile["value"]: tile for tile in ux_pass["analyticsOverflow"]["tiles"]}
+    assert tiles["9,999,999"]["digits"] is None
+    assert tiles["10,000,000,000"]["digits"] is None  # 11 digits
+    assert tiles["100,000,000,000"]["digits"] is None  # 12 digits
+    assert tiles["1,234,567,890,123"]["digits"] == "13"
+    assert tiles["12,345,678,901,234,567"]["digits"] == "17"
+    assert tiles["4,050.2926 ms"]["digits"] is None
+
+
+def test_a_sentence_is_not_a_figure_and_keeps_its_own_size(ux_pass) -> None:
+    tiles = {tile["value"]: tile for tile in ux_pass["analyticsOverflow"]["tiles"]}
+    sentence = tiles["not measured yet"]
+    assert sentence["note"] is True
+    assert sentence["digits"] is None
+
+
+def test_a_tile_that_fits_carries_no_inline_size(ux_pass) -> None:
+    """The measured guard resets the size and only writes one when it must.
+
+    jsdom reports every box as 0 x 0, so nothing overflows here and the guard
+    must leave every figure at the size its CSS gives it -- an inline style on
+    a tile that fits would be a typographic change nobody asked for.
+    """
+
+    for tile in ux_pass["analyticsOverflow"]["tiles"]:
+        assert tile["inlineSize"] is None, tile
+
+
+def test_the_cost_tile_keeps_every_number_and_moves_the_two_words(ux_pass) -> None:
+    """USER Q3 (2026-11-04, "all rec"): the small print drops the repeated
+    words into the title. Every number stays, and the full sentence survives."""
+
+    note = ux_pass["analyticsOverflow"]["costNote"]
+    assert note["value"] == "$5284.8604"
+    assert note["text"] == "465,391 of 683,928 priced · $4050.2926 + $1234.5678"
+    assert "reported" not in note["text"]
+    assert "est." not in note["text"]
+    assert (
+        note["title"]
+        == "465,391 of 683,928 priced · $4050.2926 reported + $1234.5678 est."
+    )
+    assert note["inlineSize"] is None

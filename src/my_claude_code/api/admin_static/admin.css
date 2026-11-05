@@ -2760,6 +2760,44 @@ textarea:focus-visible,
   font-size: 18px;
 }
 
+/* ANALYTICS-OVERFLOW (8.14.2): a figure that is too wide for its tile shrinks
+   instead of spilling out of it. Before this the only rule was the size above,
+   so `100,000,000,000` measured 135 px in a 114 px content box and painted
+   over its own padding into the next track's gutter.
+
+   Two mechanisms, because they cover different values. The digit count is the
+   cheap primary -- pure CSS, no layout read, no reflow on a poll tick. It
+   cannot see a value that carries a unit (`4,050.2926 ms` counts as seven
+   digits and measures 120 px), so fitStatValue() in admin.js measures every
+   figure against its own box and steps the size down until it fits.
+
+   A figure never wraps: `465,391` on two lines reads as two numbers, which is
+   worse than a smaller one. The sentence tiles (`.stat-value-note`) are not
+   figures, keep their own size and still wrap. */
+.requests-card strong:not(.stat-value-note) {
+  white-space: nowrap;
+}
+
+.requests-card strong[data-digits="13"] {
+  font-size: 16px;
+}
+
+.requests-card strong[data-digits="14"] {
+  font-size: 15px;
+}
+
+.requests-card strong[data-digits="15"],
+.requests-card strong[data-digits="16"],
+.requests-card strong[data-digits="17"] {
+  font-size: 14px;
+}
+
+.requests-card strong[data-digits="18"],
+.requests-card strong[data-digits="19"],
+.requests-card strong[data-digits="20"] {
+  font-size: 13px;
+}
+
 .requests-card span {
   font-size: 12px;
   color: var(--muted, #888);

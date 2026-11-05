@@ -34936,12 +34936,21 @@ function paintRequestCostTile() {
     // know how much of this was a guess reads the answer without leaving the
     // tile. A half that is NULL means nothing was priced that way, which the
     // formatter renders as "—" rather than as "$0.00".
-    note.textContent =
-      `${formatPricedShare(totals.priced, totals.requests)} · ` +
-      `${formatCostAmount(totals.reported_usd)} reported + ` +
-      `${formatCostAmount(totals.estimated_usd)} est.`;
+    //
+    // 8.14.2 (ANALYTICS-OVERFLOW, USER Q3): on a real log the line ran to four
+    // lines in a one-track tile, and the words "reported" and "est." repeat
+    // what the two positions already say. They move to the title -- the full
+    // sentence is still one hover away -- and every number stays on the tile.
+    const share = formatPricedShare(totals.priced, totals.requests);
+    const reported = formatCostAmount(totals.reported_usd);
+    const estimated = formatCostAmount(totals.estimated_usd);
+    note.textContent = `${share} · ${reported} + ${estimated}`;
+    note.title = `${share} · ${reported} reported + ${estimated} est.`;
   }
   tile.append(value, label, note);
+  // The cost tile is built after renderStatCards has fitted the band, so its
+  // own figure takes the same measured pass here.
+  fitStatValue(value);
 }
 
 /* Why a cost panel is empty, in the panel. "Nothing priced" and "nothing was
@@ -35366,7 +35375,17 @@ function renderStatCards(container, cards) {
     // 7.122.3 (U33): "not measured yet" sat in the 18 px display type the
     // figures use, so a number nobody measured shouted as loudly as a number
     // that was. A value that is a sentence is marked as the note it is.
-    if (statValueIsNote(value)) valueEl.className = "stat-value-note";
+    const isNote = statValueIsNote(value);
+    if (isNote) valueEl.className = "stat-value-note";
+    // 8.14.2 (ANALYTICS-OVERFLOW): a figure too wide for its tile shrinks
+    // instead of spilling out of it. The digit count picks the size in CSS --
+    // no layout read, no reflow on a poll tick -- and it is written only
+    // where a rule exists, so a tile that already fits keeps the DOM it had.
+    // A sentence is not a figure and keeps its own size.
+    if (!isNote) {
+      const digits = String(value).replace(/[^0-9]/g, "").length;
+      if (digits >= 13) valueEl.dataset.digits = String(digits);
+    }
     const labelEl = document.createElement("span");
     labelEl.textContent = label;
     card.append(valueEl, labelEl);
@@ -35377,6 +35396,12 @@ function renderStatCards(container, cards) {
     }
     container.appendChild(card);
   });
+  // The measured guard, for what the digit count cannot see: it counts every
+  // digit, so `4,050.2926 ms` reads as seven and keeps the display size while
+  // measuring wider than its card. Runs once the cards are in the document,
+  // and again whenever the band changes size.
+  fitStatValues(container);
+  observeStatFit(container);
 }
 
 /** Whether a tile's value is a sentence rather than a figure (U33). */
@@ -35384,6 +35409,65 @@ function statValueIsNote(value) {
   const text = String(value ?? "").trim();
   if (text === "—" || text === "…") return true;
   return /^(not measured|counting|no data|not reported|unavailable)/i.test(text);
+}
+
+/** The smallest size a tile's figure may take (8.14.2, ANALYTICS-OVERFLOW).
+ *
+ * Below this a figure stops being readable, and a silently clipped number is
+ * worse than a small one. The floor is where the honest answer becomes "this
+ * tile is too narrow for this number", not "shrink until it disappears".
+ */
+const STAT_VALUE_MIN_PX = 11;
+
+/** Shrink one tile's figure until it fits its card (ANALYTICS-OVERFLOW).
+ *
+ * `data-digits` covers a plain number, but it counts every digit: a value
+ * that carries a unit -- `4,050.2926 ms` -- reads as seven digits, keeps the
+ * display size and measures wider than the card. This is the measured pass,
+ * and it uses the test the UI quality rule already mandates for every element
+ * a change touches: `scrollWidth` against `clientWidth`.
+ *
+ * The inline size is cleared first so the CSS -- the digit class, or a
+ * design's own scale -- decides where the search starts. It is set only when
+ * the figure really does not fit, so a tile that fits carries no inline style.
+ */
+function fitStatValue(el) {
+  el.style.fontSize = "";
+  let size = parseFloat(getComputedStyle(el).fontSize);
+  if (!Number.isFinite(size)) return;
+  while (el.scrollWidth > el.clientWidth + 1 && size > STAT_VALUE_MIN_PX) {
+    size -= 1;
+    el.style.fontSize = `${size}px`;
+  }
+}
+
+/** Fit every figure in one stats band (ANALYTICS-OVERFLOW). */
+function fitStatValues(container) {
+  container.querySelectorAll("strong:not(.stat-value-note)").forEach(fitStatValue);
+}
+
+/** Re-fit a stats band whenever its own box changes size (ANALYTICS-OVERFLOW).
+ *
+ * A band inside a hidden view measures zero, and a window resize changes the
+ * track width, so the fit has to run again when the box changes. One observer
+ * per container, held in a WeakMap so a re-render cannot stack them. The
+ * callback ignores a height-only change, which is what a font shrink itself
+ * produces -- without that guard the observer would re-enter on its own work.
+ */
+const statFitObservers = new WeakMap();
+
+function observeStatFit(container) {
+  if (typeof ResizeObserver === "undefined") return;
+  if (statFitObservers.has(container)) return;
+  let lastWidth = -1;
+  const observer = new ResizeObserver((entries) => {
+    const width = Math.round(entries[0]?.contentRect?.width ?? 0);
+    if (width === lastWidth) return;
+    lastWidth = width;
+    fitStatValues(container);
+  });
+  observer.observe(container);
+  statFitObservers.set(container, observer);
 }
 
 /* How long each model took to say anything, per outcome.
