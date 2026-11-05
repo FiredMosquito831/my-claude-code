@@ -10148,11 +10148,35 @@ if (modelsLink) {
     /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/g,
     /\b\d+\s*(?:second|minute|hour|day)s?\s+ago\b/g,
     /\bjust now\b/g,
-    /\b\d{1,2}:\d{2}(?::\d{2})?\b/g,
+    /* The clock INCLUDING its meridiem. `toLocaleTimeString()` renders
+       "5:28:14 PM" after noon and "5:28:14 AM" before it in an en-US locale,
+       and "17:28:14" all day in a 24-hour one -- so a mask that stopped at the
+       seconds left the suffix in the digest and made every view that prints a
+       clock depend on the half of the day the run happened in. Measured
+       2026-11-05 on one commit (59fbe1d1): the Ubuntu `jsdom (dashboard)` job
+       ran this file 11:43-11:56 UTC and passed; the Windows full suite ran it
+       12:24-12:26 UTC (run 42022290956) and failed on `web_search` alone,
+       whose only clock is `Updated <h:mm:ss> PM`. */
+    /\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\b/g,
   ];
+  /* What the masks above are supposed to have taken out. A clock that survives
+     normalisation is a digest that moves with the wall clock, which is the
+     whole defect this list exists to prevent -- so the harness reports the
+     leftovers and a test asserts there are none. `(?<![\d.])` keeps a
+     `127.0.0.1:8082` from reading as a time of day. */
+  const residualClockPatterns = [
+    /(?<![\d.])\d{1,2}:\d{2}(?::\d{2})?(?!\d)/g,
+    /(?<![A-Za-z])[APap][Mm]\b/g,
+  ];
+  const residualClockTokens = [];
   const fingerprintView = (node) => {
     let text = String(node.innerHTML).replace(/\s+/g, " ").trim();
     for (const pattern of volatilePatterns) text = text.replace(pattern, "<t>");
+    for (const pattern of residualClockPatterns) {
+      for (const match of text.matchAll(pattern)) {
+        residualClockTokens.push(`${node.dataset.view}: ${match[0]}`);
+      }
+    }
     return createHash("sha256").update(text).digest("hex").slice(0, 16);
   };
   for (const link of navLinks) {
@@ -10163,6 +10187,7 @@ if (modelsLink) {
     viewDigests[id] = node ? fingerprintView(node) : null;
   }
   models.viewDigests = viewDigests;
+  models.residualClockTokens = residualClockTokens;
   models.viewsRendered = Object.values(viewDigests).filter(Boolean).length;
   navLinks.find((link) => link.dataset.view === "models").click();
   await new Promise((resolve) => setTimeout(resolve, 120));
