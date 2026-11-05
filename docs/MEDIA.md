@@ -198,17 +198,24 @@ and **not charged** a failure -- the request log shows it as `unsupported`.
 An edit on the Image rail therefore skips every model whose provider declares no edit endpoint,
 uncharged, and is served by the first one that does.
 
-**Two of these are translated, not passed through, and the difference is worth knowing before
-you pick a model.** For the OpenAI-shaped providers above, the body the client sent is forwarded
-field for field, with `model` replaced by the rail's model id, so a parameter only one host
-understands still reaches it, and what the host answers is what the client receives -- `b64_json`
-or `url`, exactly as the host returned it. Gemini's native speech and transcription surfaces and
-**Mistral's image surface are not that**: MCC builds their request itself, so a field it has no
-place for is **not sent** and is listed under `not_forwarded` on the request row rather than
-translated by guess. A Mistral image forwards **only your `prompt`** -- `n`, `size`, `quality`,
-`response_format`, `style` and the rest are recorded as not forwarded, because a chat call
-carrying a built-in tool has nowhere to put them. The Models page says the same thing per model,
-field by field.
+**Most of these are passed through; three surfaces across the media rails are translated, and the
+difference is worth knowing before you pick a model.** For the OpenAI-shaped providers above, the
+body the client sent is forwarded field for field, with `model` replaced by the rail's model id, so
+a parameter only one host understands still reaches it, and what the host answers is what the
+client receives -- `b64_json` or `url`, exactly as the host returned it.
+
+**Gemini's native speech and transcription surfaces (7.66.0) and Mistral's image surface (8.14.0)
+are not that, in either direction.** MCC builds their request itself, so a field it has no place
+for is **not sent** and is listed under `not_forwarded` on the request row rather than translated
+by guess; and MCC turns the host's answer back into what an OpenAI client reads, so the bytes the
+client gets are MCC's, not the host's. On speech Gemini answers raw 24 kHz PCM or WAV and MCC
+answers the format the client named -- a WAV header on the raw samples when it asked for `wav`,
+the samples untouched when it asked for `pcm` (framing, never transcoding); on transcription
+Gemini's `candidates` are answered as the OpenAI transcript object or as plain text. A Mistral
+image forwards **only your `prompt`** -- `n`, `size`, `quality`, `response_format`, `style` and the
+rest are recorded as not forwarded, because a chat call carrying a built-in tool has nowhere to put
+them -- and the picture is fetched by a second call and answered as `{created, data:[{b64_json}]}`.
+The Models page says the same thing per model, field by field.
 
 **Mistral images** (8.14.0) are worth one more sentence, because the wire is unusual: Mistral
 does not document `POST /v1/images/generations` at all. MCC asks for the picture on

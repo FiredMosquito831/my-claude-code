@@ -4026,6 +4026,52 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   to use. Blank means the default; <code>0</code> is the sentinel for no
                   ceiling at all.
                 </p>
+                <p id="guide-adaptive">
+                  <strong><code>ADAPTIVE</code> is a choice on every door, not a rung
+                  (8.13.0).</strong> It is not an effort level and not a budget: it asks
+                  the host to <em>think as much as it decides it needs</em>, and that one
+                  sentence is defined once and read by every door. What actually goes out
+                  depends on what the host declares it can parse, never on a model name:
+                </p>
+                <table class="guide-table">
+                  <thead>
+                    <tr><th>What the host declares</th><th>What MCC sends</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>An adaptive channel of its own (Anthropic Messages)</td>
+                      <td><code>thinking: {"type": "adaptive"}</code> &mdash; the
+                        instruction leaves verbatim, nothing substituted</td>
+                    </tr>
+                    <tr>
+                      <td>An on/off field that is <em>not</em> its effort field</td>
+                      <td>That field, switched on &mdash; the same statement in the host's
+                        own words, so nothing is substituted either</td>
+                    </tr>
+                    <tr>
+                      <td>Only an effort vocabulary</td>
+                      <td>The <strong>highest rung it publishes</strong> &mdash; the least
+                        restrictive thing it accepts. It cannot be told to choose, so this
+                        is a substitution and the request detail records it as one</td>
+                    </tr>
+                    <tr>
+                      <td>No reasoning field at all</td>
+                      <td>Nothing, and the request detail says <em>no reasoning
+                        instruction sent (model default applies)</em></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="guide-note">
+                  <strong>The top rung is read from the host, never assumed.</strong> It is
+                  not <code>max</code> everywhere &mdash; the OpenAI standard map spells
+                  <code>max</code> as <code>high</code>, and a gateway with its own words
+                  spells every rung differently &mdash; so the rung comes from the
+                  vocabulary that host publishes. A model with no published vocabulary
+                  gets nothing rather than an invented level. Choosing
+                  <code>off</code> instead emits nothing on every door, and every request
+                  that does not ask for <code>adaptive</code> is byte for byte what it was
+                  before 8.13.0.
+                </p>
 
                 <h3 id="guide-prompt-cache-lifetime">Prompt cache lifetime</h3>
                 <p>
@@ -5727,14 +5773,19 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <p id="guide-media-translated-providers">
                   <strong>Not every provider takes the body you sent (since 8.14.0).</strong>
                   Most hosts on the Image rail are OpenAI-shaped: your body goes out field for
-                  field and their answer comes back as they sent it. Two are <em>translated</em>
-                  instead, and the Models page says which per model, field by field. Gemini's
-                  native speech and transcription surfaces build their own request. So does
+                  field and their answer comes back as they sent it. Three surfaces across the
+                  media rails are <em>translated</em> instead &mdash; in both directions &mdash;
+                  and the Models page says which per model, field by field. Gemini's native
+                  speech and transcription surfaces build their own request, and turn Google's
+                  answer back into what an OpenAI client reads: the audio in the format you named
+                  (a WAV header on Gemini's raw samples, never transcoding) or the transcript as
+                  JSON or text. So does
                   <strong>Mistral</strong>, whose image generation is the
                   <code>image_generation</code> built-in tool on Chat Completions &mdash; it does
                   not document <code>/v1/images/generations</code> at all &mdash; with the picture
                   then fetched by a second call, <code>GET {base}/files/{id}/content</code>, on the
-                  same key and the same proxy exit. For a Mistral image <strong>only your
+                  same key and the same proxy exit, and answered in the OpenAI Images shape.
+                  For a Mistral image <strong>only your
                   <code>prompt</code> is forwarded</strong>: <code>n</code>, <code>size</code>,
                   <code>quality</code>, <code>response_format</code> and the rest are recorded as
                   <em>not forwarded</em> on the request row rather than guessed at. A failed fetch

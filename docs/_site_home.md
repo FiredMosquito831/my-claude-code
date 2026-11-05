@@ -36,7 +36,7 @@ Command Code, Droid, Pi, Kilo, Roo Code, Antigravity and the desktop apps (Claud
 desktop, LM Studio, Warp, VS Code's Copilot endpoint) all point at one address and share one
 control panel: routing tiers with fallback chains, reasoning controls, credential rotation and
 health, a vision adapter, a native web-search tool proxy, learned provider quirks, cost with
-provenance, and a full request log — in front of 57 model providers.
+provenance, and a full request log — in front of every provider below.
 
 **Your models. Your keys. Your machine.**
 
@@ -97,8 +97,8 @@ provenance, and a full request log — in front of 57 model providers.
 
     ---
 
-    57 of them, by API key or by OAuth sign-in. Add one that is not on the list without waiting
-    for a release.
+    every one of them, by API key or by OAuth sign-in. Add one that is not on the list without
+    waiting for a release.
 
     [OAuth providers →](OAUTH-PROVIDERS.md)
 
