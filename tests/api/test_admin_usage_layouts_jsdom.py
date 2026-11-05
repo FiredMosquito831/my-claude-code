@@ -38,6 +38,7 @@ Both runs are ``MCC_JSDOM_SCENARIO=usage_layouts``, through
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -789,6 +790,31 @@ BASE_BLOCKS = (
 #: the comparison below compares the whole block minus the window rows.
 DECLARED_MOVE = "commandcode"
 
+#: ``read 366 days ago`` is a wall-clock reading, not a property of the page.
+#:
+#: ``formatUsageAge`` (``admin.js``) renders ``Math.round((now - fetched_at) /
+#: 86400)`` days, and the fixture's ``FIXTURE_NOW`` is a fixed instant
+#: (2025-11-03 19:58:30Z), so the number grows by one every day the suite is
+#: run. The baseline was written when it read 366; on 2026-11-05 at 07:58:30Z
+#: it rounded to 367 and this test began failing on every tree -- measured: the
+#: same 27 blocks on ``5e55c100`` with no changes at all, and main's own CI
+#: passed at 06:30Z the same morning, 88 minutes before the rollover.
+#:
+#: Normalising it is the honest fix: the age is *supposed* to move with the
+#: clock, so pinning it to a literal would only move the detonation date. Every
+#: other word of the block is still compared byte for byte, and the shape of
+#: the sentence is still compared -- only the number is masked.
+#: The space is optional on purpose: a block's text is its nodes concatenated,
+#: so the same sentence reaches this comparison as ``read 366 days ago`` in one
+#: layout and ``Read366days ago`` in another. Both are the same reading.
+_AGE_TEXT = re.compile(r"\d+ ?(?:second|minute|hour|day)s? ago")
+
+
+def _without_wall_clock_age(text: str) -> str:
+    """A provider's block with the ``N days ago`` reading masked."""
+
+    return _AGE_TEXT.sub("<age> ago", text)
+
 
 def _blocks_without_window_rows(text: str) -> str:
     """A provider's block, with the parts §9.1 lets move removed.
@@ -862,7 +888,7 @@ def test_every_other_provider_renders_byte_identically_in_every_layout(
             else:
                 mine_text = mine[layout_id][provider_id]
             compared += 1
-            if mine_text != base_text:
+            if _without_wall_clock_age(mine_text) != _without_wall_clock_age(base_text):
                 moved.append((layout_id, provider_id))
     assert not moved, f"these provider blocks moved and are not declared: {moved}"
     # Every provider in every layout really was compared, so an empty baseline
