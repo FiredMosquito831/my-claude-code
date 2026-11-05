@@ -21,6 +21,17 @@ What is pinned here, on the outbound copy only:
   back as the very same list;
 * the attempt's ``params.wire`` says ``foreign_thinking_dropped`` -- counts
   only -- when something was dropped, and nothing otherwise.
+
+8.12.2 adds the other half of the same rule: a Messages host that **signs
+nothing** is not Anthropic, so its own unsigned thinking is not "another
+model's". OpenCode Go measured 28 signatures beside 3,439 thinking responses
+in 16,783 ``/messages`` requests. Applying the rule there dropped the host's
+own reasoning and then suppressed the ``thinking`` field on the next turn
+*because* it had dropped it -- 76.9 % of the turns that followed a
+visible-thinking turn against 11.8 % otherwise. The last section pins that a
+host declared ``signs_thinking=False`` keeps its own blocks, keeps asking for
+reasoning on a tool follow-up, and still has the existing strip ladder behind
+it if the host refuses what it is now sent.
 """
 
 import json
@@ -40,6 +51,11 @@ from my_claude_code.providers.anthropic_messages.request import (
     drop_foreign_thinking,
 )
 from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.openai_chat import (
+    OPENAI_CHAT_PROFILES,
+    create_openai_chat_provider,
+)
+from my_claude_code.providers.openai_chat.messages_transport import MessagesTransport
 from tests.providers.support import passthrough_rate_limiter
 
 FOREIGN_TEXT = "agnes thought about the repo layout"
@@ -461,3 +477,335 @@ async def test_the_note_survives_a_retry_of_the_same_attempt() -> None:
     assert len(sent) == 2
     assert FOREIGN_THINKING_DROPPED in trace.requests[max(trace.requests)].params
     await provider.cleanup()
+
+
+# --------------------------------------------------------------------------
+# 8.12.2 -- a host that signs nothing keeps its own thinking
+# --------------------------------------------------------------------------
+
+#: The shape the 4,434 requests had: a tool loop whose final assistant turn
+#: carries an unsigned ``thinking`` block and a ``tool_use``. On a host that
+#: signs, that block is dropped and the reasoning field is suppressed; on a
+#: host that signs nothing, both must not happen.
+GO_TOOL_LOOP = [
+    _user("Read main.py."),
+    _assistant(_unsigned("Go's own reasoning."), _tool_use("toolu_go")),
+    _user([_tool_result("toolu_go")]),
+]
+
+
+def test_a_host_that_signs_nothing_keeps_its_own_unsigned_thinking() -> None:
+    history = [
+        _user("a"),
+        _assistant(_unsigned("one"), _text("t")),
+        _user("b"),
+        _assistant(_unsigned("two"), _text("u")),
+    ]
+
+    messages, blocks, chars = drop_foreign_thinking(history, signs_thinking=False)
+
+    assert messages is history
+    assert (blocks, chars) == (0, 0)
+
+
+def test_a_host_that_signs_nothing_still_drops_mccs_own_wrapper() -> None:
+    """The ``redacted_thinking`` rule is about the shape of ``data``, not a
+    signature, so it is not the host's to declare away."""
+
+    wrapped = {"type": "redacted_thinking", "data": '{"type":"reasoning.encrypted"}'}
+    history = [_user("a"), _assistant(_unsigned("mine"), wrapped, _text("t"))]
+
+    messages, blocks, chars = drop_foreign_thinking(history, signs_thinking=False)
+
+    assert messages == [_user("a"), _assistant(_unsigned("mine"), _text("t"))]
+    assert (blocks, chars) == (1, len('{"type":"reasoning.encrypted"}'))
+
+
+def test_the_suppression_does_not_fire_where_the_host_signs_nothing() -> None:
+    """The 4,434 shape: manual thinking on a tool follow-up still goes out."""
+
+    body = build_anthropic_messages_body(
+        _request(GO_TOOL_LOOP),
+        reasoning=ReasoningPolicy.on(budget_tokens=2048),
+        signs_thinking=False,
+    )
+
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert body["messages"][1]["content"] == [
+        _unsigned("Go's own reasoning."),
+        _tool_use("toolu_go"),
+    ]
+
+
+def test_the_same_history_still_loses_its_field_where_the_host_signs() -> None:
+    """The guard is not weakened; it is scoped. Same history, default host."""
+
+    body = build_anthropic_messages_body(
+        _request(GO_TOOL_LOOP), reasoning=ReasoningPolicy.on(budget_tokens=2048)
+    )
+
+    assert "thinking" not in body
+    assert body["messages"][1]["content"] == [_tool_use("toolu_go")]
+
+
+def test_the_suppression_stays_off_even_when_the_wrapper_was_dropped() -> None:
+    """The guard's own premise is the signature rule, not the drop.
+
+    A tool follow-up can still lose a block on a host that signs nothing --
+    MCC's own ``redacted_thinking`` wrapper, which no Messages host minted.
+    The suppression exists because Anthropic requires its own signed thinking
+    ahead of a tool call; this host requires nothing, so the field still goes.
+    """
+
+    wrapped = {"type": "redacted_thinking", "data": '{"type":"reasoning.encrypted"}'}
+    body = build_anthropic_messages_body(
+        _request(
+            [
+                _user("Read a."),
+                _assistant(wrapped, _tool_use("toolu_w")),
+                _user([_tool_result("toolu_w")]),
+            ]
+        ),
+        reasoning=ReasoningPolicy.on(budget_tokens=2048),
+        signs_thinking=False,
+    )
+
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert body["messages"][1]["content"] == [_tool_use("toolu_w")]
+
+
+def test_a_host_that_signs_nothing_records_no_note_for_its_own_thinking() -> None:
+    notes: dict[str, str] = {}
+    build_anthropic_messages_body(
+        _request(GO_TOOL_LOOP),
+        reasoning=ReasoningPolicy.on(budget_tokens=2048),
+        wire_notes=notes,
+        signs_thinking=False,
+    )
+
+    assert notes == {}
+
+
+def test_the_note_names_the_right_rule_on_a_host_that_signs_nothing() -> None:
+    """Only MCC's own wrapper can be dropped there, and the note says so."""
+
+    notes: dict[str, str] = {}
+    build_anthropic_messages_body(
+        _request(
+            [
+                _user("a"),
+                _assistant(
+                    {"type": "redacted_thinking", "data": '{"type":"x"}'},
+                    _text("t"),
+                ),
+            ]
+        ),
+        reasoning=ReasoningPolicy.provider_default(),
+        wire_notes=notes,
+        signs_thinking=False,
+    )
+
+    assert notes == {
+        FOREIGN_THINKING_DROPPED: (
+            "dropped 1 thinking block (12 chars) made by other models from "
+            "earlier turns; this host accepts only the thinking it wrote itself"
+        )
+    }
+
+
+# --------------------------------------------------------------------------
+# 8.12.2 -- the declaration reaches the wire from the profile
+# --------------------------------------------------------------------------
+
+
+def test_only_the_go_profile_declares_that_its_messages_door_signs_nothing() -> None:
+    """Declared data, not a provider-id branch: the table is the whole answer."""
+
+    unsigned = sorted(
+        name
+        for name, profile in OPENAI_CHAT_PROFILES.items()
+        if not profile.messages_signs_thinking
+    )
+    assert unsigned == ["opencode_go"]
+
+
+GO_BASE_URL = "https://opencode.ai/go/v1"
+
+
+def _go_transport() -> MessagesTransport:
+    """The transport the real provider builds for ``opencode_go``.
+
+    Built through :func:`create_openai_chat_provider` rather than by hand, so
+    the whole declared-data chain -- profile field, provider, transport -- is
+    the thing under test and a break anywhere along it fails here.
+    """
+
+    provider = create_openai_chat_provider(
+        "opencode_go",
+        ProviderConfig(api_key="sk-test", base_url=GO_BASE_URL),
+        passthrough_rate_limiter(),
+    )
+    return provider._messages
+
+
+_MESSAGES_SSE = (
+    b'event: message_start\ndata: {"type":"message_start"}\n\n'
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_the_go_transport_sends_the_thinking_field_a_signed_host_would_lose() -> (
+    None
+):
+    """End to end through the transport the profile builds, not the kwarg."""
+
+    transport = _go_transport()
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_MESSAGES_SSE,
+        )
+
+    inner: Any = transport._provider
+    inner._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    frames = [
+        frame
+        async for frame in transport.stream(
+            _request(GO_TOOL_LOOP),
+            input_tokens=3,
+            reasoning=ReasoningPolicy.on(budget_tokens=2048),
+        )
+    ]
+
+    assert any("message_stop" in frame for frame in frames)
+    assert len(sent) == 1
+    assert sent[0]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert sent[0]["messages"][1]["content"][0] == _unsigned("Go's own reasoning.")
+    await inner.cleanup()
+
+
+def _refuses_the_field(request: httpx.Request, sent: list[dict[str, Any]]) -> bool:
+    """The 400 a host sends when it will not take the ``thinking`` field."""
+
+    sent.append(json.loads(request.content))
+    return "thinking" in sent[-1]
+
+
+@pytest.mark.asyncio
+async def test_the_existing_strip_ladder_still_answers_a_refused_reasoning_field() -> (
+    None
+):
+    """The ladder this host already had is reachable through the Go transport.
+
+    Nothing here is new: one rung, one retry, the same body minus the field.
+    """
+
+    transport = _go_transport()
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _refuses_the_field(request, sent):
+            return httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "thinking: Extra inputs are not permitted",
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_MESSAGES_SSE,
+        )
+
+    inner: Any = transport._provider
+    inner._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    frames = [
+        frame
+        async for frame in transport.stream(
+            _request(GO_TOOL_LOOP),
+            input_tokens=3,
+            reasoning=ReasoningPolicy.on(budget_tokens=2048),
+        )
+    ]
+
+    assert any("message_stop" in frame for frame in frames)
+    assert len(sent) == 2
+    assert "thinking" not in sent[1]
+    await inner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_a_host_that_refuses_the_replayed_block_costs_one_retry_and_no_more() -> (
+    None
+):
+    """The accepted risk, measured rather than assumed.
+
+    Go's ``/messages`` door has never received a replayed unsigned thinking
+    block, so it may refuse one. What the existing ladder does about that is
+    exactly what it does about any 400 that names ``thinking``: one retry with
+    the reasoning *field* removed. It does not rewrite the history, and this
+    release adds no second retry, no pre-emptive strip and no fallback -- so a
+    host that refuses the block costs this request, and the chain moves on.
+    """
+
+    transport = _go_transport()
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        refused = any(
+            block.get("type") == "thinking"
+            for message in sent[-1]["messages"]
+            if message.get("role") == "assistant"
+            for block in message.get("content", [])
+            if isinstance(block, dict)
+        )
+        if refused:
+            return httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "messages.1.content.0: `thinking` blocks are not "
+                        "accepted in the history",
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_MESSAGES_SSE,
+        )
+
+    inner: Any = transport._provider
+    inner._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(Exception) as raised:
+        [
+            frame
+            async for frame in transport.stream(
+                _request(GO_TOOL_LOOP),
+                input_tokens=3,
+                reasoning=ReasoningPolicy.on(budget_tokens=2048),
+            )
+        ]
+
+    assert "400" in str(raised.value)
+    # Exactly the ladder's one retry: no third attempt, and the retry differs
+    # from the first only by the removed field.
+    assert len(sent) == 2
+    assert "thinking" in sent[0] and "thinking" not in sent[1]
+    assert sent[0]["messages"] == sent[1]["messages"]
+    await inner.cleanup()

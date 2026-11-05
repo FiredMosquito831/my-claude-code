@@ -56,6 +56,7 @@ def build_anthropic_messages_body(
     wire_notes: dict[str, Any] | None = None,
     forward_thinking_display: bool = False,
     prompt_cache: PromptCacheLifetimeChoice | None = None,
+    signs_thinking: bool = True,
 ) -> dict[str, Any]:
     """Build one native Messages request without exposing FCC-only fields.
 
@@ -63,6 +64,18 @@ def build_anthropic_messages_body(
     of the client's history -- ``foreign_thinking_dropped``, counts only -- so
     the sender records it beside the body it describes. Left untouched when
     nothing was removed.
+
+    ``signs_thinking`` states whether this host mints and checks signatures on
+    the thinking blocks it returns (8.12.2). ``True`` -- ``api.anthropic.com``,
+    the Claude subscription, Command Code and every other Messages caller --
+    is the behaviour every release before it had, byte for byte. ``False`` is
+    a host that answers the same protocol and signs nothing: OpenCode Go's
+    ``/messages`` door tallied a ``signature`` beside 28 of 3,439 thinking
+    responses in 16,783 requests, so MCC's "unsigned means another model's"
+    rule mislabels that host's *own* thinking as foreign, drops it, and then
+    suppresses the reasoning field for the turn after it. On such a host an
+    unsigned ``thinking`` block is kept, and the tool-follow-up suppression
+    below -- whose premise is Anthropic's own signature rule -- never fires.
 
     ``forward_thinking_display`` puts the client's own ``thinking.display``
     choice on the outgoing ``thinking``. Only the Claude-subscription provider
@@ -80,7 +93,9 @@ def build_anthropic_messages_body(
     for field in _INTERNAL_FIELDS:
         body.pop(field, None)
     native = [_native_message(message) for message in request.messages]
-    messages, dropped_blocks, dropped_chars = drop_foreign_thinking(native)
+    messages, dropped_blocks, dropped_chars = drop_foreign_thinking(
+        native, signs_thinking=signs_thinking
+    )
     body["messages"] = messages
     body["stream"] = True
     if body.get("max_tokens") is None:
@@ -99,8 +114,15 @@ def build_anthropic_messages_body(
     # this one request goes without the ``thinking`` field -- the answer the
     # DeepSeek builder gives a tool follow-up whose thinking it cannot replay
     # (``providers/deepseek/compat.py``). Adaptive thinking has no such rule.
-    unsigned_tool_turn = bool(dropped_blocks) and _final_tool_turn_lost_its_thinking(
-        native
+    #
+    # 8.12.2: the premise is Anthropic's own signature rule, so it holds only
+    # where the host signs. A host that signs nothing has no block to require
+    # and nothing to refuse, and suppressing the field there is what made MCC
+    # ask for no reasoning on 76.9 % of the turns that followed a visible one.
+    unsigned_tool_turn = (
+        signs_thinking
+        and bool(dropped_blocks)
+        and _final_tool_turn_lost_its_thinking(native, signs_thinking=signs_thinking)
     )
     if unsigned_tool_turn and _is_manual_thinking(body.get("thinking")):
         _apply_reasoning(body, request, ReasoningPolicy.off())
@@ -110,10 +132,17 @@ def build_anthropic_messages_body(
         _carry_client_display(body, request)
     if dropped_blocks and wire_notes is not None:
         noun = "block" if dropped_blocks == 1 else "blocks"
+        rule = (
+            "Anthropic accepts only its own signed thinking"
+            if signs_thinking
+            # A host that signs nothing still refuses a block that is MCC's own
+            # wrapper rather than any host's thinking, which is the only thing
+            # this build can drop for it.
+            else "this host accepts only the thinking it wrote itself"
+        )
         wire_notes[FOREIGN_THINKING_DROPPED] = (
             f"dropped {dropped_blocks} thinking {noun} ({dropped_chars:,} chars) "
-            "made by other models from earlier turns; Anthropic accepts only its "
-            "own signed thinking"
+            f"made by other models from earlier turns; {rule}"
             + (
                 "; this tool follow-up was sent without the thinking field, "
                 "because manual thinking needs Anthropic's own thinking ahead "
@@ -239,6 +268,8 @@ def _native_content(content: Any) -> Any:
 
 def drop_foreign_thinking(
     messages: list[dict[str, Any]],
+    *,
+    signs_thinking: bool = True,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Drop, from assistant turns, the thinking Anthropic did not write.
 
@@ -253,6 +284,15 @@ def drop_foreign_thinking(
     * a ``redacted_thinking`` block whose ``data`` is a JSON object or array.
       That is MCC's own wrapper for an OpenRouter-dialect reasoning detail;
       Anthropic's ``data`` is opaque ciphertext and never parses as one.
+
+    ``signs_thinking`` is the first rule's premise and nothing else's
+    (8.12.2). ``True`` -- every host that signs -- is the behaviour every
+    release before it had. ``False`` is a Messages host that signs nothing:
+    there, an unsigned ``thinking`` block is that host's own thinking, not
+    another model's, so it is kept. The ``redacted_thinking`` rule is about
+    the SHAPE of ``data`` and not about any host's signature, so it still
+    applies: a JSON object there is MCC's wrapper and no Messages host minted
+    it.
 
     Everything else is kept in its order, every non-blank signature included:
     a signature that is not Anthropic's cannot be told from one that is, and
@@ -275,7 +315,8 @@ def drop_foreign_thinking(
         remaining: list[Any] = []
         if message.get("role") == "assistant" and isinstance(content, list):
             for block in content:
-                (foreign if _is_foreign_thinking(block) else remaining).append(block)
+                is_foreign = _is_foreign_thinking(block, signs_thinking=signs_thinking)
+                (foreign if is_foreign else remaining).append(block)
         if not foreign:
             if kept is not None:
                 kept.append(message)
@@ -291,11 +332,14 @@ def drop_foreign_thinking(
     return kept, dropped_blocks, dropped_chars
 
 
-def _is_foreign_thinking(block: Any) -> bool:
+def _is_foreign_thinking(block: Any, *, signs_thinking: bool = True) -> bool:
     if not isinstance(block, dict):
         return False
     kind = block.get("type")
     if kind == "thinking":
+        if not signs_thinking:
+            # This host mints no signature, so an unsigned block is its own.
+            return False
         signature = block.get("signature")
         return not isinstance(signature, str) or not signature.strip()
     if kind == "redacted_thinking":
@@ -320,7 +364,11 @@ def _thinking_chars(block: dict[str, Any]) -> int:
     return len(text) if isinstance(text, str) else 0
 
 
-def _final_tool_turn_lost_its_thinking(messages: list[dict[str, Any]]) -> bool:
+def _final_tool_turn_lost_its_thinking(
+    messages: list[dict[str, Any]],
+    *,
+    signs_thinking: bool = True,
+) -> bool:
     """Whether the final assistant turn is a tool call left without its thinking.
 
     Read on the history as the client sent it. A turn of nothing but foreign
@@ -328,6 +376,9 @@ def _final_tool_turn_lost_its_thinking(messages: list[dict[str, Any]]) -> bool:
     is the final one. True only when that turn lost a foreign block, still
     holds a ``tool_use``, and no longer begins with a thinking block --
     exactly the turn Anthropic's manual mode refuses.
+
+    ``signs_thinking`` must be the same value the drop was made with, or this
+    reads a different history from the one that was sent.
     """
 
     for message in reversed(messages):
@@ -336,7 +387,11 @@ def _final_tool_turn_lost_its_thinking(messages: list[dict[str, Any]]) -> bool:
             continue
         if not isinstance(content, list):
             return False
-        kept = [block for block in content if not _is_foreign_thinking(block)]
+        kept = [
+            block
+            for block in content
+            if not _is_foreign_thinking(block, signs_thinking=signs_thinking)
+        ]
         if content and not kept:
             continue
         if len(kept) == len(content):

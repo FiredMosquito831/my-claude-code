@@ -319,6 +319,29 @@ class OpenAIChatProfile:
     # no header is added, no error is read differently, no cost is read
     # differently. The ``client_identity`` rule, for the same reason.
     marketplace: MarketplaceDialect | None = None
+    # Whether this host's *Messages* door mints and checks signatures on the
+    # thinking blocks it returns (8.12.2). ``True`` -- every profile but one --
+    # is Anthropic's own rule and the behaviour every release before 8.12.2
+    # had on every door: a ``thinking`` block with no signature cannot be the
+    # host's, so it is left out of the history, and a tool follow-up whose
+    # thinking was left out goes without the ``thinking`` field.
+    #
+    # OpenCode Go declares ``False`` because it was measured: of 16,783
+    # ``/messages`` responses, 3,439 tallied a ``thinking`` channel and 28
+    # tallied a ``signature`` beside it. Applying Anthropic's rule there
+    # labelled the host's own reasoning foreign, dropped it, and then asked
+    # for no reasoning on the next turn *because* it had dropped it -- 4,434
+    # requests with no ``thinking`` field, 76.9 % of the turns that followed a
+    # visible-thinking turn, against 11.8 % otherwise.
+    #
+    # A field on the profile rather than a check on the provider id, exactly
+    # as ``response_surfaces`` and ``optimistic_first_try`` above are: "this
+    # deployment answers Anthropic's protocol without Anthropic's signature
+    # rule" is a property of a host, and the day another one does, it declares
+    # it here instead of somebody adding a second name to an ``if``. It says
+    # nothing about Chat Completions or Responses, which have no signature
+    # concept at all.
+    messages_signs_thinking: bool = True
 
     @property
     def provider_name(self) -> str:
@@ -562,6 +585,12 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         # ``@ai-sdk/google`` models are probed on first use instead of
         # refused.
         optimistic_first_try=True,
+        # Measured, not assumed (8.12.2): Go's ``/messages`` door tallied a
+        # ``signature`` beside 28 of the 3,439 responses that carried a
+        # ``thinking`` channel, across 16,783 requests on 2026-11-01..03. It
+        # speaks Anthropic's protocol and does not sign, so Anthropic's
+        # signature rule must not be applied to its own thinking.
+        messages_signs_thinking=False,
     ),
     "vercel": OpenAIChatProfile(
         _policy(

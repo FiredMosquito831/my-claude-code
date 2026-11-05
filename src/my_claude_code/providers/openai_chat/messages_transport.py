@@ -287,6 +287,7 @@ class MessagesTransport:
         ) = None,
         memory: RecoveryMemory | None = None,
         marketplace: MarketplaceDialect | None = None,
+        signs_thinking: bool = True,
     ) -> None:
         self._identity = identity
         # The price marketplace this host is (7.109.0), or ``None`` -- every
@@ -330,6 +331,11 @@ class MessagesTransport:
             # no cache lifetime (7.105.0): a lifetime only where this
             # provider's or model's override row sets one.
             prompt_cache_family=prompt_cache_gateway_family(),
+            # Anthropic's protocol on a host that may not sign (8.12.2). Comes
+            # from the profile, so no provider id is compared here; ``True``
+            # -- every profile but OpenCode Go's -- builds exactly the body
+            # this transport has always built.
+            signs_thinking=signs_thinking,
         )
         if marketplace is not None:
             dialect = marketplace
