@@ -28,6 +28,7 @@ are both checked; the original marketplace baseline is never regenerated.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from my_claude_code.config.model_overrides import (
     ModelParameterOverrides,
     save_model_overrides,
 )
+from tests.contracts.adaptive_expectations import moved as adaptive_moves
 from tests.contracts.go_reasoning_expectations import corrections
 from tests.contracts.marketplace_equality_corpus import compact, record_digest, snapshot
 
@@ -85,6 +87,15 @@ def _moved(now: dict[str, Any], base: dict[str, Any]) -> list[str]:
     return moved
 
 
+#: Maintenance hook, the same shape ``test_metadata_ladder_equality`` uses:
+#: point it at a path and the run writes the adaptive move record there and
+#: skips, instead of asserting. It exists because the record has to be
+#: produced under THIS test's own fixtures -- an out-of-process run of the
+#: corpus sees a different environment for the OpenCode hosts and records
+#: moves that never happen here (measured: 3,944 recorded vs 3,776 real).
+ADAPTIVE_WRITE = os.environ.get("MCC_ADAPTIVE_WRITE", "")
+
+
 @pytest.mark.parametrize("scenario", ["nothing_set", "profile_for_inferhub_only"])
 def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
     if scenario == "profile_for_inferhub_only":
@@ -92,10 +103,36 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
     base = _baseline()
     records = snapshot()
     now = compact(records)
+    if ADAPTIVE_WRITE and scenario == "nothing_set":
+        written: dict[str, dict[str, str]] = {}
+        for name, group in base["groups"].items():
+            if not name.startswith("chat/"):
+                continue
+            host = name.split("/", 1)[1]
+            other = now["groups"][name]
+            for index, was in enumerate(group.get("calls", [])):
+                is_ = other["calls"][index]
+                if was != is_:
+                    written[f"{host}/{base['keys'][index]}"] = {
+                        "before": was,
+                        "after": is_,
+                    }
+        Path(ADAPTIVE_WRITE).write_text(
+            json.dumps(written, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        pytest.skip(f"wrote {len(written)} adaptive moves")
     assert now["count"] == base["count"] + 1 + 432  # + chat/inferhub
     assert set(now["groups"]) - set(base["groups"]) == {"chat/inferhub"}
     expected = corrections("market")
-    changed = {f"chat/opencode_go/{key}" for key in expected}
+    # 8.13.0 makes the Chat door express an ADAPTIVE policy instead of
+    # silently sending nothing, so every ``*/adaptive/*`` call on every Chat
+    # host moves. Those are recorded before/after in
+    # ``adaptive_every_door_expectations.json`` -- the historical baseline is
+    # not regenerated -- and nothing else may move.
+    adaptive = adaptive_moves("marketplace")
+    changed = {f"chat/opencode_go/{key}" for key in expected} | {
+        f"chat/{name}" for name in adaptive
+    }
     assert set(_moved(now, base)) == changed
     for index, key in enumerate(base["keys"]):
         entry = expected.get(key)
@@ -105,7 +142,22 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
             record_digest(entry["before"])
             == base["groups"]["chat/opencode_go"]["calls"][index]
         )
+        if f"opencode_go/{key}" in adaptive:
+            # An ADAPTIVE call 7.113.2 corrected is moved again by 8.13.0, so
+            # the adaptive record owns its answer. The 7.113.2 ``before`` is
+            # still asserted above -- it is the committed baseline's digest --
+            # and the new answer is asserted in the loop below.
+            continue
         assert records[f"chat/opencode_go/{key}"] == entry["after"], key
+    for name, entry in adaptive.items():
+        host, _, key = name.partition("/")
+        index = base["keys"].index(key)
+        # The recorded ``before`` must be the committed baseline's own digest,
+        # so a baseline that silently drifted fails here instead of passing.
+        assert entry["before"] == base["groups"][f"chat/{host}"]["calls"][index], name
+        assert record_digest(records[f"chat/{host}/{key}"]) == entry["after"], name
+        assert entry["after"] != entry["before"], name
+    assert adaptive, "the recorded moves would prove nothing if empty"
     if scenario == "nothing_set":
         # InferHub unset is B.AI's call, byte for byte, on every request.
         bai = {k: v for k, v in records.items() if k.startswith("chat/bai/")}

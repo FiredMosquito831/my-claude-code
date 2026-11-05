@@ -29,6 +29,7 @@ from my_claude_code.providers.openai_chat.prompt_cache import (
     apply_chat_prompt_cache_lifetime,
     chat_prompt_cache_choice,
 )
+from tests.contracts.adaptive_expectations import expected_digest, moved
 from tests.contracts.chat_prompt_cache_corpus import (
     HOSTS,
     build,
@@ -77,31 +78,54 @@ def test_the_baseline_is_the_corpus_on_every_host() -> None:
 
 
 def test_nothing_set_moves_no_body_on_any_host() -> None:
+    """Every call, against the committed baseline plus 8.13.0's recorded moves.
+
+    8.13.0 makes the Chat door express an ADAPTIVE policy instead of silently
+    sending nothing, which moves the body of every ``*/adaptive/*`` call. Those
+    are recorded before/after in ``adaptive_every_door_expectations.json`` and
+    nothing else is: a call whose policy is not ADAPTIVE must still equal the
+    v7.105.2 digest exactly, and the recorded ``before`` of every listed call
+    must be that same digest, so the historical baseline cannot drift.
+    """
+
     expected = _baseline()
-    moved: list[str] = []
+    recorded = moved("prompt_cache_ttl")
+    differing: list[str] = []
     for host in sorted(HOSTS):
         for key, (request, policy) in sorted(corpus().items()):
             built, sent, choice = _attempt(host, request, policy, None)
             assert choice is None, (host, key)
             assert sent is built, (host, key)
-            if digest(sent) != expected[f"{host}/{key}"]:
-                moved.append(f"{host}/{key}")
+            name = f"{host}/{key}"
+            if digest(sent) != expected_digest(
+                "prompt_cache_ttl", name, expected[name], recorded
+            ):
+                differing.append(name)
 
-    assert moved == []
+    assert differing == []
+    # Anti-vacuity: the recorded set is exactly the adaptive calls, and every
+    # one of them is a call this corpus really makes.
+    assert recorded, "the recorded moves would prove nothing if empty"
+    assert all("/adaptive/" in name for name in recorded), sorted(recorded)[:5]
+    assert set(recorded) <= {f"{host}/{key}" for host in HOSTS for key in corpus()}
 
 
 @pytest.mark.parametrize("host", ["open_router/open", "agnes"])
 def test_a_stamped_lifetime_moves_nothing_where_the_host_takes_none(host: str) -> None:
     expected = _baseline()
-    moved = []
+    recorded = moved("prompt_cache_ttl")
+    differing = []
     for key, (request, policy) in sorted(corpus().items()):
         built, sent, choice = _attempt(host, request, policy, ASK)
         assert choice is None, key
         assert sent is built, key
-        if digest(sent) != expected[f"{host}/{key}"]:
-            moved.append(key)
+        name = f"{host}/{key}"
+        if digest(sent) != expected_digest(
+            "prompt_cache_ttl", name, expected[name], recorded
+        ):
+            differing.append(key)
 
-    assert moved == []
+    assert differing == []
 
 
 def _strip_marker(body: dict[str, Any]) -> dict[str, Any]:
@@ -117,14 +141,17 @@ def _strip_marker(body: dict[str, Any]) -> dict[str, Any]:
 
 def test_thirty_minutes_on_a_claude_model_adds_only_the_top_level_marker() -> None:
     expected = _baseline()
+    recorded = moved("prompt_cache_ttl")
     checked = 0
     for key, (request, policy) in sorted(corpus().items()):
         _built, sent, choice = _attempt("open_router/claude", request, policy, ASK)
         assert choice is not None and choice.sent is not None, key
+        name = f"open_router/claude/{key}"
+        want = expected_digest("prompt_cache_ttl", name, expected[name], recorded)
         if isinstance(sent, str):
-            assert digest(sent) == expected[f"open_router/claude/{key}"], key
+            assert digest(sent) == want, key
             continue
-        assert digest(_strip_marker(sent)) == expected[f"open_router/claude/{key}"], key
+        assert digest(_strip_marker(sent)) == want, key
         checked += 1
 
     assert checked > 0
@@ -132,15 +159,18 @@ def test_thirty_minutes_on_a_claude_model_adds_only_the_top_level_marker() -> No
 
 def test_thirty_minutes_on_azure_adds_only_the_retention_word() -> None:
     expected = _baseline()
+    recorded = moved("prompt_cache_ttl")
     checked = 0
     for key, (request, policy) in sorted(corpus().items()):
         _built, sent, choice = _attempt("azure_openai", request, policy, ASK)
         assert choice is not None and choice.sent is not None, key
+        name = f"azure_openai/{key}"
+        want = expected_digest("prompt_cache_ttl", name, expected[name], recorded)
         if isinstance(sent, str):
-            assert digest(sent) == expected[f"azure_openai/{key}"], key
+            assert digest(sent) == want, key
             continue
         assert sent.pop("prompt_cache_retention") == "24h", key
-        assert digest(sent) == expected[f"azure_openai/{key}"], key
+        assert digest(sent) == want, key
         checked += 1
 
     assert checked > 0

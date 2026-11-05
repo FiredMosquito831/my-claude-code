@@ -12,6 +12,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from loguru import logger
+
 from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.core.anthropic.content import get_block_attr, get_block_type
 from my_claude_code.core.anthropic.conversion import (
@@ -27,9 +29,11 @@ from my_claude_code.core.anthropic.openai_tool_names import (
     OpenAIToolNameCodec,
 )
 from my_claude_code.core.reasoning import (
+    ReasoningAdaptationKind,
     ReasoningControl,
     ReasoningPolicy,
 )
+from my_claude_code.core.wire_capture import record_reasoning_adaptation
 
 from .tool_schema_dialect import (
     RESPONSES_TOOL_SCHEMA_DIALECT,
@@ -459,6 +463,39 @@ def _reasoning_block(policy: ReasoningPolicy) -> dict[str, Any] | None:
     }
 
 
+def _note_adaptive_substitution(policy: ReasoningPolicy, model: str) -> None:
+    """Record that an ADAPTIVE request left as the endpoint's default rung.
+
+    This door has no adaptive channel: ``reasoning.effort`` takes a word and
+    nothing else, so "let the model choose" cannot be spelled. It has been
+    answered with ``medium`` since long before adaptive existed, and that is
+    kept -- changing it would move the bytes of every adaptive request this
+    backend has ever served. What changes here is only that the substitution
+    is *stated*: the request row carries it and the dashboard shows it, where
+    until now the body silently said ``medium`` and nothing recorded why.
+
+    A no-op outside a tracked request (``record_reasoning_adaptation``), so
+    the body builder stays usable from tests and from token counting.
+    """
+
+    if policy.control is not ReasoningControl.ADAPTIVE:
+        return
+    record_reasoning_adaptation(
+        ReasoningAdaptationKind.SUBSTITUTED,
+        f"REASONING ADAPTIVE SUBSTITUTED: '{model}' has no adaptive channel on"
+        f" the Responses door; sending effort"
+        f" '{RESPONSES_DEFAULT_REASONING_EFFORT}' via `reasoning.effort` -- the"
+        f" endpoint's own default rung -- because a host that can only be told"
+        f" a level cannot be told to choose one",
+    )
+    logger.warning(
+        "REASONING ADAPTIVE: '{}' has no adaptive channel on the Responses"
+        " door; sent effort '{}'",
+        model,
+        RESPONSES_DEFAULT_REASONING_EFFORT,
+    )
+
+
 def _earlier_thinking(messages: list[Any]) -> tuple[int, int]:
     """Count the thinking an Anthropic history carries, as ``(blocks, chars)``.
 
@@ -678,6 +715,11 @@ def build_responses_request_body(
             # backend cannot carry encrypted reasoning across turns of a
             # ``store: false`` conversation.
             body["include"] = ["reasoning.encrypted_content"]
+    # Recorded beside the body it describes, at the one site both Responses
+    # callers (``chatgpt_oauth`` and the OpenCode Responses transport) go
+    # through, so the two cannot disagree about what an adaptive request was
+    # sent. A no-op outside a tracked request.
+    _note_adaptive_substitution(reasoning, request.model)
 
     if extra_body:
         body.update({str(key): value for key, value in extra_body.items()})

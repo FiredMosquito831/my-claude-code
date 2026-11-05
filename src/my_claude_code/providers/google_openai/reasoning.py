@@ -42,7 +42,10 @@ class VertexReasoningEncoder:
             thinking["include_thoughts"] = True
             return
 
-        if policy.control is ReasoningControl.ON:
+        if policy.control in {ReasoningControl.ON, ReasoningControl.ADAPTIVE}:
+            # ``include_thoughts`` is a level-less on: it asks the model to
+            # think without naming a budget, which is what adaptive asks for.
+            # No number is written, because adaptive names none.
             _thinking_config(body)["include_thoughts"] = True
 
     @property

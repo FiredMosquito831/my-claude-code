@@ -411,6 +411,104 @@ def narrow_dialect_by_rejections(
     )
 
 
+ADAPTIVE_MEANING = "let the host think as much as it decides it needs"
+"""What :attr:`ReasoningControl.ADAPTIVE` asks for, stated once.
+
+Not an effort rung and not a budget: it is the *absence* of a fixed
+instruction. Every door reads this one sentence rather than re-deciding what
+"adaptive" means, which is what keeps the Messages door's ``thinking:
+{"type": "adaptive"}``, a Chat host's highest rung and the Responses
+endpoint's ``medium`` from drifting into three different products.
+"""
+
+
+class AdaptiveExpression(StrEnum):
+    """How one host can express :data:`ADAPTIVE_MEANING`, from its dialect.
+
+    Derived from the declared :class:`ReasoningDialect` and nothing else, so a
+    new host is covered the day it declares its fields. The four values are
+    ordered from "says exactly this" to "cannot say it at all":
+
+    :attr:`NATIVE` -- the host has an adaptive channel of its own
+    (``thinking: {"type": "adaptive"}``). The instruction leaves verbatim.
+
+    :attr:`BARE_ON` -- the host can be told to reason through a field that is
+    *not* its effort field, i.e. without naming a level. That is the same
+    statement in the host's own words, so nothing is adapted.
+
+    :attr:`TOP_RUNG` -- the host's only word for "reason" is one of its own
+    effort rungs. It cannot be told to choose, so it is told the least
+    restrictive thing it does accept: the highest rung it publishes. That is a
+    substitution and is recorded as one.
+
+    :attr:`NOTHING` -- the host parses no reasoning field at all. Nothing is
+    sent and the model's own default applies.
+    """
+
+    NATIVE = "native"
+    BARE_ON = "bare_on"
+    TOP_RUNG = "top_rung"
+    NOTHING = "nothing"
+
+
+def adaptive_expression(dialect: ReasoningDialect) -> AdaptiveExpression:
+    """Return how ``dialect`` expresses :data:`ADAPTIVE_MEANING`.
+
+    ``toggle_field != effort_field`` is the load-bearing test for
+    :attr:`AdaptiveExpression.BARE_ON`, and it is the same distinction
+    :class:`~my_claude_code.application.reasoning_gating._Channels` draws: a
+    host whose on-value is *written into its effort field* is naming a default
+    rung, not switching reasoning on without a level. Answering an adaptive
+    request with such a host's ``enabled_value`` would be inventing a rung
+    nobody asked for, which is why that case falls through to
+    :attr:`AdaptiveExpression.TOP_RUNG` -- where the rung at least comes from
+    the vocabulary the host actually publishes.
+    """
+
+    if dialect.adaptive:
+        return AdaptiveExpression.NATIVE
+    if dialect.toggle and dialect.toggle_field != dialect.effort_field:
+        return AdaptiveExpression.BARE_ON
+    if dialect.effort_values:
+        return AdaptiveExpression.TOP_RUNG
+    return AdaptiveExpression.NOTHING
+
+
+def top_stated_effort(
+    values: frozenset[ReasoningEffort] | None,
+) -> ReasoningEffort | None:
+    """The highest rung in a published vocabulary, or ``None`` for no vocabulary.
+
+    Read from what the host declares rather than hard-coded, because the top
+    rung is not ``max`` everywhere: the OpenAI standard map spells ``max`` as
+    ``high``, and a gateway with its own words spells every rung differently.
+    ``None`` and the empty set both mean "nothing published", which is a
+    different statement from "published, and the top is X".
+    """
+
+    if not values:
+        return None
+    return max(values, key=lambda effort: EFFORT_RANK[effort])
+
+
+def dialect_declares_a_reasoning_channel(dialect: ReasoningDialect) -> bool:
+    """Whether this host parses *any* reasoning field.
+
+    Separates "the door has a channel and adaptive cannot use it" -- a real
+    degradation worth recording -- from "the door has no channel, so sending
+    nothing IS the adaptive answer", where an adaptation record would be a
+    warning about correct behaviour.
+    """
+
+    return bool(
+        dialect.toggle
+        or dialect.budget
+        or dialect.off
+        or dialect.adaptive
+        or dialect.effort_values is not None
+    )
+
+
 class ReasoningAdaptationKind(StrEnum):
     """What per-model capability gating did to a requested reasoning policy.
 

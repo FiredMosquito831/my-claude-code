@@ -3,14 +3,21 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from loguru import logger
+
 from my_claude_code.core.reasoning import (
+    ADAPTIVE_MEANING,
+    ReasoningAdaptationKind,
     ReasoningControl,
     ReasoningDialect,
     ReasoningDialectOrigin,
     ReasoningEffort,
     ReasoningPolicy,
+    dialect_declares_a_reasoning_channel,
     nearest_effort,
+    top_stated_effort,
 )
+from my_claude_code.core.wire_capture import record_reasoning_adaptation
 
 EffortValues = tuple[tuple[ReasoningEffort, str], ...]
 
@@ -89,6 +96,104 @@ def _clamped_effort(
     return mapping[nearest_effort(requested, frozenset(mapping))]
 
 
+def _adaptive_rung(
+    efforts: EffortValues,
+) -> tuple[ReasoningEffort, str] | None:
+    """The top rung this host publishes, and the word it spells for that rung.
+
+    ``None`` when this encoder's map names no rung at all, which is the
+    "cannot express it" case rather than a rung to invent.
+    """
+
+    top = top_stated_effort(_host_vocabulary(efforts))
+    if top is None:
+        return None
+    word = _clamped_effort(efforts, top)
+    if word is None:
+        return None
+    return top, word
+
+
+def _note_adaptive_rung(
+    *, model: str, field: str, effort: ReasoningEffort, word: str
+) -> None:
+    """Record that an adaptive request left as a named rung.
+
+    A no-op outside a tracked request (``record_reasoning_adaptation``), so
+    the encoders stay usable from token counting and from tests.
+    """
+
+    record_reasoning_adaptation(
+        ReasoningAdaptationKind.SUBSTITUTED,
+        f"REASONING ADAPTIVE SUBSTITUTED: '{model}' has no adaptive channel;"
+        f" sending effort '{word}' via `{field}` -- its highest published rung"
+        f" -- because a host that can only be told a level cannot be told to"
+        f" choose one. Adaptive asks to {ADAPTIVE_MEANING}.",
+    )
+    logger.info(
+        "REASONING ADAPTIVE: '{}' has no adaptive channel; sent effort '{}'"
+        " via `{}` (its top published rung, '{}')",
+        model,
+        word,
+        field,
+        effort.value,
+    )
+
+
+def _note_adaptive_nothing(*, model: str, dialect: ReasoningDialect) -> None:
+    """Record an adaptive request this door could not express at all.
+
+    Only when the host parses *some* reasoning field: a door with none sends
+    nothing, and on that door nothing IS the adaptive answer, so a warning
+    would be a warning about correct behaviour.
+    """
+
+    if not dialect_declares_a_reasoning_channel(dialect):
+        logger.info(
+            "REASONING ADAPTIVE: '{}' parses no reasoning field; nothing is"
+            " sent and the model decides for itself",
+            model,
+        )
+        return
+    record_reasoning_adaptation(
+        ReasoningAdaptationKind.NOTHING_SENT,
+        f"REASONING ADAPTIVE NOTHING SENT: '{model}' parses a reasoning field"
+        f" but none that can carry 'let the model choose'; nothing was sent and"
+        f" the model's own default applies",
+    )
+    logger.warning(
+        "REASONING ADAPTIVE NOTHING SENT: '{}' has no field for a level-less"
+        " reasoning request",
+        model,
+    )
+
+
+def _encode_adaptive_rung(
+    target: dict[str, Any], field: str, efforts: EffortValues, model: str
+) -> bool:
+    """Write the top published rung, or report that there is none.
+
+    Returns whether a word was written. Shared by every encoder whose only
+    word for "reason" is a rung, so ``NamedEffortReasoning`` and
+    ``EffortOrThinkingBudgetReasoning`` cannot drift apart about it.
+    """
+
+    rung = _adaptive_rung(efforts)
+    if rung is None:
+        return False
+    effort, word = rung
+    target[field] = word
+    _note_adaptive_rung(model=model, field=field, effort=effort, word=word)
+    return True
+
+
+def _adaptive_model(body: dict[str, Any]) -> str:
+    """The model this body names, for an adaptation message."""
+
+    model = body.get("model")
+    return model if isinstance(model, str) else "this model"
+
+
 @dataclass(frozen=True, slots=True)
 class NoReasoning:
     """Leave reasoning computation entirely to the upstream provider."""
@@ -120,6 +225,19 @@ class NamedEffortReasoning:
         if policy.control is ReasoningControl.OFF:
             if self.disabled_value is not None:
                 target[self.field] = self.disabled_value
+            return
+
+        if policy.control is ReasoningControl.ADAPTIVE:
+            # No adaptive channel on this shape: ``enabled_value``, when there
+            # is one, is written into the effort field and is therefore a
+            # default *rung*, not a level-less on -- so the honest answer is
+            # this host's own highest rung, read from its declared map.
+            if not _encode_adaptive_rung(
+                target, self.field, self.efforts, _adaptive_model(body)
+            ):
+                _note_adaptive_nothing(
+                    model=_adaptive_model(body), dialect=self.dialect
+                )
             return
 
         if policy.budget_tokens is not None and self.budget_field is not None:
@@ -160,6 +278,14 @@ class ReasoningObject:
             _extra_body(body)["reasoning"] = {"enabled": False}
             return
 
+        if policy.control is ReasoningControl.ADAPTIVE:
+            # ``reasoning.enabled`` is a real level-less on: it says "reason"
+            # without naming a rung, which is exactly what adaptive asks for.
+            # The effort field is deliberately not used -- any word in it would
+            # be a level nobody asked for.
+            _extra_body(body)["reasoning"] = {"enabled": True}
+            return
+
         reasoning: dict[str, Any] = {}
         if policy.budget_tokens is not None and self.supports_budget:
             reasoning["max_tokens"] = policy.budget_tokens
@@ -194,6 +320,10 @@ class ThinkingObjectReasoning:
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if policy.control is ReasoningControl.OFF:
             _extra_body(body)["thinking"] = dict(self.disabled)
+        elif policy.control is ReasoningControl.ADAPTIVE:
+            # A toggle object carries no level, so its "on" is the level-less
+            # request adaptive asks for -- the host decides the amount.
+            _extra_body(body)["thinking"] = dict(self.enabled)
         elif policy.requests_reasoning:
             _extra_body(body)["thinking"] = dict(self.enabled)
 
@@ -237,6 +367,18 @@ class EffortOrThinkingBudgetReasoning:
             _extra_body(body)[self.thinking_field] = {"type": "disabled"}
             return
 
+        if policy.control is ReasoningControl.ADAPTIVE:
+            # The two knobs are mutually exclusive on this host, and the
+            # thinking object here carries a *budget*, not a level-less on --
+            # so the effort field is the only word that can say "reason".
+            if not _encode_adaptive_rung(
+                body, self.field, self.efforts, _adaptive_model(body)
+            ):
+                _note_adaptive_nothing(
+                    model=_adaptive_model(body), dialect=self.dialect
+                )
+            return
+
         if policy.budget_tokens is not None:
             budget = max(self.min_budget_tokens, policy.budget_tokens)
             _extra_body(body)[self.thinking_field] = {
@@ -273,7 +415,11 @@ class ChatTemplateReasoning:
     field: str = "thinking"
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
-        if not policy.requests_reasoning and policy.control is not ReasoningControl.OFF:
+        if (
+            not policy.requests_reasoning
+            and policy.control is not ReasoningControl.OFF
+            and policy.control is not ReasoningControl.ADAPTIVE
+        ):
             return
         kwargs = _nested_dict(_extra_body(body), "chat_template_kwargs")
         kwargs[self.field] = policy.control is not ReasoningControl.OFF
@@ -294,6 +440,11 @@ class LlamaCppReasoning:
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         if policy.control is ReasoningControl.OFF:
             _extra_body(body)["thinking_budget_tokens"] = 0
+        elif policy.control is ReasoningControl.ADAPTIVE:
+            # This host's only reasoning field is a number, and adaptive names
+            # none. Inventing one would be exactly the fabricated control the
+            # rule forbids, so nothing is sent and the record says so.
+            _note_adaptive_nothing(model=_adaptive_model(body), dialect=self.dialect)
         elif (budget := policy.numeric_budget_tokens) is not None:
             _extra_body(body)["thinking_budget_tokens"] = budget
 
