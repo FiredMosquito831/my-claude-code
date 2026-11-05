@@ -132,9 +132,20 @@ class AnthropicMessagesProvider(BaseProvider):
         provider_id: str = "",
         forward_thinking_display: bool = False,
         prompt_cache_family: PromptCacheLifetimeFamily | None = None,
+        signs_thinking: bool = True,
     ) -> None:
         super().__init__(config)
         self._provider_name = provider_name
+        # Whether this host mints and checks signatures on the thinking blocks
+        # it returns (8.12.2). ``True`` -- ``api.anthropic.com``, the Claude
+        # subscription, Command Code and every other Messages caller -- is what
+        # every release before it assumed, and builds exactly the body it
+        # always built. A host that answers this protocol and signs nothing
+        # (OpenCode Go's ``/messages`` door: 28 signatures beside 3,439
+        # thinking responses) declares ``False`` at the transport that fronts
+        # it, and both the history drop and the tool-follow-up suppression
+        # stop treating its own thinking as another model's.
+        self._signs_thinking = signs_thinking
         # The catalogue id, which is what the learned-facts store keys on.
         # ``provider_name`` is the log label and several providers share one.
         self._provider_id = provider_id
@@ -296,6 +307,7 @@ class AnthropicMessagesProvider(BaseProvider):
             request,
             reasoning=reasoning,
             forward_thinking_display=self._forward_thinking_display,
+            signs_thinking=self._signs_thinking,
         )
 
     async def probe(self, model_id: str) -> None:
@@ -536,6 +548,7 @@ class AnthropicMessagesProvider(BaseProvider):
             wire_notes=wire_notes,
             forward_thinking_display=self._forward_thinking_display,
             prompt_cache=prompt_cache,
+            signs_thinking=self._signs_thinking,
         )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what

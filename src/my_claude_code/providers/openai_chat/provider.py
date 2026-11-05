@@ -506,6 +506,10 @@ class OpenAIChatProvider(BaseProvider):
                 memory=self._recovery_memory,
                 # ``None`` for every profile but a marketplace's (7.109.0).
                 marketplace=self._profile.marketplace,
+                # Whether this host's ``/messages`` door signs its thinking
+                # (8.12.2). Declared on the profile, so nothing here names a
+                # provider; ``True`` for every profile but OpenCode Go's.
+                signs_thinking=self._profile.messages_signs_thinking,
             )
             self._messages_transport = transport
         return transport
