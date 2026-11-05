@@ -28,10 +28,12 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
+    MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MEDIA_SHAPE_OPENAI_IMAGES,
     MEDIA_SHAPE_OPENAI_SPEECH,
     MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
     MEDIA_SHAPE_OPENAI_VIDEOS,
+    MISTRAL_IMAGE_TOOL_TYPE,
     MediaSurface,
 )
 from my_claude_code.core.gemini_native_media import (
@@ -39,6 +41,7 @@ from my_claude_code.core.gemini_native_media import (
     transcribe_instruction,
     transcribe_request,
 )
+from my_claude_code.core.mistral_media import image_tool_request
 
 from .multipart import MultipartBody
 
@@ -48,6 +51,11 @@ _GEMINI_SPEECH_USED = frozenset({"input", "response_format", "stream_format"})
 #: Transcription fields the Gemini translation consumes (a streamed request
 #: never gets here).
 _GEMINI_TRANSCRIBE_USED = frozenset({"language", "response_format", "stream"})
+#: Image fields the Mistral tool translation consumes: the prompt, and nothing
+#: else. A chat call has no ``n``, ``size``, ``quality`` or ``response_format``
+#: to put them in, and MCC never translates one by guess -- each is named in
+#: ``not_forwarded`` (spec §4.2, the rule ``_GEMINI_TRANSCRIBE_USED`` follows).
+_MISTRAL_IMAGE_USED = frozenset({"prompt"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +207,27 @@ def _gemini_transcribe_body(attempt: MediaAttempt) -> WireBody:
     )
 
 
+def _mistral_image_body(attempt: MediaAttempt) -> WireBody:
+    """The ``image_generation`` built-in tool on Chat Completions.
+
+    Only the prompt is forwarded: it becomes one user message. Every other
+    field the client sent has no place in a chat call and is named in
+    ``not_forwarded`` rather than dropped silently or translated by guess.
+    """
+
+    body = attempt.request.body
+    prompt = body.get("prompt")
+    notes = tuple(name for name in body if name not in _MISTRAL_IMAGE_USED)
+    return WireBody(
+        json=image_tool_request(
+            prompt if isinstance(prompt, str) else "",
+            attempt.resolved.provider_model,
+            MISTRAL_IMAGE_TOOL_TYPE,
+        ),
+        not_forwarded=notes,
+    )
+
+
 async def build_wire_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody:
     """``build_request_body``, off the loop when the body reads an upload whole."""
 
@@ -233,4 +262,6 @@ def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody
         return _gemini_speech_body(surface, attempt)
     if surface.shape == MEDIA_SHAPE_GEMINI_TRANSCRIBE:
         return _gemini_transcribe_body(attempt)
+    if surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
+        return _mistral_image_body(attempt)
     raise ValueError(f"unknown media shape {surface.shape!r}")

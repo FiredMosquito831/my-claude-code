@@ -40,6 +40,12 @@ MEDIA_SHAPE_OPENAI_VIDEOS = "openai_videos"
 #: has neither ``audio/speech`` nor ``audio/transcriptions``.
 MEDIA_SHAPE_GEMINI_TTS = "gemini_tts"
 MEDIA_SHAPE_GEMINI_TRANSCRIBE = "gemini_transcribe"
+#: 8.14.0: Mistral serves image generation as the ``image_generation`` BUILT-IN
+#: TOOL on Chat Completions -- not ``POST /v1/images/generations``, which it
+#: does not document at all -- and the picture is then fetched with a second
+#: call, ``GET /v1/files/{file_id}/content``. One shape, because the body, the
+#: answer and the byte retrieval all differ from every shape above.
+MEDIA_SHAPE_MISTRAL_IMAGE_TOOL = "mistral_image_tool"
 
 #: A surface whose host documents a JSON body only (``MediaSurface.encoding``).
 MEDIA_ENCODING_JSON = "json"
@@ -62,6 +68,7 @@ MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_OPENAI_VIDEOS,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+    MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
 )
 
 #: The header Gemini's native API reads the key from (instead of Bearer).
@@ -113,6 +120,30 @@ GEMINI_TTS_VOICES: tuple[str, ...] = (
     "Sadaltager",
     "Sulafat",
 )
+
+#: 8.14.0: the built-in tool a Mistral image is asked for by. The VALUE is the
+#: vendor's own: ``ImageGenerationTool.type`` is
+#: ``Literal["image_generation"]`` in ``mistralai/client-python``
+#: (``src/mistralai/client/models/imagegenerationtool.py``, read 2026-11-04),
+#: and the same name appears in the request's tool union
+#: (``ChatCompletionRequestTool``). It is a declared constant rather than a
+#: literal in the adapter so that, if the spelling is ever wrong, one constant
+#: changes and no adapter logic does (spec §10.2).
+#:
+#: What the vendor's types do NOT say, and no offline source settles: whether
+#: the tool is asked for in ``tools[]`` by name, through ``tool_choice``, or
+#: implicitly by the model (spec E12). MCC sends it in ``tools[]`` -- the one
+#: placement every OpenAI-compatible built-in tool uses -- and a host that
+#: wants another placement refuses the call, which is an ordinary charged
+#: failure that falls through to the next model, never a silent wrong answer.
+MISTRAL_IMAGE_TOOL_TYPE = "image_generation"
+
+#: 8.14.0: where the picture is fetched from once the tool call names it:
+#: ``GET {base}/files/{file_id}/content`` -- the "File access operation" of
+#: Mistral's own API reference (spec E4). ``{id}`` is the upstream file id
+#: (``job_path``). The bytes are a SECOND call: the chat answer carries a
+#: reference, not the picture.
+MISTRAL_IMAGE_FILE_CONTENT_PATH = "files/{id}/content"
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +301,28 @@ def gemini_transcription_surface() -> MediaSurface:
         path=GEMINI_GENERATE_CONTENT_PATH,
         formats=("json", "text"),
         auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
+def mistral_image_tool_surface() -> MediaSurface:
+    """Mistral's ``image_generation`` built-in tool on Chat Completions.
+
+    The client still asks for an image on ``/v1/images/generations``; this is
+    what goes UPSTREAM instead. ``chat/completions`` is joined onto the
+    provider's own base URL, so an operator pointing ``mistral`` at a gateway
+    moves this with it.
+
+    ``stream`` stays ``False``: the tool's streaming vocabulary is not
+    documented anywhere MCC can read, and a client that asks for a stream is
+    answered whole by the existing fold (spec §4.5). No ``formats`` either --
+    a Mistral image is not asked for in a format, so a client's
+    ``response_format`` is recorded as not forwarded rather than refused.
+    """
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        shape=MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+        path="chat/completions",
     )
 
 

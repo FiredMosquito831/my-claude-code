@@ -227,6 +227,11 @@ class MediaResponse:
     audio_seconds: float | None = None
     #: Request fields this answer's surface had no exact place for.
     not_forwarded: tuple[str, ...] = ()
+    #: Prose the answer carried that has no place in the client's answer (a
+    #: chat answer's ``message.content`` around a tool call, 8.14.0). It is
+    #: written to the request-log row's ``output_text`` and is never added to
+    #: the client's JSON: an OpenAI Images answer has no field for it.
+    text: str | None = None
 
 
 #: What a media provider yields: one buffered response, or raw stream frames.

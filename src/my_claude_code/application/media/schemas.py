@@ -84,6 +84,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
+    MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MediaSurface,
     surface_for,
 )
@@ -316,6 +317,31 @@ GEMINI_NATIVE_FORWARDED: Mapping[str, frozenset[str]] = {
     ),
 }
 
+#: 8.14.0: what MCC's Mistral adapter sends, per wire shape. A Mistral image is
+#: the ``image_generation`` built-in tool on Chat Completions: the prompt
+#: becomes one user message and nothing else the client sent has a place in
+#: that body. Mirrors ``providers/media/adapters.py`` (``_MISTRAL_IMAGE_USED``),
+#: pinned by ``tests/application/test_media_schemas.py``.
+MISTRAL_IMAGE_TOOL_FORWARDED: Mapping[str, frozenset[str]] = {
+    MEDIA_SHAPE_MISTRAL_IMAGE_TOOL: frozenset({"prompt"}),
+}
+
+#: Every shape whose body MCC CONSTRUCTS rather than forwards. A shape here is
+#: "translated": the fields it does not name are ``not forwarded by MCC``, a
+#: fact rather than a guess (IV.16), and the door's other fields are not
+#: passed through. One table, so a new translated shape cannot be added to one
+#: reader and forgotten in the other.
+TRANSLATED_SHAPES: Mapping[str, frozenset[str]] = {
+    **GEMINI_NATIVE_FORWARDED,
+    **MISTRAL_IMAGE_TOOL_FORWARDED,
+}
+
+
+def forwarded_fields(shape: str) -> frozenset[str] | None:
+    """The door fields MCC sends on ``shape``; ``None`` when it is a passthrough."""
+
+    return TRANSLATED_SHAPES.get(shape)
+
 
 # -- one rung's statement about one field -------------------------------------
 
@@ -434,7 +460,7 @@ def _declared_statements(
             sent_as=wire,
             note=f"sent to this host as {wire}",
         )
-    forwarded = GEMINI_NATIVE_FORWARDED.get(surface.shape)
+    forwarded = forwarded_fields(surface.shape)
     if forwarded is not None:
         for field in door:
             if field.name not in forwarded and field.name not in said:
@@ -602,7 +628,7 @@ def request_schema(
         # MCC's door takes the picture to edit as an upload or as JSON
         # ``images``, and refuses a request with neither.
         schema["anyOf"] = [{"required": ["image"]}, {"required": ["images"]}]
-    passthrough = surface.shape not in GEMINI_NATIVE_FORWARDED
+    passthrough = surface.shape not in TRANSLATED_SHAPES
     schema["additionalProperties"] = {
         "x-mcc": (
             {

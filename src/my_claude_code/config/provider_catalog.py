@@ -13,6 +13,7 @@ from .media_surfaces import (
     gemini_transcription_surface,
     image_edit_surface,
     image_generation_surface,
+    mistral_image_tool_surface,
     speech_surface,
     transcription_surface,
     translation_surface,
@@ -433,7 +434,22 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "mistral": ProviderDescriptor(
         provider_id="mistral",
         # Mistral documents SSE on its transcription endpoint.
-        media_surfaces=(transcription_surface(stream=True),),
+        #
+        # 8.14.0: and image generation, which Mistral serves as the
+        # ``image_generation`` built-in tool on Chat Completions (the picture
+        # is then fetched from ``files/{id}/content``), not as
+        # ``POST /images/generations``. ADDED to the tuple, never replacing the
+        # transcription surface above -- that one is unchanged and pinned by
+        # ``tests/api/test_media_transcriptions.py``.
+        #
+        # Deliberately NOT declared on ``mistral_vibe``: the image charge's
+        # pool is not established as the Vibe subscription's, so a Vibe ref on
+        # the Image rail is skipped uncharged by the capability gate. That
+        # absence IS the enforcement (spec §9.5), and a guard test keeps it so.
+        media_surfaces=(
+            transcription_surface(stream=True),
+            mistral_image_tool_surface(),
+        ),
         display_name="Mistral Studio (API)",
         credential_env="MISTRAL_API_KEY",
         credential_url="https://console.mistral.ai/",

@@ -3186,6 +3186,27 @@ the Models page reads *withheld: 1 of the required 3 rows reported one* rather
 than borrowing the Studio card's prices, which the Vibe pool may not be billed
 at. That is the honest answer, not a gap to be filled by an alias.
 
+**Images on the Studio card (8.14.0).** A `mistral/…` ref can serve the Image
+rail. Mistral does not document `POST /v1/images/generations`; it serves images
+as the `image_generation` built-in tool on Chat Completions, so MCC asks for the
+picture with a chat call and then fetches it with a second call,
+`GET {base}/files/{file_id}/content`, on the same key and through the same proxy
+exit. Two consequences worth knowing before you spend:
+
+- **Only your `prompt` is forwarded.** A chat call has nowhere to put `n`,
+  `size`, `quality`, `response_format` or `style`, so they are recorded as
+  *not forwarded* on the request row rather than guessed at. The Models page
+  says the same for each model.
+- **The image is recorded unpriced.** Mistral bills $0.10 per image on top of
+  the model's tokens, but neither models.dev nor LiteLLM publishes a per-image
+  rate MCC could read, and MCC never invents a price. If the host reports its
+  own `cost` on the answer, that figure is used; otherwise the row reads
+  *unpriced* while the Media card still counts the image and its bytes.
+
+**Vibe models are not offered on the Image rail.** Which budget an image charge
+draws on is not published, so a `mistral_vibe` ref is skipped uncharged rather
+than spending an allowance nobody agreed to. Use a `mistral/…` ref.
+
 <a id="reading-a-failed-refresh-models"></a>
 
 ### Reading a failed Refresh models
