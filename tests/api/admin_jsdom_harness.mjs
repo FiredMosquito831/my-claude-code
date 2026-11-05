@@ -25,6 +25,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM, VirtualConsole } from "jsdom";
@@ -9662,6 +9663,363 @@ if (modelsLink) {
           .className,
       }
     : null;
+
+  /* ==================================================================
+     8.12.1 (MODELS-VISIBILITY). Everything below drives the four defects
+     the user reported and the four responsiveness fixes that ship with
+     them. It runs LAST in this block so no earlier capture sees the
+     provider it appends or the bar state it leaves behind.
+     ================================================================== */
+
+  // --- the receipt asks the browser to bring it into view. jsdom has no
+  //     layout engine and no scrollIntoView, so the call is recorded: "the
+  //     page asked for it" is the only claim a DOM can make about position.
+  //     Chained onto the harness's own recorder rather than replacing it --
+  //     the Guide-link capture reads `scrolledTo`, and a stub that swallowed
+  //     every call would make that test fail for the wrong reason.
+  const scrollCalls = [];
+  const previousScrollStub = window.Element.prototype.scrollIntoView;
+  window.Element.prototype.scrollIntoView = function scrollIntoView(options) {
+    scrollCalls.push({
+      id: this.id || null,
+      className: this.className || "",
+      block: options && options.block ? options.block : null,
+    });
+    if (typeof previousScrollStub === "function") {
+      previousScrollStub.call(this, options);
+    }
+  };
+
+  /* --- THE BRICK, part 1: a press over a >=200-model provider writes ONCE.
+     The gate that used to sit in runModelsBulk armed itself on
+     `button.dataset.confirming`, which renderModelsBulkBar() destroys and
+     rebuilds on every selection change -- so a press, a row click and a
+     second press produced zero requests, forever. The provider is appended
+     here rather than to the shared fixture so the three-provider captures
+     above stay exactly what they were. */
+  const bigProvider = {
+    provider_id: "delta",
+    label: "Gamma",
+    configured: true,
+    hidden_count: 0,
+    models: Array.from({ length: 250 }, (_unused, index) => {
+      const ref = `delta/model-${String(index).padStart(3, "0")}`;
+      return {
+        ...JSON.parse(JSON.stringify(MODEL_ADMIN_PAGE.providers[0].models[0])),
+        model_ref: ref,
+        visible: false,
+        hidden_by: "",
+        configured: false,
+      };
+    }),
+  };
+  // `modelsState.data` IS this object: the route stub hands back the fixture
+  // itself, so appending here appends to what the page reads.
+  MODEL_ADMIN_PAGE.providers.push(bigProvider);
+  window.eval("renderModelsTree()");
+  await settle();
+  const deltaNode = tree.querySelector('.models-provider[data-provider="delta"]');
+  models.bigProviderModels = bigProvider.models.length;
+  const deltaShowAll = Array.from(
+    deltaNode.querySelectorAll(".models-provider-bulk button"),
+  ).find((button) => flat(button) === "Show all");
+  BULK_RESULT.action = "show";
+  BULK_RESULT.scope = "provider";
+  BULK_RESULT.provider_id = "delta";
+  BULK_RESULT.wrote_glob = null;
+  BULK_RESULT.removed_patterns = [];
+  BULK_RESULT.results = bigProvider.models.map((model) => ({
+    model_ref: model.model_ref,
+    visible: true,
+    honored: true,
+    hidden_by: "",
+  }));
+  BULK_RESULT.honored_count = BULK_RESULT.results.length;
+  BULK_RESULT.unhonored_count = 0;
+  BULK_RESULT.visibility = { allow: [], deny: [] };
+  fetchCalls.length = 0;
+  fetchBodies.length = 0;
+  scrollCalls.length = 0;
+  await click(deltaShowAll);
+  models.bigAffected = bigProvider.models.length;
+  models.bigBulkCalls = fetchCalls.filter((path) =>
+    path.endsWith("/visibility/bulk"),
+  ).length;
+  models.bigBody = fetchBodies.find((entry) =>
+    entry.path.endsWith("/visibility/bulk"),
+  );
+  models.bigRowsShown = bigProvider.models.filter((model) => model.visible)
+    .length;
+  models.bigReceipt = flat(panel);
+  models.receiptScroll = scrollCalls.filter(
+    (call) => call.id === "modelsBulkResult",
+  );
+
+  /* --- THE BRICK, part 1b: the confirm trap itself. Arm the old gate's
+     shape by pressing, changing the selection (which rebuilds the bar) and
+     pressing again -- exactly what the user did. One write, not zero. */
+  BULK_RESULT.action = "hide";
+  BULK_RESULT.scope = "provider";
+  BULK_RESULT.provider_id = "delta";
+  BULK_RESULT.results = bigProvider.models.map((model) => ({
+    model_ref: model.model_ref,
+    visible: false,
+    honored: true,
+    hidden_by: "delta/*",
+  }));
+  BULK_RESULT.honored_count = BULK_RESULT.results.length;
+  BULK_RESULT.wrote_glob = "delta/*";
+  BULK_RESULT.visibility = { allow: [], deny: ["delta/*"] };
+  window.eval("clearModelsSelection()");
+  await settle();
+  const deltaHideAll = () =>
+    Array.from(
+      tree.querySelectorAll('.models-provider[data-provider="delta"] .models-provider-bulk button'),
+    ).find((button) => flat(button) === "Hide all");
+  fetchCalls.length = 0;
+  // Guarded rather than assumed: on a tree that still carries the label-flip
+  // gate the button's text has changed to "<label> <N> -- confirm" by the time
+  // the second lookup runs, so the find returns nothing. That IS the defect,
+  // and the capture below records it as a write that never happened.
+  const firstHide = deltaHideAll();
+  if (firstHide) await click(firstHide);
+  // A selection change between the presses: this is what rebuilt the bar and
+  // destroyed the armed state.
+  const deltaBox = tree.querySelector(
+    '.models-provider[data-provider="delta"] input.models-select-all',
+  );
+  if (deltaBox) {
+    deltaBox.checked = true;
+    deltaBox.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await settle();
+  }
+  const secondHide = deltaHideAll();
+  if (secondHide) await click(secondHide);
+  models.trapBulkCalls = fetchCalls.filter((path) =>
+    path.endsWith("/visibility/bulk"),
+  ).length;
+  models.trapRowsHidden = bigProvider.models.filter((model) => !model.visible)
+    .length;
+  window.eval("clearModelsSelection()");
+  await settle();
+
+  /* --- THE BRICK, part 2: one bad provider costs one card, not the page.
+     A throw inside the provider build used to leave #modelsTree empty --
+     no rows, no provider checkboxes, no Show all / Hide all / Invert -- and
+     modelsState.data was already set, so the guard refused to repaint it for
+     the rest of the document's life. */
+  const originalBuild = window.buildModelsProviderNode;
+  let buildThrows = 0;
+  window.buildModelsProviderNode = function buildModelsProviderNode(
+    provider,
+    list,
+    autoOpen,
+  ) {
+    if (provider.provider_id === "alpha" && buildThrows++ === 0) {
+      throw new Error("one malformed provider row in the payload");
+    }
+    return originalBuild(provider, list, autoOpen);
+  };
+  // A tree WITH the per-provider catch keeps drawing; one without it throws
+  // out of the whole render, which is the defect this capture records.
+  try {
+    window.eval("renderModelsTree()");
+  } catch (error) {
+    models.skipRenderThrew = String(error.message);
+  }
+  await settle();
+  models.failedProviderCard = flat(
+    tree.querySelector("[data-failed-provider]") || { textContent: "" },
+  );
+  models.providersAfterSkip = tree.querySelectorAll(".models-provider").length;
+  models.providerBulkButtonsAfterSkip = tree.querySelectorAll(
+    ".models-provider-bulk button",
+  ).length;
+  models.providerBoxesAfterSkip = tree.querySelectorAll(
+    "input.models-select-all",
+  ).length;
+  models.rowsAfterSkip = rows().length;
+  window.buildModelsProviderNode = originalBuild;
+  window.eval("renderModelsTree()");
+  await settle();
+
+  /* --- THE BRICK, part 2b: a throw OUTSIDE the provider loop empties the
+     tree. The page must recover on the next visit, without a document
+     reload: the payload is not kept as "loaded" over a tree that never drew. */
+  const originalSummary = window.renderModelsTreeSummary;
+  let summaryThrows = 0;
+  window.renderModelsTreeSummary = function renderModelsTreeSummary(...args) {
+    if (summaryThrows++ === 0) {
+      throw new Error("one transient failure while drawing the summary");
+    }
+    return originalSummary.apply(this, args);
+  };
+  fetchCalls.length = 0;
+  const forced = await window.eval("loadModelsView(true)");
+  await settle();
+  models.emptyTreeAfterThrow = tree.children.length;
+  models.emptyTreeStatus = flat(doc.getElementById("modelsTreeStatus"));
+  models.forcedLoadReturned = forced;
+  window.renderModelsTreeSummary = originalSummary;
+  const recovered = await window.eval("loadModelsView()");
+  await settle();
+  models.recoveryPageCalls = fetchCalls.filter(
+    (path) => path === "/admin/api/model-admin",
+  ).length;
+  models.recoveryReturned = recovered;
+  models.recoveryProviders =
+    tree.querySelectorAll(".models-provider").length;
+  models.recoveryStatus = flat(doc.getElementById("modelsTreeStatus"));
+  // On a tree that refuses to repaint an empty one, the page is still bricked
+  // here. Force one load so the rest of this block has a tree to drive; the
+  // capture above is what the test reads.
+  if (!models.recoveryProviders) {
+    await window.eval("loadModelsView(true)");
+    await settle();
+  }
+
+  /* --- no-op wording, before and after the press. Rows that are already in
+     the state the button names must say so in the button, and the receipt
+     must say "nothing changed" rather than reporting a successful write over
+     five rows that did not move. */
+  window.eval("clearModelsSelection()");
+  await settle();
+  const alphaNode = tree.querySelector('.models-provider[data-provider="alpha"]');
+  if (alphaNode) {
+    const alphaToggle = alphaNode.querySelector(".models-provider-toggle");
+    if (alphaNode.querySelector(".models-provider-body").hidden) {
+      await click(alphaToggle);
+    }
+  }
+  const shownRow = rows().find(
+    (row) => flat(row.querySelector(".models-visible-word")) === "Shown",
+  );
+  const shownRef = shownRow ? shownRow.dataset.ref : null;
+  if (shownRow) await click(shownRow.querySelector("input.models-select"));
+  models.noopBarLabels = Array.from(bar.querySelectorAll("button")).map(flat);
+  models.noopAriaLabels = Array.from(bar.querySelectorAll("button")).map(
+    (button) => button.getAttribute("aria-label"),
+  );
+  BULK_RESULT.action = "show";
+  BULK_RESULT.scope = "selection";
+  BULK_RESULT.provider_id = null;
+  BULK_RESULT.wrote_glob = null;
+  BULK_RESULT.removed_patterns = [];
+  BULK_RESULT.results = [
+    { model_ref: shownRef, visible: true, honored: true, hidden_by: "" },
+  ];
+  BULK_RESULT.honored_count = 1;
+  BULK_RESULT.unhonored_count = 0;
+  const showOne = Array.from(bar.querySelectorAll("button")).find((button) =>
+    flat(button).startsWith("Show 1 selected"),
+  );
+  if (showOne) await click(showOne);
+  models.noopReceipt = flat(panel);
+
+  /* --- a 200 that honours nothing. The server drops refs it does not hold in
+     its catalogue and answers `results: []` with a 200, so the receipt used to
+     read "Showed 0 of 0 model(s)" -- a sentence about nothing that reads as
+     done. */
+  window.eval("clearModelsSelection()");
+  await settle();
+  const threeRows = rows().slice(0, 3);
+  for (const row of threeRows) {
+    await click(row.querySelector("input.models-select"));
+  }
+  BULK_RESULT.action = "show";
+  BULK_RESULT.scope = "selection";
+  BULK_RESULT.provider_id = null;
+  BULK_RESULT.results = [];
+  BULK_RESULT.honored_count = 0;
+  BULK_RESULT.unhonored_count = 0;
+  BULK_RESULT.removed_patterns = [];
+  BULK_RESULT.visibility = { allow: [], deny: [] };
+  const showThree = Array.from(bar.querySelectorAll("button")).find((button) =>
+    flat(button).startsWith("Show 3 selected"),
+  );
+  if (showThree) await click(showThree);
+  models.missReceipt = flat(panel);
+  models.missRowCount = 0;
+
+  /* --- the in-flight state. The pressed button is disabled and carries
+     aria-busy while the write is pending; "Applying..." lives two sections
+     above it and the button used to never change at all. */
+  window.eval("clearModelsSelection()");
+  await settle();
+  if (rows()[0]) await click(rows()[0].querySelector("input.models-select"));
+  BULK_RESULT.results = [
+    {
+      model_ref: rows()[0] ? rows()[0].dataset.ref : "alpha/model-00",
+      visible: false,
+      honored: true,
+      hidden_by: "",
+    },
+  ];
+  BULK_RESULT.honored_count = 1;
+  BULK_RESULT.action = "hide";
+  let releaseBulk;
+  const bulkGate = new Promise((resolve) => {
+    releaseBulk = resolve;
+  });
+  slowRoutes.set("/admin/api/model-admin/visibility/bulk", bulkGate);
+  const hidePending = Array.from(bar.querySelectorAll("button")).find((button) =>
+    flat(button).startsWith("Hide 1 selected"),
+  );
+  if (hidePending) {
+    hidePending.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    models.pendingDisabled = hidePending.disabled;
+    models.pendingAriaBusy = hidePending.getAttribute("aria-busy");
+    models.pendingLabel = flat(hidePending);
+  }
+  releaseBulk();
+  slowRoutes.delete("/admin/api/model-admin/visibility/bulk");
+  await settle();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  models.pendingCleared =
+    Boolean(hidePending) &&
+    hidePending.disabled === false &&
+    hidePending.getAttribute("aria-busy") === null;
+  window.eval("clearModelsSelection()");
+  await settle();
+
+  /* --- the whole-view ceiling. Every view's markup is hashed with the page's
+     own clock normalised away, so "only Models moved" is a comparison rather
+     than a claim. Recorded from the BASE tree (0a01560c) with this same
+     harness; see tests/fixtures/models_visibility_views_8_12_0.json.
+
+     One row is left selected so the bulk bar is up when the digests are taken:
+     its label is the change this release makes to the Models view's resting
+     markup, and without it the comparison would have nothing to move. */
+  window.eval("clearModelsSelection()");
+  await settle();
+  const digestRow = rows().find(
+    (row) => flat(row.querySelector(".models-visible-word")) === "Shown",
+  );
+  if (digestRow) await click(digestRow.querySelector("input.models-select"));
+  const viewDigests = {};
+  const volatilePatterns = [
+    /\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/g,
+    /\b\d+\s*(?:second|minute|hour|day)s?\s+ago\b/g,
+    /\bjust now\b/g,
+    /\b\d{1,2}:\d{2}(?::\d{2})?\b/g,
+  ];
+  const fingerprintView = (node) => {
+    let text = String(node.innerHTML).replace(/\s+/g, " ").trim();
+    for (const pattern of volatilePatterns) text = text.replace(pattern, "<t>");
+    return createHash("sha256").update(text).digest("hex").slice(0, 16);
+  };
+  for (const link of navLinks) {
+    link.click();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const id = link.dataset.view;
+    const node = doc.querySelector(`.admin-view[data-view="${id}"]`);
+    viewDigests[id] = node ? fingerprintView(node) : null;
+  }
+  models.viewDigests = viewDigests;
+  models.viewsRendered = Object.values(viewDigests).filter(Boolean).length;
+  navLinks.find((link) => link.dataset.view === "models").click();
+  await new Promise((resolve) => setTimeout(resolve, 120));
 }
 
 // ----------------------------------------------------- analytics filters

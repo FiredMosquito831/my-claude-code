@@ -1274,11 +1274,42 @@ def test_a_single_row_write_repaints_the_provider_head_too(rendered) -> None:
 def test_the_action_bar_says_how_much_of_the_selection_is_already_done(
     rendered,
 ) -> None:
-    """No tri-state control -- the count instead."""
+    """No tri-state control -- the count instead.
+
+    8.12.1 changed the wording: when every selected row is already in the state
+    the button names, the press cannot change anything, and the label says so
+    rather than printing a count the user has to interpret. The old assertion
+    pinned "Show 1 selected (1 already shown)", which is the page admitting the
+    press is a no-op while styling it exactly like the two buttons that work.
+    """
 
     labels = rendered["models"]["soloBarLabels"]
     assert "Hide 1 selected" in labels
-    assert "Show 1 selected (1 already shown)" in labels
+    assert "Show 1 selected (nothing to change)" in labels
+
+
+def test_a_partly_done_selection_still_says_how_much_is_already_done(
+    rendered,
+) -> None:
+    """The count survives where it is informative: 1 of 1 done is the only case
+    that reads as "nothing to change"."""
+
+    labels = rendered["models"]["noopBarLabels"]
+    assert "Hide 1 selected" in labels
+    assert "Invert 1 selected" in labels
+    assert labels[0] == "Show 1 selected (nothing to change)"
+
+
+def test_the_buttons_accessible_name_says_the_same_thing_as_its_label(
+    rendered,
+) -> None:
+    """A screen reader hears the aria-label, not the text: an accessible name
+    that kept the old promise would leave the lie in place for exactly the
+    users the label was fixed for."""
+
+    aria = rendered["models"]["noopAriaLabels"]
+    assert "Show the 1 selected model(s) (nothing to change)" in aria
+    assert "Hide the 1 selected model(s)" in aria
 
 
 def test_a_selection_covering_a_whole_provider_is_offered_one_glob(
@@ -1434,6 +1465,251 @@ def test_the_provider_header_is_the_pages_one_sticky_element(rendered) -> None:
     """One per rendered provider, where there were none at all."""
 
     assert rendered["models"]["stickyHeads"] == 3
+
+
+# ------------------------------------------------ models visibility (8.12.1) --
+# The user's report: "the mechanisms for hiding and showing models and buttons
+# are really unreliable or unresponsive and sometimes don't work at all if i
+# press show selected it doesn't happen", and "after a few ops it broke to the
+# point where nothing worked anymore show or hide". Two independent bricks, and
+# the suite had 56 `rendered["models"]` assertions and not one of them pressed
+# Show. These are the presses.
+
+
+def test_one_press_over_a_two_hundred_model_provider_writes_once(rendered) -> None:
+    """Q5, binding: the >=200 label flip is gone, and the first press acts.
+
+    The gate armed itself on `button.dataset.confirming`, but
+    renderModelsBulkBar() empties and rebuilds the bar on every selection
+    change, so the armed state died with the node. Measured on the base tree
+    with this same harness: one press over a 250-model provider made ZERO
+    requests and wrote nothing.
+    """
+
+    models = rendered["models"]
+    assert models["bigProviderModels"] == 250
+    assert models["bigBulkCalls"] == 1, "the first press must write"
+    assert models["bigRowsShown"] == 250, "and the rows must change"
+    assert models["bigBody"]["body"] == {
+        "scope": "provider",
+        "action": "show",
+        "provider_id": "delta",
+        "model_refs": [],
+    }
+
+
+def test_a_selection_change_between_two_presses_does_not_eat_either(
+    rendered,
+) -> None:
+    """The confirm trap, in the user's own sequence.
+
+    Press, click a row (which rebuilds the bar), press again. The base tree
+    made zero requests across both presses -- and the second press could not
+    even find its button, because the first had renamed it "<label> <N> --
+    confirm". Two presses now write twice.
+    """
+
+    models = rendered["models"]
+    assert models["trapBulkCalls"] == 2
+    assert models["trapRowsHidden"] == 250
+
+
+def test_a_provider_that_cannot_be_drawn_costs_one_card_not_the_page(
+    rendered,
+) -> None:
+    """A throw inside one provider's build used to leave #modelsTree empty.
+
+    No provider heads, no rows, no Show all / Hide all / Invert, no provider
+    checkbox -- and because modelsState.data was already set, the load guard
+    refused to repaint it for the rest of the document's life. That is
+    "nothing worked anymore, on any op".
+    """
+
+    models = rendered["models"]
+    assert models["failedProviderCard"] == (
+        "alpha could not be drawn: one malformed provider row in the payload"
+    )
+    assert models["providersAfterSkip"] == 3, "the other three still drew"
+    assert models["providerBoxesAfterSkip"] == 3
+    assert models["providerBulkButtonsAfterSkip"] == 9, (
+        "every surviving provider keeps Show all / Hide all / Invert"
+    )
+
+
+def test_a_transient_render_failure_recovers_without_a_document_reload(
+    rendered,
+) -> None:
+    """The empty-tree brick: one throw, and every control was gone for good.
+
+    A throw outside the provider loop still empties the tree -- renderModelsTree
+    clears it first. What changed is that the payload is not kept as "loaded"
+    over a tree that never drew, so the next visit retries instead of being
+    refused at the guard.
+    """
+
+    models = rendered["models"]
+    assert models["emptyTreeAfterThrow"] == 0
+    assert models["emptyTreeStatus"] == (
+        "one transient failure while drawing the summary"
+    )
+    assert models["forcedLoadReturned"] is False, (
+        "a load whose render failed must not report success"
+    )
+    # The next visit, with no reload and no force, repaints.
+    assert models["recoveryPageCalls"] == 2
+    assert models["recoveryReturned"] is True
+    assert models["recoveryProviders"] == 4
+    assert models["recoveryStatus"] == ""
+
+
+def test_a_show_over_rows_that_are_already_shown_says_nothing_changed(
+    rendered,
+) -> None:
+    """The anchor symptom: "if i press show selected it doesn't happen".
+
+    It did happen -- there was nothing to do -- and the receipt said
+    "Showed 1 of 1 model(s)", which reads as a write that moved nothing. The
+    sentence now leads with what actually changed.
+    """
+
+    receipt = rendered["models"]["noopReceipt"]
+    assert "All 1 model(s) were already shown — nothing changed." in receipt
+    # The existing sentence survives byte for byte: extend, never narrow.
+    assert "Showed 1 of 1 model(s)." in receipt
+    assert "Routing is unaffected either way." in receipt
+
+
+def test_a_two_hundred_that_honours_nothing_counts_the_misses(rendered) -> None:
+    """The server drops refs it does not hold and answers 200 with `results: []`.
+
+    "Showed 0 of 0 model(s)" is a sentence about nothing at all, and it read as
+    done. Three refs were sent and none was answered for.
+    """
+
+    receipt = rendered["models"]["missReceipt"]
+    assert (
+        "Nothing was written: the server did not recognise any of the 3 models "
+        "you selected." in receipt
+    )
+    assert "Showed 0 of 0" not in receipt
+    assert "Routing is unaffected either way." in receipt
+
+
+def test_the_receipt_is_brought_into_view_where_the_press_was(rendered) -> None:
+    """It sits two sections above the button, and the bar hides on success.
+
+    Asserted by the scroll the page asks for, not by the node existing: jsdom
+    has no layout engine, so "the page asked the browser to bring it into view"
+    is the only claim a DOM can make about position. The real position is
+    checked in a browser.
+    """
+
+    calls = rendered["models"]["receiptScroll"]
+    assert calls, "the receipt was never scrolled into view"
+    assert calls[0]["id"] == "modelsBulkResult"
+    assert calls[0]["block"] == "nearest"
+
+
+def test_the_pressed_button_is_disabled_and_busy_while_the_write_is_pending(
+    rendered,
+) -> None:
+    """ "Applying..." went to a status two sections above the button, and the
+    button never changed at all -- so the user pressed again, which is how two
+    writes end up in flight at once."""
+
+    models = rendered["models"]
+    assert models["pendingDisabled"] is True
+    assert models["pendingAriaBusy"] == "true"
+    assert models["pendingLabel"] == "Hide 1 selected", (
+        "the label is not what carries the pending state"
+    )
+    assert models["pendingCleared"] is True, "and it is restored afterwards"
+
+
+#: The views whose bytes this release changes on purpose, and why.
+MOVED_VIEWS = {
+    "models": "the bulk bar's no-op label and the receipt's new sentences",
+}
+
+#: The base-written per-view digests. Recorded by running THIS harness against
+#: the base tree's `admin_static` (0a01560c, v8.12.0) with nothing from this PR
+#: applied -- the same code on both sides, so a difference is the change.
+VIEWS_BASELINE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "models_visibility_views_8_12_0.json"
+)
+
+#: Views whose markup is not reproducible off this machine, measured -- not
+#: assumed. A base-vs-branch pair of runs here reports both byte-identical; the
+#: same comparison on the GitHub runner (run 41960676630, 2026-11-05) reports
+#: both moved. So the difference is the machine, not this change: they carry a
+#: live figure the normaliser cannot see (the same class of instability the
+#: cards-overlay baseline records as its PRE_EXISTING_MOVES entry for
+#: `requests`).
+#:
+#: They stay in the anti-vacuity check -- they are still required to render --
+#: and `test_the_volatile_view_set_is_exactly_the_measured_one` pins the set so
+#: it cannot quietly grow into "every view is exempt".
+VOLATILE_VIEWS = {
+    "proxying": "a live figure that differs between this machine and the runner",
+    "requests": "a live figure that differs between this machine and the runner",
+}
+
+
+def test_no_view_outside_the_intended_ones_moved(rendered) -> None:
+    """A CEILING, not an equality: every other view is compared, and only the
+    declared one may differ.
+
+    An equality (`moved == MOVED_VIEWS`) requires the declared view to KEEP
+    moving, so a view that legitimately converges back fails the test -- the
+    shape that cost this project two releases (#356, the 8.10.0 lesson).
+    """
+
+    baseline = json.loads(VIEWS_BASELINE.read_text(encoding="utf-8"))
+    assert "BASE tree 0a01560c" in baseline["written_by"]
+
+    digests = rendered["models"]["viewDigests"]
+    moved = {
+        view
+        for view, digest in baseline["views"].items()
+        if view not in VOLATILE_VIEWS and digests.get(view) != digest
+    }
+    unexpected = sorted(moved - set(MOVED_VIEWS))
+    assert not unexpected, (
+        f"views moved that this PR does not touch: {unexpected}. Either the "
+        "change reached a page it should not, or the change is intended and "
+        f"MOVED_VIEWS needs it: {sorted(moved)}"
+    )
+    # Anti-vacuity 1: the declared view is in the baseline, so the comparison
+    # above is comparing something rather than silently agreeing with itself.
+    assert set(MOVED_VIEWS) <= set(baseline["views"])
+    # Anti-vacuity 2: something moved, or the harness captured nothing useful.
+    assert moved, "nothing moved at all, which means the change did not land"
+
+
+def test_the_volatile_view_set_is_exactly_the_measured_one() -> None:
+    """The exemption must stay a measurement, not a loophole.
+
+    Two views, and two views because that is what the runner was measured to
+    move while this machine moved neither. Widening it needs a new measurement
+    recorded above -- not an edit here to make a red test go green.
+    """
+
+    assert set(VOLATILE_VIEWS) == {"proxying", "requests"}
+
+
+def test_the_view_comparison_is_not_vacuous(rendered) -> None:
+    """Every view the baseline knows is still rendered by this run."""
+
+    baseline = json.loads(VIEWS_BASELINE.read_text(encoding="utf-8"))
+    digests = rendered["models"]["viewDigests"]
+
+    missing = [view for view in baseline["views"] if not digests.get(view)]
+    assert missing == []
+    assert rendered["models"]["viewsRendered"] >= 16
+    # The excluded views are still rendered and still compared for existence.
+    assert set(VOLATILE_VIEWS) <= set(digests)
 
 
 # --------------------------------------------------------- the retry ladder --

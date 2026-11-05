@@ -1,0 +1,23 @@
+{
+  "written_by": "BASE tree 0a01560c (v8.12.0), tests/api/admin_jsdom_harness.mjs, nothing from this PR applied",
+  "harness": "admin_jsdom_harness.mjs",
+  "note": "One sha256 per view of the view node innerHTML, whitespace collapsed and the page clock normalised away. Recorded by running this branch's harness against the base tree's admin_static, so the comparison is the same code on both sides.",
+  "views": {
+    "get_started": "4d930e5dfdd046cf",
+    "providers": "45a46fe9a974306d",
+    "proxying": "8d7c6d0d43ef0ea4",
+    "marketplaces": "890238af8383889b",
+    "claude": "7674d51aae14c950",
+    "coding_agents": "fb23045001ed9c8c",
+    "model_config": "15b61ebfeb2f5a52",
+    "models": "16db4233c4bae9f1",
+    "messaging": "de6133f1edf1a3af",
+    "usage": "1ff6e635a9169af0",
+    "requests": "129eeed823204d79",
+    "optimizer": "9b82c23a17cb916e",
+    "web_search": "ac6e86eba1df5ce4",
+    "limits": "41aef578c0f1661b",
+    "guide": "e2d2b583ffaebbd0",
+    "docs": "9ea91e62ddba230a"
+  }
+}
