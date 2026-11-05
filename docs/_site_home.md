@@ -97,7 +97,7 @@ provenance, and a full request log — in front of every provider below.
 
     ---
 
-    every one of them, by API key or by OAuth sign-in. Add one that is not on the list without
+    Every one of them, by API key or by OAuth sign-in. Add one that is not on the list without
     waiting for a release.
 
     [OAuth providers →](OAUTH-PROVIDERS.md)
