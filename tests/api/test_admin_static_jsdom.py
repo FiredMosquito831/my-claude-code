@@ -1819,6 +1819,25 @@ def test_the_volatile_view_set_is_exactly_the_measured_one() -> None:
     assert set(VOLATILE_VIEWS) == {"proxying", "requests"}
 
 
+def test_no_view_digest_carries_a_clock_the_normaliser_missed(rendered) -> None:
+    """The masks must leave no wall-clock text behind in ANY view.
+
+    This is the test that would have caught the 2026-11-05 failure. The clock
+    mask stopped at the seconds, so `Updated 5:28:14 PM` normalised to
+    `Updated <t> PM` and `web_search`'s digest depended on the half of the day
+    the run happened in: the Ubuntu `jsdom (dashboard)` job ran this file at
+    11:43-11:56 UTC and passed, the Windows full suite ran it at 12:24-12:26
+    UTC (run 42022290956) and failed on `web_search` alone, and a clean base
+    worktree at 59fbe1d1 failed here every afternoon.
+
+    A digest that moves with the wall clock is not a baseline, and exempting
+    the view would have hidden the guard instead of fixing it -- so the harness
+    reports what survived the masks and this asserts the list is empty.
+    """
+
+    assert rendered["models"]["residualClockTokens"] == []
+
+
 def test_the_view_comparison_is_not_vacuous(rendered) -> None:
     """Every view the baseline knows is still rendered by this run."""
 

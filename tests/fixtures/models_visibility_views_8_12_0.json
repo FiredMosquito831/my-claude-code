@@ -1,7 +1,7 @@
 {
   "written_by": "BASE tree 0a01560c (v8.12.0), tests/api/admin_jsdom_harness.mjs, nothing from this PR applied",
   "harness": "admin_jsdom_harness.mjs",
-  "note": "One sha256 per view of the view node innerHTML, whitespace collapsed and the page clock normalised away. Recorded by running this branch's harness against the base tree's admin_static, so the comparison is the same code on both sides.",
+  "note": "One sha256 per view of the view node innerHTML, whitespace collapsed and the page clock normalised away. Recorded by running this branch's harness against the base tree's admin_static, so the comparison is the same code on both sides. The `web_search` cell was re-recorded from the SAME base tree (0a01560c) on 2026-11-05, with the harness's clock mask widened to swallow the AM/PM meridiem: `Updated 5:28:14 PM` used to normalise to `Updated <t> PM`, so this one cell depended on the half of the day the run happened in. Every other cell was re-measured in the same run and is byte-identical. `requests` keeps its old value because it was never reproducible -- it carries live figures -- which is why it is in VOLATILE_VIEWS.",
   "views": {
     "get_started": "4d930e5dfdd046cf",
     "providers": "45a46fe9a974306d",
@@ -15,7 +15,7 @@
     "usage": "1ff6e635a9169af0",
     "requests": "129eeed823204d79",
     "optimizer": "9b82c23a17cb916e",
-    "web_search": "ac6e86eba1df5ce4",
+    "web_search": "c50c814f5fcd498c",
     "limits": "41aef578c0f1661b",
     "guide": "e2d2b583ffaebbd0",
     "docs": "9ea91e62ddba230a"
