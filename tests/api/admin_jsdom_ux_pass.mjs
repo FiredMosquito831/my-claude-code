@@ -619,6 +619,69 @@ export function prepareUxPassScenario({ window, ROUTES }) {
     el("reqClearFilters").click();
     await wait(300);
 
+    // ---- ANALYTICS-OVERFLOW (8.14.2) ------------------------------------
+    /* A figure too wide for its tile shrinks instead of spilling out of it.
+       jsdom has no layout -- `scrollWidth` is always 0 here -- so what is
+       proved in this file is structural: which values carry a digit class,
+       that a sentence never does, that a tile which fits carries no inline
+       size, and that the cost tile's small print keeps every number while the
+       two words it drops survive in the title. The fit itself is measured in
+       a browser, in PROGRESS.md's table. */
+    const band = el("reqStatsCards");
+    const costRoute = ROUTES["/admin/api/requests/cost"];
+    ROUTES["/admin/api/requests/cost"] = {
+      ...costRoute,
+      totals: {
+        reported_usd: 4050.2926,
+        estimated_usd: 1234.5678,
+        total_usd: 5284.8604,
+        priced: 465391,
+        requests: 683928,
+      },
+    };
+    await navTo("providers");
+    await navTo("requests");
+    await waitFor(
+      () =>
+        el("reqCostTile") &&
+        flat(el("reqCostTile").querySelector("strong")) !== "…",
+      4000,
+    );
+    const costTile = el("reqCostTile");
+    out.analyticsOverflow = {
+      costNote: costTile
+        ? {
+            value: flat(costTile.querySelector("strong")),
+            text: flat(costTile.querySelector("small")),
+            title: costTile.querySelector("small").title,
+            inlineSize: costTile.querySelector("strong").style.fontSize || null,
+          }
+        : null,
+      tiles: [],
+    };
+    window.eval(
+      `renderStatCards(document.getElementById("reqStatsCards"), ${JSON.stringify([
+        ["Count", "9,999,999"],
+        ["Ten billion", "10,000,000,000"],
+        ["Hundred billion", "100,000,000,000"],
+        ["Trillion", "1,234,567,890,123"],
+        ["Long", "12,345,678,901,234,567"],
+        ["Sentence", "not measured yet"],
+        ["Unit", "4,050.2926 ms"],
+      ])})`,
+    );
+    out.analyticsOverflow.tiles = Array.from(
+      band.querySelectorAll(".requests-card"),
+    ).map((card) => {
+      const strong = card.querySelector("strong");
+      return {
+        value: flat(strong),
+        digits: strong.dataset.digits ?? null,
+        note: strong.classList.contains("stat-value-note"),
+        inlineSize: strong.style.fontSize || null,
+      };
+    });
+
     return out;
   }
 
