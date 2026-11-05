@@ -21,8 +21,9 @@ site_name: My Claude Code
 site_description: >-
   My Claude Code (MCC) is a local multi-provider LLM proxy, model router and
   control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI
-  coding agents — 57 providers, fallback routing, credential health, a native
-  web-search tool proxy, and analytics with cost provenance.
+  coding agents — every provider behind one address, fallback routing,
+  credential health, a native web-search tool proxy, and analytics with cost
+  provenance.
 site_author: FiredMosquito831
 
 # The canonical origin every generated <link rel="canonical"> and every

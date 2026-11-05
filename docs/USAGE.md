@@ -74,7 +74,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 
 ## 1. How it works
 
-My Claude Code is a **local router that speaks four protocols at once**: Anthropic's Messages API, OpenAI's Chat Completions and Responses APIs, and Google's Gemini API. Whichever one your coding agent already speaks, it believes it is talking to that vendor. The proxy receives the request, forwards it to whichever provider you configured — NVIDIA NIM, OpenRouter, a local Ollama, 57 of them — and translates the response back into the wire format the agent asked in.
+My Claude Code is a **local router that speaks four protocols at once**: Anthropic's Messages API, OpenAI's Chat Completions and Responses APIs, and Google's Gemini API. Whichever one your coding agent already speaks, it believes it is talking to that vendor. The proxy receives the request, forwards it to whichever provider you configured — NVIDIA NIM, OpenRouter, a local Ollama, every provider in the README's table — and translates the response back into the wire format the agent asked in.
 
 <div align="center">
   <img src="../assets/how-it-works.svg" alt="Request flow from agent through the proxy to a provider" width="760">
@@ -4583,6 +4583,17 @@ Providers expose reasoning differently. MCC resolves your intent once at the bou
 Two independent facts decide what actually goes on the wire: what the **model** supports, and which reasoning fields the **host** in front of it parses. A control is sent only when both agree; otherwise the nearest thing both can express goes instead, and the request log names the field it went through. A model with only an on/off switch behind a gateway whose only word for "reason" is one of its own effort rungs gets the level you asked for, clamped to that gateway's scale — the gateway's *own* default rung is never put in its place, so a request for `low` never leaves as `max`. Where the host has no reasoning field at all, nothing is sent and the model's own default applies; the request log calls that "no reasoning instruction sent (model default applies)", and it is a correct outcome, not a fault. Where MCC knows neither fact the request is unchanged.
 
 Every OpenAI-compatible host declares the standard `reasoning_effort` field unless it was probed speaking something else; a host that refuses it answers with a 400, is retried once without it, and is not asked again for that model. Since 6.33.0 that is true of **every** provider, whichever protocol it speaks: an Anthropic Messages host that refuses a `thinking` object and a Responses host that refuses a `reasoning` block are learned from the same way, by the same matcher. Your own model-parameter override is applied **after** every postprocessor, so setting `reasoning_effort` explicitly — or to null — on a model always wins over the default dialect.
+
+**`ADAPTIVE` is a choice on every door, not a rung (8.13.0).** It is not an effort level and not a budget: it asks the host to *think as much as it decides it needs*, and that sentence is defined once and read by every door. What goes out depends on what the host declares it can parse, never on a model name or a provider id:
+
+| What the host declares | What MCC sends |
+| --- | --- |
+| An adaptive channel of its own (Anthropic Messages) | `thinking: {"type": "adaptive"}` — the instruction leaves verbatim |
+| An on/off field that is *not* its effort field | That field, switched on — the same statement in the host's own words, nothing substituted |
+| Only an effort vocabulary | The **highest rung it publishes** — the least restrictive thing it accepts, and a substitution the request detail records as one |
+| No reasoning field at all | Nothing; the request detail says *no reasoning instruction sent (model default applies)* |
+
+The top rung is read from the host rather than assumed, because it is not `max` everywhere: the OpenAI standard map spells `max` as `high`, and a gateway with its own words spells every rung differently. A model with no published vocabulary is sent nothing rather than an invented level. `off` emits nothing on every door, and every request that does not ask for `adaptive` is byte for byte what it was before 8.13.0.
 
 The Models page shows the two side by side: what the model can do, with the resolution tier each field came from, and what the host parses, labelled **default OpenAI dialect**, **declared by this provider**, or **learned from the host's own rejection** — never a vote.
 
