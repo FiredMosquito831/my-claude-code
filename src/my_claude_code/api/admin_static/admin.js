@@ -465,6 +465,38 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+/** `api()` with a bound, for the one request a page cannot leave hanging.
+ *
+ * `api()` has no timeout on purpose -- a slow provider read is not an error --
+ * but a page load that never settles leaves its own `loading` flag set, and
+ * every later load, including a forced one, is then dropped at the guard. One
+ * held GET reads as "nothing happened" for the rest of the document's life.
+ * Same request otherwise, `no-store` included. */
+async function apiWithTimeout(path, timeoutMs, options = {}) {
+  const controller =
+    typeof AbortController === "function" && timeoutMs > 0
+      ? new AbortController()
+      : null;
+  const timer = controller
+    ? window.setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  try {
+    return await api(path, {
+      ...options,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+  } catch (error) {
+    if (controller && controller.signal.aborted) {
+      throw new Error(
+        `the server did not answer within ${Math.round(timeoutMs / 1000)} s`,
+      );
+    }
+    throw error;
+  } finally {
+    if (timer != null) window.clearTimeout(timer);
+  }
+}
+
 /* ------------------------------------------------------- dashboard polls --
    What this page asks the server for on its own, without a click. Measured on
    2026-09-28 with the Requests view open: 153 requests a minute, 89 % of them
@@ -44404,9 +44436,28 @@ let modelsDrag = null;
 // a page of rows is a scroll or two, not a wall.
 const MODELS_PAGE_SIZE = 40;
 
+// The page payload is 3.4 MB and 7.1 s at a real install's size (1,200 models,
+// 996 patterns), so this bound is generous by an order of magnitude. It exists
+// to turn "forever" into "retry", not to time the server out.
+const MODELS_LOAD_TIMEOUT_MS = 60000;
+
+/* A tree with no children means the last render did not finish: renderModelsTree
+   empties #modelsTree first and then builds, and every branch that finds
+   nothing to draw appends a sentence, so an empty tree is never a legitimate
+   end state. Refusing to repaint one is what made a single transient throw cost
+   every control on the page -- no rows, no provider boxes, no Show/Hide/Invert
+   -- until the document was reloaded. */
+function modelsTreeRendered() {
+  const tree = byId("modelsTree");
+  return Boolean(tree && tree.children.length);
+}
+
+/* Resolves TRUE only when a payload arrived AND the page drew it. Callers that
+   announce a result -- Undo's "Restored the pattern lists." -- must not say so
+   over a reload that was declined or failed. */
 async function loadModelsView(force = false) {
-  if (modelsState.loading) return;
-  if (modelsState.data && !force) return;
+  if (modelsState.loading) return false;
+  if (modelsState.data && !force && modelsTreeRendered()) return false;
   modelsState.loading = true;
   setModelsStatus("Loading models...");
   try {
@@ -44416,18 +44467,44 @@ async function loadModelsView(force = false) {
     // off exactly that kind of critical path. Started at the same moment, so
     // it costs nothing in wall clock, and a failure leaves the page intact
     // with no chips rather than no page.
+    //
+    // All three are bounded: the two side reads used to be unbounded too, so
+    // one held latency scan held the whole Promise.all and the page with it.
     const [data, latency, inLoop] = await Promise.all([
-      api("/admin/api/model-admin"),
-      api("/admin/api/requests/latency").catch(() => null),
-      api("/admin/api/requests/in-loop").catch(() => null),
+      apiWithTimeout("/admin/api/model-admin", MODELS_LOAD_TIMEOUT_MS),
+      apiWithTimeout("/admin/api/requests/latency", MODELS_LOAD_TIMEOUT_MS).catch(
+        () => null,
+      ),
+      apiWithTimeout("/admin/api/requests/in-loop", MODELS_LOAD_TIMEOUT_MS).catch(
+        () => null,
+      ),
     ]);
-    modelsState.data = data;
     modelsState.latency = indexLatencyByModel(latency);
     modelsState.inLoop = indexInLoopByModel(inLoop);
-    renderModelsPage();
+    // Stored only for the render that reads it, and put back if that render
+    // throws. renderModelsTree() empties #modelsTree before it builds
+    // anything, so a throw used to leave the tree blank while `data` was
+    // already set -- and the guard above then refused to repaint it for the
+    // rest of the document's life. One transient failure cost every control on
+    // the page: no provider heads, no rows, no Show/Hide/Invert, no Reload
+    // that helped. Restoring the previous value makes the next visit retry
+    // instead of being refused.
+    const previous = modelsState.data;
+    modelsState.data = data;
+    try {
+      renderModelsPage();
+    } catch (error) {
+      modelsState.data = previous;
+      setModelsStatus(error.message);
+      return false;
+    }
     setModelsStatus("");
+    return true;
   } catch (error) {
+    // The fetch itself failed: keep whatever the page already holds, so a
+    // failed Reload does not break the tree that is on screen.
     setModelsStatus(error.message);
+    return false;
   } finally {
     modelsState.loading = false;
   }
@@ -45431,7 +45508,25 @@ function renderModelsTree() {
   // page.
   const auto = Boolean(modelsState.filter) && matching.length === 1;
   matching.forEach(([provider, models]) => {
-    tree.appendChild(buildModelsProviderNode(provider, models, auto));
+    try {
+      tree.appendChild(buildModelsProviderNode(provider, models, auto));
+    } catch (error) {
+      // One provider the page cannot draw must not cost the other nine their
+      // controls. renderModelsTree() empties the tree before it builds
+      // anything, so a throw here used to leave nothing to click at all --
+      // no rows, no provider checkboxes, no Show all / Hide all / Invert, and
+      // the bulk bar could not even appear. Name the provider that failed and
+      // keep the rest: the same rule the override editor already follows for
+      // a node renderModelsPage() had discarded.
+      const failed = document.createElement("p");
+      failed.className = "models-status";
+      // A data attribute rather than a class: the asset-wiring contract
+      // requires a CSS rule for every class admin.js emits, and this card is
+      // deliberately styled like the tree's other status lines.
+      failed.dataset.failedProvider = provider.provider_id;
+      failed.textContent = `${provider.provider_id} could not be drawn: ${error.message}`;
+      tree.appendChild(failed);
+    }
   });
 }
 
@@ -48967,9 +49062,20 @@ function renderModelsBulkBar() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "secondary-button models-bulk-button";
-    const suffix = done ? ` (${done} ${phrase})` : "";
+    // What the press will actually change, not what the selection contains.
+    // "Show 5 selected (5 already shown)" is the page admitting the press
+    // cannot do anything, styled exactly like the two buttons that work.
+    const suffix =
+      done && done === count && action !== "invert"
+        ? " (nothing to change)"
+        : done
+          ? ` (${done} ${phrase})`
+          : "";
     button.textContent = `${label} ${count} selected${suffix}`;
-    button.setAttribute("aria-label", `${label} the ${count} selected model(s)`);
+    button.setAttribute(
+      "aria-label",
+      `${label} the ${count} selected model(s)${suffix}`,
+    );
     button.addEventListener("click", () => {
       runModelsBulk({
         scope: "selection",
@@ -49022,7 +49128,7 @@ function renderModelsBulkBar() {
    names which of your own globs overruled which refs, and carries the only
    Undo, must not vanish on a timer. One atomic live region, one whole
    sentence, no bare numbers. */
-function renderModelsBulkResult(result) {
+function renderModelsBulkResult(result, context = {}) {
   const target = byId("modelsBulkResult");
   if (!target) return;
   target.textContent = "";
@@ -49035,9 +49141,50 @@ function renderModelsBulkResult(result) {
       : result.action === "show"
         ? "Showed"
         : "Inverted";
+  // How many models this gesture NAMED, and how many of them the server
+  // answered for. It drops refs it does not hold in its catalogue and still
+  // answers 200 with `results: []`, so "Showed 0 of 0 model(s)" was a sentence
+  // about nothing at all and read as "done".
+  const sent = Number(context.sent) || 0;
+  const missed = Math.max(0, sent - rows.length);
+  const before = context.before;
+  const changed =
+    before && typeof before.get === "function"
+      ? rows.filter(
+          (row) =>
+            before.has(row.model_ref) &&
+            before.get(row.model_ref) !== row.visible,
+        ).length
+      : null;
+
+  // What the press actually did, before what it was asked to do. "Show 5
+  // selected" over five rows that were already shown used to report a
+  // successful write and move nothing on screen -- the anchor symptom.
+  if (changed === 0 && rows.length && result.action !== "invert") {
+    const noop = document.createElement("p");
+    const stateWord = result.action === "show" ? "shown" : "hidden";
+    noop.textContent = `All ${rows.length} model(s) were already ${stateWord} — nothing changed.`;
+    target.appendChild(noop);
+  }
+
   const lead = document.createElement("p");
   const where = result.provider_id ? ` ${result.provider_id}` : "";
-  let text = `${verb} ${result.honored_count} of ${rows.length}${where} model(s).`;
+  let text;
+  if (!rows.length && sent > 0) {
+    text =
+      sent === 1
+        ? "Nothing was written: the server did not recognise the model you selected."
+        : `Nothing was written: the server did not recognise any of the ${sent} models you selected.`;
+  } else {
+    text = `${verb} ${result.honored_count} of ${rows.length}${where} model(s).`;
+  }
+  if (missed > 0 && rows.length) {
+    text += ` ${missed} of the ${sent} model(s) you selected ${
+      missed === 1 ? "was" : "were"
+    } not recognised by the server, so nothing was written for ${
+      missed === 1 ? "it" : "them"
+    }.`;
+  }
   if (result.wrote_glob) {
     text += ` Written as one pattern, ${result.wrote_glob}.`;
   } else if (rows.length && result.action !== "show") {
@@ -49104,6 +49251,14 @@ function renderModelsBulkResult(result) {
   }
 
   appendModelsPanelActions(target);
+  // The receipt is written two sections above the button that produced it --
+  // 48 DOM elements on the smallest page, thousands of pixels on a real one --
+  // and the bar that was pressed hides itself on success, so without this the
+  // only pixels that move are the bar disappearing. `nearest` scrolls only
+  // when the panel is not already in view.
+  if (typeof target.scrollIntoView === "function") {
+    target.scrollIntoView({ block: "nearest" });
+  }
 }
 
 /* One sentence carrying the same Undo and Dismiss the bulk panel carries, for
@@ -49139,7 +49294,18 @@ function appendModelsPanelActions(target) {
         }),
       })
         .then(() => loadModelsView(true))
-        .then(() => {
+        .then((loaded) => {
+          if (!loaded) {
+            // The reload was declined (a load was already in flight) or it
+            // failed. "Restored the pattern lists." over a page that never
+            // repainted is the sentence that made a real write look like a
+            // dead button, so say what is actually true.
+            showMessage(
+              "Restored the pattern lists. The page could not be reloaded — press Reload to see it.",
+              "warn",
+            );
+            return;
+          }
           target.textContent = "";
           target.hidden = true;
           showMessage("Restored the pattern lists.", "ok");
@@ -49241,22 +49407,24 @@ async function runModelsBulk(request) {
     return;
   }
   const button = request.button;
-  // No modal: visibility is display-only and reversible, and a dialog on every
-  // "Hide all" is precisely the friction being removed. One inline confirm for
-  // the rare very large action.
-  if (button && affected >= 200 && button.dataset.confirming !== "1") {
-    const label = button.textContent;
-    button.dataset.confirming = "1";
-    button.textContent = `${label} ${affected} -- confirm`;
-    window.setTimeout(() => {
-      if (button.dataset.confirming !== "1") return;
-      button.dataset.confirming = "";
-      button.textContent = label;
-    }, 5000);
-    return;
-  }
-  if (button) button.dataset.confirming = "";
+  // Every press does the write it names.
+  //
+  // What used to live here was a "confirmation" that armed itself on
+  // `button.dataset.confirming` -- but renderModelsBulkBar() empties and
+  // rebuilds this bar on every selection change, so the armed state died with
+  // the node: measured, three presses and zero writes. It also asked nothing
+  // (no question, no cancel, no aria-live, aria-label never updated) and ate
+  // the first press on any provider over 200 models -- which is exactly the
+  // control a user reaches for after hiding everything, because a Hide is then
+  // a no-op and the only forward gesture is Show. Visibility is display-only,
+  // reversible and already carries Undo, so there is no guard here to keep and
+  // nothing to relocate: nothing that must survive a render may live on a node.
+  const before = modelsVisibilityBefore(request, refs);
   setModelsVisibilityStatus("Applying...");
+  // The pressed button is where the eye is; "Applying..." is two sections
+  // above it. Without this the page gives no local signal at all, and pressing
+  // again is how two writes end up in flight at once.
+  modelsBulkPending(button, true);
   try {
     const result = await api("/admin/api/model-admin/visibility/bulk", {
       method: "POST",
@@ -49276,11 +49444,46 @@ async function runModelsBulk(request) {
     modelsState.undo = result.previous || null;
     applyModelsBulkResult(result);
     clearModelsSelection();
-    renderModelsBulkResult(result);
+    // `refs.length` is the number of models this gesture NAMED. A whole-provider
+    // gesture names none -- the server resolves the provider itself -- so it
+    // cannot count what it did not send.
+    renderModelsBulkResult(result, { sent: refs.length, before });
   } catch (error) {
     modelsState.undo = null;
     setModelsVisibilityStatus(error.message, "error");
+  } finally {
+    modelsBulkPending(button, false);
   }
+}
+
+/* The pressed button says it is working. `disabled` is what stops a second
+   press; `aria-busy` is what tells a screen reader the same thing. */
+function modelsBulkPending(button, pending) {
+  if (!button) return;
+  button.disabled = Boolean(pending);
+  if (pending) button.setAttribute("aria-busy", "true");
+  else button.removeAttribute("aria-busy");
+}
+
+/* The visibility of every model this gesture will touch, read BEFORE the
+   write. The server's answer says what each ref is now, never what it was, and
+   "Showed 5 of 5 model(s)" over five rows that were already shown is the
+   sentence that made a working write look like a dead button. */
+function modelsVisibilityBefore(request, refs) {
+  const wanted = new Set(refs);
+  const index = new Map();
+  ((modelsState.data && modelsState.data.providers) || []).forEach((provider) => {
+    if (request.scope === "provider" && provider.provider_id !== request.providerId) {
+      return;
+    }
+    (provider.models || []).forEach((model) => {
+      // A whole-provider gesture names no refs; a narrowed one names the ones
+      // it can see, and only those are acted on.
+      if (wanted.size && !wanted.has(model.model_ref)) return;
+      index.set(model.model_ref, model.visible);
+    });
+  });
+  return index;
 }
 
 /* Patch the payload the page already holds instead of re-fetching it: one
