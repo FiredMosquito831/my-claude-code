@@ -142,14 +142,39 @@ def _create_commandcode(
     return CommandCodeProvider(config, rate_limiter=rate_limiter)
 
 
+def _mistral_provider(
+    config: ProviderConfig,
+    rate_limiter: ProviderRateLimiter,
+    *,
+    provider_id: str,
+) -> BaseProvider:
+    """One construction body for both Mistral credentials.
+
+    ``ProviderFactory`` is ``(config, settings, rate_limiter)`` and carries no
+    provider id, so the smallest honest way to give the same class two ids is
+    two two-line owners over one helper. Widening the factory signature would
+    touch every entry in the map for no gain, and copying the body would be
+    the same code twice.
+    """
+    from my_claude_code.providers.mistral import MistralProvider
+
+    return MistralProvider(config, rate_limiter=rate_limiter, provider_id=provider_id)
+
+
 def _create_mistral(
     config: ProviderConfig,
     _settings: Settings,
     rate_limiter: ProviderRateLimiter,
 ) -> BaseProvider:
-    from my_claude_code.providers.mistral import MistralProvider
+    return _mistral_provider(config, rate_limiter, provider_id="mistral")
 
-    return MistralProvider(config, rate_limiter=rate_limiter)
+
+def _create_mistral_vibe(
+    config: ProviderConfig,
+    _settings: Settings,
+    rate_limiter: ProviderRateLimiter,
+) -> BaseProvider:
+    return _mistral_provider(config, rate_limiter, provider_id="mistral_vibe")
 
 
 def _create_deepseek(
@@ -267,6 +292,7 @@ _SPECIAL_PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
     "anthropic_oauth": _create_anthropic_oauth,
     "commandcode": _create_commandcode,
     "mistral": _create_mistral,
+    "mistral_vibe": _create_mistral_vibe,
     "deepseek": _create_deepseek,
     "lmstudio": _create_lmstudio,
     "cloudflare": _create_cloudflare,

@@ -167,3 +167,36 @@ def test_kimi_coding_is_declared_and_deliberately_not_read() -> None:
     assert row.supported is True
     assert row.endpoint is None
     assert row.readable is False
+
+
+def test_mistral_vibe_is_credential_bound_and_never_read() -> None:
+    """8.12.0: the Vibe allowance is behind Mistral's own dashboard session.
+
+    The percentage exists, but only on an internal tRPC route that needs an
+    authenticated browser session and does not accept the plan key. MCC's
+    standing rule is that it never asks for a cookie, so this row is the
+    seventh state -- a route that exists and needs a credential this machine
+    does not hold -- and it must never become ``readable`` by accident.
+    """
+
+    row = source_for("mistral_vibe")
+    assert row.needs_credential == "a browser session cookie"
+    assert row.credential_bound is True
+    assert row.readable is False
+    assert row.supported is False
+    assert row.endpoint is None
+
+
+def test_mistral_studio_publishes_no_usage_endpoint_mcc_can_read() -> None:
+    """8.12.0: no documented Bearer-authenticated route returns the allowance.
+
+    Named rather than left absent so the answer is checkable in one place, the
+    way ``novita`` and ``cline`` are named.
+    """
+
+    row = source_for("mistral")
+    assert row.mechanisms == ()
+    assert row.supported is False
+    assert row.readable is False
+    assert row.credential_bound is False
+    assert row.source == "unsupported"

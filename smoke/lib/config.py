@@ -275,6 +275,14 @@ class SmokeConfig:
             return bool(self.settings.open_router_api_key.strip())
         if provider == "mistral":
             return bool(self.settings.mistral_api_key.strip())
+        if provider == "mistral_vibe":
+            # Same rule as every other provider: the smoke runs only when the
+            # operator has the credential. There is no default model id here on
+            # purpose -- no id for this product is published anywhere MCC can
+            # cite, so ``_provider_smoke_model`` falls back to its own
+            # ``mistral_vibe/smoke-default`` placeholder and the run is skipped
+            # without a key.
+            return bool(self.settings.mistral_vibe_api_key.strip())
         if provider == "mistral_codestral":
             return bool(self.settings.codestral_api_key.strip())
         if provider == "deepseek":

@@ -509,6 +509,9 @@ class Settings(BaseSettings):
     # ==================== Mistral La Plateforme ====================
     mistral_api_key: str = Field(default="", validation_alias="MISTRAL_API_KEY")
 
+    # ==================== Mistral Vibe (subscription) ====================
+    mistral_vibe_api_key: str = Field(default="", validation_alias="MISTRAL_VIBE_KEY")
+
     # ==================== Mistral Codestral (codestral.mistral.ai) ====================
     codestral_api_key: str = Field(default="", validation_alias="CODESTRAL_API_KEY")
 
@@ -1699,6 +1702,7 @@ class Settings(BaseSettings):
     nvidia_nim_proxy: str = Field(default="", validation_alias="NVIDIA_NIM_PROXY")
     open_router_proxy: str = Field(default="", validation_alias="OPENROUTER_PROXY")
     mistral_proxy: str = Field(default="", validation_alias="MISTRAL_PROXY")
+    mistral_vibe_proxy: str = Field(default="", validation_alias="MISTRAL_VIBE_PROXY")
     codestral_proxy: str = Field(default="", validation_alias="CODESTRAL_PROXY")
     lmstudio_proxy: str = Field(default="", validation_alias="LMSTUDIO_PROXY")
     llamacpp_proxy: str = Field(default="", validation_alias="LLAMACPP_PROXY")

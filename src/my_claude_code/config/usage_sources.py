@@ -459,6 +459,31 @@ PROVIDER_SOURCES: tuple[UsageSource, ...] = (
     # answer; naming them makes the answer checkable in one place.
     UsageSource(provider_id="novita", display_name="Novita"),
     UsageSource(provider_id="cline", display_name="Cline"),
+    # ── Mistral's two credentials ─────────────────────────────────────────
+    # Neither pool has a key-readable remaining balance, and the two rows say
+    # two different things because they are two different facts (IV.16).
+    #
+    # Studio: no mechanism at all. There is no documented Bearer-authenticated
+    # endpoint that returns the API allowance, so this is the eighth state --
+    # "publishes no usage endpoint MCC can read" -- exactly as Novita and Cline
+    # read. Named rather than left absent so the answer is checkable here.
+    UsageSource(provider_id="mistral", display_name="Mistral Studio (API)"),
+    # Vibe: the percentage does exist, but only behind Mistral's own dashboard
+    # tRPC route, which needs an authenticated browser session (and sometimes
+    # CSRF) and does not accept the plan key as a replacement. MCC does not ask
+    # for a cookie, so this is the seventh state -- a route that exists and
+    # needs a credential this machine does not hold -- the same fact
+    # ``opencode_zen`` states about a different vendor.
+    #
+    # No figure, no percentage, no reset date and no dollar conversion: the
+    # percentage does not establish the allowance in dollars, and the $300/$150
+    # Vibe budgets are subscriber-reported, not published.
+    UsageSource(
+        provider_id="mistral_vibe",
+        display_name="Mistral Vibe (subscription)",
+        needs_credential="a browser session cookie",
+        detail="the remaining allowance sits behind Mistral's own dashboard session",
+    ),
 )
 
 _BY_ID: dict[str, UsageSource] = {row.provider_id: row for row in PROVIDER_SOURCES}

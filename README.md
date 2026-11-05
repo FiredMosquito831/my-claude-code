@@ -149,7 +149,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 
 | Capability | What it gives you | Where it lives | More |
 | --- | --- | --- | --- |
-| 57 providers | Cloud, subscription and local backends behind one address | **Providers** page | [below](#model-providers) |
+| every provider below | Cloud, subscription and local backends behind one address | **Providers** page | [below](#model-providers) |
 | Custom providers | Any other OpenAI-compatible endpoint, added from the UI | **Providers** page | [Guide](docs/USAGE.md#8-providers-and-api-keys) |
 | Multi-key rotation | Comma-separated keys per provider, four rotation policies, per-key health and usage | **Providers** page | [Guide](docs/USAGE.md#12-multi-key-rotation) |
 | Credential health | Keys marked unhealthy only by the provider's own auth and rate-limit signals | **Limits & Resilience** page | [Guide](docs/USAGE.md#12-multi-key-rotation) |
@@ -278,10 +278,10 @@ Per-agent walkthroughs live in the [Usage Guide](docs/USAGE.md#7-tutorial-connec
 
 ## Model Providers
 
-57 providers, all managed the same way: enter the listed setting on the **Providers** page, open **Model Config**, search the `MODEL` dropdown and select a model. MCC builds each slug as `<provider-id>/<exact-provider-model-id>`, and free-text entry stays available when a provider cannot list its models. Click **Validate**, then **Apply**. Any other OpenAI-compatible endpoint can be added as a custom provider from the same page. Local backends (LM Studio, llama.cpp, Ollama) need a base URL rather than a key; setup for each is in the [Usage Guide](docs/USAGE.md#8-providers-and-api-keys).
+every provider below, all managed the same way: enter the listed setting on the **Providers** page, open **Model Config**, search the `MODEL` dropdown and select a model. MCC builds each slug as `<provider-id>/<exact-provider-model-id>`, and free-text entry stays available when a provider cannot list its models. Click **Validate**, then **Apply**. Any other OpenAI-compatible endpoint can be added as a custom provider from the same page. Local backends (LM Studio, llama.cpp, Ollama) need a base URL rather than a key; setup for each is in the [Usage Guide](docs/USAGE.md#8-providers-and-api-keys).
 
 <details>
-<summary><strong>All 57 providers, their settings and an example model</strong></summary>
+<summary><strong>Every provider, its setting and an example model</strong></summary>
 
 | Provider | Admin UI setting | Example `MODEL` |
 | --- | --- | --- |
@@ -294,7 +294,8 @@ Per-agent walkthroughs live in the [Usage Guide](docs/USAGE.md#7-tutorial-connec
 | [Google Vertex AI](https://console.cloud.google.com/vertex-ai) | `VERTEX_PROJECT_ID` + `VERTEX_LOCATION` | `vertex/google/gemini-3.1-flash` |
 | [Azure OpenAI](https://portal.azure.com/) | `AZURE_OPENAI_API_KEY` | `azure_openai/my-gpt-5-deployment` |
 | [DeepSeek](https://platform.deepseek.com/api_keys) | `DEEPSEEK_API_KEY` | `deepseek/deepseek-chat` |
-| [Mistral La Plateforme](https://console.mistral.ai/) | `MISTRAL_API_KEY` | `mistral/devstral-small-latest` |
+| [Mistral Studio (API)](https://console.mistral.ai/) | `MISTRAL_API_KEY` | `mistral/devstral-small-latest` |
+| [Mistral Vibe (subscription)](https://chat.mistral.ai/code/extensions) | `MISTRAL_VIBE_KEY` | `mistral_vibe/zai-glm-5-3` |
 | [Mistral Codestral](https://console.mistral.ai/) | `CODESTRAL_API_KEY` | `mistral_codestral/codestral-latest` |
 | [OpenCode Zen](https://opencode.ai/auth) | `OPENCODE_API_KEY` — optional: free models need no key | `opencode/muse-spark-1.3-contributor-free` |
 | [OpenCode Go](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode_go/minimax-m2.7` |
@@ -345,7 +346,7 @@ Per-agent walkthroughs live in the [Usage Guide](docs/USAGE.md#7-tutorial-connec
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | `LLAMACPP_BASE_URL` | `llamacpp/<model-id>` |
 | [Ollama](https://ollama.com/) | `OLLAMA_BASE_URL` | `ollama/<model-tag>` |
 
-Notes worth knowing: Mistral Codestral uses a separate key from Mistral La Plateforme; OpenCode Zen and OpenCode Go share `OPENCODE_API_KEY` but use different prefixes, the rotation policy lives on the OpenCode Zen card, and both read identity headers off every request — without them the Zen free tier answers `400 MissingSessionID`, so 6.69.0 sends them and identifies as the OpenCode client by default (`OPENCODE_CLIENT_IDENTITY=mcc` opts out — see [USAGE](docs/USAGE.md#opencode-zen-and-opencode-go-what-mcc-sends-about-itself)), and since 6.74.0 MCC resolves **which endpoint each Zen model is served on** — two of its seven free models live on the Responses API and answered a bare HTTP 500 on Chat Completions before ([USAGE](docs/USAGE.md#opencode-zen-serves-different-models-on-different-endpoints)); Azure OpenAI needs `AZURE_OPENAI_BASE_URL` in its v1 form and the model you name is your *deployment* name; Cloudflare needs both its token and its account ID; Agnes AI sends `reasoning_effort` with the words its host answers to (`none`, `low`, `medium`, `high`, `max`) rather than the `enable_thinking` flag its page documents -- the same bytes a custom provider on the same URL sends -- and `AGNES_BASE_URL` points it at another host; Ollama Cloud connects to `ollama.com` while local Ollama keeps the `ollama/` prefix. Prefer tool-capable models for coding agents, and give local models enough context for the agent's system prompt and tool definitions.
+Notes worth knowing: Mistral ships **two credentials on one host**, and they are two cards because they are two pools — `MISTRAL_API_KEY` (Mistral Studio, the general developer API allowance) and `MISTRAL_VIBE_KEY` (a Vibe plan key from Vibe Code → Extensions → Advanced, drawing on the subscription's coding budget). MCC never substitutes one for the other; a Vibe refusal means that key's entitlement does not cover the request, not that the key is wrong. Mistral Codestral uses a separate key again, on its own host; OpenCode Zen and OpenCode Go share `OPENCODE_API_KEY` but use different prefixes, the rotation policy lives on the OpenCode Zen card, and both read identity headers off every request — without them the Zen free tier answers `400 MissingSessionID`, so 6.69.0 sends them and identifies as the OpenCode client by default (`OPENCODE_CLIENT_IDENTITY=mcc` opts out — see [USAGE](docs/USAGE.md#opencode-zen-and-opencode-go-what-mcc-sends-about-itself)), and since 6.74.0 MCC resolves **which endpoint each Zen model is served on** — two of its seven free models live on the Responses API and answered a bare HTTP 500 on Chat Completions before ([USAGE](docs/USAGE.md#opencode-zen-serves-different-models-on-different-endpoints)); Azure OpenAI needs `AZURE_OPENAI_BASE_URL` in its v1 form and the model you name is your *deployment* name; Cloudflare needs both its token and its account ID; Agnes AI sends `reasoning_effort` with the words its host answers to (`none`, `low`, `medium`, `high`, `max`) rather than the `enable_thinking` flag its page documents -- the same bytes a custom provider on the same URL sends -- and `AGNES_BASE_URL` points it at another host; Ollama Cloud connects to `ollama.com` while local Ollama keeps the `ollama/` prefix. Prefer tool-capable models for coding agents, and give local models enough context for the agent's system prompt and tool definitions.
 
 </details>
 

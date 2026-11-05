@@ -31,6 +31,7 @@ def _settings(**overrides):
         "nvidia_nim_api_key": "",
         "open_router_api_key": "",
         "mistral_api_key": "",
+        "mistral_vibe_api_key": "",
         "codestral_api_key": "",
         "deepseek_api_key": "",
         "kimi_api_key": "",

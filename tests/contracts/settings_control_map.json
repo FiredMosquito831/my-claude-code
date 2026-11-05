@@ -1072,6 +1072,18 @@
       "control": "field-MISTRAL_PROXY",
       "page": "providers"
     },
+    "MISTRAL_VIBE_KEY": {
+      "control": "field-MISTRAL_VIBE_KEY",
+      "page": "providers"
+    },
+    "MISTRAL_VIBE_KEY_ROTATION": {
+      "control": "field-MISTRAL_VIBE_KEY_ROTATION",
+      "page": "providers"
+    },
+    "MISTRAL_VIBE_PROXY": {
+      "control": "field-MISTRAL_VIBE_PROXY",
+      "page": "providers"
+    },
     "MODEL": {
       "control": "field-MODEL",
       "page": "model_config"

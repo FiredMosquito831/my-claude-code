@@ -62,18 +62,39 @@ hardcoded provider vocabulary table.
 
 
 class MistralProvider(OpenAIChatProvider):
-    """Mistral API using ``https://api.mistral.ai/v1/chat/completions``."""
+    """Mistral API using ``https://api.mistral.ai/v1/chat/completions``.
+
+    Serves both Mistral credentials. A Studio key (``MISTRAL_API_KEY``) and a
+    Vibe plan key (``MISTRAL_VIBE_KEY``) dial the same host with the same
+    request shape and differ only in what they draw on, so they are one class
+    with one ``provider_id`` argument rather than two copies of the reasoning
+    shape and the once-only rejection retry. Copying the class would put that
+    retry in two places and let the two drift.
+
+    ``provider_id`` defaults to ``"mistral"``, which is what every call site
+    before the second credential passed implicitly, so the Studio instance is
+    constructed exactly as it was. It is not decoration: the id keys the
+    user's own model-parameter overrides, the learned-facts store and the
+    zero-cost table, and it is what the request log records per attempt. Two
+    credentials spending two different budgets must not share those.
+    """
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
         """See :data:`MISTRAL_REASONING_DIALECT`."""
         return MISTRAL_REASONING_DIALECT
 
-    def __init__(self, config: ProviderConfig, *, rate_limiter: ProviderRateLimiter):
+    def __init__(
+        self,
+        config: ProviderConfig,
+        *,
+        rate_limiter: ProviderRateLimiter,
+        provider_id: str = "mistral",
+    ):
         super().__init__(
             config,
             profile=_PROFILE,
             rate_limiter=rate_limiter,
-            provider_id="mistral",
+            provider_id=provider_id,
         )
 
     def _build_request_body(

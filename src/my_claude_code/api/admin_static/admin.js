@@ -10097,6 +10097,7 @@ const GUIDE_ANCHORS = {
   openai_clients: "guide-openai-clients",
   gemini_clients: "guide-gemini-clients",
   claude_models: "guide-claude-models",
+  mistral_models: "guide-mistral-models",
   keys: "guide-keys",
   proxy_tor: "guide-proxy-tor",
   proxy_runners: "guide-proxy-runners",
