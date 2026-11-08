@@ -28,6 +28,7 @@ from my_claude_code.api.response_streams import (
     EmptyStreamError,
     StreamKeepalive,
     anthropic_sse_streaming_response,
+    requested_model_stream,
     terminal_execution_error_response,
     trace_terminal_execution_error,
 )
@@ -243,6 +244,14 @@ class MessagesHandler:
             plan = self._apply_message_routing_policies(plan)
             capture.set_plan(plan)
             routed = plan.primary
+            # The alias the client sent, which is what its reply must name --
+            # every rung of the chain carries the same one, so a fallback
+            # cannot change the answer to "which model did you ask for".
+            # Read from the resolved route rather than from ``request.model``
+            # because routing has already rewritten that to the provider's own
+            # id on ``routed``; ``request_data`` is un-routed today, and this
+            # stays correct if that ever stops being true.
+            response_model = routed.resolved.original_model
             self._reject_unsupported_server_tools(routed)
             capture.set_routing(routed)
 
@@ -274,6 +283,7 @@ class MessagesHandler:
                 result,
                 stream=request_data.stream,
                 request_id=request_id,
+                response_model=response_model,
             )
         except ApplicationError as exc:
             capture.finish_error(exc)
@@ -330,6 +340,7 @@ class MessagesHandler:
         *,
         stream: bool,
         request_id: str,
+        response_model: str,
     ) -> object:
         if isinstance(result, _MessagesCompleteResult):
             return result.response
@@ -337,8 +348,14 @@ class MessagesHandler:
             # Non-streaming clients (e.g. Claude Code utility calls) need a
             # complete JSON Message; the internal pipeline is always SSE, so
             # serving that raw here breaks the client SDK's response parse.
+            # The same model rewrite the streaming boundary applies, because
+            # the fold below reads ``model`` straight out of ``message_start``
+            # and a ``stream: false`` client must not see the routed name
+            # either.
             try:
-                message, error = await aggregate_anthropic_sse_to_message(result.body)
+                message, error = await aggregate_anthropic_sse_to_message(
+                    requested_model_stream(result.body, response_model)
+                )
             except GeneratorExit:
                 raise
             except asyncio.CancelledError:
@@ -387,6 +404,7 @@ class MessagesHandler:
             ),
             request_id=request_id,
             keepalive=StreamKeepalive.from_settings(self._settings),
+            response_model=response_model,
         )
 
     def _pre_start_error_response(
