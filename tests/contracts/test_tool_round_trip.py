@@ -147,9 +147,19 @@ def _arguments(tool: dict[str, Any]) -> dict[str, Any]:
 
 
 def _request(
-    model: str, tools: list[dict[str, Any]], *, turn: int = 1
+    model: str,
+    tools: list[dict[str, Any]],
+    *,
+    turn: int = 1,
+    tool_use_id: str = "toolu_turn1",
 ) -> MessagesRequest:
-    """Turn 1 asks; turn 2 replays turn 1's call of the longest tool, then asks again."""
+    """Turn 1 asks; turn 2 replays turn 1's call of the longest tool, then asks again.
+
+    ``tool_use_id`` is the id the client echoes back, i.e. whatever turn 1's
+    stream put in ``tool_use.id``. A Responses door must have given it the
+    upstream ``call_id``, and that is what turn 2's ``function_call`` and
+    ``function_call_output`` are then keyed by.
+    """
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": "do the task"}]
     if turn == 2:
@@ -160,7 +170,7 @@ def _request(
                 "content": [
                     {
                         "type": "tool_use",
-                        "id": "toolu_turn1",
+                        "id": tool_use_id,
                         "name": longest["name"],
                         "input": _arguments(longest),
                     }
@@ -171,7 +181,7 @@ def _request(
                 "content": [
                     {
                         "type": "tool_result",
-                        "tool_use_id": "toolu_turn1",
+                        "tool_use_id": tool_use_id,
                         "content": "ok",
                     }
                 ],
@@ -212,6 +222,25 @@ def _tool_uses(sse: str) -> list[tuple[str, dict[str, Any]]]:
         (names[index], json.loads(parts[index]) if parts[index] else {})
         for index in sorted(names)
     ]
+
+
+def _tool_use_ids(sse: str) -> list[str]:
+    """The ``tool_use.id`` of every block, in stream order.
+
+    This is the value the client echoes back as ``tool_result.tool_use_id``,
+    and the value that becomes both the replayed ``function_call.call_id`` and
+    the ``function_call_output.call_id`` on the next request. On a Responses
+    door it must be the upstream ``call_id`` -- never the item ``id``.
+    """
+
+    ids: dict[int, str] = {}
+    for event in parse_sse_text(sse):
+        if event.event != "content_block_start":
+            continue
+        block = event.data["content_block"]
+        if block.get("type") == "tool_use":
+            ids[event.data["index"]] = block["id"]
+    return [ids[index] for index in sorted(ids)]
 
 
 # -- one fake upstream per surface ------------------------------------------------------
@@ -540,6 +569,45 @@ def _assert_cache_prefix(
     assert _canonical(_history(second)[: len(head)]) == _canonical(head), label
 
 
+def _assert_tool_identity(
+    label: str, received_ids: list[str], next_body: dict[str, Any]
+) -> None:
+    """The client sees the ``call_id``, and the next request pairs by it.
+
+    A Responses ``function_call`` item carries two ids: the item ``id``
+    (``fc_…``) that names the output item, and the ``call_id`` (``call_…``)
+    that pairs the call with its ``function_call_output``. The protocol pairs
+    by ``call_id``. The fake upstream below sends ``id: fc_N`` and ``call_id:
+    call_N`` -- deliberately different -- so a converter that hands the client
+    the item id is caught here rather than upstream.
+
+    ``next_body`` is the request built from the history the client sends after
+    running the first call, replaying the id it was actually given.
+    """
+
+    # 1. what the client was told, in order.
+    assert received_ids == [f"call_{index}" for index in range(len(received_ids))], (
+        label,
+        received_ids,
+    )
+
+    # 2. the id the client echoes back is the one the next request pairs by,
+    #    on both sides of the pair.
+    calls = [
+        item for item in _history(next_body) if item.get("type") == "function_call"
+    ]
+    outputs = [
+        item
+        for item in _history(next_body)
+        if item.get("type") == "function_call_output"
+    ]
+    assert [item.get("call_id") for item in calls] == [received_ids[0]], (label, calls)
+    assert [item.get("call_id") for item in outputs] == [received_ids[0]], (
+        label,
+        outputs,
+    )
+
+
 def _canonical(value: Any) -> str:
     """The exact bytes compared: key order kept, nothing normalised away."""
 
@@ -560,18 +628,27 @@ def test_every_tool_round_trips_through_zen(
     label = f"{harness}/{surface}/{'free' if free else 'paid'}"
 
     first = Upstream(surface, tools)
-    received = _tool_uses(
-        asyncio.run(_through_zen(surface, _request(model, tools), first))
-    )
+    turn_one = asyncio.run(_through_zen(surface, _request(model, tools), first))
+    received = _tool_uses(turn_one)
+    echoed = _tool_use_ids(turn_one)
     assert len(first.bodies) == 1, label
     assert first.paths[0].endswith(ENDPOINTS[surface]), (label, first.paths)
     _assert_round_trip(label, tools, first.bodies[0], received, stand_ins_allowed=free)
     added = _outbound_names(first.bodies[0])[len(tools) :]
     assert added == (EXPECTED_STAND_INS.get(harness, []) if free else []), label
 
+    # Turn 2 replays the id the client was actually given. On the Responses
+    # door that must be the upstream ``call_id``; the fixture sends a
+    # different item ``id`` on purpose.
     second = Upstream(surface, tools)
-    asyncio.run(_through_zen(surface, _request(model, tools, turn=2), second))
+    asyncio.run(
+        _through_zen(
+            surface, _request(model, tools, turn=2, tool_use_id=echoed[0]), second
+        )
+    )
     _assert_cache_prefix(label, first.bodies[0], second.bodies[0])
+    if surface == "responses":
+        _assert_tool_identity(label, echoed, second.bodies[0])
 
 
 #: ``None``: nothing stated, so nothing may be renamed. ``64``: a stated limit
@@ -593,9 +670,9 @@ def test_every_tool_round_trips_through_chatgpt_oauth(
     label = f"{harness}/chatgpt_oauth/{learned}"
 
     first = Upstream("responses", tools)  # the ChatGPT backend speaks Responses
-    received = _tool_uses(
-        asyncio.run(_through_chatgpt(_request("gpt-5.6-luna", tools), first))
-    )
+    turn_one = asyncio.run(_through_chatgpt(_request("gpt-5.6-luna", tools), first))
+    received = _tool_uses(turn_one)
+    echoed = _tool_use_ids(turn_one)
     assert len(first.bodies) == 1, label
     _assert_round_trip(label, tools, first.bodies[0], received, stand_ins_allowed=False)
     outbound = _outbound_names(first.bodies[0])
@@ -605,9 +682,16 @@ def test_every_tool_round_trips_through_chatgpt_oauth(
     else:
         assert all(len(name) <= learned for name in outbound), label
 
+    # The client's next turn replays the id it was actually given, and the
+    # backend pairs its ``function_call_output`` by that id.
     second = Upstream("responses", tools)
-    asyncio.run(_through_chatgpt(_request("gpt-5.6-luna", tools, turn=2), second))
+    asyncio.run(
+        _through_chatgpt(
+            _request("gpt-5.6-luna", tools, turn=2, tool_use_id=echoed[0]), second
+        )
+    )
     _assert_cache_prefix(label, first.bodies[0], second.bodies[0])
+    _assert_tool_identity(label, echoed, second.bodies[0])
 
 
 def test_the_fixtures_cover_what_the_contract_promises() -> None:
