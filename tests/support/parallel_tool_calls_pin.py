@@ -27,8 +27,6 @@ contract that passes here would pass against a server started with
 ``RESPONSES_PARALLEL_TOOL_CALLS=false``.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from my_claude_code.config import settings as config_settings
