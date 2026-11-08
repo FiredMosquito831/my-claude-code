@@ -28,6 +28,7 @@ from my_claude_code.core.anthropic.openai_tool_names import (
     MIN_TOOL_NAME_MAX_LENGTH,
     OpenAIToolNameCodec,
 )
+from my_claude_code.core.openai_responses import call_id_from_item
 from my_claude_code.core.reasoning import (
     ReasoningAdaptationKind,
     ReasoningControl,
@@ -751,7 +752,13 @@ def responses_tool_call_to_anthropic(
         input_data = {"raw": arguments}
     return {
         "type": "tool_use",
-        "id": item.get("id", ""),
+        # The protocol pairs a call with its ``function_call_output`` by
+        # ``call_id``; the item ``id`` identifies the output item and pairs
+        # nothing. The client echoes this value back as ``tool_use_id``, and
+        # that value becomes both the replayed ``function_call.call_id`` and
+        # the ``function_call_output``'s ``call_id``, so it has to be the
+        # ``call_id``. Same helper, same answer as the streaming converter.
+        "id": call_id_from_item(item),
         "name": name,
         "input": input_data,
     }

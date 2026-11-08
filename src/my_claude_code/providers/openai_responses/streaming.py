@@ -22,6 +22,7 @@ from my_claude_code.core.anthropic.thinking import (
     ThinkTagParser,
 )
 from my_claude_code.core.generation_rate import GenerationClock
+from my_claude_code.core.openai_responses import call_id_from_item
 from my_claude_code.core.reported_cost import (
     record_reported_reasoning,
     reported_reasoning_tokens,
@@ -312,15 +313,31 @@ class ResponsesStreamConverter:
                 # read, and an empty thinking block would claim otherwise.
                 return
             if item_type == "function_call":
-                tool_id = item.get("id") or f"call_{len(self._active_tool_calls)}"
+                # Two ids, and the protocol gives them different jobs. The
+                # item ``id`` names this output item and is what the
+                # ``function_call_arguments.delta`` and ``.done`` frames are
+                # keyed by, so it is the key of ``_active_tool_calls`` and
+                # nothing may take its place there. The ``call_id`` is what
+                # pairs the call with its ``function_call_output``, so it is
+                # the only id the client may see: the client echoes it back as
+                # ``tool_use_id``, and that value becomes both the replayed
+                # ``function_call.call_id`` and the ``function_call_output``'s
+                # ``call_id`` on the next request. Sending the item id there
+                # orphans every tool result upstream.
+                item_id = item.get("id") or f"call_{len(self._active_tool_calls)}"
+                tool_id = call_id_from_item(item)
                 name = item.get("name") or "unknown"
                 if self._tool_names is not None:
                     # The only frame whose name reaches the client: the
                     # tool_use block is opened here, and the argument and
                     # ``.done`` frames are matched by item id, never by name.
                     name = self._tool_names.decode(name)
-                self._active_tool_calls[tool_id] = {
-                    "id": tool_id,
+                self._active_tool_calls[item_id] = {
+                    "id": item_id,
+                    # The ``call_id`` this entry's tool_use block was opened
+                    # with. Recorded so the two ids stay legible side by side
+                    # at the one site that has both; nothing reads it back.
+                    "client_id": tool_id,
                     "name": name,
                     "arguments": "",
                     "index": len(self._active_tool_calls),
@@ -330,7 +347,7 @@ class ResponsesStreamConverter:
                 yield from self._flush_answer_text()
                 yield from self._ledger.close_content_blocks()
                 yield self._ledger.start_tool_block(
-                    tool_index=self._active_tool_calls[tool_id]["index"],
+                    tool_index=self._active_tool_calls[item_id]["index"],
                     tool_id=tool_id,
                     name=name,
                 )
@@ -359,6 +376,11 @@ class ResponsesStreamConverter:
                 yield from self._flush_answer_text()
                 return
             if item_type == "function_call":
+                # The item ``id``, deliberately -- not the ``call_id`` the
+                # block was opened with. This frame and the argument deltas
+                # are keyed by the item id, and ``_active_tool_calls`` is keyed
+                # by it for exactly that reason; using the client-visible id
+                # here would match nothing.
                 tool_id = item.get("id")
                 tool = self._active_tool_calls.get(tool_id)
                 if tool is not None:
