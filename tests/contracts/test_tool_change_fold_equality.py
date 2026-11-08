@@ -68,6 +68,10 @@ from tests.providers.opencode_family_bodies import (
     opencode_bodies,
     tool_request,
 )
+from tests.support.parallel_tool_calls_pin import (
+    pin_parallel_tool_calls_off,
+    unpin_parallel_tool_calls,
+)
 
 BASELINE = Path(__file__).with_name("tool_change_fold_equality_baseline.json")
 WRITE_BASELINE = os.environ.get("MCC_TOOL_FOLD_BASELINE_WRITE", "")
@@ -75,6 +79,24 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 #: Looked up rather than imported so this module also runs on the code before
 #: the fold existed, which is where the baseline is written.
 FOLD = getattr(anthropic_protocol, "fold_tool_changes", None)
+
+
+@pytest.fixture(autouse=True)
+def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
+    """Every body here is compared with one recorded before 8.15.0.
+
+    8.15.0 ships ``RESPONSES_PARALLEL_TOOL_CALLS`` on, so a Responses body
+    built today carries ``true`` where the baseline carries ``false``. The
+    pin keeps this file's claim exact -- *this change* moved no byte -- and
+    ``tests/providers/test_responses_parallel_tool_calls.py`` proves the one
+    cell 8.15.0 does move, and that it moves nothing else.
+    """
+
+    pin_parallel_tool_calls_off(monkeypatch)
+    try:
+        yield
+    finally:
+        unpin_parallel_tool_calls()
 
 
 def _tool(name: str) -> dict[str, Any]:

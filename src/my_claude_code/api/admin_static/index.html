@@ -2815,6 +2815,7 @@
                 <a href="#guide-agent-tiers">Tiers for every agent</a>
                 <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-prompt-cache-lifetime">Prompt cache lifetime</a>
+                <a href="#guide-responses-protocol">Responses protocol</a>
                 <a href="#guide-inferhub">InferHub: set a price ceiling</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
@@ -4170,6 +4171,50 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   take no lifetime: their rows say <em>caches automatically; no lifetime
                   control</em> and nothing is ever sent to them. Any other host says
                   <em>lifetime control not known for this host</em>.
+                </p>
+
+                <h3 id="guide-responses-protocol">Responses protocol</h3>
+                <p>
+                  <strong>New in 8.15.0.</strong> The Responses API has a field the
+                  Anthropic Messages protocol does not:
+                  <code>parallel_tool_calls</code>, which tells the host whether the
+                  model may answer one turn with several tool calls at once. Two of
+                  MCC's doors speak that protocol &mdash; the <strong>ChatGPT
+                  subscription</strong> and the <strong>shared Responses
+                  transport</strong> OpenCode Zen and OpenCode Go are served on &mdash;
+                  and until 8.15.0 both senders hard-coded the field to
+                  <code>false</code>.
+                </p>
+                <p>
+                  That is not what the reference client does: Codex CLI sets the field
+                  from its own configuration rather than pinning it, and the cost of
+                  pinning it is measurable. On this machine's request log,
+                  <strong>0.4&nbsp;%</strong> of ChatGPT OAuth turns carried more than
+                  one tool block (76 of 20,697) against <strong>23.2&nbsp;%</strong> on
+                  the Anthropic subscription door &mdash; a 58&times; difference on a
+                  door where Claude Code's own prompting asks for batched reads, greps
+                  and edits. A model told to batch and forbidden from doing so
+                  serialises the work, which costs turns. To choose, open
+                  <strong>Model Config &rarr; Reasoning &rarr; Responses
+                  protocol</strong>: <code>RESPONSES_PARALLEL_TOOL_CALLS</code>, on by
+                  default, off sends one tool call per turn.
+                </p>
+                <p class="guide-note">
+                  <strong>This changes behaviour for every Responses request, by
+                  default.</strong> It is the one setting in this release that does: a
+                  fresh install, and an existing install with no line for it in
+                  <code>~/.mcc/.env</code>, sends <code>"parallel_tool_calls":
+                  true</code> where every release up to 8.14.3 sent
+                  <code>false</code>. Set it to <code>false</code> to get the old bytes
+                  back exactly &mdash; with the setting off, every Responses body is
+                  byte-identical to 8.14.3's. The Anthropic Messages door and the Chat
+                  Completions door have no such field and are unchanged, as are media,
+                  web search, <code>/v1/models</code> and every catalogue. It is
+                  <strong>not</strong> a fix for agents failing to spawn: Codex sends
+                  <code>false</code> on this backend too, and the same log shows
+                  <code>gpt-6-luna</code> making 1,674 <code>Agent</code> calls while
+                  the field was <code>false</code>. A save applies to the next request,
+                  with no restart.
                 </p>
 
                 <h3 id="guide-inferhub">InferHub: set a price ceiling</h3>

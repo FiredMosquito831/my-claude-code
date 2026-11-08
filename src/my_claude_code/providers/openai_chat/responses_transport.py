@@ -36,6 +36,7 @@ import httpx
 from loguru import logger
 
 from my_claude_code.config.marketplaces import MarketplaceDialect
+from my_claude_code.config.settings import configured_responses_parallel_tool_calls
 from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import EMPTY_TOOL_CATALOGUE
@@ -460,7 +461,12 @@ class ResponsesTransport:
             reasoning=reasoning,
             store=False,
             stream=True,
-            parallel_tool_calls=False,
+            # 8.15.0: the adapter-level switch, read here so a dashboard save
+            # reaches the next request. Before it, this line hard-coded
+            # ``False``. The same setting serves the ChatGPT subscription
+            # (``providers/chatgpt_oauth/conversion.py``): it is a property of
+            # the Responses protocol, not of one host.
+            parallel_tool_calls=configured_responses_parallel_tool_calls(),
             max_output_tokens=max_output_tokens,
             extra_body=extra_body,
             tool_name_max_length=self.tool_name_max_length,

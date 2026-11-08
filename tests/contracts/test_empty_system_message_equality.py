@@ -90,6 +90,10 @@ from tests.providers.opencode_family_bodies import (
     opencode_provider,
 )
 from tests.providers.support import passthrough_rate_limiter
+from tests.support.parallel_tool_calls_pin import (
+    pin_parallel_tool_calls_off,
+    unpin_parallel_tool_calls,
+)
 
 BASELINE = Path(__file__).with_name("empty_system_message_equality_baseline.json")
 WRITE_BASELINE = os.environ.get("MCC_EMPTY_SYSTEM_BASELINE_WRITE", "")
@@ -98,6 +102,26 @@ WRITE_BASELINE = os.environ.get("MCC_EMPTY_SYSTEM_BASELINE_WRITE", "")
 FOLD = getattr(anthropic_protocol, "fold_tool_changes", None)
 NOTE_KEY = getattr(anthropic_protocol, "EMPTY_SYSTEM_MESSAGES_DROPPED", None)
 NOTE = getattr(anthropic_protocol, "empty_system_messages_note", None)
+
+
+@pytest.fixture(autouse=True)
+def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
+    """Every body here is compared with one recorded before 8.15.0.
+
+    8.15.0 ships ``RESPONSES_PARALLEL_TOOL_CALLS`` on, so the ``responses``,
+    ``chatgpt_oauth`` and ``opencode_responses`` cells would each move one
+    field for a reason that has nothing to do with this file's subject (an
+    empty system message). The pin keeps every recorded digest exact;
+    ``tests/providers/test_responses_parallel_tool_calls.py`` proves the one
+    cell 8.15.0 does move, and that it moves nothing else.
+    """
+
+    pin_parallel_tool_calls_off(monkeypatch)
+    try:
+        yield
+    finally:
+        unpin_parallel_tool_calls()
+
 
 #: Surfaces that speak the Anthropic format: never refused, never changed.
 ANTHROPIC_FORMAT = frozenset({"native_anthropic", "opencode_messages"})

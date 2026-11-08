@@ -14889,39 +14889,70 @@ function renderMessagingAuthNotice(openPlatforms) {
 /* The Reasoning section of Model Config: the thinking levels in the grid
    exactly as before, then (7.104.0) a "Prompt cache lifetime" subheading
    holding PROMPT_CACHE_TTL and one lifetime per tier, in the same tier order
-   as the thinking levels above it. Generic fields, saved like every other. */
+   as the thinking levels above it, then (8.15.0) a "Responses protocol"
+   subheading holding the choices a Responses body carries. Generic fields,
+   saved like every other. */
 const PROMPT_CACHE_TTL_FIELD_PREFIX = "PROMPT_CACHE_TTL";
+const RESPONSES_PROTOCOL_FIELD_PREFIX = "RESPONSES_";
 
 function renderReasoningSection(fields) {
   const wrap = document.createElement("div");
   const lifetimes = fields.filter((field) =>
     field.key.startsWith(PROMPT_CACHE_TTL_FIELD_PREFIX),
   );
+  const protocol = fields.filter((field) =>
+    field.key.startsWith(RESPONSES_PROTOCOL_FIELD_PREFIX),
+  );
   const grid = document.createElement("div");
   grid.className = "field-grid";
   fields
-    .filter((field) => !field.key.startsWith(PROMPT_CACHE_TTL_FIELD_PREFIX))
+    .filter(
+      (field) =>
+        !field.key.startsWith(PROMPT_CACHE_TTL_FIELD_PREFIX) &&
+        !field.key.startsWith(RESPONSES_PROTOCOL_FIELD_PREFIX),
+    )
     .forEach((field) => grid.appendChild(renderField(field)));
   wrap.appendChild(grid);
-  if (lifetimes.length === 0) return wrap;
-  const group = document.createElement("div");
-  group.className = "settings-subsection";
-  group.id = "subsection-prompt-cache-lifetime";
-  const heading = document.createElement("h4");
-  heading.className = "settings-subheading";
-  heading.textContent = "Prompt cache lifetime";
-  const lead = document.createElement("p");
-  lead.className = "settings-subheading-lead";
-  lead.textContent =
-    "How long a host keeps the prompt cache, chosen by MCC instead of the " +
-    "client. From client changes nothing. Minutes are adapted to what the " +
-    "host accepts: Anthropic and the Claude subscription keep 5 min or 1 h; " +
-    "other hosts are not changed by this setting yet.";
-  const lifetimeGrid = document.createElement("div");
-  lifetimeGrid.className = "field-grid";
-  lifetimes.forEach((field) => lifetimeGrid.appendChild(renderField(field)));
-  group.append(heading, lead, lifetimeGrid);
-  wrap.appendChild(group);
+  if (lifetimes.length > 0) {
+    const group = document.createElement("div");
+    group.className = "settings-subsection";
+    group.id = "subsection-prompt-cache-lifetime";
+    const heading = document.createElement("h4");
+    heading.className = "settings-subheading";
+    heading.textContent = "Prompt cache lifetime";
+    const lead = document.createElement("p");
+    lead.className = "settings-subheading-lead";
+    lead.textContent =
+      "How long a host keeps the prompt cache, chosen by MCC instead of the " +
+      "client. From client changes nothing. Minutes are adapted to what the " +
+      "host accepts: Anthropic and the Claude subscription keep 5 min or 1 h; " +
+      "other hosts are not changed by this setting yet.";
+    const lifetimeGrid = document.createElement("div");
+    lifetimeGrid.className = "field-grid";
+    lifetimes.forEach((field) => lifetimeGrid.appendChild(renderField(field)));
+    group.append(heading, lead, lifetimeGrid);
+    wrap.appendChild(group);
+  }
+  if (protocol.length > 0) {
+    const group = document.createElement("div");
+    group.className = "settings-subsection";
+    group.id = "subsection-responses-protocol";
+    const heading = document.createElement("h4");
+    heading.className = "settings-subheading";
+    heading.textContent = "Responses protocol";
+    const lead = document.createElement("p");
+    lead.className = "settings-subheading-lead";
+    lead.textContent =
+      "What MCC asks for in a Responses request body. These reach every host " +
+      "served on that protocol — the ChatGPT subscription and the shared " +
+      "transport OpenCode Zen and Go use — and nothing on the Anthropic or " +
+      "Chat Completions doors, which have no equivalent field.";
+    const protocolGrid = document.createElement("div");
+    protocolGrid.className = "field-grid";
+    protocol.forEach((field) => protocolGrid.appendChild(renderField(field)));
+    group.append(heading, lead, protocolGrid);
+    wrap.appendChild(group);
+  }
   return wrap;
 }
 
@@ -50114,6 +50145,7 @@ const SECTION_NAVIGATOR = {
     ["Agent tiers", "#guide-agent-tiers"],
     ["Reasoning", "#guide-reasoning"],
     ["Cache lifetime", "#guide-prompt-cache-lifetime"],
+    ["Responses protocol", "#guide-responses-protocol"],
     ["InferHub", "#guide-inferhub"],
     ["Claude Code", "#guide-cli"],
     ["Claude Desktop", "#guide-desktop"],

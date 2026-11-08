@@ -1150,3 +1150,65 @@ def test_the_prompt_cache_lifetime_reaches_the_anthropic_body(
     marker = body["messages"][0]["content"][0]["cache_control"]
     assert marker["ttl"] == (ttl or "1h")
     assert (request.prompt_cache_ask is None) is (value is None)
+
+
+@pytest.mark.parametrize("value", [None, "true", "false"])
+def test_the_parallel_tool_calls_setting_reaches_both_responses_senders(
+    value: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """8.15.0's RESPONSES_PARALLEL_TOOL_CALLS, from ``Settings`` to the wire.
+
+    Two senders, one value: the ChatGPT subscription's own builder and the
+    shared Responses transport OpenCode Zen/Go are served on. A setting that
+    reached one of them would leave half the Responses traffic on the old
+    hard-coded ``false`` -- and the dashboard would say otherwise.
+
+    Read through ``get_settings`` and the cache the admin save clears, which
+    is the hop that makes the setting hot: the value is resolved when the body
+    is built, not when the provider was constructed.
+    """
+
+    from my_claude_code.config import settings as config_settings
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+    from my_claude_code.providers.base import ProviderConfig
+    from my_claude_code.providers.chatgpt_oauth.conversion import (
+        build_chatgpt_oauth_request_body,
+    )
+    from my_claude_code.providers.openai_chat import (
+        OPENAI_CHAT_PROFILES,
+        create_openai_chat_provider,
+    )
+    from tests.providers.support import passthrough_rate_limiter
+
+    expected = True if value is None else value == "true"
+    if value is None:
+        monkeypatch.delenv("RESPONSES_PARALLEL_TOOL_CALLS", raising=False)
+    else:
+        monkeypatch.setenv("RESPONSES_PARALLEL_TOOL_CALLS", value)
+    config_settings.get_settings.cache_clear()
+    try:
+        request = MessagesRequest.model_validate(
+            {
+                "model": "gpt-5.6-terra",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        chatgpt = build_chatgpt_oauth_request_body(
+            request, reasoning=DEFAULT_REASONING_POLICY
+        )
+        provider = create_openai_chat_provider(
+            "opencode",
+            ProviderConfig(api_key="sk-test", base_url="https://opencode.ai/zen/v1"),
+            passthrough_rate_limiter(),
+            profile=OPENAI_CHAT_PROFILES["opencode"],
+        )
+        shared, _headers = provider._responses.build_body(
+            request, reasoning=DEFAULT_REASONING_POLICY, max_output_tokens=64
+        )
+    finally:
+        config_settings.get_settings.cache_clear()
+
+    assert chatgpt["parallel_tool_calls"] is expected
+    assert shared["parallel_tool_calls"] is expected

@@ -16,6 +16,7 @@ field, and the wire baseline compares the serialised bytes.
 from typing import Any
 
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.config.settings import configured_responses_parallel_tool_calls
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.openai_responses import (
@@ -84,7 +85,9 @@ def build_chatgpt_oauth_request_body(
         reasoning=reasoning,
         store=False,
         stream=True,
-        parallel_tool_calls=False,
+        # 8.15.0: the adapter-level switch, read here so a dashboard save
+        # reaches the next request. Before it, this line hard-coded ``False``.
+        parallel_tool_calls=configured_responses_parallel_tool_calls(),
         max_output_tokens=None,
         prompt_cache_key=None,
         include_encrypted_reasoning=True,

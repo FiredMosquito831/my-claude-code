@@ -87,7 +87,11 @@ def test_build_request_body_converts_messages():
     assert body["model"] == "gpt-5"
     assert body["store"] is False
     assert body["stream"] is True
-    assert body["parallel_tool_calls"] is False
+    # 8.15.0: the field is no longer a constant of this door -- it is the
+    # adapter-level setting, which ships on. The value itself, and the proof
+    # that it is the only cell the setting moves, live in
+    # ``tests/providers/test_responses_parallel_tool_calls.py``.
+    assert body["parallel_tool_calls"] is True
     assert "max_output_tokens" not in body
     assert body["input"] == [
         {

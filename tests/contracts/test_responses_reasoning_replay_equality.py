@@ -53,10 +53,35 @@ from my_claude_code.providers.openai_chat.request_policy import (
 )
 from tests.contracts.go_reasoning_expectations import corrected_expectation
 from tests.providers.support import passthrough_rate_limiter
+from tests.support.parallel_tool_calls_pin import (
+    pin_parallel_tool_calls_off,
+    unpin_parallel_tool_calls,
+)
 
 BASELINE_PATH = Path(__file__).with_name(
     "responses_reasoning_replay_equality_baseline.json"
 )
+
+
+@pytest.fixture(autouse=True)
+def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
+    """Every digest here was recorded from a sender that sent ``false``.
+
+    8.15.0 ships ``RESPONSES_PARALLEL_TOOL_CALLS`` on, which flips one field
+    in every Responses body -- including the ``|thinking-stripped`` twins this
+    file compares against. The pin keeps both sides of each comparison on the
+    pre-8.15.0 bytes, so the claim "this body equals v7.58.0's with the
+    thinking left out" stays exact; ``tests/providers/
+    test_responses_parallel_tool_calls.py`` proves the one cell 8.15.0 moves,
+    in both directions, on both doors.
+    """
+
+    pin_parallel_tool_calls_off(monkeypatch)
+    try:
+        yield
+    finally:
+        unpin_parallel_tool_calls()
+
 
 #: A 1x1 PNG, the smallest image both dialects carry.
 _PNG = (

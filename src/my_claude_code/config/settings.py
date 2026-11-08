@@ -219,6 +219,7 @@ from .constants import (
     REQUEST_WATCHDOG_INTERVAL_SECONDS_DEFAULT,
     REQUEST_WATCHDOG_LOG_MAX_MB_DEFAULT,
     REQUEST_WATCHDOG_STALL_SECONDS_DEFAULT,
+    RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
     SERVER_PORT_TAKEOVER_CHOICES,
     SERVER_PORT_TAKEOVER_DEFAULT,
@@ -1830,6 +1831,17 @@ class Settings(BaseSettings):
     prompt_cache_ttl_haiku: str = Field(
         default=PROMPT_CACHE_TTL_TIER_DEFAULT,
         validation_alias="PROMPT_CACHE_TTL_HAIKU",
+    )
+    # Whether a Responses body asks the host for parallel tool calls (8.15.0).
+    # One value for every Responses door -- the ChatGPT subscription and the
+    # shared transport OpenCode Zen/Go are served on -- because the field is a
+    # property of the protocol rather than of a host. Read where the body is
+    # built, so a save applies to the next request with no restart and no
+    # provider rebuild. True ships by the user's decision (2026-11-08); false
+    # reproduces every byte v8.14.3 sent.
+    responses_parallel_tool_calls: bool = Field(
+        default=RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
+        validation_alias="RESPONSES_PARALLEL_TOOL_CALLS",
     )
 
     # ==================== HTTP Client Timeouts ====================
@@ -3471,6 +3483,34 @@ def configured_opencode_client_runtime() -> str:
     """The ``<runtime>/<version>`` the operator pinned, or ``""``."""
     settings = get_settings()
     return str(getattr(settings, "opencode_client_runtime", "") or "")
+
+
+def configured_responses_parallel_tool_calls() -> bool:
+    """Whether a Responses body asks its host for parallel tool calls (8.15.0).
+
+    Read per request, at the moment the body is built, for the same reason the
+    OpenCode identity above is: a value captured when a provider was
+    constructed could not follow a dashboard save, and this setting needs no
+    restart. Both Responses senders call this and hand the answer to
+    :func:`~my_claude_code.providers.openai_responses.conversion.
+    build_responses_request_body`, whose own keyword default stays ``False``
+    so a caller that says nothing keeps the bytes every release before 8.15.0
+    sent.
+
+    ``getattr`` with the shipped default rather than a bare attribute read:
+    the settings object is rebuilt from the environment on every admin save
+    (``get_settings.cache_clear``), and a field this module no longer declared
+    would otherwise turn every Responses request into an ``AttributeError``
+    on the request path.
+    """
+    settings = get_settings()
+    return bool(
+        getattr(
+            settings,
+            "responses_parallel_tool_calls",
+            RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
+        )
+    )
 
 
 def configured_opencode_free_tier_models() -> tuple[str, ...]:

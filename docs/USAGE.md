@@ -4880,6 +4880,26 @@ Model Config's settings and the override rows reach every host with a lifetime l
 
 Each attempt's request detail records `prompt_cache_ttl` beside the body whenever a setting applied: the minutes asked and which setting asked them (`from`: `model_override`, `provider_override`, the tier setting such as `PROMPT_CACHE_TTL_OPUS`, or `PROMPT_CACHE_TTL`), the lifetime sent, the lifetimes the host takes, how many markers there were and how many were changed, whether one was added (or, on Azure, the `field` written), and any lifetime the host refused. With nothing set the key is absent and every stored row is exactly what it was.
 
+### Responses protocol
+
+**New in 8.15.0.** The Responses API has a field the Anthropic Messages protocol does not: `parallel_tool_calls`, which tells the host whether the model may answer one turn with several tool calls at once. Two of MCC's doors speak that protocol — the **ChatGPT subscription** (`chatgpt_oauth`, and its `openai` alias) and the **shared Responses transport** that OpenCode Zen and OpenCode Go are served on. Until 8.15.0 both senders hard-coded it to `false`.
+
+That is not what the reference client does: Codex CLI sets the field from its own configuration rather than pinning it, and the cost of pinning it is measurable. On this machine's request log, **0.4 %** of ChatGPT OAuth turns carried more than one tool block (76 of 20,697) against **23.2 %** on the Anthropic subscription door — a 58× difference on a door where Claude Code's own prompting asks for batched reads, greps and edits. A model told to batch and forbidden from doing so serialises the work, which costs turns.
+
+To choose, open **Model Config → Reasoning → Responses protocol**:
+
+| Setting | Default | Values |
+| --- | --- | --- |
+| `RESPONSES_PARALLEL_TOOL_CALLS` | `true` | `true` — the model may batch; `false` — one tool call per turn |
+
+**This changes behaviour for every Responses request, by default.** It is the one setting in this release that does: a fresh install, and an existing install that has no line for it in its `.env`, sends `"parallel_tool_calls": true` where every release up to 8.14.3 sent `false`. Set it to `false` — on the page, or with a line in `~/.mcc/.env` — to get the old bytes back exactly: with the setting off, every Responses body is byte-identical to 8.14.3's, which is what the historical equality contracts pin.
+
+**What it does not touch.** The field exists only on the Responses protocol. The Anthropic Messages door (the Claude API, the Claude subscription, Command Code, OpenCode Zen's Messages door, every custom Messages provider) has no such field and is unchanged; so is the Chat Completions door, which has `parallel_tool_calls` only on the inbound `/v1/chat/completions` surface where a client sends it. Media, web search, `/v1/models` and every catalogue are untouched.
+
+**What it is not.** It is **not** a fix for agents failing to spawn. Codex sends `false` on this backend too, and the same request log shows `gpt-6-luna` making **1,674** `Agent` calls while the field was `false`, so the flag cannot be what stops a spawn. It is a real capability gap closed, not a diagnosis.
+
+A save applies to the next request, with no restart: the value is read when the body is built, not when the provider was constructed.
+
 ---
 
 ## 10. Web search

@@ -1764,6 +1764,10 @@
       "control": "field-REQUEST_WATCHDOG_STALL_SECONDS",
       "page": "limits"
     },
+    "RESPONSES_PARALLEL_TOOL_CALLS": {
+      "control": "field-RESPONSES_PARALLEL_TOOL_CALLS",
+      "page": "model_config"
+    },
     "SAMBANOVA_API_KEY": {
       "control": "field-SAMBANOVA_API_KEY",
       "page": "providers"
