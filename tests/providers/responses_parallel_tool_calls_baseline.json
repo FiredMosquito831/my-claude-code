@@ -1,0 +1,139 @@
+{
+ "_what": "8.15.0 RESPONSES_PARALLEL_TOOL_CALLS off-equality baseline: the bodies v8.14.3 built for the same fixture through the same two senders. Recorded on a detached worktree at 179c19aa.",
+ "_written_on": "179c19aa (v8.14.3)",
+ "bodies": {
+  "chatgpt_oauth": {
+   "model": "gpt-5.6-terra",
+   "input": [
+    {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "list the files"
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "Reading."
+      }
+     ]
+    },
+    {
+     "type": "function_call",
+     "call_id": "toolu_01",
+     "name": "Bash",
+     "arguments": "{\"command\": \"ls\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "toolu_01",
+     "output": "a.txt"
+    }
+   ],
+   "store": false,
+   "stream": true,
+   "parallel_tool_calls": false,
+   "instructions": "You are a test harness.",
+   "tools": [
+    {
+     "type": "function",
+     "name": "Bash",
+     "description": "Run a shell command.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "command": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "command"
+      ]
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "reasoning": {
+    "effort": "medium",
+    "summary": "auto"
+   },
+   "include": [
+    "reasoning.encrypted_content"
+   ]
+  },
+  "shared_responses_transport": {
+   "model": "gpt-5.6-terra",
+   "input": [
+    {
+     "type": "message",
+     "role": "user",
+     "content": [
+      {
+       "type": "input_text",
+       "text": "list the files"
+      }
+     ]
+    },
+    {
+     "type": "message",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "Reading."
+      }
+     ]
+    },
+    {
+     "type": "function_call",
+     "call_id": "toolu_01",
+     "name": "Bash",
+     "arguments": "{\"command\": \"ls\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "toolu_01",
+     "output": "a.txt"
+    }
+   ],
+   "store": false,
+   "stream": true,
+   "parallel_tool_calls": false,
+   "max_output_tokens": 512,
+   "instructions": "You are a test harness.",
+   "tools": [
+    {
+     "type": "function",
+     "name": "Bash",
+     "description": "Run a shell command.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "command": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "command"
+      ]
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "reasoning": {
+    "effort": "medium",
+    "summary": "auto"
+   },
+   "include": [
+    "reasoning.encrypted_content"
+   ]
+  }
+ }
+}

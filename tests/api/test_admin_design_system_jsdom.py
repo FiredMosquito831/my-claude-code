@@ -57,7 +57,9 @@ EXPECTED_NAVIGATOR = {
     "optimizer": 5,
     "web_search": 4,
     "limits": 8,
-    "guide": 41,
+    # 8.15.0 adds the Guide's "Responses protocol" section, which is one more
+    # heading in the strip's own table.
+    "guide": 42,
     "docs": 3,
     # 8.7.0 (USAGE-LAYOUTS): the Usage page's strip. THREE entries, not five:
     # the five layouts draw five different DOMs, so the strip names the
@@ -260,11 +262,16 @@ def test_with_both_features_off_every_view_is_the_base_tree(
     # hashes that draw cards (`proxying` renders the same cards per configured
     # provider in `#proxyingList`); `guide` and `requests` were already
     # declared. `web_search` is not one of the views this file compares.
+    # 8.15.0: `model_config` gains the "Responses protocol" subheading on the
+    # Reasoning card -- one heading, one lead sentence and one control, drawn
+    # by `renderReasoningSection`. Declared rather than re-shot: the rest of
+    # the page is still the base tree's bytes, which is what this test says.
     DECLARED_MOVES: set[str] = {
         "guide",
         "requests",
         "providers",
         "proxying",
+        "model_config",
     }
     base = baseline["views"]
     mine = design_system_off["views"]

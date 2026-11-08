@@ -56,8 +56,33 @@ from my_claude_code.providers.openai_responses import (
     responses_tool_name_codec,
 )
 from tests.providers.support import passthrough_rate_limiter
+from tests.support.parallel_tool_calls_pin import (
+    pin_parallel_tool_calls_off,
+    unpin_parallel_tool_calls,
+)
 
 HERE = Path(__file__).parent
+
+
+@pytest.fixture(autouse=True)
+def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
+    """The goldens below were captured at 4bad9787, before 8.15.0.
+
+    ``chatgpt_oauth_long_tool_names_golden.json`` is a whole Responses body,
+    and 8.15.0 ships ``RESPONSES_PARALLEL_TOOL_CALLS`` on -- so without this
+    pin the "byte-identical to the pre-fix golden" claims in (c) and (h) would
+    fail on a field neither of them is about. The pin keeps every recorded
+    byte exact; ``tests/providers/test_responses_parallel_tool_calls.py``
+    proves the one cell 8.15.0 does move, and that it moves nothing else.
+    """
+
+    pin_parallel_tool_calls_off(monkeypatch)
+    try:
+        yield
+    finally:
+        unpin_parallel_tool_calls()
+
+
 WIRE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 CONSOLE = "mcp__plugin_chrome-devtools-mcp_chrome-devtools__get_console_message"
 INSIGHT = "mcp__plugin_chrome-devtools-mcp_chrome-devtools__performance_analyze_insight"

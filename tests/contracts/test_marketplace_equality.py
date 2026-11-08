@@ -46,8 +46,31 @@ from my_claude_code.config.model_overrides import (
 from tests.contracts.adaptive_expectations import moved as adaptive_moves
 from tests.contracts.go_reasoning_expectations import corrections
 from tests.contracts.marketplace_equality_corpus import compact, record_digest, snapshot
+from tests.support.parallel_tool_calls_pin import (
+    pin_parallel_tool_calls_off,
+    unpin_parallel_tool_calls,
+)
 
 BASELINE_PATH = Path(__file__).with_name("marketplace_equality_baseline.json")
+
+
+@pytest.fixture(autouse=True)
+def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
+    """Every record here was captured from a sender that sent ``false``.
+
+    8.15.0 ships ``RESPONSES_PARALLEL_TOOL_CALLS`` on, which moves one field in
+    every ``responses/*`` record -- and this file's whole claim is that the
+    marketplace moved no byte of any *other* call. The pin keeps that claim
+    exact and keeps the recorded move set at the two it names;
+    ``tests/providers/test_responses_parallel_tool_calls.py`` proves the one
+    cell 8.15.0 does move, on both doors.
+    """
+
+    pin_parallel_tool_calls_off(monkeypatch)
+    try:
+        yield
+    finally:
+        unpin_parallel_tool_calls()
 
 
 def _baseline() -> dict[str, Any]:

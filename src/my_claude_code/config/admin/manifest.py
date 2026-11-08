@@ -1524,6 +1524,28 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         affects_providers=False,
         description=_tier_prompt_cache_ttl_help("Haiku"),
     ),
+    # The "Responses protocol" subheading of the Reasoning section (8.15.0):
+    # choices a Responses body carries, for every host that serves one -- the
+    # ChatGPT subscription and the shared transport OpenCode Zen/Go are on.
+    ConfigFieldSpec(
+        "RESPONSES_PARALLEL_TOOL_CALLS",
+        "Parallel Tool Calls",
+        "reasoning",
+        "boolean",
+        settings_attr="responses_parallel_tool_calls",
+        default="true",
+        affects_providers=False,
+        description=(
+            "Whether a Responses request asks its host for parallel tool calls. On "
+            "(the default) lets the model batch independent reads, greps and edits "
+            "into one turn, which is what Claude Code's own prompting asks for; off "
+            "asks for one tool call per turn. It reaches every Responses host -- the "
+            "ChatGPT subscription and the shared transport OpenCode Zen and Go are "
+            "served on -- and changes nothing on the Anthropic or Chat Completions "
+            "doors, which have no such field. Off restores every byte 8.14.3 sent. A "
+            "save applies to the next request, with no restart."
+        ),
+    ),
     ConfigFieldSpec(
         "ANTHROPIC_AUTH_TOKEN",
         "API/CLI Auth Token",

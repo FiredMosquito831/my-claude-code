@@ -1162,6 +1162,27 @@ PROMPT_CACHE_TTL_TIER_DEFAULT = PROMPT_CACHE_TTL_INHERIT
 PROMPT_CACHE_TTL_MIN_MINUTES = 1
 PROMPT_CACHE_TTL_MAX_MINUTES = 60
 
+# Whether a Responses request asks the host for parallel tool calls (8.15.0).
+#
+# One setting for every Responses door -- the ChatGPT subscription and the
+# shared transport OpenCode Zen/Go are served on -- because it is a property of
+# the protocol, not of a host: `parallel_tool_calls` is a field of the Responses
+# body and every host that takes the body takes the field.
+#
+# True, by the user's decision (2026-11-08, "parallel tool calls should be full
+# adapter level setting or option we can toggle on or off (default on)").
+# Before 8.15.0 both senders hard-coded `false`, which is what the reference
+# client does *not* do -- Codex CLI sets it from its own config -- and the cost
+# was measurable: 0.4% of ChatGPT OAuth turns carried more than one tool block
+# against 23.2% on the Anthropic door (INVESTIGATION-REASONING-CONTINUITY-PER-
+# DOOR.md 6.2), a 58x difference on a door where Claude Code's own prompting
+# asks for batched calls.
+#
+# `false` is not a degraded mode: it reproduces every byte v8.14.3 sent, which
+# is what the equality contracts pin. The builder's own keyword default stays
+# `False` for the same reason -- a caller that says nothing keeps those bytes.
+RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT = True
+
 # The longest edge, in pixels, an outbound image may have. The default is the
 # number Anthropic itself resizes to and the number Claude Code ships
 # (`maxTargetPx: 1568`, `maxTargetTokens: 1568`); combined with the destination

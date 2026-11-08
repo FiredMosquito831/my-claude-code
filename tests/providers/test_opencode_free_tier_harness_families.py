@@ -71,6 +71,7 @@ from tests.providers.opencode_family_bodies import (
     opencode_provider,
     tool_request,
 )
+from tests.support.parallel_tool_calls_pin import pin_parallel_tool_calls_off
 
 GOLDEN = json.loads(
     (Path(__file__).parent / "opencode_harness_families_golden.json").read_text(
@@ -104,6 +105,13 @@ def _fresh_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "OPENCODE_FREE_TIER_CREDENTIAL",
     ):
         monkeypatch.delenv(name, raising=False)
+    # 8.15.0: the golden below was written by the 7.49.0 code, which sent
+    # ``parallel_tool_calls: false`` on every Responses body. The shipped
+    # default is now ``true``, so the pin keeps this file's claim exact --
+    # "the tool-name-family work moved no byte" -- and
+    # ``tests/providers/test_responses_parallel_tool_calls.py`` proves the one
+    # cell 8.15.0 does move, and that it moves nothing else.
+    pin_parallel_tool_calls_off(monkeypatch)
     _clear_settings()
     yield
     _clear_settings()

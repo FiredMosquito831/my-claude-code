@@ -604,6 +604,11 @@ def build_responses_request_body(
     ``store``/``stream``/``parallel_tool_calls``
         the three the ChatGPT/Codex backend has always been sent, and the
         defaults so that caller's body is unchanged by this function existing.
+        Since 8.15.0 the two Responses senders pass
+        ``parallel_tool_calls`` from the operator's setting
+        (``RESPONSES_PARALLEL_TOOL_CALLS``, on by default) instead of a
+        constant; the keyword default here stays ``False``, so a caller that
+        says nothing still gets the bytes every release before 8.15.0 sent.
     ``max_output_tokens``
         the Responses spelling of the output allowance. ``None`` omits it,
         which is what the Codex endpoint wants (OpenCode's own codex plugin
