@@ -189,6 +189,154 @@ def _json_object(data: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _frame_data_text(frame: str) -> str | None:
+    """The JSON one SSE frame carries, or ``None`` when it carries other than one.
+
+    An Anthropic frame is ``event: <name>`` plus exactly one ``data:`` line, and
+    that is the shape both MCC's own emitter and the Anthropic Messages relay
+    write (the relay re-serialises every upstream frame into it). A frame with
+    no ``data:`` line, or with several, is one this module does not understand,
+    and the caller leaves it exactly as it arrived rather than guessing.
+    """
+
+    payloads = [
+        line[5:].lstrip(" ") for line in frame.split("\n") if line.startswith("data:")
+    ]
+    if len(payloads) != 1:
+        return None
+    return payloads[0]
+
+
+def _replace_json_string_value(text: str, key: str, old: str, new: str) -> str | None:
+    """Replace the one ``"key": "<old>"`` value in ``text``; ``None`` if not one.
+
+    A textual replacement rather than a re-serialisation, because the frame is
+    on its way to a client: re-encoding the payload would rewrite bytes nobody
+    asked to change -- the Anthropic Messages door relays a host's own
+    serialisation, which is compact while MCC's own emitter is not -- and the
+    only byte this feature is allowed to move is the model's value.
+
+    ``None`` when the value is absent or appears more than once: an ambiguous
+    match is left alone rather than guessed at.
+    """
+
+    needle = f"{json.dumps(key)}:"
+    encoded_old = json.dumps(old)
+    encoded_new = json.dumps(new)
+    found = -1
+    search_from = 0
+    while True:
+        at = text.find(needle, search_from)
+        if at < 0:
+            break
+        value_at = at + len(needle)
+        while value_at < len(text) and text[value_at] in " \t\r\n":
+            value_at += 1
+        if text.startswith(encoded_old, value_at):
+            if found >= 0:
+                return None
+            found = value_at
+        search_from = at + len(needle)
+    if found < 0:
+        return None
+    return f"{text[:found]}{encoded_new}{text[found + len(encoded_old) :]}"
+
+
+def rewrite_message_start_model(frame: str, model: str) -> str | None:
+    """Return ``frame`` with ``message.model`` set to ``model``.
+
+    ``None`` means the frame is not a ``message_start``, so a caller still
+    looking for one keeps looking. A frame that IS one is returned either way --
+    a message carries exactly one, so the search is over -- and it is returned
+    byte for byte unchanged when the model already matches, when the frame
+    carries no string model to replace, or when the value cannot be located
+    unambiguously. Nothing here can corrupt a frame: the worst case is that the
+    client sees what it saw before this feature existed.
+
+    This is the response-model boundary. Claude Code marks an assistant turn
+    *foreign* when ``message_start.message.model`` differs from the model it
+    asked for, and strips every ``thinking``/``redacted_thinking`` block from
+    such a turn. MCC routes a request to a provider model, so a reply built by
+    MCC's own ledger -- or echoed by an Anthropic-shaped host -- names the
+    routed model, and every turn of a non-Anthropic door reads as foreign. The
+    fix belongs here, at the one funnel every Anthropic SSE frame passes
+    through, rather than in the ledger (which covers two of the three upstream
+    door families) or in routing (whose rewrite of ``request.model`` is what
+    must go upstream, and is correct).
+    """
+
+    if '"message_start"' not in frame:
+        return None
+    data = _frame_data_text(frame)
+    if data is None:
+        return None
+    payload = _json_object(data)
+    if payload is None or payload.get("type") != "message_start":
+        return None
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return frame
+    current = message.get("model")
+    if not isinstance(current, str) or current == model:
+        return frame
+    replaced = _replace_json_string_value(frame, "model", current, model)
+    if replaced is None:
+        return frame
+    return replaced
+
+
+class _RequestedModelStream(AsyncIterator[str]):
+    """Rewrite the first ``message_start`` frame's model as it passes through.
+
+    ``message_start`` is the first frame of an Anthropic stream, so this
+    disarms on the frame it rewrites and every later chunk is handed back by
+    identity: nothing is buffered, nothing is re-ordered, and a stream that
+    never carries a ``message_start`` (an error-only one) is passed through
+    untouched.
+    """
+
+    __slots__ = ("_body", "_model")
+
+    def __init__(self, body: AsyncIterator[str], model: str) -> None:
+        self._body = body
+        self._model = model
+
+    def __aiter__(self) -> _RequestedModelStream:
+        return self
+
+    async def __anext__(self) -> str:
+        chunk = await anext(self._body)
+        model = self._model
+        if model is not None:
+            rewritten = rewrite_message_start_model(chunk, model)
+            if rewritten is not None:
+                self._model = None
+                return rewritten
+        return chunk
+
+    async def aclose(self) -> None:
+        self._model = None
+        close_error = await try_close_async_iterator(self._body)
+        if close_error is not None:
+            raise close_error
+
+
+def requested_model_stream(
+    body: AsyncIterator[str], model: str | None
+) -> AsyncIterator[str]:
+    """Report ``model`` as the reply's model on the stream ``body``.
+
+    ``None`` or an empty name means the caller has nothing to report -- a
+    surface that never resolved a route, or a route with no alias -- and the
+    body is returned unwrapped, so such a request is byte-identical to what it
+    was before this feature existed.
+    """
+
+    if not model:
+        return body
+    return _RequestedModelStream(body, model)
+
+
 @dataclass(frozen=True, slots=True)
 class StreamKeepalive:
     """When a silent streaming response gets a keepalive frame, and for how long.
@@ -988,10 +1136,19 @@ async def anthropic_sse_streaming_response(
     pre_start_error_response: PreStartErrorResponse,
     request_id: str,
     keepalive: StreamKeepalive | None = None,
+    response_model: str | None = None,
 ) -> Response:
-    """Return a streaming response for Anthropic-style SSE streams."""
+    """Return a streaming response for Anthropic-style SSE streams.
+
+    ``response_model`` is the model the client asked for -- the alias it sent,
+    not the one routing resolved it to. It is written into the first
+    ``message_start`` frame's ``message.model`` on the way out, for every
+    provider and every Anthropic client, because Claude Code discards the
+    reasoning of any turn whose model name differs from the one it requested.
+    ``None`` leaves the stream untouched.
+    """
     return await _first_chunk_streaming_response(
-        body,
+        requested_model_stream(body, response_model),
         headers=ANTHROPIC_SSE_RESPONSE_HEADERS,
         pre_start_error_response=pre_start_error_response,
         terminal_frame=_anthropic_terminal_frame,

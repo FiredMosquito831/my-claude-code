@@ -225,7 +225,13 @@ async def test_messages_handler_aggregates_provider_stream_when_stream_false() -
     assert body["id"] == "msg_test"
     assert body["type"] == "message"
     assert body["role"] == "assistant"
-    assert body["model"] == "test-model"
+    # The model the CLIENT asked for, not the one routing resolved it to: the
+    # fold reads ``model`` out of ``message_start``, and a ``stream: false``
+    # client must see the same name a streaming one does (8.15.1). The routed
+    # id is still what went upstream, and it is still what the request log
+    # records as ``resolved_model``.
+    assert body["model"] == "nvidia_nim/test-model"
+    assert provider.requests[0].model == "test-model"
     assert body["content"] == [{"type": "text", "text": "OK"}]
     assert body["stop_reason"] == "end_turn"
     assert body["usage"] == {"input_tokens": 7, "output_tokens": 2}
