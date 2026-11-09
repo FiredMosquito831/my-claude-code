@@ -1247,7 +1247,9 @@ def test_the_carrier_replay_setting_reaches_both_responses_senders(
     from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
     from tests.providers.support import passthrough_rate_limiter
 
-    expected = False if value is None else value == "true"
+    # 8.16.2 flipped the shipped default to on, so "unset" now means on. The
+    # three cases stay: unset (the default), explicit true, explicit false.
+    expected = True if value is None else value == "true"
     if value is None:
         monkeypatch.delenv("RESPONSES_CARRIER_REPLAY", raising=False)
     else:

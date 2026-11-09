@@ -1552,7 +1552,7 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "reasoning",
         "boolean",
         settings_attr="responses_carrier_replay",
-        default="false",
+        default="true",
         affects_providers=False,
         description=(
             "Whether a Responses request carries the host's own encrypted reasoning "
@@ -1567,9 +1567,10 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "provenance guard (8.16.1) refuses that envelope at every other door too -- "
             "the Messages family and the Chat Completions family, including the "
             "OpenRouter-dialect gateways -- and records history_carrier_foreign. No "
-            "readable reasoning text is ever written back. Off (the default) restores "
-            "every byte 8.15.1 sent. A save applies to the next request, with no "
-            "restart."
+            "readable reasoning text is ever written back. A host that refuses a "
+            "replayed item costs one request and is then never sent one again. Off "
+            "restores every byte 8.15.1 sent. A save applies to the next request, with "
+            "no restart."
         ),
     ),
     ConfigFieldSpec(

@@ -4902,13 +4902,15 @@ A save applies to the next request, with no restart: the value is read when the 
 
 #### Encrypted reasoning replay
 
-**New in 8.16.0, and off by default.** The Responses API can return a reasoning item's `encrypted_content` — an opaque blob the host minted — and on a `store: false` conversation that blob is the **only** way the reasoning survives to the next turn. MCC has asked for it since 7.5.0 (`include: ["reasoning.encrypted_content"]`) and then thrown it away: `history_thinking_omitted` was recorded on **13,856 of 26,566** measured ChatGPT OAuth attempts (52.2 %), **96.5 %** of `gpt-6.1-sol` and **93.5 %** of `gpt-6-luna`.
+**New in 8.16.0; on by default since 8.16.2.** The Responses API can return a reasoning item's `encrypted_content` — an opaque blob the host minted — and on a `store: false` conversation that blob is the **only** way the reasoning survives to the next turn. MCC has asked for it since 7.5.0 (`include: ["reasoning.encrypted_content"]`) and then thrown it away: `history_thinking_omitted` was recorded on **13,856 of 26,566** measured ChatGPT OAuth attempts (52.2 %), **96.5 %** of `gpt-6.1-sol` and **93.5 %** of `gpt-6-luna`.
 
 With `RESPONSES_CARRIER_REPLAY` on, MCC hands the blob to the client — inside the `thinking` block's `signature` when the item has a readable summary, as a standalone `redacted_thinking` block when it does not — and, on the next turn, decodes it back into the `reasoning` input item it came from, at the head of that turn's `input[]` run.
 
 | Setting | Default | Values |
 | --- | --- | --- |
-| `RESPONSES_CARRIER_REPLAY` | `false` | `true` — replay the host's own reasoning item; `false` — every byte 8.15.1 sent |
+| `RESPONSES_CARRIER_REPLAY` | `true` | `true` — replay the host's own reasoning item; `false` — every byte 8.15.1 sent |
+
+**Why it is on by default.** It shipped off in 8.16.0 because two preconditions were unmet: the provenance guard (8.16.1) had not shipped, and neither had the fail-soft for a host that refuses a replayed item. Both have. A host that refuses one costs a **single** request and is then never sent one again. Turning it off is safe at any time and restores every byte 8.15.1 sent.
 
 **The envelope is host- and model-bound.** Every blob is wrapped in MCC's own `mcc:reasoning:v1:` envelope, which records the provider, the protocol, the endpoint, the **account** (never the rotating credential) and the routed model that minted it. A blob is replayed only when all five match the host it is about to be sent to; otherwise it is dropped and counted (`history_carrier_foreign`), and the turn proceeds with the reasoning omitted, exactly as before. A session that alternates between two models therefore keeps two independent continuity chains — which is what the backend itself does.
 
