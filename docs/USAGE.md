@@ -4938,6 +4938,26 @@ The Chat-Completions seam was a **live defect** independent of the replay featur
 
 **What you see.** A request whose history carried a carrier that could not go gains one line in its request detail — `history_carrier_foreign`, a count, never any content. A request that carried none records exactly what it recorded before.
 
+##### Keeping the text when only the envelope has to go
+
+**New in 8.16.3, and it has no setting either.** A carrier and the readable summary beside it are two different things with two different rules: the envelope is bound to the host, model and account that minted it, and the text is not bound to anything. So the guard now has three answers instead of two, and the third one saves the reasoning:
+
+| The block | The destination | What MCC sends |
+| --- | --- | --- |
+| a carrier in a `thinking` block's `signature`, **with** readable text | a Messages host that declares it **signs nothing** — OpenCode Go's `/messages` door today | **the block, with its text and its position, and no `signature` key**; counted `history_carrier_stripped` |
+| the same block | a Messages host that **signs** — `anthropic`, `anthropic_oauth`, `commandcode`, every other Messages door | **nothing**; counted `history_carrier_foreign` — unchanged from 8.16.2 |
+| a carrier with **no** readable text, or a carrier in a `redacted_thinking` block's `data` | every door | **nothing**; counted `history_carrier_foreign` |
+
+The `signature` key is **removed**, not blanked. A host that signs nothing has no signature on its own thinking blocks either, so removing the key reproduces a shape it has already seen, where `signature: ""` would be a shape it has not.
+
+**Why the Anthropic door still recovers nothing.** Anthropic requires a signature on every `thinking` block it is sent and answers a 400 to one that is missing, not a string, or blank — measured against the live API on three Claude models. Stripping the signature there would not save the text; it would only move the drop one rule later, and cost a failed request. That is a property of Anthropic's protocol, not a gap MCC can close: there is no `thinking` block Anthropic accepts without a signature it minted, and MCC cannot mint one.
+
+**Why the Chat Completions door needed no change.** It never reads a `thinking` block's `signature` at all — the conversion reads the block's *text* and nothing else — so the summary beside a carrier has always crossed there and still does. 8.16.3 pins that with tests rather than changing it.
+
+**The strip is per request, never per history.** It is written into the outbound copy for one attempt, so the client's transcript is untouched and a hop through a non-signing host cannot change what a later turn to the signing model sends. That is what keeps the prompt cache safe: return to the original model and its prefix is exactly what it would have been if the middle hop had never happened. The strip also appears identically on every turn to the same host, because it is a pure function of the block and the door's declaration, so a single-model conversation keeps a strict prefix turn to turn.
+
+**What you see.** A request whose history had a carrier removed from a block that kept its text gains `history_carrier_stripped` — `removed 1 reasoning carrier from a block whose text was kept (this host signs nothing)`. It is a separate line from `history_carrier_foreign` on purpose: one says a block was lost, the other says the text survived and only the envelope went.
+
 A save applies to the next request, with no restart.
 
 ---
