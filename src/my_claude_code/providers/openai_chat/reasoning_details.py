@@ -129,11 +129,19 @@ def carrier_foreign_note_for_history(messages: Any) -> dict[str, str]:
     minted by an MCC with a higher size guard is still dropped rather than
     forwarded because it was "too big to be ours".
 
-    Only assistant turns are read, and only the two fields that can hold an
-    envelope: a ``thinking`` block's ``signature`` and a ``redacted_thinking``
-    block's ``data``. A ``thinking`` block's ``thinking`` text is the host's own
-    summary -- portable across models and providers by decision 9 -- and is
-    never read here.
+    Only assistant turns are read, and **only the one field this door can send**:
+    a ``redacted_thinking`` block's ``data``. That is deliberate, and it is why
+    the count is honest rather than merely plausible.
+
+    A ``thinking`` block's ``signature`` is a carrier surface on the **Messages**
+    door, where the block goes out whole -- and the Messages trim counts it
+    there. This door never sends a signature at all: ``_convert_assistant_message``
+    reads a ``thinking`` block's **text** (as ``reasoning_content`` or think
+    tags) and nothing else, so a carrier in a signature has no path to the wire
+    here and counting it would make the line claim a drop that never happened.
+    A ``thinking`` block's ``thinking`` text is the host's own summary --
+    portable across models and providers by decision 9 -- and is never read
+    here either.
 
     ``{}`` when the history carries none, which keeps every other request's
     recorded params exactly as they were.
@@ -149,14 +157,9 @@ def carrier_foreign_note_for_history(messages: Any) -> dict[str, str]:
         if not _is_sequence(content):
             continue
         for block in content:
-            kind = _field(block, "type")
-            if kind == "thinking":
-                value = _field(block, "signature")
-            elif kind == "redacted_thinking":
-                value = _field(block, "data")
-            else:
+            if _field(block, "type") != "redacted_thinking":
                 continue
-            if is_carrier(value):
+            if is_carrier(_field(block, "data")):
                 count += 1
     return carrier_foreign_note(count)
 

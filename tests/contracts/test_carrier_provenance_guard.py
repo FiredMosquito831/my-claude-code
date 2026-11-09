@@ -595,6 +595,28 @@ def test_the_chat_door_counts_what_it_dropped(provider_id: str) -> None:
     assert carrier_foreign_note_for_history(clean.messages) == {}
 
 
+@pytest.mark.parametrize("provider_id", CHAT_CARRIER_PROFILES)
+def test_the_chat_door_does_not_count_a_carrier_it_could_never_send(
+    provider_id: str,
+) -> None:
+    """A signature carrier has no path to the wire here, so it is not counted.
+
+    The Messages door sends a ``thinking`` block whole and therefore counts a
+    carrier in its ``signature``. This door never sends a signature at all --
+    ``_convert_assistant_message`` reads the block's *text* and nothing else --
+    so counting one would make ``history_carrier_foreign`` claim a drop that
+    never happened. The line and the body must agree, which is the rule
+    ``empty_system_messages_note`` states and this note inherits.
+    """
+
+    request = _request(_carrier_in_signature(), model="a-chat-model")
+    assert carrier_foreign_note_for_history(request.messages) == {}
+    # And the body carries neither the envelope nor a reasoning detail.
+    body = _chat_body(provider_id, _carrier_in_signature())
+    assert CARRIER not in json.dumps(body)
+    assert _chat_details(body) == []
+
+
 def test_the_chat_runner_records_the_carrier_note_in_its_wire_notes() -> None:
     """The line reaches ``params.wire``, not just the helper's return value.
 
