@@ -1316,3 +1316,107 @@ def test_the_carrier_replay_setting_reaches_both_responses_senders(
     shared_kinds = [entry.get("type") for entry in shared["input"]]
     assert ("reasoning" in shared_kinds) is expected
     assert (chatgpt_origin is not None) is expected
+
+
+@pytest.mark.parametrize("value", [None, "true", "false"])
+def test_the_plaintext_replay_setting_reaches_both_responses_senders(
+    value: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """8.17.0's RESPONSES_PLAINTEXT_REPLAY, from ``Settings`` to the wire.
+
+    Two senders, one value, and the value decides whether the plaintext pass
+    runs at all. The observable is the summary-only ``reasoning`` item the body
+    carries -- present with the setting on and the history carrying readable
+    text, absent with it off -- on **both** Responses doors.
+
+    The setting is read by the *provider* (``_plaintext_replay`` /
+    ``plaintext_replay``), immediately before the body is built, not by the pure
+    builders -- which is what makes it hot: a dashboard save reaches the next
+    request with no restart and no provider rebuild. Both readers are exercised
+    here, and the shared transport's is followed all the way to the body.
+
+    The three cases stay as the carrier's do: unset (the shipped default, which
+    is on), explicit true, explicit false.
+    """
+
+    from my_claude_code.config import settings as config_settings
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+    from my_claude_code.providers.base import ProviderConfig
+    from my_claude_code.providers.chatgpt_oauth.provider import ChatGPTOAuthProvider
+    from my_claude_code.providers.openai_chat import create_openai_chat_provider
+    from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+    from tests.providers.support import passthrough_rate_limiter
+
+    # 8.17.0 ships the default on, so "unset" now means on.
+    expected = True if value is None else value == "true"
+    if value is None:
+        monkeypatch.delenv("RESPONSES_PLAINTEXT_REPLAY", raising=False)
+    else:
+        monkeypatch.setenv("RESPONSES_PLAINTEXT_REPLAY", value)
+    config_settings.get_settings.cache_clear()
+    try:
+        request = MessagesRequest.model_validate(
+            {
+                "model": "gpt-5.6-terra",
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "a readable plan",
+                                "signature": "sig",
+                            }
+                        ],
+                    },
+                    {"role": "user", "content": "again"},
+                ],
+            }
+        )
+        provider = create_openai_chat_provider(
+            "opencode",
+            ProviderConfig(api_key="sk-test", base_url="https://opencode.ai/zen/v1"),
+            passthrough_rate_limiter(),
+            profile=OPENAI_CHAT_PROFILES["opencode"],
+        )
+        shared, _headers = provider._responses.build_body(
+            request,
+            reasoning=DEFAULT_REASONING_POLICY,
+            max_output_tokens=64,
+        )
+        chatgpt = ChatGPTOAuthProvider(
+            ProviderConfig(
+                api_key="test_token",
+                base_url="https://chatgpt.com/backend-api",
+                rate_limit=10,
+                rate_window=60,
+                max_concurrency=5,
+            ),
+            rate_limiter=passthrough_rate_limiter(),
+        )
+        chatgpt_plaintext = chatgpt._plaintext_replay("gpt-5.6-terra")
+        shared_plaintext = provider._responses.plaintext_replay("gpt-5.6-terra")
+    finally:
+        config_settings.get_settings.cache_clear()
+
+    shared_items = [
+        entry for entry in shared["input"] if entry.get("type") == "reasoning"
+    ]
+    assert bool(shared_items) is expected
+    assert chatgpt_plaintext is expected
+    assert shared_plaintext is expected
+    if expected:
+        # The item is the summary shape, on the real sender's real body.
+        assert shared_items == [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "a readable plan"}],
+            }
+        ]
+    else:
+        import json
+
+        assert "a readable plan" not in json.dumps(shared)

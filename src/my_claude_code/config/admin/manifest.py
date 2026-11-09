@@ -1574,6 +1574,30 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "RESPONSES_PLAINTEXT_REPLAY",
+        "Replay Readable Reasoning",
+        "reasoning",
+        "boolean",
+        settings_attr="responses_plaintext_replay",
+        default="true",
+        affects_providers=False,
+        description=(
+            "Whether a Responses request replays an earlier turn's readable reasoning "
+            "back to the model as a reasoning item. A Responses host can return "
+            "reasoning as an opaque encrypted blob, which the setting above replays; it "
+            "can also return plain summary text, and until now MCC sent neither, so a "
+            "fallback into this door lost whatever readable reasoning the previous "
+            "model had written. On, a thinking block's text (or an assistant turn's "
+            "top-level reasoning_content) becomes a reasoning input item carrying that "
+            "text as a summary, placed at the head of its own turn. The text is never "
+            "written as output text and never as a think tag, so the 7.58.1 echo class "
+            "stays closed. A block whose encrypted carrier was refused by the "
+            "provenance guard still has its text replayed here, because the envelope is "
+            "host-bound and the text is not. Off restores every byte 8.16.3 sent. A "
+            "save applies to the next request, with no restart."
+        ),
+    ),
+    ConfigFieldSpec(
         "ANTHROPIC_AUTH_TOKEN",
         "API/CLI Auth Token",
         "runtime",

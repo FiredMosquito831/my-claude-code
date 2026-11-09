@@ -1,6 +1,6 @@
 {
-  "_what": "Finite, approved wire-note corrections for 8.16.0. The historical baselines stay intact beside these; an unlisted case must still equal its baseline. Only *_wire_notes cells appear here -- no body moved.",
-  "_recorded_on": "a79b7544 (v8.15.1) before any other edit, by measuring the builder on the same corpus the contract reads",
+  "_what": "Finite, approved wire-note corrections for 8.16.0 and 8.17.0. The historical baselines stay intact beside these; an unlisted case must still equal its baseline. Only *_wire_notes cells appear here -- no body moved.",
+  "_recorded_on": "the 'empty' group on a79b7544 (v8.15.1) before any other edit, by measuring the builder on the same corpus the contract reads; the 'plaintext' group on the 8.17.0 branch, by measuring the same builder with RESPONSES_PLAINTEXT_REPLAY on and off",
   "cases": {
     "empty": {
       "fold_every_block/responses_wire_notes": {
@@ -10,6 +10,12 @@
       "fold_every_block/chatgpt_oauth_wire_notes": {
         "before": "sha256:bad37bf01b80d51dd8bd94c96f6ef14a8ffa6d14aaa2a3b19e688311dac1f0e6 bytes:137",
         "after": "sha256:5061f13531fbb8ed1a0b3dadeb6bb8d695b8003248c9ca07684ed8cead249cfd bytes:138"
+      }
+    },
+    "plaintext": {
+      "plain_thinking_block/responses_wire_notes": {
+        "before": "sha256:982c327b7a781ba73c1b0aa94eca0fb25225ff6a921cfc4c6b641aaa17d2a2c8 bytes:107",
+        "after": "sha256:f9567001e0ae3de1a86d14e719627076c8e556e581ff034d371cc03e140db9ab bytes:119"
       }
     }
   }

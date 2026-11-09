@@ -83,8 +83,24 @@ OPENCODE_ORIGIN = ReplayOrigin(
     model="muse-spark-1.3-contributor-free",
 )
 
+#: A third host, matching neither of the two above. A carrier minted for it is
+#: ``CARRIER_FOREIGN`` at both, which is what §7.3's three-hop fixture needs:
+#: the envelope is refused by A *and* by B, so both replay the text.
+THIRD_ORIGIN = ReplayOrigin(
+    provider="inferhub",
+    protocol="responses",
+    endpoint="https://api.inferhub.dev/v1",
+    connection=connection_id("a-third-account"),
+    model="a-third-model",
+)
+
 E1 = "gAAAAABpQ2Fycmllck9uZV9FbmNyeXB0ZWRDb250ZW50XzAxMjM0NTY3ODlh"
 E2 = "gAAAAABpQ2FycmllclR3b19FbmNyeXB0ZWRDb250ZW50X2FiY2RlZmdoaWo"
+
+#: The readable reasoning every plaintext shape carries. A string no other
+#: fixture uses, so "the text is in ``input``" and "the text is nowhere" are
+#: both unambiguous.
+PLAINTEXT = "the previous model's readable plan"
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +119,11 @@ def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
         pass
 
 
-def _carrier(encrypted: str, item_id: str | None = "rs_1") -> str:
+def _carrier(
+    encrypted: str,
+    item_id: str | None = "rs_1",
+    origin: ReplayOrigin = ORIGIN,
+) -> str:
     item: dict[str, Any] = {
         "type": "reasoning",
         "status": "completed",
@@ -113,7 +133,7 @@ def _carrier(encrypted: str, item_id: str | None = "rs_1") -> str:
     }
     if item_id is not None:
         item = {"id": item_id, **item}
-    carrier = encode_carrier(ORIGIN, item)
+    carrier = encode_carrier(origin, item)
     assert carrier is not None
     return carrier
 
@@ -224,6 +244,101 @@ CORPUS: dict[str, list[dict[str, Any]]] = {
         },
         {"role": "user", "content": "again"},
     ],
+    # ------------------------------------------------------------------ #
+    # 8.17.0's shapes. The eight above carry no plaintext-reasoning case
+    # that is not already a carrier case, so the plaintext pass needs its
+    # own: every branch of the dynamic rule, plus position and ordering.
+    # ------------------------------------------------------------------ #
+    "9_plain_thinking_no_carrier": [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [
+                _thinking(PLAINTEXT, "sig-from-anthropic"),
+                {"type": "text", "text": "hi"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ],
+    "10_plain_thinking_blank_text": [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [
+                _thinking("   ", "sig-from-anthropic"),
+                {"type": "text", "text": "hi"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ],
+    "11_foreign_carrier_with_text": [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [
+                # Minted for OPENCODE_ORIGIN, so the ChatGPT door refuses the
+                # envelope and the text must take the plaintext path.
+                _thinking(PLAINTEXT, _carrier(E1, "rs_1", OPENCODE_ORIGIN)),
+                {"type": "text", "text": "hi"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ],
+    "12_malformed_carrier_with_text": [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [
+                _thinking(PLAINTEXT, "mcc:reasoning:v1:" + "not-base64!!!"),
+                {"type": "text", "text": "hi"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ],
+    "13_string_turn_reasoning_content": [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "done", "reasoning_content": PLAINTEXT},
+        {"role": "user", "content": "again"},
+    ],
+    "14_carrier_and_plain_in_one_turn": [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": [
+                _thinking("a summary", _carrier(E1, "rs_1")),
+                _thinking(PLAINTEXT, "sig-from-anthropic"),
+                {"type": "text", "text": "done"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ],
+    "15_multi_turn_tool_loop_with_plaintext": [
+        {"role": "user", "content": "go"},
+        {
+            "role": "assistant",
+            "content": [
+                _thinking("first thought", "sig-1"),
+                _tool_use("call_1"),
+            ],
+        },
+        _tool_result("call_1"),
+        {
+            "role": "assistant",
+            "content": [
+                _thinking("second thought", "sig-2"),
+                _tool_use("call_2", "Grep"),
+            ],
+        },
+        _tool_result("call_2"),
+        {
+            "role": "assistant",
+            "content": [
+                _thinking("third thought", "sig-3"),
+                {"type": "text", "text": "done"},
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ],
 }
 
 
@@ -255,7 +370,11 @@ argued.
 
 
 def _opencode_body(
-    provider_id: str, request: MessagesRequest, policy: ReasoningPolicy, origin: Any
+    provider_id: str,
+    request: MessagesRequest,
+    policy: ReasoningPolicy,
+    origin: Any,
+    plaintext_replay: Any = OMIT,
 ) -> dict[str, Any]:
     provider = create_openai_chat_provider(
         provider_id,
@@ -266,6 +385,8 @@ def _opencode_body(
     kwargs: dict[str, Any] = {}
     if origin is not OMIT:
         kwargs["origin"] = origin
+    if plaintext_replay is not OMIT:
+        kwargs["plaintext_replay"] = plaintext_replay
     body = build_responses_request_body(
         request,
         reasoning=policy,
@@ -282,14 +403,27 @@ def _opencode_body(
     return body
 
 
-def _bodies(fixture: str, policy_name: str, origin: Any) -> dict[str, Any]:
-    """Every door's body for one corpus shape, at one setting."""
+def _bodies(
+    fixture: str,
+    policy_name: str,
+    origin: Any,
+    plaintext_replay: Any = OMIT,
+) -> dict[str, Any]:
+    """Every door's body for one corpus shape, at one setting.
+
+    ``plaintext_replay`` (8.17.0) is passed through to the two Responses
+    senders only. ``OMIT`` keeps the v8.16.3 call shape, which is what the
+    equality proof compares against: *"the new keyword changes no byte when it
+    is absent"*, measured rather than argued.
+    """
 
     policy = POLICIES[policy_name]
     out: dict[str, Any] = {}
     chatgpt_kwargs: dict[str, Any] = {}
     if origin is not OMIT:
         chatgpt_kwargs["origin"] = origin
+    if plaintext_replay is not OMIT:
+        chatgpt_kwargs["plaintext_replay"] = plaintext_replay
     out["responses/chatgpt_oauth"] = build_chatgpt_oauth_request_body(
         _request(fixture, model="gpt-5.6-terra"),
         reasoning=policy,
@@ -306,6 +440,7 @@ def _bodies(fixture: str, policy_name: str, origin: Any) -> dict[str, Any]:
             # The OpenCode origin only matches the OpenCode bodies; the
             # ChatGPT origin is passed for the other door above.
             OMIT if origin is OMIT else (OPENCODE_ORIGIN if origin else None),
+            plaintext_replay,
         )
     out["anthropic_messages"] = build_anthropic_messages_body(
         _request(fixture, model="claude-sonnet-5-5"), reasoning=policy
@@ -344,10 +479,14 @@ def test_with_the_setting_off_every_body_is_byte_identical(
     The comparison is against the same builder called **without the keyword at
     all** -- which is the v8.15.1 call shape -- so the claim is "the new keyword
     changes no byte when it is absent", proven rather than argued.
+
+    8.17.0 extends the same claim to ``plaintext_replay``: with it explicitly
+    ``False`` every body must equal the body built by a caller that never heard
+    of the keyword, on all 15 shapes x 6 doors x 2 policies.
     """
 
-    off = _bodies(fixture, policy_name, origin=None)
-    legacy = _bodies(fixture, policy_name, origin=OMIT)
+    off = _bodies(fixture, policy_name, origin=None, plaintext_replay=False)
+    legacy = _bodies(fixture, policy_name, origin=OMIT, plaintext_replay=OMIT)
     for door, body in off.items():
         assert _digest(body) == _digest(legacy[door]), door
 
@@ -362,8 +501,10 @@ def test_with_the_setting_off_no_carrier_note_is_written(fixture: str) -> None:
         reasoning=ReasoningPolicy.off(),
         wire_notes=notes,
         origin=None,
+        plaintext_replay=False,
     )
     assert not [key for key in notes if key.startswith("history_carrier_")]
+    assert not [key for key in notes if key.startswith("history_plaintext_")]
 
 
 # --------------------------------------------------------------------------- #
@@ -381,13 +522,24 @@ def test_with_the_setting_on_only_input_gains_items(
     ``model``, ``store``, ``stream``, ``parallel_tool_calls``,
     ``max_output_tokens``, ``prompt_cache_key``, ``instructions``, ``tools``,
     ``tool_choice``, ``reasoning`` and ``include`` are byte-identical.
+
+    8.17.0's second producer is held to the same claim, and to one more: every
+    item it adds has exactly ``{"summary", "type"}`` as its key set -- no
+    ``id``, no ``encrypted_content``, no ``status``, no ``content``, no
+    ``role``. That is LiteLLM's shape (an item without an id is always
+    accepted; one with a foreign id 404s), asserted on the whole key set rather
+    than a "contains" check.
     """
 
     off = _bodies(fixture, policy_name, origin=None)
-    on = _bodies(fixture, policy_name, origin=ORIGIN)
+    on = _bodies(fixture, policy_name, origin=ORIGIN, plaintext_replay=True)
+    on_carrier_only = _bodies(fixture, policy_name, origin=ORIGIN)
 
     for door in off:
         if not door.startswith("responses/"):
+            # The plaintext pass is a property of the Responses door. The
+            # Messages and Chat bodies are byte-identical with the setting on
+            # and off -- §8 case 9.
             assert _digest(on[door]) == _digest(off[door]), door
             continue
         before = off[door]
@@ -404,6 +556,25 @@ def test_with_the_setting_on_only_input_gains_items(
                 item for item in after["input"] if item.get("type") != "reasoning"
             ]
             assert _canonical(without) == _canonical(before["input"]), door
+        # The plaintext pass adds items only where the carrier pass did not
+        # already replay that reasoning: the carrier-only body is a subset of
+        # the plaintext-on body, item for item.
+        carrier_items = [
+            item
+            for item in on_carrier_only[door]["input"]
+            if item.get("type") == "reasoning"
+        ]
+        for item in carrier_items:
+            assert item in after["input"], (door, item)
+        # Every item the plaintext pass itself added carries exactly two keys.
+        for item in added:
+            if "encrypted_content" in item:
+                continue
+            assert sorted(item) == ["summary", "type"], (door, item)
+            assert item["summary"] and all(
+                sorted(part) == ["text", "type"] and part["type"] == "summary_text"
+                for part in item["summary"]
+            ), (door, item)
 
 
 def test_the_anthropic_and_chat_doors_never_move() -> None:
@@ -412,7 +583,7 @@ def test_the_anthropic_and_chat_doors_never_move() -> None:
     for fixture in CORPUS:
         for policy_name in POLICIES:
             off = _bodies(fixture, policy_name, origin=None)
-            on = _bodies(fixture, policy_name, origin=ORIGIN)
+            on = _bodies(fixture, policy_name, origin=ORIGIN, plaintext_replay=True)
             for door in off:
                 if door.startswith("responses/"):
                     continue
@@ -435,23 +606,33 @@ def test_the_prompt_cache_prefix_before_every_insertion_is_byte_stable(
     sent. So every item that the setting-off body carried keeps its bytes and
     its relative order: walking the setting-on ``input`` and skipping the
     ``reasoning`` items reproduces the setting-off ``input`` item for item.
+
+    Run for both producers independently and for both together, because each
+    inserts at the same place by the same rule.
     """
 
-    off = _bodies(fixture, "off", origin=None)["responses/chatgpt_oauth"]
-    on = _bodies(fixture, "off", origin=ORIGIN)["responses/chatgpt_oauth"]
+    for origin, plaintext_replay in (
+        (ORIGIN, False),
+        (None, True),
+        (ORIGIN, True),
+    ):
+        off = _bodies(fixture, "off", origin=None)["responses/chatgpt_oauth"]
+        on = _bodies(fixture, "off", origin=origin, plaintext_replay=plaintext_replay)[
+            "responses/chatgpt_oauth"
+        ]
 
-    off_items = off["input"]
-    on_items = on["input"]
-    i = 0
-    j = 0
-    while i < len(on_items):
-        if on_items[i].get("type") == "reasoning":
+        off_items = off["input"]
+        on_items = on["input"]
+        i = 0
+        j = 0
+        while i < len(on_items):
+            if on_items[i].get("type") == "reasoning":
+                i += 1
+                continue
+            assert _canonical(on_items[i]) == _canonical(off_items[j]), (i, j)
             i += 1
-            continue
-        assert _canonical(on_items[i]) == _canonical(off_items[j]), (i, j)
-        i += 1
-        j += 1
-    assert j == len(off_items)
+            j += 1
+        assert j == len(off_items)
 
 
 #: A conversation whose assistant turns each carry a carrier, cut at every
@@ -477,13 +658,19 @@ CACHE_CONVERSATION: list[dict[str, Any]] = [
 ]
 
 
-def _body_for(messages: list[dict[str, Any]]) -> dict[str, Any]:
+def _body_for(
+    messages: list[dict[str, Any]],
+    *,
+    origin: ReplayOrigin | None = ORIGIN,
+    plaintext_replay: bool = False,
+) -> dict[str, Any]:
     return build_chatgpt_oauth_request_body(
         MessagesRequest.model_validate(
             {"model": "gpt-5.6-terra", "max_tokens": 4096, "messages": messages}
         ),
         reasoning=ReasoningPolicy.off(),
-        origin=ORIGIN,
+        origin=origin,
+        plaintext_replay=plaintext_replay,
     )
 
 
@@ -549,3 +736,171 @@ def test_a_history_with_one_carrier_in_its_last_turn_adds_nothing_earlier() -> N
     assert _digest(on["input"][:first_assistant]) == _digest(
         off["input"][:first_assistant]
     )
+
+
+# --------------------------------------------------------------------------- #
+# 8.17.0's cache proofs: the plaintext pass is stable across turns and hops
+# --------------------------------------------------------------------------- #
+
+#: The same three-turn shape, with a plaintext block on every assistant turn and
+#: no carrier anywhere -- the conversation the plaintext pass is alone in.
+PLAINTEXT_CONVERSATION: list[dict[str, Any]] = [
+    {"role": "user", "content": "one"},
+    {
+        "role": "assistant",
+        "content": [
+            _thinking("first thought", "sig-1"),
+            _tool_use("call_1"),
+        ],
+    },
+    _tool_result("call_1"),
+    {
+        "role": "assistant",
+        "content": [
+            _thinking("second thought", "sig-2"),
+            {"type": "text", "text": "done"},
+        ],
+    },
+    {"role": "user", "content": "two"},
+]
+
+
+def test_each_turns_body_extends_the_previous_turns_body_with_plaintext() -> None:
+    """§7.4, second run: the same property with the plaintext pass alone.
+
+    The new items appear at the same place on every turn -- at the head of
+    their own turn's run, computed from that turn's blocks -- so
+    ``later["input"][:len(earlier["input"])] == earlier["input"]`` exactly.
+    Nothing an earlier turn sent moves when a later turn is added.
+    """
+
+    cuts = [1, 3, 5]
+    bodies = [
+        _body_for(PLAINTEXT_CONVERSATION[:cut], origin=None, plaintext_replay=True)
+        for cut in cuts
+    ]
+
+    assert [item.get("type") for item in bodies[0]["input"]] == ["message"]
+    assert [item.get("type") for item in bodies[1]["input"]] == [
+        "message",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+    ]
+    assert [item.get("type") for item in bodies[2]["input"]] == [
+        "message",
+        "reasoning",
+        "function_call",
+        "function_call_output",
+        "reasoning",
+        "message",
+        "message",
+    ]
+    # And the items are the text items, not carriers.
+    assert bodies[1]["input"][1] == {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "first thought"}],
+    }
+    assert bodies[2]["input"][4] == {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "second thought"}],
+    }
+
+    for earlier, later in itertools.pairwise(bodies):
+        assert _canonical(later["input"][: len(earlier["input"])]) == _canonical(
+            earlier["input"]
+        ), "turn N's body must start with turn N-1's body"
+
+
+def test_a_hop_through_another_host_changes_nothing_for_the_original_host() -> None:
+    """§7.3, the three-hop A -> B -> A, in the user's own words.
+
+    *"if we strip thinking for encrypted models do it only for that request
+    without affecting the requests for non encrypted models ... so if we return
+    to the original model we don't break prefixes."*
+
+    The history's one block carries a carrier minted for **another** host, so
+    both A and B refuse the envelope and both replay the **text**. The plaintext
+    item is portable by definition, so unlike a carrier it is *identical* for A
+    and B -- which is stronger than the strip case, where the two destinations
+    legitimately differ.
+
+    The property: A's body after the hop is byte-identical to what it would
+    have been if the hop had never happened, and the history itself was never
+    mutated.
+    """
+
+    history = [
+        {"role": "user", "content": "one"},
+        {
+            "role": "assistant",
+            "content": [
+                # Minted for a THIRD host, so both A and B refuse the envelope
+                # and both replay the text.
+                _thinking(PLAINTEXT, _carrier(E1, "rs_1", THIRD_ORIGIN)),
+                {"type": "text", "text": "ok"},
+            ],
+        },
+        {"role": "user", "content": "two"},
+    ]
+    control_history = copy.deepcopy(history)
+    before = json.dumps(history)
+
+    control = _body_for(control_history, origin=ORIGIN, plaintext_replay=True)
+    b_body = _body_for(history, origin=OPENCODE_ORIGIN, plaintext_replay=True)
+    a_body = _body_for(history, origin=ORIGIN, plaintext_replay=True)
+
+    # A is unaffected by the hop.
+    assert json.dumps(a_body) == json.dumps(control)
+    # And the history was never mutated by any of the three builds.
+    assert json.dumps(history) == before
+    assert json.dumps(control_history) == before
+
+    # The three assertions that make it a *hop* test rather than a purity test.
+    expected = {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": PLAINTEXT}],
+    }
+    assert b_body["input"][1] == expected
+    assert a_body["input"][1] == expected
+    assert a_body["input"][1] == b_body["input"][1]
+
+
+def test_a_history_whose_carrier_matches_one_host_gives_two_correct_bodies() -> None:
+    """§7.3's other half: where A and B legitimately differ.
+
+    A history whose block carries **A's** carrier. A replays the host's own
+    item; B refuses it and replays the **text** instead. Two different, correct
+    bodies from one history -- and neither is a mutation of the other.
+    """
+
+    history = [
+        {"role": "user", "content": "one"},
+        {
+            "role": "assistant",
+            "content": [
+                _thinking(PLAINTEXT, _carrier(E1, "rs_1", ORIGIN)),
+                {"type": "text", "text": "ok"},
+            ],
+        },
+        {"role": "user", "content": "two"},
+    ]
+    a_body = _body_for(history, origin=ORIGIN, plaintext_replay=True)
+    b_body = _body_for(history, origin=OPENCODE_ORIGIN, plaintext_replay=True)
+
+    # A: the host's own item, verbatim, and no second summary item.
+    a_reasoning = [item for item in a_body["input"] if item.get("type") == "reasoning"]
+    assert len(a_reasoning) == 1
+    assert "encrypted_content" in a_reasoning[0]
+    assert "summary" not in a_reasoning[0] or a_reasoning[0]["summary"] == []
+
+    # B: the envelope refused, the text kept.
+    b_reasoning = [item for item in b_body["input"] if item.get("type") == "reasoning"]
+    assert b_reasoning == [
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": PLAINTEXT}],
+        }
+    ]
+    # The envelope's own bytes never reach B.
+    assert E1 not in json.dumps(b_body)

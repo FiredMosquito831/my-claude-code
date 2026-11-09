@@ -57,6 +57,10 @@ from tests.support.parallel_tool_calls_pin import (
     pin_parallel_tool_calls_off,
     unpin_parallel_tool_calls,
 )
+from tests.support.plaintext_replay_pin import (
+    pin_plaintext_replay_off,
+    unpin_plaintext_replay,
+)
 
 BASELINE_PATH = Path(__file__).with_name(
     "responses_reasoning_replay_equality_baseline.json"
@@ -74,12 +78,22 @@ def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
     thinking left out" stays exact; ``tests/providers/
     test_responses_parallel_tool_calls.py`` proves the one cell 8.15.0 moves,
     in both directions, on both doors.
+
+    8.17.0 ships ``RESPONSES_PLAINTEXT_REPLAY`` on, and this file's whole claim
+    is that a Responses body equals v7.58.0's **with the thinking left out**.
+    With the plaintext pass running, the thinking is no longer left out: it is
+    replayed as a summary item, and every ``thinking_*`` fixture would differ
+    for a reason that has nothing to do with 7.58.1. The second pin keeps that
+    claim exact. The new default's own behaviour is proved in
+    ``tests/contracts/test_responses_plaintext_replay.py``.
     """
 
     pin_parallel_tool_calls_off(monkeypatch)
+    pin_plaintext_replay_off(monkeypatch)
     try:
         yield
     finally:
+        unpin_plaintext_replay()
         unpin_parallel_tool_calls()
 
 

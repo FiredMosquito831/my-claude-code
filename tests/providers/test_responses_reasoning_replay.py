@@ -35,13 +35,16 @@ from my_claude_code.providers.chatgpt_oauth.conversion import (
 from my_claude_code.providers.chatgpt_oauth.provider import CHATGPT_OAUTH_DEFAULT_BASE
 from my_claude_code.providers.openai_chat.responses_transport import ResponsesTransport
 from my_claude_code.providers.openai_responses import (
+    HISTORY_PLAINTEXT_REPLAYED,
     HISTORY_THINKING_OMITTED,
     RESPONSES_REASONING_REPLAY,
     build_responses_request_body,
+    history_plaintext_marker,
     history_thinking_marker,
 )
 from my_claude_code.providers.recovery import LearnedFactStore
 from tests.providers.support import passthrough_rate_limiter
+from tests.support.plaintext_replay_pin import pin_plaintext_replay_off
 
 REASONING = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
 SECRET_THOUGHT = "the user's secret plan is to refactor utils.py"
@@ -163,6 +166,20 @@ def test_the_responses_surface_replays_no_reasoning() -> None:
 
 @pytest.mark.parametrize("builder", ["chatgpt_oauth", "generic"])
 def test_no_input_item_carries_a_think_tag_or_the_thought(builder: str) -> None:
+    """7.58.1's ban, and 8.17.0's scope for its second half.
+
+    **The format ban is absolute and unchanged:** no ``<think`` substring and
+    no ``</think`` substring in any ``input`` item, on either builder. That was
+    always the rule the regression paid for -- a model shown its own past turns
+    as literal tags writes its next turn in them.
+
+    **The "and the thought" half is scoped to the setting-off path**, because
+    keeping reasoning text out of ``input`` entirely was never the ban; it was
+    the defect 8.17.0 exists to fix. Both builders are called without the
+    keyword here, so this test pins the shipped-default call shape: ``False``
+    at the builder, which is every byte 8.16.3 sent.
+    """
+
     if builder == "chatgpt_oauth":
         body = build_chatgpt_oauth_request_body(_request(), reasoning=REASONING)
     else:
@@ -170,7 +187,7 @@ def test_no_input_item_carries_a_think_tag_or_the_thought(builder: str) -> None:
             _request(), reasoning=REASONING, tool_name_max_length=64
         )
     for item in body["input"]:
-        assert "<think>" not in _wire(item)
+        assert " thinking" not in _wire(item)
         assert "</think>" not in _wire(item)
     wire = _wire(body["input"])
     for thought in (
@@ -180,6 +197,67 @@ def test_no_input_item_carries_a_think_tag_or_the_thought(builder: str) -> None:
         "String-turn reasoning.",
     ):
         assert thought not in wire
+
+
+@pytest.mark.parametrize("builder", ["chatgpt_oauth", "generic"])
+def test_with_plaintext_replay_on_the_thought_appears_only_in_a_summary(
+    builder: str,
+) -> None:
+    """§6.4's replacement assertion, and the whole point of 8.17.0.
+
+    The text is in ``input`` -- that is the feature -- and it is reachable
+    **only** through ``{"type": "reasoning", "summary": [...]}``. The format ban
+    still holds, and the assistant ``message`` items are byte-identical to the
+    setting-off body's.
+    """
+
+    if builder == "chatgpt_oauth":
+        body = build_chatgpt_oauth_request_body(
+            _request(), reasoning=REASONING, plaintext_replay=True
+        )
+        off = build_chatgpt_oauth_request_body(_request(), reasoning=REASONING)
+    else:
+        body = build_responses_request_body(
+            _request(),
+            reasoning=REASONING,
+            tool_name_max_length=64,
+            plaintext_replay=True,
+        )
+        off = build_responses_request_body(
+            _request(), reasoning=REASONING, tool_name_max_length=64
+        )
+
+    # The format ban, unchanged.
+    for item in body["input"]:
+        assert "<think" not in _wire(item)
+        assert "</think" not in _wire(item)
+
+    # Every thought is present, and only inside a reasoning item's summary.
+    for thought in (
+        SECRET_THOUGHT,
+        "Only a thought.",
+        "After the call.",
+        "String-turn reasoning.",
+    ):
+        carrying = [item for item in body["input"] if thought in _wire(item)]
+        assert carrying, thought
+        for item in carrying:
+            assert item.get("type") == "reasoning", (thought, item)
+            assert [part["text"] for part in item["summary"]] == [thought]
+
+    # No assistant message item changed: the text never became output_text.
+    def _assistant_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return [
+            item
+            for item in payload["input"]
+            if item.get("type") == "message" and item.get("role") == "assistant"
+        ]
+
+    assert _assistant_messages(body) == _assistant_messages(off)
+
+    # And removing the reasoning items restores the setting-off input exactly.
+    without = [item for item in body["input"] if item.get("type") != "reasoning"]
+    assert without == off["input"]
 
 
 def test_the_rest_of_the_history_still_goes_in_order() -> None:
@@ -305,6 +383,13 @@ def _params(trace: Any) -> dict[str, Any]:
     return trace.requests[max(trace.requests)].params
 
 
+#: Both sender tests below were recorded before 8.17.0 existed, when a Responses
+#: sender replayed no readable reasoning at all. ``RESPONSES_PLAINTEXT_REPLAY``
+#: ships **on**, so they pin the switch rather than being re-recorded -- the
+#: same discipline, and the same argument, as ``parallel_tool_calls_pin``. The
+#: shipped default's own behaviour is asserted by the two tests after them.
+
+
 def _accepted(_body: dict[str, Any]) -> httpx.Response:
     frames = [
         {"type": "response.output_text.delta", "delta": "ok"},
@@ -323,7 +408,10 @@ def _accepted(_body: dict[str, Any]) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_the_opencode_transport_records_the_omission_beside_the_body() -> None:
+async def test_the_opencode_transport_records_the_omission_beside_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin_plaintext_replay_off(monkeypatch)
     transport = ResponsesTransport(
         ProviderConfig(api_key="sk-test", base_url="https://example.invalid/v1"),
         base_url="https://example.invalid/v1",
@@ -369,7 +457,10 @@ async def test_the_opencode_transport_records_the_omission_beside_the_body() -> 
 
 
 @pytest.mark.asyncio
-async def test_chatgpt_oauth_records_the_omission_beside_the_body() -> None:
+async def test_chatgpt_oauth_records_the_omission_beside_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pin_plaintext_replay_off(monkeypatch)
     provider = ChatGPTOAuthProvider(
         ProviderConfig(
             api_key="test_token",
@@ -417,3 +508,123 @@ def test_the_marker_is_never_read_as_a_reasoning_instruction() -> None:
         _request(), reasoning=ReasoningPolicy.off(), wire_notes=notes
     )
     assert not reasoning_was_emitted({**off, **history_thinking_marker(notes)})
+
+
+# --------------------------------------------------------------------------
+# 8.17.0: the shipped default's own record, on the same two senders
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_opencode_transport_records_the_replay_beside_the_body() -> None:
+    """With ``RESPONSES_PLAINTEXT_REPLAY`` at its shipped default, the transport
+    records ``history_plaintext_replayed`` beside the body -- and the text goes
+    in the body, never in the record."""
+
+    transport = ResponsesTransport(
+        ProviderConfig(api_key="sk-test", base_url="https://example.invalid/v1"),
+        base_url="https://example.invalid/v1",
+        provider_name="MUSE",
+        identity=None,
+        api_key=None,
+        rate_limiter=passthrough_rate_limiter(),
+        memory=LearnedFactStore().memory_for("muse_gateway"),
+    )
+    sent: list[dict[str, Any]] = []
+
+    def _handler(http_request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(http_request.content))
+        return _accepted(sent[-1])
+
+    transport._client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    trace = install_wire_trace()
+    request = _request(model="muse-spark-1.3-contributor-free")
+    notes: dict[str, str] = {}
+    body, headers = transport.build_body(
+        request, reasoning=REASONING, max_output_tokens=512, wire_notes=notes
+    )
+    events = [
+        event
+        async for event in transport.stream(
+            request,
+            input_tokens=0,
+            reasoning=REASONING,
+            body=body,
+            headers=headers,
+            surface_label="responses",
+            wire_notes=notes,
+        )
+    ]
+    await transport.aclose()
+
+    assert any("ok" in event for event in events)
+    params = _params(trace)
+    assert params[HISTORY_PLAINTEXT_REPLAYED] == (
+        "replayed 4 readable reasoning blocks from the client's history"
+    )
+    # The record is a count, never text.
+    assert SECRET_THOUGHT not in json.dumps(params)
+    # And it is recorded beside the body, never sent in it.
+    assert HISTORY_PLAINTEXT_REPLAYED not in sent[0]
+    # The text IS in the body, inside reasoning items only.
+    for item in sent[0]["input"]:
+        if item.get("type") == "reasoning":
+            continue
+        assert SECRET_THOUGHT not in _wire(item)
+    assert "<think" not in _wire(sent[0])
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_oauth_records_the_replay_beside_the_body() -> None:
+    provider = ChatGPTOAuthProvider(
+        ProviderConfig(
+            api_key="test_token",
+            base_url=CHATGPT_OAUTH_DEFAULT_BASE,
+            rate_limit=10,
+            rate_window=60,
+            max_concurrency=5,
+        ),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+    trace = install_wire_trace()
+
+    async def _raw_stream():
+        yield b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+        yield b'data: {"type":"response.completed","response":{}}\n\n'
+
+    response = MagicMock(status_code=200)
+    response.aiter_raw = _raw_stream
+    response.aclose = AsyncMock()
+    provider._send_stream_request = AsyncMock(return_value=response)
+
+    chunks = [
+        chunk
+        async for chunk in provider.stream_response(_request(), reasoning=REASONING)
+    ]
+
+    sent = provider._send_stream_request.await_args_list[0].kwargs["body"]
+    assert any("ok" in chunk for chunk in chunks)
+    params = _params(trace)
+    assert params[HISTORY_PLAINTEXT_REPLAYED] == (
+        "replayed 4 readable reasoning blocks from the client's history"
+    )
+    assert SECRET_THOUGHT not in json.dumps(params)
+    assert HISTORY_PLAINTEXT_REPLAYED not in sent
+    assert "<think" not in _wire(sent)
+
+
+def test_the_plaintext_marker_is_never_read_as_a_reasoning_instruction() -> None:
+    from my_claude_code.core.wire_capture import is_reasoning_key, reasoning_was_emitted
+
+    assert not is_reasoning_key(HISTORY_PLAINTEXT_REPLAYED)
+    body = build_chatgpt_oauth_request_body(
+        _request(), reasoning=ReasoningPolicy.off(), plaintext_replay=True
+    )
+    notes: dict[str, str] = {}
+    build_responses_request_body(
+        _request(),
+        reasoning=ReasoningPolicy.off(),
+        wire_notes=notes,
+        plaintext_replay=True,
+    )
+    assert not reasoning_was_emitted({**body, **history_plaintext_marker(notes)})

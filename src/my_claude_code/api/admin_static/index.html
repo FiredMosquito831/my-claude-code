@@ -2818,6 +2818,7 @@
                 <a href="#guide-responses-protocol">Responses protocol</a>
                 <a href="#guide-carrier-provenance">Reasoning carriers never cross hosts</a>
                 <a href="#guide-carrier-text-recovery">Keeping the reasoning text when only the envelope has to go</a>
+                <a href="#guide-plaintext-replay">Replaying readable reasoning on the Responses door</a>
                 <a href="#guide-inferhub">InferHub: set a price ceiling</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
@@ -4373,6 +4374,106 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <code>history_carrier_foreign</code> on purpose: one says a block
                   was lost, the other says the text survived and only the envelope
                   went.
+                </p>
+
+                <h3 id="guide-plaintext-replay">Replaying readable reasoning on the Responses door</h3>
+                <p>
+                  The two sections above are about the <strong>encrypted</strong>
+                  blob a Responses host mints. A model's reasoning can also be plain
+                  text &mdash; a <code>thinking</code> block's text, or an assistant
+                  turn's top-level <code>reasoning_content</code> &mdash; and on this
+                  door MCC used to send neither. So a fallback <em>into</em> the
+                  Responses door (the ChatGPT subscription, or the shared transport
+                  OpenCode Zen and Go are served on) lost whatever readable reasoning
+                  the previous model had written, carrier or no carrier.
+                </p>
+                <p>
+                  <code>RESPONSES_PLAINTEXT_REPLAY</code> is on by default and is a
+                  <strong>separate switch</strong> from
+                  <code>RESPONSES_CARRIER_REPLAY</code>: two mechanisms, two failure
+                  modes, and an operator whose host refuses a summary item can turn
+                  this one off and keep carriers.
+                </p>
+                <table>
+                  <thead>
+                    <tr><th>what the history holds</th><th>what MCC sends</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>a <code>thinking</code> block with a carrier that matches
+                        this host</td>
+                      <td>the host's own <code>reasoning</code> item, verbatim &mdash;
+                        the carrier path, unchanged</td>
+                    </tr>
+                    <tr>
+                      <td>a <code>thinking</code> block whose carrier was
+                        <strong>refused</strong> (minted elsewhere, or malformed) and
+                        which still has text</td>
+                      <td>the <strong>text</strong>, as a summary item &mdash; the
+                        envelope is host-bound and the text is not</td>
+                    </tr>
+                    <tr>
+                      <td>a <code>thinking</code> block with text and no carrier</td>
+                      <td>the <strong>text</strong>, as a summary item</td>
+                    </tr>
+                    <tr>
+                      <td>a <code>thinking</code> block with blank text</td>
+                      <td>nothing &mdash; there is nothing readable to carry</td>
+                    </tr>
+                    <tr>
+                      <td>a <code>redacted_thinking</code> block</td>
+                      <td>nothing &mdash; its <code>data</code> is the opaque
+                        envelope, never readable text</td>
+                    </tr>
+                    <tr>
+                      <td>an assistant turn whose <code>content</code> is a string
+                        with a top-level <code>reasoning_content</code></td>
+                      <td>the <strong>text</strong>, as a summary item</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p>
+                  The item is
+                  <code>{"type": "reasoning", "summary": [{"type": "summary_text",
+                  "text": &hellip;}]}</code> &mdash; no <code>id</code>, no
+                  <code>encrypted_content</code> &mdash; placed at the head of its own
+                  turn's <code>input[]</code> run, after any carrier item for the same
+                  turn.
+                </p>
+                <p>
+                  <strong>The 7.58.1 echo class stays shut.</strong> The text never
+                  becomes output text and never becomes a <code>&lt;think&gt;</code>
+                  tag; it lives in a structured item's <code>summary</code>, a field
+                  with no room for one. The assistant <code>message</code> items are
+                  byte-identical to the setting-off body's.
+                </p>
+                <p>
+                  <strong>What you see.</strong> A request whose history carried
+                  readable reasoning gains one line in its request detail:
+                  <code>history_plaintext_replayed</code>, a count, never any content.
+                  A request that replayed nothing records exactly what it recorded
+                  before. With the setting on and something still left out, the
+                  omission line's second clause reads <em>the Responses surface
+                  replays reasoning only as structured items</em> instead of <em>the
+                  Responses surface replays no reasoning as text</em>; with the
+                  setting off the line is byte-identical to 8.16.3's.
+                </p>
+                <p>
+                  <strong>What it does not touch.</strong> The Anthropic Messages
+                  door and the Chat Completions door are unchanged, byte for byte,
+                  with the setting on or off. With it off, every body on every door is
+                  byte-identical to 8.16.3's.
+                </p>
+                <p>
+                  <strong>One assumption is unverified.</strong> Whether the
+                  ChatGPT/Codex backend accepts a summary-only <code>reasoning</code>
+                  item has not been measured. Three shipped implementations build
+                  exactly this shape, and the learned refusal bounds the cost: a host
+                  that refuses one costs a single request and is then never sent one
+                  again until the fact expires. That fact is shared with the carrier
+                  path, so a host that refuses only summary items also stops receiving
+                  carriers for its lifetime &mdash; turning this setting off is the
+                  escape hatch.
                 </p>
 
                 <h3 id="guide-inferhub">InferHub: set a price ceiling</h3>

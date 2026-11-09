@@ -90,6 +90,30 @@ HISTORY_CARRIER_FOREIGN = "history_carrier_foreign"
 HISTORY_CARRIER_MALFORMED = "history_carrier_malformed"
 HISTORY_CARRIER_OVERSIZE = "history_carrier_oversize"
 
+#: The plaintext replay's own note (8.17.0), and the one that is not a loss: a
+#: ``thinking`` block's readable text -- or an assistant turn's top-level
+#: ``reasoning_content`` -- was replayed as a summary-only ``reasoning`` item.
+#:
+#: A sibling of the carrier notes and never folded into them, because the two
+#: say different things about different payloads: the carrier notes count the
+#: host's own opaque envelope, this one counts text a model wrote. Folding them
+#: would make ``history_carrier_replayed`` claim an envelope that never existed.
+#:
+#: Written **only when the setting is on** and **only when the count is
+#: non-zero**, so a request whose history carries no readable reasoning records
+#: exactly the ``params.wire`` it recorded before 8.17.0. Counts only, never
+#: text -- the rule ``history_thinking_omitted`` and every ``history_carrier_*``
+#: key keeps. The name avoids the ``reasoning_*``/``thinking_*`` prefixes for
+#: the same reason they do.
+HISTORY_PLAINTEXT_REPLAYED = "history_plaintext_replayed"
+
+#: The block index a string-content assistant turn's ``reasoning_content`` is
+#: recorded under. A string turn has no block list, so this can never collide
+#: with a real block index -- every one of those is ``>= 0``. It exists so the
+#: replay pass and the omission count can speak about that turn in the same
+#: ``(message index, block index)`` vocabulary every other block uses.
+_STRING_TURN_REASONING_INDEX = -1
+
 #: The fifth carrier note (8.16.3), and the only one that is not a loss: a
 #: carrier **signature** was removed from a block whose readable text was kept,
 #: on a Messages host that declares it signs nothing. It is a sibling of
@@ -639,6 +663,114 @@ def _carrier_items(
     return items, replayed
 
 
+def _summary_item(text: str) -> dict[str, Any]:
+    """One summary-only ``reasoning`` input item carrying ``text``.
+
+    The exact shape three shipped implementations build and the shape this
+    module already *reads* inbound (``core/openai_responses/reasoning.py``
+    pulls ``{"type": "summary_text", "text": ...}`` out of a ``summary``
+    array). **No ``id``, no ``encrypted_content``, no ``status``, no
+    ``content``**: LiteLLM's own docstring records why -- *"the Responses API
+    404s on any id it did not mint itself and rejects an empty one, while an
+    item without an id is always accepted"* -- and a summary-only item has no
+    ciphertext to bind an id to.
+
+    A fresh dict every call, and the text is the block's own string: nothing
+    here can mutate the client's history.
+    """
+
+    return {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": text}],
+    }
+
+
+def _plaintext_items(
+    messages: list[Any],
+    counts: dict[str, int],
+    replayed: set[tuple[int, int]],
+) -> tuple[dict[int, list[dict[str, Any]]], set[tuple[int, int]]]:
+    """Summary-only ``reasoning`` items for this history's readable reasoning.
+
+    The second producer for ``reasoning_by_message`` (8.17.0). PR-2's carrier
+    pass replays the *host's own* item; this one replays the *text* a model
+    wrote, which is portable across models and providers by decision 9.
+
+    Returns ``(reasoning_by_input_index, replayed_blocks)``, the same pair
+    :func:`_carrier_items` returns and for the same reason: the note and the
+    body must never disagree about what was replayed.
+
+    ``replayed`` is PR-2's accepted-carrier set: a block in it already went
+    upstream inside its envelope, and replaying its text as well would send the
+    same reasoning twice. Every other block with readable text is replayed --
+    **including one whose carrier was refused**, because the envelope is
+    host-bound and the text is not (ROUND 9: nothing is lost).
+
+    The dynamic rule, in full:
+
+    * a ``thinking`` block with readable text and no accepted carrier -> one
+      summary item;
+    * a ``thinking`` block with blank or whitespace-only text -> nothing, and
+      ``_earlier_thinking`` still counts it as omitted;
+    * a ``redacted_thinking`` block -> nothing, always: it has no text field,
+      and its ``data`` is the opaque envelope, never readable text. Reading
+      ``data`` here would be the fake-blob failure Bifrost documents;
+    * an assistant turn whose ``content`` is a string with a non-blank top-level
+      ``reasoning_content`` -> one summary item. It is plaintext reasoning with
+      no envelope, and leaving it out would make the omission note count a
+      block that was in fact replayed.
+
+    **Nothing is invented.** A block with no readable text produces no item; a
+    ``redacted_thinking`` block with no carrier produces no item; a blank
+    ``thinking`` block produces no item.
+
+    **Nothing is raised.** A block that is not a dict, a ``thinking`` field that
+    is not a string, a ``content`` that is neither list nor string, a
+    ``reasoning_content`` that is not a string -- each is skipped, never raised
+    and never partially used. Every outcome that matters is counted.
+
+    **Nothing is mutated.** The item is a new dict and the text is the block's
+    own immutable string, so the client's history is untouched -- the rule
+    ``drop_foreign_thinking`` documents on the Messages door.
+    """
+
+    items: dict[int, list[dict[str, Any]]] = {}
+    replayed_blocks: set[tuple[int, int]] = set()
+    for message_index, message in enumerate(messages):
+        if getattr(message, "role", None) != "assistant":
+            continue
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            for block_index, block in enumerate(content):
+                # Only a ``thinking`` block has a text field. A
+                # ``redacted_thinking`` block's ``data`` is the envelope.
+                if get_block_type(block) != "thinking":
+                    continue
+                if (message_index, block_index) in replayed:
+                    # Its reasoning already went upstream inside the host's own
+                    # item; the text would be the same reasoning twice.
+                    continue
+                text = get_block_attr(block, "thinking", "")
+                if not isinstance(text, str) or not text.strip():
+                    # Nothing readable to carry.
+                    continue
+                items.setdefault(message_index, []).append(_summary_item(text))
+                replayed_blocks.add((message_index, block_index))
+                counts[HISTORY_PLAINTEXT_REPLAYED] = (
+                    counts.get(HISTORY_PLAINTEXT_REPLAYED, 0) + 1
+                )
+        elif isinstance(content, str):
+            reasoning = getattr(message, "reasoning_content", None)
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                continue
+            items.setdefault(message_index, []).append(_summary_item(reasoning))
+            replayed_blocks.add((message_index, _STRING_TURN_REASONING_INDEX))
+            counts[HISTORY_PLAINTEXT_REPLAYED] = (
+                counts.get(HISTORY_PLAINTEXT_REPLAYED, 0) + 1
+            )
+    return items, replayed_blocks
+
+
 def _earlier_thinking(
     messages: list[Any],
     replayed: set[tuple[int, int]] | None = None,
@@ -650,14 +782,19 @@ def _earlier_thinking(
     ``redacted_thinking`` block beside it, and the top-level
     ``reasoning_content`` of an assistant turn given as a plain string.
 
-    ``replayed`` is the set of ``(message index, block index)`` whose carrier
-    the replay pass accepted (8.16.0). A block in that set is **not** counted:
-    its reasoning item went upstream inside the envelope, so calling it omitted
-    would make the note disagree with the body. Everything else is counted,
-    which is every block when the setting is off -- and that is deliberate: a
-    ``redacted_thinking`` block was silently uncounted until 8.16.0, and a note
-    that leaves out what it actually leaves out is not a note. The change is
-    visible only in ``params.wire``, never in a body.
+    ``replayed`` is the set of ``(message index, block index)`` whose reasoning
+    the replay passes accepted (8.16.0, extended 8.17.0). A block in that set is
+    **not** counted: its reasoning went upstream -- inside the envelope, or as a
+    summary item -- so calling it omitted would make the note disagree with the
+    body. Everything else is counted, which is every block when the setting is
+    off -- and that is deliberate: a ``redacted_thinking`` block was silently
+    uncounted until 8.16.0, and a note that leaves out what it actually leaves
+    out is not a note. The change is visible only in ``params.wire``, never in a
+    body.
+
+    A string-content assistant turn's ``reasoning_content`` is recorded under
+    :data:`_STRING_TURN_REASONING_INDEX`, so the plaintext pass can skip exactly
+    the turn it replayed.
     """
 
     skipped = replayed or set()
@@ -682,6 +819,8 @@ def _earlier_thinking(
                 text = get_block_attr(block, field, "")
                 chars += len(text) if isinstance(text, str) else 0
         elif isinstance(content, str):
+            if (message_index, _STRING_TURN_REASONING_INDEX) in skipped:
+                continue
             reasoning = getattr(message, "reasoning_content", None)
             if isinstance(reasoning, str) and reasoning:
                 blocks += 1
@@ -692,17 +831,31 @@ def _earlier_thinking(
 def _history_thinking_note(
     messages: list[Any],
     replayed: set[tuple[int, int]] | None = None,
+    plaintext_replay: bool = False,
 ) -> dict[str, str]:
-    """The ``history_thinking_omitted`` record for one history, or ``{}``."""
+    """The ``history_thinking_omitted`` record for one history, or ``{}``.
+
+    ``plaintext_replay`` changes **only the sentence's second clause**, and only
+    when the setting is on. With it on, "the Responses surface replays no
+    reasoning as text" is false for the blocks the plaintext pass replayed --
+    the count is already right (``replayed`` skips them), so the *reason* must
+    be right too. With it off the sentence is byte-identical to 8.16.3's, which
+    is what keeps every stored ``params.wire`` unchanged.
+    """
 
     blocks, chars = _earlier_thinking(messages, replayed)
     if not blocks:
         return {}
     noun = "block" if blocks == 1 else "blocks"
+    tail = (
+        "the Responses surface replays reasoning only as structured items"
+        if plaintext_replay
+        else "the Responses surface replays no reasoning as text"
+    )
     return {
         HISTORY_THINKING_OMITTED: (
             f"omitted {blocks} earlier thinking {noun} ({chars} chars) from "
-            "input; the Responses surface replays no reasoning as text"
+            f"input; {tail}"
         )
     }
 
@@ -800,6 +953,25 @@ def _carrier_note(counts: Mapping[str, int]) -> dict[str, str]:
     return notes
 
 
+def _plaintext_note(counts: Mapping[str, int]) -> dict[str, str]:
+    """The ``history_plaintext_replayed`` record for one build, or ``{}``.
+
+    Written only for a non-zero count, so a history with no readable reasoning
+    records exactly the ``params.wire`` it recorded before 8.17.0. Counts only
+    -- no block's text, no summary, no id.
+    """
+
+    replayed = counts.get(HISTORY_PLAINTEXT_REPLAYED, 0)
+    if not replayed:
+        return {}
+    noun = "block" if replayed == 1 else "blocks"
+    return {
+        HISTORY_PLAINTEXT_REPLAYED: (
+            f"replayed {replayed} readable reasoning {noun} from the client's history"
+        )
+    }
+
+
 def history_thinking_marker(
     wire_notes: Mapping[str, str] | None,
 ) -> dict[str, str]:
@@ -833,6 +1005,25 @@ def history_carrier_marker(
     if not wire_notes:
         return {}
     return {key: wire_notes[key] for key in _BUILD_CARRIER_KEYS if key in wire_notes}
+
+
+def history_plaintext_marker(
+    wire_notes: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """The plaintext-replay record out of one build's ``wire_notes``, or ``{}``.
+
+    Beside :func:`history_thinking_marker` and :func:`history_carrier_marker`,
+    and for the same reason: a retry never changes what the history carried, so
+    every attempt row of one request carries the same line. Empty when the
+    setting is off -- the key is only ever written by a build that was handed
+    ``plaintext_replay=True`` -- so a request whose history carries no readable
+    reasoning records exactly the ``params.wire`` it recorded before 8.17.0.
+    """
+
+    if not wire_notes:
+        return {}
+    note = wire_notes.get(HISTORY_PLAINTEXT_REPLAYED)
+    return {HISTORY_PLAINTEXT_REPLAYED: note} if note else {}
 
 
 def _extract_system_instructions(request: MessagesRequest) -> str | None:
@@ -871,6 +1062,7 @@ def build_responses_request_body(
     tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
     wire_notes: dict[str, str] | None = None,
     origin: ReplayOrigin | None = None,
+    plaintext_replay: bool = False,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -940,11 +1132,25 @@ def build_responses_request_body(
         matched against ``origin`` on all five fields, and -- when it matches
         -- replayed as the ``reasoning`` item it was minted from, at the head
         of its own turn's ``input[]`` run.
+    ``plaintext_replay``
+        whether an earlier turn's **readable** reasoning is replayed as a
+        summary-only ``reasoning`` item (8.17.0), or ``False`` -- the shipped
+        default here, and every caller until the operator turns
+        ``RESPONSES_PLAINTEXT_REPLAY`` on. ``False`` is what makes this
+        function's output byte-identical to every release before 8.17.0.
+        Present, a ``thinking`` block with readable text and no accepted
+        carrier -- **including one whose carrier the provenance guard refused**
+        -- and an assistant turn's non-blank top-level ``reasoning_content``
+        each become one ``{"type": "reasoning", "summary": [...]}`` item at the
+        head of their own turn's run, after any carrier item for the same turn.
 
     Earlier assistant thinking is never replayed **as text** on this surface
     (:data:`RESPONSES_REASONING_REPLAY`); what was left out is counted into
     ``wire_notes``. The carrier is a fourth path, not a mode: it replays an
-    opaque item the host itself wrote, never a ``thinking`` string.
+    opaque item the host itself wrote, never a ``thinking`` string. The
+    plaintext path is a fifth, and it is still not "as text": the reasoning
+    lands in a structured ``reasoning`` item's ``summary``, which has no field
+    a `` thinking`` tag could live in, and never in ``output_text``.
 
     Order of operations, fixed: the free-tier catalogue (if any) has already
     replaced ``request.tools`` one layer up; the name codec is chosen here and
@@ -957,13 +1163,27 @@ def build_responses_request_body(
     "the same request" has to serialise the same way every time.
     """
 
-    carrier_counts: dict[str, int] = {}
+    history_counts: dict[str, int] = {}
     reasoning_by_message: dict[int, list[dict[str, Any]]] | None = None
     replayed_blocks: set[tuple[int, int]] = set()
     if origin is not None:
         reasoning_by_message, replayed_blocks = _carrier_items(
-            request.messages, origin, carrier_counts
+            request.messages, origin, history_counts
         )
+    if plaintext_replay:
+        # The second producer, merged into the same mapping: carrier items
+        # first, then the plaintext items, in block order within each group.
+        # That order is deterministic, which is what makes the cache-prefix
+        # property hold -- it is not a claim about which reads better.
+        plaintext, plaintext_blocks = _plaintext_items(
+            request.messages, history_counts, replayed_blocks
+        )
+        replayed_blocks = replayed_blocks | plaintext_blocks
+        if plaintext:
+            merged = dict(reasoning_by_message or {})
+            for index, items in plaintext.items():
+                merged.setdefault(index, []).extend(items)
+            reasoning_by_message = merged
     try:
         openai_messages = AnthropicToOpenAIConverter.convert_messages(
             request.messages,
@@ -973,10 +1193,14 @@ def build_responses_request_body(
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
     if wire_notes is not None:
-        wire_notes.update(_history_thinking_note(request.messages, replayed_blocks))
+        wire_notes.update(
+            _history_thinking_note(request.messages, replayed_blocks, plaintext_replay)
+        )
         wire_notes.update(empty_system_messages_note(request.messages))
         if origin is not None:
-            wire_notes.update(_carrier_note(carrier_counts))
+            wire_notes.update(_carrier_note(history_counts))
+        if plaintext_replay:
+            wire_notes.update(_plaintext_note(history_counts))
 
     tool_names = responses_tool_name_codec(
         request, tool_name_max_length, tool_catalogue

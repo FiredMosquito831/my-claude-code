@@ -20,7 +20,10 @@ from my_claude_code.application.model_metadata import (
     ResponseSurfaceSource,
 )
 from my_claude_code.config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
-from my_claude_code.config.settings import configured_responses_carrier_replay
+from my_claude_code.config.settings import (
+    configured_responses_carrier_replay,
+    configured_responses_plaintext_replay,
+)
 from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
@@ -67,6 +70,7 @@ from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
     alias_responses_body_tool_names,
     history_carrier_marker,
+    history_plaintext_marker,
     history_thinking_marker,
     note_carrier_shape,
     note_responses_generation_delta,
@@ -565,6 +569,34 @@ class ChatGPTOAuthProvider(BaseProvider):
             model=model,
         )
 
+    def _plaintext_replay(self, model: str) -> bool:
+        """Whether this request may replay readable reasoning as a summary (8.17.0).
+
+        The operator's ``RESPONSES_PLAINTEXT_REPLAY``, minus what this model's
+        host has been proven to refuse.
+
+        ``False`` when the setting is off, which is what keeps every body
+        byte-identical to 8.16.3: the builder runs no plaintext pass without
+        it.
+
+        ``False`` too while this model's host is known to refuse a replayed
+        ``reasoning`` item -- the **same** fact the carrier pass reads, and
+        deliberately not a second one. A host that refuses a ``reasoning``
+        input item is refusing the *item type*, not the payload, and both
+        paths send that item type; sending a carrier to a host that has just
+        refused a summary item would be a second refusal for the same reason.
+        The cost is stated where the fact is declared: a host that refuses only
+        summary items also loses carriers for the fact's TTL, and this setting
+        is the operator's escape hatch.
+
+        Read here rather than inside the builder so the answer reaches the body
+        from one place, exactly as :meth:`_replay_origin` does.
+        """
+
+        if not configured_responses_plaintext_replay():
+            return False
+        return not self._recovery_memory.responses_reasoning_item_refused_for(model)
+
     def _remember_refused_reasoning_item(
         self, error: Exception, body: Mapping[str, Any]
     ) -> None:
@@ -923,6 +955,11 @@ class ChatGPTOAuthProvider(BaseProvider):
             wire_notes=declared_marker,
             tool_name_max_length=name_limit,
             origin=origin,
+            # 8.17.0: the operator's plaintext switch, minus what this model's
+            # host has been proven to refuse. Its own setting, not the
+            # carrier's: an operator whose host rejects a summary item can turn
+            # this off and keep carriers.
+            plaintext_replay=self._plaintext_replay(request.model),
         )
         url = f"{self._base_url}/codex/responses"
         headers = _build_headers(credentials, self._session_id)
@@ -1021,6 +1058,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                             **history_thinking_marker(declared_marker),
                             **empty_system_messages_marker(declared_marker),
                             **history_carrier_marker(declared_marker),
+                            **history_plaintext_marker(declared_marker),
                         )
                         try:
                             response = await self._rate_limiter.execute_with_retry(
