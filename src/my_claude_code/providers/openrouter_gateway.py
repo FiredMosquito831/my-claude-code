@@ -18,6 +18,7 @@ from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.model_listing import (
@@ -138,6 +139,20 @@ def _redacted_reasoning_details(content: Any) -> list[dict[str, Any]]:
             continue
         data = _field(block, "data")
         if not isinstance(data, str) or not data:
+            continue
+        if is_carrier(data):
+            # A carrier minted for another host must not reach a gateway
+            # upstream. Before 8.16.1 this line was the leak: the block fell
+            # through to the ``reasoning.encrypted`` branch below and the
+            # envelope went out verbatim, because ``convert_messages`` had
+            # already dropped it and this second pass never learned about it.
+            # The prefix test cannot collide with the JSON branch: a carrier
+            # starts ``mcc:``, a JSON container starts ``{`` or ``[``.
+            #
+            # This is the byte-identical twin of the copy in
+            # ``providers/openai_chat/reasoning_details.py`` (Q6: both, or
+            # neither). The contract test parametrises over both so a fix to
+            # one cannot pass.
             continue
         parsed = _json_payload(data)
         if isinstance(parsed, list):

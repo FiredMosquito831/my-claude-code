@@ -2816,6 +2816,7 @@
                 <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-prompt-cache-lifetime">Prompt cache lifetime</a>
                 <a href="#guide-responses-protocol">Responses protocol</a>
+                <a href="#guide-carrier-provenance">Reasoning carriers never cross hosts</a>
                 <a href="#guide-inferhub">InferHub: set a price ceiling</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
@@ -4215,6 +4216,71 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   <code>gpt-6-luna</code> making 1,674 <code>Agent</code> calls while
                   the field was <code>false</code>. A save applies to the next request,
                   with no restart.
+                </p>
+
+                <h3 id="guide-carrier-provenance">Reasoning carriers never cross hosts</h3>
+                <p>
+                  <strong>New in 8.16.1, and it has no setting: it is always
+                  on.</strong> The Responses API can hand back an opaque
+                  <code>encrypted_content</code> blob beside a reasoning item, and
+                  MCC carries it through your client's own transcript as an
+                  <code>mcc:reasoning:v1:</code> envelope &mdash; in a
+                  <code>thinking</code> block's <code>signature</code>, or as a
+                  standalone <code>redacted_thinking</code> block. That blob is
+                  minted for <strong>one host, one account and one model</strong>,
+                  and a host validates it against the item it issued. So a carrier
+                  is never sent to a host that did not mint it.
+                </p>
+                <table class="guide-table">
+                  <thead>
+                    <tr><th>Door family</th><th>What MCC refuses</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>Messages</strong> &mdash; <code>anthropic</code>,
+                        <code>anthropic_oauth</code>, <code>commandcode</code>, and
+                        every Messages transport including OpenCode Go's
+                        <code>/messages</code> door</td>
+                      <td>A <code>thinking</code> block whose signature, or a
+                        <code>redacted_thinking</code> block whose data, starts
+                        <code>mcc:reasoning:v1:</code> &mdash; removed and counted</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Responses</strong> &mdash; the ChatGPT subscription
+                        and the shared Responses transport</td>
+                      <td>Anything whose five origin fields do not all match the
+                        host it is about to be sent to &mdash; dropped and counted</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Chat Completions</strong> &mdash; <code>cline</code>,
+                        <code>zenmux</code>, and every OpenRouter-dialect gateway
+                        (<code>openrouter</code>, <code>kilo</code>,
+                        <code>nous_portal</code>)</td>
+                      <td>The same envelope, which used to be forwarded verbatim as a
+                        <code>reasoning.encrypted</code> detail &mdash; now skipped
+                        and counted</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p>
+                  The request detail gains one line on a request whose history
+                  carried a carrier that could not go:
+                  <code>history_carrier_foreign</code>, a count, never any content.
+                  A request that carried none records exactly what it recorded
+                  before.
+                </p>
+                <p class="guide-note">
+                  <strong>Readable reasoning is not affected.</strong> The guard
+                  reads <code>signature</code> and <code>data</code> and never a
+                  thinking block's text, so plaintext reasoning still crosses models
+                  and providers exactly as before &mdash; that is the half that
+                  survives a fallback, a compaction and a client change. A body that
+                  carries no carrier is byte-identical to 8.16.0, so no prompt cache
+                  prefix moves. The test is the prefix at byte offset 0 and nothing
+                  else: a corrupted MCC blob is still MCC's and is still dropped,
+                  never forwarded because it looked broken, and a real Anthropic
+                  signature can never match &mdash; base64 has no
+                  <code>:</code> in its alphabet.
                 </p>
 
                 <h3 id="guide-inferhub">InferHub: set a price ceiling</h3>

@@ -10,10 +10,15 @@ from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.application.prompt_cache import PromptCacheLifetimeChoice
 from my_claude_code.config.settings import configured_default_max_output_tokens
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.reasoning import (
     MINIMUM_BUDGET_TOKENS,
     ReasoningControl,
     ReasoningPolicy,
+)
+from my_claude_code.providers.openai_responses import (
+    HISTORY_CARRIER_FOREIGN,
+    carrier_foreign_note,
 )
 
 _INTERNAL_FIELDS = frozenset(
@@ -93,8 +98,9 @@ def build_anthropic_messages_body(
     for field in _INTERNAL_FIELDS:
         body.pop(field, None)
     native = [_native_message(message) for message in request.messages]
+    carrier_counts: dict[str, int] = {}
     messages, dropped_blocks, dropped_chars = drop_foreign_thinking(
-        native, signs_thinking=signs_thinking
+        native, signs_thinking=signs_thinking, carrier_counts=carrier_counts
     )
     body["messages"] = messages
     body["stream"] = True
@@ -119,9 +125,10 @@ def build_anthropic_messages_body(
     # where the host signs. A host that signs nothing has no block to require
     # and nothing to refuse, and suppressing the field there is what made MCC
     # ask for no reasoning on 76.9 % of the turns that followed a visible one.
+    carriers_dropped = carrier_counts.get(HISTORY_CARRIER_FOREIGN, 0)
     unsigned_tool_turn = (
         signs_thinking
-        and bool(dropped_blocks)
+        and bool(dropped_blocks or carriers_dropped)
         and _final_tool_turn_lost_its_thinking(native, signs_thinking=signs_thinking)
     )
     if unsigned_tool_turn and _is_manual_thinking(body.get("thinking")):
@@ -151,6 +158,14 @@ def build_anthropic_messages_body(
                 else ""
             )
         )
+    if wire_notes is not None:
+        # Its own key, beside ``foreign_thinking_dropped`` and never inside its
+        # sentence: a carrier is not thinking another model wrote, it is an
+        # opaque envelope one host minted, and an operator reading the request
+        # detail must be able to tell the two apart. Absent, not ``0``, when
+        # there were none -- so every other request's recorded params are
+        # exactly what they were.
+        wire_notes.update(carrier_foreign_note(carriers_dropped))
     _merge_extra_body(body, request.extra_body)
     if prompt_cache is not None:
         body = apply_prompt_cache_lifetime(body, prompt_cache, wire_notes)
@@ -270,11 +285,13 @@ def drop_foreign_thinking(
     messages: list[dict[str, Any]],
     *,
     signs_thinking: bool = True,
+    carrier_counts: dict[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Drop, from assistant turns, the thinking Anthropic did not write.
 
-    Returns ``(messages, dropped_blocks, dropped_chars)``. Two kinds of block
-    are provably not Anthropic's, and Anthropic answers a 400 for either:
+    Returns ``(messages, dropped_blocks, dropped_chars)``. Three kinds of block
+    are provably not Anthropic's, and Anthropic answers a 400 for either of the
+    first two:
 
     * a ``thinking`` block whose ``signature`` is absent, not a string, or
       blank. Anthropic signs every thinking block it mints; MCC opens the
@@ -284,6 +301,25 @@ def drop_foreign_thinking(
     * a ``redacted_thinking`` block whose ``data`` is a JSON object or array.
       That is MCC's own wrapper for an OpenRouter-dialect reasoning detail;
       Anthropic's ``data`` is opaque ciphertext and never parses as one.
+    * **a carrier**: a ``thinking`` block whose ``signature``, or a
+      ``redacted_thinking`` block whose ``data``, starts with
+      ``mcc:reasoning:v1:`` (8.16.1). That is an envelope one Responses host
+      minted for itself, and no Messages host -- Anthropic's own API, the
+      Claude subscription, Command Code, OpenCode Go's ``/messages`` door --
+      may be sent it. The verdict needs no ``accepts()`` call: a v1 envelope
+      always writes ``"protocol": "responses"``, and a ``messages`` destination
+      can never match that field, so the answer is ``False`` for every possible
+      value of the other four. Evaluating it once at design time rather than
+      per request is the spec's Q2, and the day a Messages-scoped carrier kind
+      exists it mints under its own prefix and this guard does not fire on it.
+
+    ``carrier_counts``, when given, receives the number of carriers dropped
+    under ``history_carrier_foreign``. They are counted **separately** from
+    ``dropped_blocks``/``dropped_chars`` and never folded into either: a
+    carrier is not thinking text, its length is not a character count of
+    anything a model wrote, and the two facts belong on two lines of the
+    request detail. The returned tuple keeps its arity so every existing caller
+    and test is untouched.
 
     ``signs_thinking`` is the first rule's premise and nothing else's
     (8.12.2). ``True`` -- every host that signs -- is the behaviour every
@@ -309,6 +345,7 @@ def drop_foreign_thinking(
     kept: list[dict[str, Any]] | None = None
     dropped_blocks = 0
     dropped_chars = 0
+    carriers = 0
     for index, message in enumerate(messages):
         content = message.get("content")
         foreign: list[Any] = []
@@ -316,25 +353,62 @@ def drop_foreign_thinking(
         if message.get("role") == "assistant" and isinstance(content, list):
             for block in content:
                 is_foreign = _is_foreign_thinking(block, signs_thinking=signs_thinking)
-                (foreign if is_foreign else remaining).append(block)
+                if not is_foreign:
+                    remaining.append(block)
+                elif _carries_carrier(block):
+                    # Counted on its own line, never as thinking text.
+                    foreign.append(block)
+                    carriers += 1
+                else:
+                    foreign.append(block)
+                    dropped_blocks += 1
+                    dropped_chars += _thinking_chars(block)
         if not foreign:
             if kept is not None:
                 kept.append(message)
             continue
         if kept is None:
             kept = list(messages[:index])
-        dropped_blocks += len(foreign)
-        dropped_chars += sum(_thinking_chars(block) for block in foreign)
         if remaining:
             kept.append({**message, "content": remaining})
+    if carrier_counts is not None and carriers:
+        carrier_counts[HISTORY_CARRIER_FOREIGN] = carriers
     if kept is None:
         return messages, 0, 0
     return kept, dropped_blocks, dropped_chars
 
 
+def _carries_carrier(block: Any) -> bool:
+    """Whether this block's opaque field is one of MCC's own envelopes.
+
+    Exactly two fields can hold one (8.16.0): a ``thinking`` block's
+    ``signature`` and a ``redacted_thinking`` block's ``data``. A ``thinking``
+    block's ``thinking`` text is the host's own summary -- portable by decision
+    9 and never read here. The test is
+    :func:`~my_claude_code.core.openai_responses.is_carrier` and nothing else:
+    the prefix at byte offset 0, no decode, no length test.
+    """
+
+    if not isinstance(block, dict):
+        return False
+    kind = block.get("type")
+    if kind == "thinking":
+        return is_carrier(block.get("signature"))
+    if kind == "redacted_thinking":
+        return is_carrier(block.get("data"))
+    return False
+
+
 def _is_foreign_thinking(block: Any, *, signs_thinking: bool = True) -> bool:
     if not isinstance(block, dict):
         return False
+    if _carries_carrier(block):
+        # FIRST, and unconditional: a carrier is not a signature, and
+        # ``signs_thinking`` is a statement about signatures. A host that mints
+        # none (OpenCode Go's ``/messages`` door) still did not mint this blob,
+        # so the short-circuit below must never be reached for one -- that is
+        # the whole of mutation M2.
+        return True
     kind = block.get("type")
     if kind == "thinking":
         if not signs_thinking:

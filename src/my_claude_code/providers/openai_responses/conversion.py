@@ -688,6 +688,38 @@ def _history_thinking_note(
     }
 
 
+def carrier_foreign_note(count: int) -> dict[str, str]:
+    """The ``history_carrier_foreign`` record for ``count`` dropped carriers.
+
+    **One sentence for every door** (8.16.1). The provenance guard refuses a
+    carrier at three seams, and the operator must read the same line whichever
+    one refused it:
+
+    * the **Responses** door, where PR-2's ``accepts()`` says the origin does
+      not match (:func:`_carrier_note` calls this);
+    * the **Messages** door, where the prefix alone decides, because a
+      ``responses``-protocol envelope can never match a ``messages``
+      destination -- ``accepts()`` is ``False`` for every possible value of the
+      other four fields, so the verdict is evaluated once at design time rather
+      than at runtime (the spec's Q2);
+    * the **Chat** door, for the same protocol reason, in
+      ``providers/openai_chat/reasoning_details.py``.
+
+    ``{}`` for a count of zero, which keeps every other request's recorded
+    params exactly as they were -- the rule ``empty_system_messages_note``
+    states. Counts only: no substring of an envelope, no summary text, no id.
+    """
+
+    if count <= 0:
+        return {}
+    noun = "carrier" if count == 1 else "carriers"
+    return {
+        HISTORY_CARRIER_FOREIGN: (
+            f"dropped {count} reasoning {noun} minted by another host"
+        )
+    }
+
+
 def _carrier_note(counts: Mapping[str, int]) -> dict[str, str]:
     """The ``history_carrier_*`` records for one build, or ``{}``.
 
@@ -705,11 +737,7 @@ def _carrier_note(counts: Mapping[str, int]) -> dict[str, str]:
         notes[HISTORY_CARRIER_REPLAYED] = (
             f"replayed {replayed} reasoning {noun} from the client's history"
         )
-    if foreign:
-        noun = "carrier" if foreign == 1 else "carriers"
-        notes[HISTORY_CARRIER_FOREIGN] = (
-            f"dropped {foreign} reasoning {noun} minted by another host"
-        )
+    notes.update(carrier_foreign_note(foreign))
     if malformed:
         noun = "carrier" if malformed == 1 else "carriers"
         notes[HISTORY_CARRIER_MALFORMED] = (

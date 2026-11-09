@@ -150,6 +150,7 @@ from .prompt_cache import (
     chat_prompt_cache_choice,
     note_chat_prompt_cache_refusal,
 )
+from .reasoning_details import carrier_foreign_note_for_history
 from .request_policy import build_openai_chat_request_body, chat_tool_schema_note
 from .response_surface import (
     ResolvedSurfaceLadder,
@@ -1845,6 +1846,12 @@ class _OpenAIChatStreamRunner:
         # Chat schema dialect.
         self._wire_notes: dict[str, Any] = {
             **empty_system_messages_note(request.messages),
+            # 8.16.1: the carriers this door will not send. A pure function of
+            # the request, counted with the very predicate
+            # ``_redacted_reasoning_details`` leaves them out by, so the line
+            # and the body cannot disagree -- ``{}`` for every history that
+            # carries none, which is every history until a carrier exists.
+            **carrier_foreign_note_for_history(request.messages),
             **provider.tool_schema_wire_note(request),
         }
         # The prompt-cache lifetime this attempt sends (7.106.0), or ``None``
