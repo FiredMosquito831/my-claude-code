@@ -97,6 +97,10 @@ from tests.support.parallel_tool_calls_pin import (
     pin_parallel_tool_calls_off,
     unpin_parallel_tool_calls,
 )
+from tests.support.plaintext_replay_pin import (
+    pin_plaintext_replay_off,
+    unpin_plaintext_replay,
+)
 
 BASELINE = Path(__file__).with_name("empty_system_message_equality_baseline.json")
 WRITE_BASELINE = os.environ.get("MCC_EMPTY_SYSTEM_BASELINE_WRITE", "")
@@ -117,12 +121,19 @@ def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
     empty system message). The pin keeps every recorded digest exact;
     ``tests/providers/test_responses_parallel_tool_calls.py`` proves the one
     cell 8.15.0 does move, and that it moves nothing else.
+
+    8.17.0 ships ``RESPONSES_PLAINTEXT_REPLAY`` on, which adds a summary
+    ``reasoning`` item to any Responses body whose history carries readable
+    reasoning -- a second cell that has nothing to do with an empty system
+    message. The second pin keeps that claim exact.
     """
 
     pin_parallel_tool_calls_off(monkeypatch)
+    pin_plaintext_replay_off(monkeypatch)
     try:
         yield
     finally:
+        unpin_plaintext_replay()
         unpin_parallel_tool_calls()
 
 

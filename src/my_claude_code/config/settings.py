@@ -221,6 +221,7 @@ from .constants import (
     REQUEST_WATCHDOG_STALL_SECONDS_DEFAULT,
     RESPONSES_CARRIER_REPLAY_DEFAULT,
     RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
+    RESPONSES_PLAINTEXT_REPLAY_DEFAULT,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
     SERVER_PORT_TAKEOVER_CHOICES,
     SERVER_PORT_TAKEOVER_DEFAULT,
@@ -1856,6 +1857,20 @@ class Settings(BaseSettings):
     responses_carrier_replay: bool = Field(
         default=RESPONSES_CARRIER_REPLAY_DEFAULT,
         validation_alias="RESPONSES_CARRIER_REPLAY",
+    )
+    # Whether a Responses body replays an earlier turn's *readable* reasoning as
+    # a summary-only ``reasoning`` item (8.17.0). A separate field from the one
+    # above on purpose: they are two mechanisms with two failure modes and two
+    # pieces of evidence, and "everything is toggleable" means one switch each.
+    # Read where the body is built, so a save applies to the next request with
+    # no restart and no provider rebuild.
+    #
+    # True ships by the user's ROUND 9 decision (2026-11-09, "nothing is lost",
+    # "all toggleable"): a feature that defaults off does nothing. False
+    # reproduces every byte v8.16.3 sent.
+    responses_plaintext_replay: bool = Field(
+        default=RESPONSES_PLAINTEXT_REPLAY_DEFAULT,
+        validation_alias="RESPONSES_PLAINTEXT_REPLAY",
     )
 
     # ==================== HTTP Client Timeouts ====================
@@ -3552,6 +3567,44 @@ def configured_responses_carrier_replay() -> bool:
             settings,
             "responses_carrier_replay",
             RESPONSES_CARRIER_REPLAY_DEFAULT,
+        )
+    )
+
+
+def configured_responses_plaintext_replay() -> bool:
+    """Whether a Responses body replays readable reasoning as a summary (8.17.0).
+
+    Read per request, at the moment the body is built, for the same reason
+    :func:`configured_responses_carrier_replay` is: a value captured when a
+    provider was constructed could not follow a dashboard save, and this
+    setting needs no restart. Both Responses senders call this and hand the
+    answer to their body builder, whose own keyword default stays ``False`` so
+    a caller that says nothing keeps the bytes every release before 8.17.0
+    sent.
+
+    A separate setting from the carrier's, and not folded into it: the carrier
+    decides whether MCC hands the *host's own opaque item* back, this one
+    decides whether MCC sends *text a model wrote*. They have different failure
+    modes, different evidence, and an operator whose host refuses a summary
+    item must be able to turn this off while keeping carriers.
+
+    The learned refusal is applied by the senders, not here -- they hold the
+    memory -- so a host that refused a replayed ``reasoning`` item stops
+    receiving either kind of item from one place.
+
+    ``getattr`` with the shipped default rather than a bare attribute read:
+    the settings object is rebuilt from the environment on every admin save
+    (``get_settings.cache_clear``), and a field this module no longer declared
+    would otherwise turn every Responses request into an ``AttributeError``
+    on the request path.
+    """
+
+    settings = get_settings()
+    return bool(
+        getattr(
+            settings,
+            "responses_plaintext_replay",
+            RESPONSES_PLAINTEXT_REPLAY_DEFAULT,
         )
     )
 

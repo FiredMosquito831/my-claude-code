@@ -4960,6 +4960,41 @@ The `signature` key is **removed**, not blanked. A host that signs nothing has n
 
 A save applies to the next request, with no restart.
 
+#### Readable reasoning replay on the Responses door
+
+**New in 8.17.0, and on by default.** The two sections above are about the **encrypted** blob a Responses host mints. A model's reasoning can also be plain text — a `thinking` block's text, or an assistant turn's top-level `reasoning_content` — and on this door MCC sent neither: the Responses history converter is pinned to `ReasoningReplayMode.DISABLED`, which is the 7.58.1 fix. So a fallback **into** the Responses door (the ChatGPT subscription, or the shared transport OpenCode Zen and Go are served on) lost whatever readable reasoning the previous model had written, carrier or no carrier, on every model.
+
+| Setting | Default | Values |
+| --- | --- | --- |
+| `RESPONSES_PLAINTEXT_REPLAY` | `true` | `true` — replay readable reasoning as a summary item; `false` — every byte 8.16.3 sent |
+
+**The rule is dynamic by content, never by a model list.**
+
+| The block | What MCC sends |
+| --- | --- |
+| a `thinking` block with a carrier that **matches** this host | the host's own `reasoning` item, verbatim — the carrier path, unchanged |
+| a `thinking` block whose carrier was **refused** (minted elsewhere, or malformed) and which still has text | **the text**, as a summary item — the envelope is host-bound and the text is not |
+| a `thinking` block with text and **no** carrier | **the text**, as a summary item |
+| a `thinking` block with blank or whitespace-only text | nothing — there is nothing readable to carry |
+| a `redacted_thinking` block | nothing — its `data` is the opaque envelope, never readable text |
+| an assistant turn whose `content` is a string with a top-level `reasoning_content` | **the text**, as a summary item |
+
+The item is `{"type": "reasoning", "summary": [{"type": "summary_text", "text": …}]}` — no `id`, no `encrypted_content`, no `status`, no `content` — placed at the head of its own turn's `input[]` run, after any carrier item for the same turn. That is the shape three shipped implementations build, and the shape this door already writes in its own `output[]`.
+
+**The refused-carrier row is the important one, and it is where MCC lost the most.** A block holding both a readable summary and an envelope minted for another host had its text die with the envelope. On this door the text is a *different item type*, so it is not refused with the envelope: the carrier is dropped and counted `history_carrier_foreign`, and the text is replayed. That is the opposite of what the Messages door does, and deliberately so — there Anthropic refuses an unsigned `thinking` block outright, so the text is refused with the envelope.
+
+**The 7.58.1 echo class stays shut.** The text never becomes output text and never becomes a `<think>` tag; it lives in a structured item's `summary`, a field with no room for one. The assistant `message` items are byte-identical to the setting-off body's.
+
+**Why it is on by default.** A feature that defaults off does nothing, and reasoning continuity is the whole purpose of this arc. Turning it off is safe at any time and restores every byte 8.16.3 sent.
+
+**One assumption is unverified.** Whether the ChatGPT/Codex backend accepts a summary-only `reasoning` item has not been measured. Three shipped implementations build exactly this shape, and the learned refusal bounds the cost: a host that refuses one costs a **single** request and is then never sent one again until the fact expires. That fact is shared with the carrier path — both send the same item type — so a host that refuses only summary items also stops receiving carriers for its lifetime. Turning this setting off is the escape hatch for exactly that case.
+
+**What you see.** A request whose history carried readable reasoning gains `history_plaintext_replayed` — `replayed 2 readable reasoning blocks from the client's history` — a count, never any content. A request that replayed nothing records exactly what it recorded before. With the setting on and something still left out, the omission line's second clause reads *the Responses surface replays reasoning only as structured items* instead of *the Responses surface replays no reasoning as text*; with the setting off the line is byte-identical to 8.16.3's.
+
+**What it does not touch.** The Anthropic Messages door and the Chat Completions door are unchanged, byte for byte, with the setting on or off. With it off, every body on every door is byte-identical to 8.16.3's.
+
+A save applies to the next request, with no restart.
+
 ---
 
 ## 10. Web search

@@ -1219,6 +1219,39 @@ RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT = True
 # make the default safe.
 RESPONSES_CARRIER_REPLAY_DEFAULT = True
 
+# Whether a Responses body replays an earlier turn's *readable* reasoning back
+# to the model as a summary-only `reasoning` item (8.17.0).
+# `RESPONSES_PLAINTEXT_REPLAY`.
+#
+# The carrier above replays the host's own opaque item, and it only helps a host
+# that encrypted its reasoning and only when the client round-trips the
+# envelope. A model's reasoning can also be plain text -- a `thinking` block's
+# text, or an assistant turn's top-level `reasoning_content` -- and on this door
+# MCC threw that away unconditionally: `RESPONSES_REASONING_REPLAY` is
+# `ReasoningReplayMode.DISABLED`, which is the 7.58.1 fix. So a fallback INTO
+# the Responses door lost the previous model's readable reasoning completely,
+# carrier or no carrier, on every model. That is the largest remaining
+# continuity gap in the arc.
+#
+# The rule is dynamic by content, never by a model list: an item carrying
+# `encrypted_content` takes the carrier path; a plaintext block takes this one;
+# neither is invented. A block whose carrier was *refused* (foreign or
+# malformed) still has its text replayed here, because the envelope is
+# host-bound and the text is not.
+#
+# The text lands in a structured `reasoning` item's `summary`, never in output
+# text and never in a think tag, so the 7.58.1 echo class stays closed.
+#
+# **On by default**, by the user's ROUND 9 decision ("nothing is lost", "all
+# toggleable"): a feature that defaults off does nothing. `false` reproduces
+# every byte v8.16.3 sent, and the equality contracts pin that state.
+#
+# One assumption is UNVERIFIED: whether the ChatGPT/Codex backend accepts a
+# summary-only `reasoning` item. Three shipped implementations build exactly
+# this shape, and the learned refusal above bounds the cost to one refused
+# request per (provider, model).
+RESPONSES_PLAINTEXT_REPLAY_DEFAULT = True
+
 # The longest edge, in pixels, an outbound image may have. The default is the
 # number Anthropic itself resizes to and the number Claude Code ships
 # (`maxTargetPx: 1568`, `maxTargetTokens: 1568`); combined with the destination

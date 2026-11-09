@@ -62,6 +62,7 @@ def build_chatgpt_oauth_request_body(
     wire_notes: dict[str, str] | None = None,
     tool_name_max_length: int | None = None,
     origin: ReplayOrigin | None = None,
+    plaintext_replay: bool = False,
 ) -> dict[str, Any]:
     """Build a ChatGPT Responses API request body from an Anthropic request.
 
@@ -78,6 +79,13 @@ def build_chatgpt_oauth_request_body(
     what keeps this body byte-identical to every release before 8.16.0. Present,
     the history's carriers are decoded, matched against it on all five fields
     and replayed as the ``reasoning`` items they were minted from.
+
+    ``plaintext_replay`` is the operator's ``RESPONSES_PLAINTEXT_REPLAY``
+    (8.17.0), or ``False`` -- its own default, so a caller that says nothing
+    gets the bytes every release before 8.17.0 sent. Present, the history's
+    readable reasoning is replayed as summary-only ``reasoning`` items. It is
+    a **separate** switch from ``origin`` on purpose: an operator whose host
+    refuses a summary item can turn this off and keep carriers.
     """
     if request.extra_body:
         raise InvalidRequestError(
@@ -103,4 +111,5 @@ def build_chatgpt_oauth_request_body(
         tool_schema_dialect=tool_schema_dialect,
         wire_notes=wire_notes,
         origin=origin,
+        plaintext_replay=plaintext_replay,
     )

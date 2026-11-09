@@ -1768,6 +1768,10 @@
       "control": "field-RESPONSES_CARRIER_REPLAY",
       "page": "model_config"
     },
+    "RESPONSES_PLAINTEXT_REPLAY": {
+      "control": "field-RESPONSES_PLAINTEXT_REPLAY",
+      "page": "model_config"
+    },
     "RESPONSES_PARALLEL_TOOL_CALLS": {
       "control": "field-RESPONSES_PARALLEL_TOOL_CALLS",
       "page": "model_config"

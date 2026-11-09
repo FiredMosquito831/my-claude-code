@@ -72,6 +72,10 @@ from tests.support.parallel_tool_calls_pin import (
     pin_parallel_tool_calls_off,
     unpin_parallel_tool_calls,
 )
+from tests.support.plaintext_replay_pin import (
+    pin_plaintext_replay_off,
+    unpin_plaintext_replay,
+)
 
 BASELINE = Path(__file__).with_name("tool_change_fold_equality_baseline.json")
 WRITE_BASELINE = os.environ.get("MCC_TOOL_FOLD_BASELINE_WRITE", "")
@@ -90,12 +94,19 @@ def _pre_8_15_0_responses_bodies(monkeypatch: pytest.MonkeyPatch):
     pin keeps this file's claim exact -- *this change* moved no byte -- and
     ``tests/providers/test_responses_parallel_tool_calls.py`` proves the one
     cell 8.15.0 does move, and that it moves nothing else.
+
+    8.17.0 ships ``RESPONSES_PLAINTEXT_REPLAY`` on, which adds a summary
+    ``reasoning`` item to any Responses body whose history carries readable
+    reasoning -- again for a reason that has nothing to do with the tool-change
+    fold. The second pin keeps this file's claim exact.
     """
 
     pin_parallel_tool_calls_off(monkeypatch)
+    pin_plaintext_replay_off(monkeypatch)
     try:
         yield
     finally:
+        unpin_plaintext_replay()
         unpin_parallel_tool_calls()
 
 

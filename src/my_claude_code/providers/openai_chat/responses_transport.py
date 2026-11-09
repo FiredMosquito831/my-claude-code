@@ -39,6 +39,7 @@ from my_claude_code.config.marketplaces import MarketplaceDialect
 from my_claude_code.config.settings import (
     configured_responses_carrier_replay,
     configured_responses_parallel_tool_calls,
+    configured_responses_plaintext_replay,
 )
 from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -69,6 +70,7 @@ from my_claude_code.providers.openai_responses import (
     alias_responses_body_tool_names,
     build_responses_request_body,
     history_carrier_marker,
+    history_plaintext_marker,
     history_thinking_marker,
     iter_responses_sse_events,
     note_carrier_shape,
@@ -487,6 +489,32 @@ class ResponsesTransport:
             model=model,
         )
 
+    def plaintext_replay(self, model: str) -> bool:
+        """Whether this request may replay readable reasoning as a summary (8.17.0).
+
+        The operator's ``RESPONSES_PLAINTEXT_REPLAY``, minus what this model's
+        host has been proven to refuse.
+
+        ``False`` when the setting is off, which is what keeps every body
+        byte-identical to 8.16.3: the builder runs no plaintext pass without
+        it.
+
+        ``False`` too while this model's host is known to refuse a replayed
+        ``reasoning`` item -- the **same** fact :meth:`replay_origin` reads, and
+        deliberately not a second one. A host that refuses a ``reasoning`` input
+        item is refusing the *item type*, not the payload, and both paths send
+        that item type. The cost is stated where the fact is declared: a host
+        that refuses only summary items also loses carriers for the fact's TTL,
+        and this setting is the operator's escape hatch.
+
+        Read here rather than inside the builder so the answer reaches the body
+        from one place, exactly as :meth:`replay_origin` does.
+        """
+
+        if not configured_responses_plaintext_replay():
+            return False
+        return not self._memory.responses_reasoning_item_refused_for(model)
+
     def _remember_refused_reasoning_item(
         self, error: Exception, body: Mapping[str, Any]
     ) -> None:
@@ -583,6 +611,11 @@ class ResponsesTransport:
             # ``stream``'s converter read the same value, so a carrier minted
             # here can only ever be replayed to this host, account and model.
             origin=self.replay_origin(request.model),
+            # 8.17.0: the operator's plaintext switch, minus what this model's
+            # host has been proven to refuse. Its own setting, not the
+            # carrier's: an operator whose host rejects a summary item can turn
+            # this off and keep carriers.
+            plaintext_replay=self.plaintext_replay(request.model),
         )
         headers = self._headers(body)
         cache_key = self._prompt_cache_key(headers)
@@ -857,6 +890,7 @@ class ResponsesTransport:
                 **history_thinking_marker(wire_notes),
                 **empty_system_messages_marker(wire_notes),
                 **history_carrier_marker(wire_notes),
+                **history_plaintext_marker(wire_notes),
             )
             try:
                 response = await self._rate_limiter.execute_with_retry(

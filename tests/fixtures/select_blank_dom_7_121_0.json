@@ -2,8 +2,8 @@
  "written_by": "tests/api/admin_jsdom_select_blank.mjs, run against the BASE tree f6de93ad (v7.121.0) with this scenario and this harness copied in, on the fixture .env in tests/support/select_blank_payload.py. The after-answers are this tree's own run of the same scenario.",
  "scenario": "select_blank",
  "fixture_env_sha256": "ebccabeb67b1ccc86404dae8c3d77cf2337b539267582b04d3d5d2c62da6ac90",
- "payload_field_count": 559,
- "payload_field_count_note": "551 at v7.121.0 and 8.1.0; 552 from 8.6.0, which adds USAGE_AUTO_REFRESH_SECONDS; 553 from 8.7.0, which adds USAGE_LAYOUT; 554 from 8.8.0, which adds LOG_RAW_UPSTREAM_BYTES; 557 from 8.12.0, which adds MISTRAL_VIBE_KEY, MISTRAL_VIBE_KEY_ROTATION and MISTRAL_VIBE_PROXY for the second Mistral credential; 558 from 8.15.0, which adds RESPONSES_PARALLEL_TOOL_CALLS on the Reasoning card; 559 from 8.16.0, which adds RESPONSES_CARRIER_REPLAY beside it. The number is not a recording of that ancient tree -- it asserts that the fixture payload and the manifest agree about how many settings exist TODAY, which is the pair this test is about. Every other cell in this file is still the base tree's, unchanged.",
+ "payload_field_count": 560,
+ "payload_field_count_note": "551 at v7.121.0 and 8.1.0; 552 from 8.6.0, which adds USAGE_AUTO_REFRESH_SECONDS; 553 from 8.7.0, which adds USAGE_LAYOUT; 554 from 8.8.0, which adds LOG_RAW_UPSTREAM_BYTES; 557 from 8.12.0, which adds MISTRAL_VIBE_KEY, MISTRAL_VIBE_KEY_ROTATION and MISTRAL_VIBE_PROXY for the second Mistral credential; 558 from 8.15.0, which adds RESPONSES_PARALLEL_TOOL_CALLS on the Reasoning card; 559 from 8.16.0, which adds RESPONSES_CARRIER_REPLAY beside it; 560 from 8.17.0, which adds RESPONSES_PLAINTEXT_REPLAY beside that. The number is not a recording of that ancient tree -- it asserts that the fixture payload and the manifest agree about how many settings exist TODAY, which is the pair this test is about. Every other cell in this file is still the base tree's, unchanged.",
  "base": {
   "footerOnLoad": "5 unsaved changes",
   "changedOnLoad": [
