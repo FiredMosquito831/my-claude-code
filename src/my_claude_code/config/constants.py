@@ -1193,19 +1193,31 @@ RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT = True
 # on 13,856 of 26,566 measured ChatGPT OAuth attempts (52.2 %), 96.5 % of
 # `gpt-6.1-sol` and 93.5 % of `gpt-6-luna`.
 #
-# **Off by default, and the flip is its own PR.** IV.7 requires that with no new
-# preference set the request bodies are byte-identical, which a default-on
-# setting cannot satisfy. Three things are true on the day this ships and false
-# later: the provenance guard (the next PR) has not shipped, so a provider
-# switch would send our envelope to Anthropic; the A/B that settles whether the
-# backend accepts its own item id on replay has not run; and the fail-soft for a
-# host that refuses a replayed item has not shipped either. The flip is one line
-# plus a recaptured equality baseline, gated on all four.
+# **On by default since 8.16.2.** It shipped off in 8.16.0 because three
+# preconditions were unmet on that day, and all three are now met:
 #
-# `False` reproduces every byte v8.15.1 sent, which is what the equality
-# contracts pin. The builder's own keyword default (`origin=None`) stays the
-# same for the same reason.
-RESPONSES_CARRIER_REPLAY_DEFAULT = False
+# 1. **The provenance guard shipped** (8.16.1). A carrier minted for one host is
+#    dropped at any destination that did not mint it, on all three seams, so a
+#    provider switch can no longer send our envelope to Anthropic.
+# 2. **The fail-soft shipped** (8.16.0): `FACT_RESPONSES_REASONING_ITEM_REJECTED`
+#    matches a 400 that faults an item in `input[]` and names a reasoning item,
+#    and `replay_origin` then returns `None` so body and stream agree from one
+#    switch. The worst case is one refused request per (provider, model), after
+#    which the host is never sent one again.
+# 3. **The cache cost is measured** (8.16.0): the first request after the flip is
+#    one miss per conversation, and every later turn is a strict prefix of the
+#    previous one.
+#
+# IV.7's "bodies byte-identical with no new preference set" was the reason for
+# `False`, and it is the one rule this flip knowingly overrides: a feature that
+# is off by default does nothing, and reasoning continuity is the whole purpose
+# of the arc. The setting still exists; with it explicitly `false` every body is
+# still byte-identical to v8.15.1, and the equality contracts pin that state.
+#
+# The A/B that settles whether the backend accepts its own item id on replay has
+# NOT run. It measures benefit, not safety; the guard and the fail-soft are what
+# make the default safe.
+RESPONSES_CARRIER_REPLAY_DEFAULT = True
 
 # The longest edge, in pixels, an outbound image may have. The default is the
 # number Anthropic itself resizes to and the number Claude Code ships
