@@ -50146,6 +50146,7 @@ const SECTION_NAVIGATOR = {
     ["Reasoning", "#guide-reasoning"],
     ["Cache lifetime", "#guide-prompt-cache-lifetime"],
     ["Responses protocol", "#guide-responses-protocol"],
+    ["Reasoning carriers", "#guide-carrier-provenance"],
     ["InferHub", "#guide-inferhub"],
     ["Claude Code", "#guide-cli"],
     ["Claude Desktop", "#guide-desktop"],

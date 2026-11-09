@@ -4918,6 +4918,24 @@ With `RESPONSES_CARRIER_REPLAY` on, MCC hands the blob to the client — inside 
 
 **What it does not touch.** The Anthropic Messages door and the Chat Completions door are unchanged, byte for byte. With the setting off, every body on every door is byte-identical to 8.15.1.
 
+#### The provenance guard
+
+**New in 8.16.1, and it has no setting: it is always on.** A carrier minted for one host is never sent to a host that did not mint it. Three seams can carry one, and all three are guarded:
+
+| Door family | Where | What happens |
+| --- | --- | --- |
+| **Messages** — `anthropic`, `anthropic_oauth`, `commandcode`, and every Messages transport including OpenCode Go's `/messages` door | the history trim every Messages body passes through | a `thinking` block whose `signature`, or a `redacted_thinking` block whose `data`, starts with `mcc:reasoning:v1:` is removed and counted |
+| **Responses** — the ChatGPT subscription and the shared Responses transport | the replay pass | PR-2's origin match: replayed only when all five origin fields agree |
+| **Chat Completions** — `cline`, `zenmux`, and every OpenRouter-dialect gateway (`openrouter`, `kilo`, `nous_portal`) | the `reasoning_details` replay pass | the envelope is skipped and counted instead of being forwarded as `{"type": "reasoning.encrypted", …}` |
+
+The Chat-Completions seam was a **live defect** independent of the replay feature: any non-JSON `redacted_thinking` block was turned into a `reasoning.encrypted` detail and sent to the gateway, while the converted Chat body had already dropped it. That path is closed.
+
+**The test is the prefix, and nothing else.** A value that starts with `mcc:reasoning:v1:` is MCC's, even if it no longer decodes — a corrupted blob is still ours and is still dropped, never forwarded because it looked broken. A value that does not start with that prefix is not ours and is never parsed. Anthropic's own signatures are base64 of a protobuf, and `:` is in no base64 alphabet, so a real signature can never be mistaken for an envelope.
+
+**What it never drops.** Readable reasoning is portable and still crosses models and providers, exactly as before: a signed `thinking` block's text, a `reasoning_content` string, a bare base64 `redacted_thinking` that is not ours. The guard reads `signature` and `data` and never `thinking`. A body that carries no carrier is byte-identical to 8.16.0.
+
+**What you see.** A request whose history carried a carrier that could not go gains one line in its request detail — `history_carrier_foreign`, a count, never any content. A request that carried none records exactly what it recorded before.
+
 A save applies to the next request, with no restart.
 
 ---

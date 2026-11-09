@@ -9,7 +9,9 @@ from my_claude_code.core.anthropic import (
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.providers.openai_responses import carrier_foreign_note
 
 
 def apply_reasoning_details_replay(
@@ -108,6 +110,60 @@ def _assistant_reasoning_details(messages: Any) -> list[list[dict[str, Any]]]:
     return result
 
 
+def carrier_foreign_note_for_history(messages: Any) -> dict[str, str]:
+    """The ``history_carrier_foreign`` record for one Chat history, or ``{}``.
+
+    A **pure function of the request**, the shape ``empty_system_messages_note``
+    has: the runner merges it into its ``_wire_notes`` before the body is built,
+    and the count it writes is the count
+    :func:`_redacted_reasoning_details` leaves out of ``reasoning_details`` --
+    so the line and the body cannot disagree.
+
+    Why the Chat door drops every carrier, and why that needs no ``accepts()``
+    call: a v1 envelope always writes ``"protocol": "responses"``, and a
+    ``chat`` destination can never match that field, so the verdict is ``False``
+    for every possible value of the other four. Evaluating it once at design
+    time rather than per request is the spec's Q2. The guard is
+    :func:`~my_claude_code.core.openai_responses.is_carrier` and nothing else --
+    the prefix at byte offset 0, no decode, no length test -- so a carrier
+    minted by an MCC with a higher size guard is still dropped rather than
+    forwarded because it was "too big to be ours".
+
+    Only assistant turns are read, and **only the one field this door can send**:
+    a ``redacted_thinking`` block's ``data``. That is deliberate, and it is why
+    the count is honest rather than merely plausible.
+
+    A ``thinking`` block's ``signature`` is a carrier surface on the **Messages**
+    door, where the block goes out whole -- and the Messages trim counts it
+    there. This door never sends a signature at all: ``_convert_assistant_message``
+    reads a ``thinking`` block's **text** (as ``reasoning_content`` or think
+    tags) and nothing else, so a carrier in a signature has no path to the wire
+    here and counting it would make the line claim a drop that never happened.
+    A ``thinking`` block's ``thinking`` text is the host's own summary --
+    portable across models and providers by decision 9 -- and is never read
+    here either.
+
+    ``{}`` when the history carries none, which keeps every other request's
+    recorded params exactly as they were.
+    """
+
+    if not _is_sequence(messages):
+        return {}
+    count = 0
+    for message in messages:
+        if _field(message, "role") != "assistant":
+            continue
+        content = _field(message, "content")
+        if not _is_sequence(content):
+            continue
+        for block in content:
+            if _field(block, "type") != "redacted_thinking":
+                continue
+            if is_carrier(_field(block, "data")):
+                count += 1
+    return carrier_foreign_note(count)
+
+
 def _redacted_reasoning_details(content: Any) -> list[dict[str, Any]]:
     if not _is_sequence(content):
         return []
@@ -117,6 +173,16 @@ def _redacted_reasoning_details(content: Any) -> list[dict[str, Any]]:
             continue
         data = _field(block, "data")
         if not isinstance(data, str) or not data:
+            continue
+        if is_carrier(data):
+            # A carrier minted for another host must not reach a Chat upstream.
+            # Before 8.16.1 this line was the leak: the block fell through to
+            # the ``reasoning.encrypted`` branch below and the envelope went out
+            # verbatim, because ``convert_messages`` had already dropped it and
+            # this second pass never learned about it. The prefix test cannot
+            # collide with the JSON branch: a carrier starts ``mcc:``, a JSON
+            # container starts ``{`` or ``[``. Counted by
+            # :func:`carrier_foreign_note_for_history`, in the same pass.
             continue
         parsed = _json_payload(data)
         if isinstance(parsed, list):
