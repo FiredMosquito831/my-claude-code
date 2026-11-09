@@ -57,9 +57,10 @@ EXPECTED_NAVIGATOR = {
     "optimizer": 5,
     "web_search": 4,
     "limits": 8,
-    # 8.15.0 adds the Guide's "Responses protocol" section, which is one more
-    # heading in the strip's own table.
-    "guide": 42,
+    # 8.15.0 adds the Guide's "Responses protocol" section, and 8.16.1 its
+    # "Reasoning carriers" section -- each one more heading in the strip's own
+    # table, and each a real `<h3 id="guide-...">` in the Guide body.
+    "guide": 43,
     "docs": 3,
     # 8.7.0 (USAGE-LAYOUTS): the Usage page's strip. THREE entries, not five:
     # the five layouts draw five different DOMs, so the strip names the
