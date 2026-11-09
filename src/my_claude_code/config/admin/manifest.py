@@ -1547,6 +1547,29 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "RESPONSES_CARRIER_REPLAY",
+        "Replay Encrypted Reasoning",
+        "reasoning",
+        "boolean",
+        settings_attr="responses_carrier_replay",
+        default="false",
+        affects_providers=False,
+        description=(
+            "Whether a Responses request carries the host's own encrypted reasoning "
+            "item back to it on the next turn. The Responses API returns an opaque "
+            "encrypted_content blob beside a reasoning item, and on a stateless "
+            "conversation that blob is the only way the reasoning survives: MCC asks "
+            "for it and then discards it, which is why 52% of measured ChatGPT OAuth "
+            "turns reported omitted history thinking. On, MCC hands the blob to the "
+            "client inside the thinking block's signature (or a redacted_thinking "
+            "block when there is no summary), and replays it as a reasoning input item "
+            "only to the exact host, endpoint, account and model that minted it. No "
+            "readable reasoning text is ever written back. Off (the default) restores "
+            "every byte 8.15.1 sent. A save applies to the next request, with no "
+            "restart."
+        ),
+    ),
+    ConfigFieldSpec(
         "ANTHROPIC_AUTH_TOKEN",
         "API/CLI Auth Token",
         "runtime",

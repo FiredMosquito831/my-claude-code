@@ -481,6 +481,10 @@ class OpenAIChatProvider(BaseProvider):
                 tool_schema_dialect=self._profile.tool_schema_dialect,
                 # ``None`` for every profile but a marketplace's (7.109.0).
                 marketplace=self._profile.marketplace,
+                # The catalogue id, which is what a carrier's
+                # ``origin.provider`` records (8.16.0). ``_provider_name`` is a
+                # log label several profiles share.
+                provider_id=self._provider_id,
             )
             self._responses_transport = transport
         return transport

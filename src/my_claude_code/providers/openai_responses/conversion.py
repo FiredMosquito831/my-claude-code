@@ -9,7 +9,7 @@ necessary. Nothing in this module names a backend, a base URL or a credential
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 from loguru import logger
@@ -28,7 +28,13 @@ from my_claude_code.core.anthropic.openai_tool_names import (
     MIN_TOOL_NAME_MAX_LENGTH,
     OpenAIToolNameCodec,
 )
-from my_claude_code.core.openai_responses import call_id_from_item
+from my_claude_code.core.openai_responses import (
+    ReplayOrigin,
+    accepts,
+    call_id_from_item,
+    decode_carrier,
+    is_carrier,
+)
 from my_claude_code.core.reasoning import (
     ReasoningAdaptationKind,
     ReasoningControl,
@@ -71,6 +77,28 @@ RESPONSES_REASONING_REPLAY = ReasoningReplayMode.DISABLED
 #: with those prefixes as a reasoning *instruction* (``is_reasoning_key``), and
 #: a note about the history would then count as reasoning sent.
 HISTORY_THINKING_OMITTED = "history_thinking_omitted"
+
+#: The four carrier notes (8.16.0). Written **only when the setting is on** and
+#: **only when the count is non-zero**, so a request whose history carries no
+#: carrier records exactly the ``params.wire`` it recorded before. Counts only,
+#: never text: no substring of a carrier ever reaches the request log.
+#:
+#: The names avoid the ``reasoning_*``/``thinking_*`` prefixes for the same
+#: reason ``history_thinking_omitted`` does.
+HISTORY_CARRIER_REPLAYED = "history_carrier_replayed"
+HISTORY_CARRIER_FOREIGN = "history_carrier_foreign"
+HISTORY_CARRIER_MALFORMED = "history_carrier_malformed"
+HISTORY_CARRIER_OVERSIZE = "history_carrier_oversize"
+
+#: The three the *build* can count, in the order the note reads. Oversize is
+#: the fourth and is counted on the reply instead: it is only knowable once the
+#: host has sent the item that would have carried it, which is after this
+#: request's body was recorded (see ``ResponsesStreamConverter.carrier_counts``).
+_BUILD_CARRIER_KEYS: tuple[str, ...] = (
+    HISTORY_CARRIER_REPLAYED,
+    HISTORY_CARRIER_FOREIGN,
+    HISTORY_CARRIER_MALFORMED,
+)
 
 
 def responses_tool_name_codec(
@@ -350,10 +378,26 @@ def _openai_message_to_responses_items(
 def _openai_messages_to_responses_input(
     messages: list[dict[str, Any]],
     tool_names: OpenAIToolNameCodec | None = None,
+    reasoning_by_message: Mapping[int, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert OpenAI-chat message list to Responses API input list."""
+    """Convert OpenAI-chat message list to Responses API input list.
+
+    ``reasoning_by_message`` places replayed ``reasoning`` items **before** the
+    message they belong to, keyed by that message's index in ``messages``. That
+    is the position rule: a turn's reasoning items sit at the head of its own
+    ``input[]`` run, before its ``message`` item and before every
+    ``function_call``, which is the shape the host itself writes in ``output[]``
+    and the shape that keeps every ``function_call`` adjacent to its own
+    ``function_call_output``.
+
+    ``None`` -- every caller until 8.16.0 -- emits exactly the list it emitted
+    before.
+    """
+
     items: list[dict[str, Any]] = []
-    for message in messages:
+    for index, message in enumerate(messages):
+        if reasoning_by_message is not None:
+            items.extend(reasoning_by_message.get(index, ()))
         items.extend(_openai_message_to_responses_items(message, tool_names))
     return items
 
@@ -497,29 +541,127 @@ def _note_adaptive_substitution(policy: ReasoningPolicy, model: str) -> None:
     )
 
 
-def _earlier_thinking(messages: list[Any]) -> tuple[int, int]:
-    """Count the thinking an Anthropic history carries, as ``(blocks, chars)``.
+def _carrier_blocks(messages: list[Any]) -> Iterator[tuple[int, int, str, str]]:
+    """Yield ``(message index, block index, block type, opaque value)``.
 
-    Exactly what ``THINK_TAGS`` used to write back as ``<think>`` text: every
-    ``thinking`` block of an assistant turn given as a block list, and the
-    top-level ``reasoning_content`` of an assistant turn given as a plain
-    string. ``redacted_thinking`` was never replayed in any mode, so it is
-    not counted as omitted now.
+    Only the two block types that carry an opaque continuation field are
+    walked: a ``thinking`` block's ``signature`` and a ``redacted_thinking``
+    block's ``data``. Nothing else on this surface can hold a carrier, and a
+    top-level ``reasoning_content`` string is text rather than an envelope.
     """
 
+    for message_index, message in enumerate(messages):
+        if getattr(message, "role", None) != "assistant":
+            continue
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            continue
+        for block_index, block in enumerate(content):
+            block_type = get_block_type(block)
+            if block_type == "thinking":
+                value = get_block_attr(block, "signature", "")
+            elif block_type == "redacted_thinking":
+                value = get_block_attr(block, "data", "")
+            else:
+                continue
+            if isinstance(value, str):
+                yield message_index, block_index, block_type, value
+
+
+def _carrier_items(
+    messages: list[Any],
+    destination: ReplayOrigin | None,
+    counts: dict[str, int],
+) -> tuple[dict[int, list[dict[str, Any]]], set[tuple[int, int]]]:
+    """Decode this history's carriers and decide which may be replayed.
+
+    Returns ``(reasoning_by_input_index, replayed_blocks)``.
+
+    ``reasoning_by_input_index`` maps an index in ``messages`` to the ordered
+    ``reasoning`` items that turn contributes, ready for
+    :meth:`~my_claude_code.core.anthropic.conversion.AnthropicToOpenAIConverter.
+    convert_messages` to place at the head of that turn's ``input[]`` run.
+
+    ``replayed_blocks`` is the set of ``(message index, block index)`` whose
+    carrier was accepted, so :func:`_earlier_thinking` counts exactly the
+    blocks that were **not** replayed. Two passes, one decision: the note and
+    the body can never disagree.
+
+    Every outcome is counted, never raised. A block that claims to be a carrier
+    and does not decode is dropped and counted; a carrier minted by another
+    host is dropped and counted. Neither is ever partially used, and neither is
+    ever sent as a raw string in ``encrypted_content`` -- that is precisely the
+    fake-blob failure Bifrost documents.
+
+    A ``thinking`` block whose text a client rewrote is still a carrier: the
+    envelope is authoritative and the text is decoration, so no comparison is
+    made between the block's ``thinking`` and ``native["summary"]``. A
+    comparison would be a second source of truth and would drop a valid carrier
+    over a cosmetic difference.
+    """
+
+    items: dict[int, list[dict[str, Any]]] = {}
+    replayed: set[tuple[int, int]] = set()
+    for message_index, block_index, _kind, value in _carrier_blocks(messages):
+        if not is_carrier(value):
+            continue
+        payload = decode_carrier(value)
+        if payload is None:
+            counts[HISTORY_CARRIER_MALFORMED] = (
+                counts.get(HISTORY_CARRIER_MALFORMED, 0) + 1
+            )
+            continue
+        if not accepts(destination, payload.origin):
+            counts[HISTORY_CARRIER_FOREIGN] = counts.get(HISTORY_CARRIER_FOREIGN, 0) + 1
+            continue
+        items.setdefault(message_index, []).append(payload.native)
+        replayed.add((message_index, block_index))
+        counts[HISTORY_CARRIER_REPLAYED] = counts.get(HISTORY_CARRIER_REPLAYED, 0) + 1
+    return items, replayed
+
+
+def _earlier_thinking(
+    messages: list[Any],
+    replayed: set[tuple[int, int]] | None = None,
+) -> tuple[int, int]:
+    """Count the thinking an Anthropic history carries, as ``(blocks, chars)``.
+
+    Exactly what the Responses surface leaves out of ``input``: every
+    ``thinking`` block of an assistant turn given as a block list, every
+    ``redacted_thinking`` block beside it, and the top-level
+    ``reasoning_content`` of an assistant turn given as a plain string.
+
+    ``replayed`` is the set of ``(message index, block index)`` whose carrier
+    the replay pass accepted (8.16.0). A block in that set is **not** counted:
+    its reasoning item went upstream inside the envelope, so calling it omitted
+    would make the note disagree with the body. Everything else is counted,
+    which is every block when the setting is off -- and that is deliberate: a
+    ``redacted_thinking`` block was silently uncounted until 8.16.0, and a note
+    that leaves out what it actually leaves out is not a note. The change is
+    visible only in ``params.wire``, never in a body.
+    """
+
+    skipped = replayed or set()
     blocks = 0
     chars = 0
-    for message in messages:
+    for message_index, message in enumerate(messages):
         if getattr(message, "role", None) != "assistant":
             continue
         content = getattr(message, "content", None)
         if isinstance(content, list):
-            for block in content:
-                if get_block_type(block) != "thinking":
+            for block_index, block in enumerate(content):
+                block_type = get_block_type(block)
+                if block_type == "thinking":
+                    field = "thinking"
+                elif block_type == "redacted_thinking":
+                    field = "data"
+                else:
+                    continue
+                if (message_index, block_index) in skipped:
                     continue
                 blocks += 1
-                thinking = get_block_attr(block, "thinking", "")
-                chars += len(thinking) if isinstance(thinking, str) else 0
+                text = get_block_attr(block, field, "")
+                chars += len(text) if isinstance(text, str) else 0
         elif isinstance(content, str):
             reasoning = getattr(message, "reasoning_content", None)
             if isinstance(reasoning, str) and reasoning:
@@ -528,10 +670,13 @@ def _earlier_thinking(messages: list[Any]) -> tuple[int, int]:
     return blocks, chars
 
 
-def _history_thinking_note(messages: list[Any]) -> dict[str, str]:
+def _history_thinking_note(
+    messages: list[Any],
+    replayed: set[tuple[int, int]] | None = None,
+) -> dict[str, str]:
     """The ``history_thinking_omitted`` record for one history, or ``{}``."""
 
-    blocks, chars = _earlier_thinking(messages)
+    blocks, chars = _earlier_thinking(messages, replayed)
     if not blocks:
         return {}
     noun = "block" if blocks == 1 else "blocks"
@@ -541,6 +686,36 @@ def _history_thinking_note(messages: list[Any]) -> dict[str, str]:
             "input; the Responses surface replays no reasoning as text"
         )
     }
+
+
+def _carrier_note(counts: Mapping[str, int]) -> dict[str, str]:
+    """The ``history_carrier_*`` records for one build, or ``{}``.
+
+    Written only for a non-zero count, so a history with no carrier records
+    exactly the ``params.wire`` it recorded before 8.16.0. Counts only -- no
+    substring of an envelope, no summary text, no id.
+    """
+
+    notes: dict[str, str] = {}
+    replayed = counts.get(HISTORY_CARRIER_REPLAYED, 0)
+    foreign = counts.get(HISTORY_CARRIER_FOREIGN, 0)
+    malformed = counts.get(HISTORY_CARRIER_MALFORMED, 0)
+    if replayed:
+        noun = "carrier" if replayed == 1 else "carriers"
+        notes[HISTORY_CARRIER_REPLAYED] = (
+            f"replayed {replayed} reasoning {noun} from the client's history"
+        )
+    if foreign:
+        noun = "carrier" if foreign == 1 else "carriers"
+        notes[HISTORY_CARRIER_FOREIGN] = (
+            f"dropped {foreign} reasoning {noun} minted by another host"
+        )
+    if malformed:
+        noun = "carrier" if malformed == 1 else "carriers"
+        notes[HISTORY_CARRIER_MALFORMED] = (
+            f"dropped {malformed} malformed reasoning {noun} from the client's history"
+        )
+    return notes
 
 
 def history_thinking_marker(
@@ -558,6 +733,24 @@ def history_thinking_marker(
         return {}
     note = wire_notes.get(HISTORY_THINKING_OMITTED)
     return {HISTORY_THINKING_OMITTED: note} if note else {}
+
+
+def history_carrier_marker(
+    wire_notes: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """The carrier record out of one build's ``wire_notes``, or ``{}``.
+
+    Beside :func:`history_thinking_marker`, and for the same reason: a retry
+    never changes what the history carried, so every attempt row of one
+    request carries the same line. Empty when the setting is off -- the keys
+    are only ever written by a build that was handed an ``origin`` -- so a
+    request whose history carries no carrier records exactly the
+    ``params.wire`` it recorded before 8.16.0.
+    """
+
+    if not wire_notes:
+        return {}
+    return {key: wire_notes[key] for key in _BUILD_CARRIER_KEYS if key in wire_notes}
 
 
 def _extract_system_instructions(request: MessagesRequest) -> str | None:
@@ -595,6 +788,7 @@ def build_responses_request_body(
     include_tool_choice: bool = True,
     tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
     wire_notes: dict[str, str] | None = None,
+    origin: ReplayOrigin | None = None,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -654,10 +848,21 @@ def build_responses_request_body(
         ``history_thinking_omitted`` and ``empty_system_messages_dropped``,
         counts only -- so the sender records it beside the body it describes.
         Left untouched when nothing was removed.
+    ``origin``
+        the host this body is about to be sent to, as five strings (8.16.0),
+        or ``None`` -- which is every caller until the operator turns
+        ``RESPONSES_CARRIER_REPLAY`` on, and is what makes this function's
+        output byte-identical to every release before 8.16.0. Present, it
+        turns on the carrier pass: every ``thinking``/``redacted_thinking``
+        block whose ``signature``/``data`` is one of our envelopes is decoded,
+        matched against ``origin`` on all five fields, and -- when it matches
+        -- replayed as the ``reasoning`` item it was minted from, at the head
+        of its own turn's ``input[]`` run.
 
-    Earlier assistant thinking is never replayed on this surface
+    Earlier assistant thinking is never replayed **as text** on this surface
     (:data:`RESPONSES_REASONING_REPLAY`); what was left out is counted into
-    ``wire_notes``.
+    ``wire_notes``. The carrier is a fourth path, not a mode: it replays an
+    opaque item the host itself wrote, never a ``thinking`` string.
 
     Order of operations, fixed: the free-tier catalogue (if any) has already
     replaced ``request.tools`` one layer up; the name codec is chosen here and
@@ -670,26 +875,51 @@ def build_responses_request_body(
     "the same request" has to serialise the same way every time.
     """
 
+    carrier_counts: dict[str, int] = {}
+    reasoning_by_message: dict[int, list[dict[str, Any]]] | None = None
+    replayed_blocks: set[tuple[int, int]] = set()
+    if origin is not None:
+        reasoning_by_message, replayed_blocks = _carrier_items(
+            request.messages, origin, carrier_counts
+        )
     try:
         openai_messages = AnthropicToOpenAIConverter.convert_messages(
             request.messages,
             reasoning_replay=RESPONSES_REASONING_REPLAY,
+            reasoning_by_message=reasoning_by_message,
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
     if wire_notes is not None:
-        wire_notes.update(_history_thinking_note(request.messages))
+        wire_notes.update(_history_thinking_note(request.messages, replayed_blocks))
         wire_notes.update(empty_system_messages_note(request.messages))
+        if origin is not None:
+            wire_notes.update(_carrier_note(carrier_counts))
 
     tool_names = responses_tool_name_codec(
         request, tool_name_max_length, tool_catalogue
     )
     instructions = _extract_system_instructions(request)
+    stripped_system = bool(openai_messages) and (
+        openai_messages[0].get("role") == "system"
+    )
     _, chat_messages = _strip_openai_system_message(openai_messages)
+    if stripped_system and reasoning_by_message:
+        # ``convert_messages`` never emits a leading system message (an inline
+        # Anthropic system turn becomes a user message), so this is defensive
+        # rather than expected: if it ever did, the mapping is one index off
+        # and every replayed item would land in front of the wrong turn.
+        reasoning_by_message = {
+            index - 1: items
+            for index, items in reasoning_by_message.items()
+            if index > 0
+        }
 
     body: dict[str, Any] = {
         "model": request.model,
-        "input": _openai_messages_to_responses_input(chat_messages, tool_names),
+        "input": _openai_messages_to_responses_input(
+            chat_messages, tool_names, reasoning_by_message
+        ),
         "store": store,
         "stream": stream,
         "parallel_tool_calls": parallel_tool_calls,

@@ -36,13 +36,22 @@ import httpx
 from loguru import logger
 
 from my_claude_code.config.marketplaces import MarketplaceDialect
-from my_claude_code.config.settings import configured_responses_parallel_tool_calls
+from my_claude_code.config.settings import (
+    configured_responses_carrier_replay,
+    configured_responses_parallel_tool_calls,
+)
 from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import EMPTY_TOOL_CATALOGUE
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.client_fingerprint import current_fingerprint
 from my_claude_code.core.generation_rate import GenerationClock
+from my_claude_code.core.openai_responses import (
+    CARRIER_PROTOCOL_RESPONSES,
+    ReplayOrigin,
+    connection_id,
+    normalise_endpoint,
+)
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.core.upstream_ladder import note_recovery_rung, note_response_head
 from my_claude_code.core.wire_capture import (
@@ -59,8 +68,10 @@ from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
     alias_responses_body_tool_names,
     build_responses_request_body,
+    history_carrier_marker,
     history_thinking_marker,
     iter_responses_sse_events,
+    note_carrier_shape,
     note_responses_event_shape,
     note_responses_generation_delta,
     responses_tool_name_codec,
@@ -86,7 +97,10 @@ from my_claude_code.providers.recovery import (
     apply_tools_max_count,
     clone_body_without_tool_choice,
     complaint_evidence_snippet,
+    complaint_refuses_a_replayed_reasoning_item,
     effective_tools_max_count,
+    input_carries_reasoning_items,
+    is_bad_request,
     is_tool_choice_auto_only,
     merge_tool_schema_markers,
     merge_tools_trimmed_markers,
@@ -263,6 +277,7 @@ class ResponsesTransport:
         memory: RecoveryMemory | None = None,
         tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
         marketplace: MarketplaceDialect | None = None,
+        provider_id: str = "",
     ) -> None:
         self._config = config
         # The price marketplace this host is (7.109.0), or ``None`` -- every
@@ -299,6 +314,13 @@ class ResponsesTransport:
         self._rate_limiter = rate_limiter
         self._base_url = base_url.rstrip("/")
         self._provider_name = provider_name
+        # The catalogue id (``opencode``, ``opencode_go``), which is what a
+        # carrier's ``origin.provider`` records (8.16.0). ``_provider_name`` is
+        # the profile's log label (``OPENCODE``) and is a display word, not an
+        # identity: two profiles share one label. Empty -- a bare transport
+        # built by a test -- falls back to the label, which is stable for that
+        # instance and therefore still a usable match key.
+        self._provider_id = provider_id or provider_name
         self._identity = identity
         self._api_key = api_key
         self._api_key_provider = api_key_provider
@@ -430,6 +452,88 @@ class ResponsesTransport:
             return None
         return headers.get(self._identity.session_header)
 
+    def replay_origin(self, model: str) -> ReplayOrigin | None:
+        """This host as the five strings a carrier is bound to (8.16.0).
+
+        ``None`` when the operator has not turned ``RESPONSES_CARRIER_REPLAY``
+        on, which is what keeps every body byte-identical to 8.15.1: the origin
+        *is* the switch, and the builder runs no carrier pass without one.
+
+        ``None`` too while this model's host is known to refuse a replayed
+        ``reasoning`` item. That is the learned net, and it is read here rather
+        than inside the builder so the answer reaches both the body and the
+        converter from one place: a host that refused once is never offered a
+        carrier again until the fact expires or the operator forgets it.
+
+        ``connection`` is the **account**, never the credential. The transport
+        holds the provider's configured API key, which is the account identity
+        for an API-key host; a rotating credential provider is deliberately not
+        consulted, because the value it would return changes per call and a
+        connection that moves cannot match anything. ``""`` -- a stable
+        constant -- is the answer when no configured key exists, exactly as
+        :func:`~my_claude_code.core.openai_responses.carrier.connection_id`
+        documents.
+        """
+
+        if not configured_responses_carrier_replay():
+            return None
+        if self._memory.responses_reasoning_item_refused_for(model):
+            return None
+        return ReplayOrigin(
+            provider=self._provider_id,
+            protocol=CARRIER_PROTOCOL_RESPONSES,
+            endpoint=normalise_endpoint(self._base_url),
+            connection=connection_id(self._api_key or ""),
+            model=model,
+        )
+
+    def _remember_refused_reasoning_item(
+        self, error: Exception, body: Mapping[str, Any]
+    ) -> None:
+        """Learn, from the host's own 400, that it will not take an item back.
+
+        Called on every failed try, before the recovery ladder is consulted, so
+        it can neither add a retry nor change one: what it writes changes the
+        *next* request's ``input``, never this one's.
+
+        Three conditions, all of them evidence and none of them a guess:
+
+        * the host answered a request-validation rejection (400/422);
+        * its words are located in the ``input`` array (``input[3]``) and name
+          a reasoning item -- which rules out the opposite complaint, a top-level
+          ``reasoning`` field refusal the strip ladder already answers;
+        * the body MCC actually sent carried a ``reasoning`` input item, so
+          "this deployment refused an item MCC replayed" is what the row means
+          rather than "this deployment said the word".
+
+        Without this, the first host that refuses costs a failed request every
+        turn: the carrier is rebuilt from the client's transcript each time, so
+        there is nothing a single request's retry could fix.
+        """
+
+        if not is_bad_request(error):
+            return
+        if not input_carries_reasoning_items(body.get("input")):
+            return
+        complaint = upstream_complaint(error)
+        if not complaint_refuses_a_replayed_reasoning_item(complaint):
+            return
+        model = body.get("model")
+        if not isinstance(model, str) or not model:
+            return
+        learned = self._memory.remember_responses_reasoning_item_refusal(
+            model, evidence=complaint_evidence_snippet(complaint)
+        )
+        if learned:
+            logger.warning(
+                "{}_RESPONSES: {} refused a replayed reasoning item; later "
+                "requests to it leave the client's carriers out, as every "
+                "release before 8.16.0 did: {}",
+                self._provider_name,
+                model,
+                complaint_evidence_snippet(complaint),
+            )
+
     def build_body(
         self,
         request: MessagesRequest,
@@ -474,6 +578,11 @@ class ResponsesTransport:
             include_tool_choice=not self._tool_choice_refused(request),
             tool_schema_dialect=self._tool_schema_dialect,
             wire_notes=wire_notes,
+            # 8.16.0: the host this body is about to be sent to, or ``None``
+            # when the operator has not turned carrier replay on. Both this and
+            # ``stream``'s converter read the same value, so a carrier minted
+            # here can only ever be replayed to this host, account and model.
+            origin=self.replay_origin(request.model),
         )
         headers = self._headers(body)
         cache_key = self._prompt_cache_key(headers)
@@ -747,12 +856,16 @@ class ResponsesTransport:
                 **count_marker,
                 **history_thinking_marker(wire_notes),
                 **empty_system_messages_marker(wire_notes),
+                **history_carrier_marker(wire_notes),
             )
             try:
                 response = await self._rate_limiter.execute_with_retry(
                     self.send, body=current, headers=headers
                 )
             except Exception as error:
+                # 8.16.0: before the ladder, so it can neither add a retry nor
+                # change one -- what it writes changes the NEXT request's input.
+                self._remember_refused_reasoning_item(error, current)
                 if self._marketplace is not None:
                     # 7.109.0: what the refusal said, and the one 402 that is
                     # not out of credits as the door's short 400.
@@ -912,6 +1025,11 @@ class ResponsesTransport:
                         self.tool_name_max_length,
                         self.tool_catalogue(request),
                     ),
+                    # 8.16.0: the same origin the body was built with. Both
+                    # ``None`` when the setting is off, which mints nothing and
+                    # leaves the stream byte-identical.
+                    origin=self.replay_origin(request.model),
+                    carrier_replay=configured_responses_carrier_replay(),
                 )
                 try:
                     yield ledger.message_start()
@@ -943,6 +1061,7 @@ class ResponsesTransport:
                             shape.note_generation(
                                 generation.first_at, generation.last_at
                             )
+                            note_carrier_shape(shape, converter)
                         record_response_shape(shape)
                 finally:
                     await response.aclose()

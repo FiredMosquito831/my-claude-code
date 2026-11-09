@@ -4900,6 +4900,26 @@ To choose, open **Model Config → Reasoning → Responses protocol**:
 
 A save applies to the next request, with no restart: the value is read when the body is built, not when the provider was constructed.
 
+#### Encrypted reasoning replay
+
+**New in 8.16.0, and off by default.** The Responses API can return a reasoning item's `encrypted_content` — an opaque blob the host minted — and on a `store: false` conversation that blob is the **only** way the reasoning survives to the next turn. MCC has asked for it since 7.5.0 (`include: ["reasoning.encrypted_content"]`) and then thrown it away: `history_thinking_omitted` was recorded on **13,856 of 26,566** measured ChatGPT OAuth attempts (52.2 %), **96.5 %** of `gpt-6.1-sol` and **93.5 %** of `gpt-6-luna`.
+
+With `RESPONSES_CARRIER_REPLAY` on, MCC hands the blob to the client — inside the `thinking` block's `signature` when the item has a readable summary, as a standalone `redacted_thinking` block when it does not — and, on the next turn, decodes it back into the `reasoning` input item it came from, at the head of that turn's `input[]` run.
+
+| Setting | Default | Values |
+| --- | --- | --- |
+| `RESPONSES_CARRIER_REPLAY` | `false` | `true` — replay the host's own reasoning item; `false` — every byte 8.15.1 sent |
+
+**The envelope is host- and model-bound.** Every blob is wrapped in MCC's own `mcc:reasoning:v1:` envelope, which records the provider, the protocol, the endpoint, the **account** (never the rotating credential) and the routed model that minted it. A blob is replayed only when all five match the host it is about to be sent to; otherwise it is dropped and counted (`history_carrier_foreign`), and the turn proceeds with the reasoning omitted, exactly as before. A session that alternates between two models therefore keeps two independent continuity chains — which is what the backend itself does.
+
+**What it never does.** It writes no readable reasoning text back: the summary the host sent travels inside the base64 envelope, never as `​think` output text, so the 7.58.1 echo class stays shut. It never truncates a blob (a corrupted blob is worse than no continuity — an item over 32 KiB mints nothing and is counted). It never invents an item the host did not write.
+
+**Why it ships off.** Three things are true today and false later: the provenance guard has not shipped, so a provider switch mid-session could send MCC's envelope to a host that did not mint it; the A/B that settles whether the backend accepts its own item `id` on replay has not run; and the fail-soft for a host that refuses a replayed item has not shipped. Turning it on is a separate, one-line decision after those land — and it is **not yet proven** to change model quality.
+
+**What it does not touch.** The Anthropic Messages door and the Chat Completions door are unchanged, byte for byte. With the setting off, every body on every door is byte-identical to 8.15.1.
+
+A save applies to the next request, with no restart.
+
 ---
 
 ## 10. Web search

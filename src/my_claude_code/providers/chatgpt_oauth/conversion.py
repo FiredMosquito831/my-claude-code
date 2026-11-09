@@ -18,6 +18,7 @@ from typing import Any
 from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.config.settings import configured_responses_parallel_tool_calls
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.openai_responses import ReplayOrigin
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.openai_responses import (
     RESPONSES_TOOL_SCHEMA_DIALECT,
@@ -60,6 +61,7 @@ def build_chatgpt_oauth_request_body(
     tool_schema_dialect: ToolSchemaDialect = CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT,
     wire_notes: dict[str, str] | None = None,
     tool_name_max_length: int | None = None,
+    origin: ReplayOrigin | None = None,
 ) -> dict[str, Any]:
     """Build a ChatGPT Responses API request body from an Anthropic request.
 
@@ -70,6 +72,12 @@ def build_chatgpt_oauth_request_body(
     rejection and MCC learned (7.59.0); ``None`` -- nothing declared, nothing
     learned -- sends every name exactly as the client wrote it, which is
     every byte this function built before.
+
+    ``origin`` is this backend as five strings (8.16.0), or ``None`` -- which is
+    what the operator's ``RESPONSES_CARRIER_REPLAY`` being off produces, and is
+    what keeps this body byte-identical to every release before 8.16.0. Present,
+    the history's carriers are decoded, matched against it on all five fields
+    and replayed as the ``reasoning`` items they were minted from.
     """
     if request.extra_body:
         raise InvalidRequestError(
@@ -94,4 +102,5 @@ def build_chatgpt_oauth_request_body(
         tool_name_max_length=tool_name_max_length,
         tool_schema_dialect=tool_schema_dialect,
         wire_notes=wire_notes,
+        origin=origin,
     )

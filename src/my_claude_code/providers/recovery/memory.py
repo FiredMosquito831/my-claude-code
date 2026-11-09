@@ -24,6 +24,7 @@ from .facts import (
     FACT_HISTORY_THINKING_REJECTED,
     FACT_OUTPUT_CAP,
     FACT_REASONING_FIELD_REJECTED,
+    FACT_RESPONSES_REASONING_ITEM_REJECTED,
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
     FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
@@ -95,6 +96,17 @@ class RecoveryMemory:
     #: nothing: a host that signs already drops those blocks, so the row could
     #: not change anything there.
     history_thinking_rejected: set[str] = field(default_factory=set)
+
+    #: Bare model ids whose Responses host refused a replayed ``reasoning``
+    #: item in ``input[]`` (8.16.0). While a model is here its requests build
+    #: no reasoning item at all, so the turn proceeds with the reasoning
+    #: omitted -- the pre-8.16.0 body -- instead of paying the same 400 every
+    #: turn from a carrier the client keeps handing back.
+    #:
+    #: A different fact from :attr:`history_thinking_rejected` above: that one
+    #: is an Anthropic Messages history block and its reader is the Messages
+    #: door's trim. This one is a Responses input item.
+    responses_reasoning_item_rejected: set[str] = field(default_factory=set)
 
     #: Where a newly learned fact is written through to, or ``None`` for a
     #: memory that persists nothing.
@@ -329,6 +341,37 @@ class RecoveryMemory:
         self.history_thinking_rejected.add(model)
         if self.sink is not None:
             self.sink(FACT_HISTORY_THINKING_REJECTED, model, True, "", evidence)
+        return not already_known
+
+    def responses_reasoning_item_refused_for(self, model: str) -> bool:
+        """Whether this model's host refused a replayed ``reasoning`` item.
+
+        The reader 8.16.0's carrier pass adds. ``False`` for every model that
+        has never refused one, which is every model on every host until a
+        carrier is actually replayed -- so a host that never refuses builds
+        exactly the body it built before the carrier existed.
+        """
+
+        return model in self.responses_reasoning_item_rejected
+
+    def remember_responses_reasoning_item_refusal(
+        self, model: str, *, evidence: str = ""
+    ) -> bool:
+        """Record a refused replayed reasoning item; ``False`` when known.
+
+        Written from the host's own 400 the moment it arrives, not from a retry
+        that succeeded: there is no retry to prove it, because the carrier is
+        rebuilt from the client's transcript rather than rewritten inside one
+        request. The evidence is the 400 itself -- a fault located in the input
+        array that names a reasoning item, on a request whose ``input`` actually
+        carried one -- and the row expires on the inferred clock so a host that
+        changes its mind is re-asked.
+        """
+
+        already_known = model in self.responses_reasoning_item_rejected
+        self.responses_reasoning_item_rejected.add(model)
+        if self.sink is not None:
+            self.sink(FACT_RESPONSES_REASONING_ITEM_REJECTED, model, True, "", evidence)
         return not already_known
 
     def stream_usage_refused(self, model: str) -> bool:

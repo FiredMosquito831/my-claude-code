@@ -20,6 +20,7 @@ from my_claude_code.application.model_metadata import (
     ResponseSurfaceSource,
 )
 from my_claude_code.config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
+from my_claude_code.config.settings import configured_responses_carrier_replay
 from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
@@ -34,6 +35,12 @@ from my_claude_code.core.diagnostics import (
 )
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.generation_rate import GenerationClock
+from my_claude_code.core.openai_responses import (
+    CARRIER_PROTOCOL_RESPONSES,
+    ReplayOrigin,
+    connection_id,
+    normalise_endpoint,
+)
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningAdaptationKind,
@@ -59,7 +66,9 @@ from my_claude_code.providers.oauth_names import account_name
 from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
     alias_responses_body_tool_names,
+    history_carrier_marker,
     history_thinking_marker,
+    note_carrier_shape,
     note_responses_generation_delta,
     responses_tool_name_codec,
 )
@@ -85,7 +94,10 @@ from my_claude_code.providers.recovery import (
     apply_learned_tool_schema_refusals,
     apply_tools_max_count,
     complaint_evidence_snippet,
+    complaint_refuses_a_replayed_reasoning_item,
     effective_tools_max_count,
+    input_carries_reasoning_items,
+    is_bad_request,
     learned_fact_store,
     merge_tool_schema_markers,
     merge_tools_trimmed_markers,
@@ -511,6 +523,96 @@ class ChatGPTOAuthProvider(BaseProvider):
             CHATGPT_OAUTH_REASONING_DIALECT, rejections, value_rejections
         )
 
+    def _replay_origin(self, credentials: Any, model: str) -> ReplayOrigin | None:
+        """This backend as the five strings a carrier is bound to (8.16.0).
+
+        ``None`` when the operator has not turned ``RESPONSES_CARRIER_REPLAY``
+        on, which is what keeps every body byte-identical to 8.15.1: the origin
+        *is* the switch, and the builder runs no carrier pass without one.
+
+        ``None`` too while this model's host is known to refuse a replayed
+        ``reasoning`` item. That is the learned net, and it is read here rather
+        than inside the builder so the answer reaches both the body and the
+        converter from one place: a host that refused once is never offered a
+        carrier again until the fact expires or the operator forgets it.
+
+        ``connection`` is the **account**, never the credential. The access
+        token refreshes roughly hourly; hashing it would refuse every carrier
+        minted before a refresh and break continuity every hour, silently. The
+        order is the resolved credential's own ``account_id``, then the pinned
+        account this leaf serves, then the header override, then ``""`` -- which
+        hashes to a stable constant rather than to nothing.
+        """
+
+        if not configured_responses_carrier_replay():
+            return None
+        if self._recovery_memory.responses_reasoning_item_refused_for(model):
+            return None
+        account = ""
+        for candidate in (
+            getattr(credentials, "account_id", ""),
+            self._pinned_account_id,
+            self._account_id,
+        ):
+            if isinstance(candidate, str) and candidate:
+                account = candidate
+                break
+        return ReplayOrigin(
+            provider=CHATGPT_OAUTH_PROVIDER_ID,
+            protocol=CARRIER_PROTOCOL_RESPONSES,
+            endpoint=normalise_endpoint(self._base_url),
+            connection=connection_id(account),
+            model=model,
+        )
+
+    def _remember_refused_reasoning_item(
+        self, error: Exception, body: Mapping[str, Any]
+    ) -> None:
+        """Learn, from the host's own 400, that it will not take an item back.
+
+        The net under the carrier replay (8.16.0). Called on every failed try,
+        before the recovery ladder is consulted, so it can neither add a retry
+        nor change one: what it writes changes the *next* request's ``input``,
+        never this one's.
+
+        Three conditions, all of them evidence and none of them a guess:
+
+        * the host answered a request-validation rejection (400/422);
+        * its words are located in the ``input`` array (``input[3]``) and name
+          a reasoning item -- which rules out the opposite complaint, a
+          top-level ``reasoning`` field refusal the strip ladder already
+          answers;
+        * the body MCC actually sent carried a ``reasoning`` input item, so
+          "this deployment refused an item MCC replayed" is what the row means
+          rather than "this deployment said the word".
+
+        Without this, the first host that refuses costs a failed request every
+        turn: the carrier is rebuilt from the client's transcript each time, so
+        there is nothing a single request's retry could fix.
+        """
+
+        if not is_bad_request(error):
+            return
+        if not input_carries_reasoning_items(body.get("input")):
+            return
+        complaint = upstream_complaint(error)
+        if not complaint_refuses_a_replayed_reasoning_item(complaint):
+            return
+        model = body.get("model")
+        if not isinstance(model, str) or not model:
+            return
+        learned = self._recovery_memory.remember_responses_reasoning_item_refusal(
+            model, evidence=complaint_evidence_snippet(complaint)
+        )
+        if learned:
+            logger.warning(
+                "CHATGPT_OAUTH_STREAM: {} refused a replayed reasoning item; "
+                "later requests to it leave the client's carriers out, as "
+                "every release before 8.16.0 did: {}",
+                model,
+                complaint_evidence_snippet(complaint),
+            )
+
     def _remember_reasoning_rejection(
         self,
         body: dict[str, Any],
@@ -809,12 +911,18 @@ class ChatGPTOAuthProvider(BaseProvider):
         # body had before 7.59.0. Read per request so a *Forget* on the Models
         # page reaches the very next one.
         name_limit = self._tool_name_max_length()
+        # The host this body is about to be sent to, as five strings, or
+        # ``None`` when the operator has not turned carrier replay on (8.16.0).
+        # Built here rather than inside the builder because the account is what
+        # this layer knows and the protocol layer must not.
+        origin = self._replay_origin(credentials, request.model)
         body = build_chatgpt_oauth_request_body(
             request,
             reasoning=reasoning,
             tool_schema_dialect=self._tool_schema_dialect,
             wire_notes=declared_marker,
             tool_name_max_length=name_limit,
+            origin=origin,
         )
         url = f"{self._base_url}/codex/responses"
         headers = _build_headers(credentials, self._session_id)
@@ -912,6 +1020,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                             **count_marker,
                             **history_thinking_marker(declared_marker),
                             **empty_system_messages_marker(declared_marker),
+                            **history_carrier_marker(declared_marker),
                         )
                         try:
                             response = await self._rate_limiter.execute_with_retry(
@@ -962,6 +1071,11 @@ class ChatGPTOAuthProvider(BaseProvider):
                         except ApplicationUnavailableError:
                             raise
                         except Exception as error:
+                            # 8.16.0: before the ladder, so it can neither add
+                            # a retry nor change one -- what it writes changes
+                            # the NEXT request's input, which is the only place
+                            # a carrier can be left out.
+                            self._remember_refused_reasoning_item(error, attempt_body)
                             recovered = ladder.next_body(
                                 error, attempt_body, used_retry_kinds
                             )
@@ -1061,6 +1175,13 @@ class ChatGPTOAuthProvider(BaseProvider):
                             tool_names=responses_tool_name_codec(
                                 request, accepted_name_limit
                             ),
+                            # 8.16.0: the same origin the body was built with,
+                            # so a carrier minted here can only ever be replayed
+                            # to this host, this account and this model. Both
+                            # ``None`` when the setting is off, which mints
+                            # nothing and leaves the stream byte-identical.
+                            origin=origin,
+                            carrier_replay=origin is not None,
                         )
                         shape = start_response_shape()
                         # Where the model generated, from the protocol's own
@@ -1106,6 +1227,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                                 shape.note_generation(
                                     generation.first_at, generation.last_at
                                 )
+                                note_carrier_shape(shape, converter)
                             record_response_shape(shape)
                     finally:
                         await response.aclose()
