@@ -32,6 +32,14 @@ visible-thinking turn against 11.8 % otherwise. The last section pins that a
 host declared ``signs_thinking=False`` keeps its own blocks, keeps asking for
 reasoning on a tool follow-up, and still has the existing strip ladder behind
 it if the host refuses what it is now sent.
+
+**8.16.3 adds the third case, and it is the one this file's name no longer
+describes exactly.** A carrier-bearing ``thinking`` block has both a readable
+summary and an envelope, and the two have different rules: the envelope is
+host-bound, the text is portable. On a host that signs nothing the block is
+**kept** with its text and the ``signature`` key removed; on a host that signs
+it is dropped whole, exactly as before. The sections at the end pin that split,
+its idempotency, and the purity the whole cache argument rests on.
 """
 
 import json
@@ -42,6 +50,11 @@ import httpx
 import pytest
 
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.openai_responses import (
+    ReplayOrigin,
+    connection_id,
+    encode_carrier,
+)
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.core.wire_capture import install_wire_trace
 from my_claude_code.providers.anthropic_messages import AnthropicMessagesProvider
@@ -56,11 +69,52 @@ from my_claude_code.providers.openai_chat import (
     create_openai_chat_provider,
 )
 from my_claude_code.providers.openai_chat.messages_transport import MessagesTransport
+from my_claude_code.providers.openai_responses import (
+    HISTORY_CARRIER_FOREIGN,
+    HISTORY_CARRIER_STRIPPED,
+)
 from tests.providers.support import passthrough_rate_limiter
 
 FOREIGN_TEXT = "agnes thought about the repo layout"
 #: The shape of Anthropic's own ciphertext: never a JSON object or array.
 CIPHERTEXT = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpPkNRj"
+
+#: An ``mcc:reasoning:v1:`` envelope, minted the way PR-2 mints one.
+_CARRIER_ORIGIN = ReplayOrigin(
+    provider="chatgpt_oauth",
+    protocol="responses",
+    endpoint="https://chatgpt.com/backend-api",
+    connection=connection_id("account-one"),
+    model="gpt-6.1-sol",
+)
+
+
+def _mint_carrier() -> str:
+    """One ``mcc:reasoning:v1:`` envelope, minted the way PR-2 mints one."""
+
+    carrier = encode_carrier(
+        _CARRIER_ORIGIN,
+        {
+            "id": "rs_1",
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [],
+            "content": [],
+            "encrypted_content": (
+                "gAAAAABpQ2Fycmllck9uZV9FbmNyeXB0ZWRDb250ZW50XzAxMjM0NTY3ODlh"
+            ),
+        },
+    )
+    assert carrier is not None
+    return carrier
+
+
+CARRIER = _mint_carrier()
+
+STRIPPED_NOTE = (
+    "removed 1 reasoning carrier from a block whose text was kept "
+    "(this host signs nothing)"
+)
 
 
 def _signed(text: str = "Anthropic's own reasoning.") -> dict[str, Any]:
@@ -808,4 +862,211 @@ async def test_a_host_that_refuses_the_replayed_block_costs_one_retry_and_no_mor
     assert len(sent) == 2
     assert "thinking" in sent[0] and "thinking" not in sent[1]
     assert sent[0]["messages"] == sent[1]["messages"]
+    await inner.cleanup()
+
+
+# --------------------------------------------------------------------------
+# 8.16.3 -- a carrier-bearing block: strip the envelope, keep the text
+# --------------------------------------------------------------------------
+
+
+def _carrier_block(text: str = "B's summary", **extra: Any) -> dict[str, Any]:
+    return {"type": "thinking", "thinking": text, "signature": CARRIER, **extra}
+
+
+def test_a_carrier_with_text_is_stripped_where_the_host_signs_nothing() -> None:
+    """The release, in one assertion: the block stays, the envelope does not.
+
+    The ``signature`` key is **absent**, not blanked. The host's own unsigned
+    blocks have no ``signature`` key at all -- ``ContentBlockThinking.signature``
+    is ``str | None`` and ``model_dump(exclude_none=True)`` drops it -- so
+    removing reproduces a shape the host has already seen, where ``""`` would be
+    one it has not.
+    """
+
+    history = [_user("a"), _assistant(_carrier_block(), _text("t")), _user("b")]
+
+    messages, blocks, chars = drop_foreign_thinking(history, signs_thinking=False)
+
+    assert messages[1] == _assistant(
+        {"type": "thinking", "thinking": "B's summary"}, _text("t")
+    )
+    assert (blocks, chars) == (0, 0)
+    # A strip is not a drop: the block is in the body.
+    assert messages[1]["content"][0]["thinking"] == "B's summary"
+
+
+def test_a_carrier_with_text_is_dropped_where_the_host_signs() -> None:
+    """The Anthropic door recovers nothing, and this release does not pretend it does.
+
+    An unsigned ``thinking`` block is a 400 at Anthropic, so stripping there
+    would only move the drop one rule later. The body is byte-identical to
+    8.16.2's.
+    """
+
+    history = [_user("a"), _assistant(_carrier_block(), _text("t")), _user("b")]
+
+    messages, blocks, chars = drop_foreign_thinking(history, signs_thinking=True)
+
+    assert messages[1] == _assistant(_text("t"))
+    assert (blocks, chars) == (0, 0)
+
+
+def test_the_strip_reports_itself_under_its_own_key() -> None:
+    """Two facts, two keys. A strip never touches ``history_carrier_foreign``."""
+
+    counts: dict[str, int] = {}
+    drop_foreign_thinking(
+        [_user("a"), _assistant(_carrier_block(), _text("t"))],
+        signs_thinking=False,
+        carrier_counts=counts,
+    )
+    assert counts == {HISTORY_CARRIER_STRIPPED: 1}
+
+    counts = {}
+    drop_foreign_thinking(
+        [_user("a"), _assistant(_carrier_block(), _text("t"))],
+        signs_thinking=True,
+        carrier_counts=counts,
+    )
+    assert counts == {HISTORY_CARRIER_FOREIGN: 1}
+
+
+def test_the_strip_is_idempotent() -> None:
+    """Stripping twice is stripping once, and the second pass reports nothing."""
+
+    history = [_user("a"), _assistant(_carrier_block(), _text("t")), _user("b")]
+
+    once, _, _ = drop_foreign_thinking(history, signs_thinking=False)
+    counts: dict[str, int] = {}
+    twice, blocks, chars = drop_foreign_thinking(
+        once, signs_thinking=False, carrier_counts=counts
+    )
+
+    assert twice == once
+    assert twice is once
+    assert counts == {}
+    assert (blocks, chars) == (0, 0)
+
+
+def test_the_strip_does_not_modify_the_callers_block() -> None:
+    """Purity, at the block level: the input dict keeps its envelope.
+
+    ``drop_foreign_thinking`` is documented as a pure function of the history,
+    and the cache argument rests on it. A ``pop`` would be safe today because
+    the caller deep-copies first -- and would make the contract depend on that
+    copy discipline, which is the coupling that breaks two releases later.
+    """
+
+    block = _carrier_block()
+    history = [_user("a"), _assistant(block, _text("t"))]
+    before = json.dumps(history)
+
+    messages, _, _ = drop_foreign_thinking(history, signs_thinking=False)
+
+    assert json.dumps(history) == before
+    assert block["signature"] == CARRIER
+    assert messages[1]["content"][0] is not block
+
+
+def test_a_stripped_turn_is_not_an_unsigned_tool_turn() -> None:
+    """A kept block satisfies Anthropic's rule, so the field is not suppressed.
+
+    ``unsigned_tool_turn`` exists because manual thinking needs Anthropic's own
+    thinking ahead of a tool call. A **stripped** block is in the body, so the
+    rule is satisfied by the block itself -- and on a non-signing host the
+    suppression never fires anyway (8.12.2). Both reasons point the same way.
+    """
+
+    body = build_anthropic_messages_body(
+        _request(
+            [
+                _user("Read a."),
+                _assistant(_carrier_block(), _tool_use("toolu_c")),
+                _user([_tool_result("toolu_c")]),
+            ]
+        ),
+        reasoning=ReasoningPolicy.on(budget_tokens=2048),
+        signs_thinking=False,
+    )
+
+    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert body["messages"][1]["content"] == [
+        {"type": "thinking", "thinking": "B's summary"},
+        _tool_use("toolu_c"),
+    ]
+
+
+def test_the_build_writes_the_strip_note_and_never_the_drop_note() -> None:
+    """The operator's line, on the door that can produce it."""
+
+    notes: dict[str, str] = {}
+    build_anthropic_messages_body(
+        _request([_user("a"), _assistant(_carrier_block(), _text("t")), _user("b")]),
+        reasoning=ReasoningPolicy.provider_default(),
+        wire_notes=notes,
+        signs_thinking=False,
+    )
+
+    assert notes == {HISTORY_CARRIER_STRIPPED: STRIPPED_NOTE}
+    assert FOREIGN_THINKING_DROPPED not in notes
+    assert HISTORY_CARRIER_FOREIGN not in notes
+    assert CARRIER not in json.dumps(notes)
+
+
+def test_a_clean_history_records_no_carrier_note_on_either_door() -> None:
+    """Absent, not ``0`` -- so every other request's params are what they were."""
+
+    for signs_thinking in (True, False):
+        notes: dict[str, str] = {}
+        build_anthropic_messages_body(
+            _request([_user("a"), _assistant(_signed(), _text("t"))]),
+            reasoning=ReasoningPolicy.provider_default(),
+            wire_notes=notes,
+            signs_thinking=signs_thinking,
+        )
+        assert notes == {}, signs_thinking
+
+
+@pytest.mark.asyncio
+async def test_the_go_transport_sends_the_kept_text_without_the_envelope() -> None:
+    """End to end through the transport the profile builds, not the kwarg.
+
+    The declaration reaches the wire: ``opencode_go`` is the one profile whose
+    ``messages_signs_thinking`` is ``False``, and the body its transport sends
+    carries the summary and no ``signature`` key.
+    """
+
+    transport = _go_transport()
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_MESSAGES_SSE,
+        )
+
+    inner: Any = transport._provider
+    inner._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    frames = [
+        frame
+        async for frame in transport.stream(
+            _request(
+                [_user("a"), _assistant(_carrier_block(), _text("t")), _user("b")]
+            ),
+            input_tokens=3,
+            reasoning=ReasoningPolicy.off(),
+        )
+    ]
+
+    assert any("message_stop" in frame for frame in frames)
+    assert len(sent) == 1
+    assert sent[0]["messages"][1]["content"] == [
+        {"type": "thinking", "thinking": "B's summary"},
+        _text("t"),
+    ]
+    assert CARRIER not in json.dumps(sent[0])
     await inner.cleanup()

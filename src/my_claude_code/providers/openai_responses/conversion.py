@@ -90,6 +90,25 @@ HISTORY_CARRIER_FOREIGN = "history_carrier_foreign"
 HISTORY_CARRIER_MALFORMED = "history_carrier_malformed"
 HISTORY_CARRIER_OVERSIZE = "history_carrier_oversize"
 
+#: The fifth carrier note (8.16.3), and the only one that is not a loss: a
+#: carrier **signature** was removed from a block whose readable text was kept,
+#: on a Messages host that declares it signs nothing. It is a sibling of
+#: ``history_carrier_foreign`` and never folded into it, because the two facts
+#: read as opposites to an operator -- one says a block was lost, the other says
+#: the text survived and only the envelope went. Folding a strip into
+#: ``history_carrier_foreign`` would make that key's own sentence ("dropped")
+#: false, which is the rule ``history_thinking_omitted`` and
+#: ``foreign_thinking_dropped`` both keep: counts only, and a sentence that is
+#: true.
+#:
+#: Written only by the **Messages** door, and only when the count is non-zero.
+#: The Responses and Chat doors cannot strip: neither sends a ``thinking``
+#: block's ``signature`` at all, so a carrier there has no text to survive.
+#:
+#: Deliberately not in ``_BUILD_CARRIER_KEYS``: that tuple is what the Responses
+#: build's own retry marker extracts, and a strip cannot occur on that door.
+HISTORY_CARRIER_STRIPPED = "history_carrier_stripped"
+
 #: The three the *build* can count, in the order the note reads. Oversize is
 #: the fourth and is counted on the reply instead: it is only knowable once the
 #: host has sent the item that would have carried it, which is after this
@@ -716,6 +735,41 @@ def carrier_foreign_note(count: int) -> dict[str, str]:
     return {
         HISTORY_CARRIER_FOREIGN: (
             f"dropped {count} reasoning {noun} minted by another host"
+        )
+    }
+
+
+def carrier_stripped_note(count: int) -> dict[str, str]:
+    """The ``history_carrier_stripped`` record for ``count`` removed envelopes.
+
+    **The other half of the same refusal** (8.16.3), and a different sentence on
+    purpose. ``carrier_foreign_note`` says a block was **lost**; this says the
+    block's readable text **survived** and only the host-bound envelope went. An
+    operator reading the request detail must be able to tell those apart, which
+    is why they are two keys and not one count.
+
+    Only the **Messages** door can write it, and only where the destination
+    declares ``signs_thinking=False`` -- a host that mints and checks no
+    signature accepts an unsigned ``thinking`` block, so the envelope is
+    removed from a **new** dict and the block, its text and its position are
+    kept. On a host that signs, the same block is dropped whole and counted
+    ``history_carrier_foreign`` instead: an unsigned ``thinking`` block is a 400
+    there, so stripping would only move the drop one rule later.
+
+    ``{}`` for a count of zero, which keeps every other request's recorded
+    params exactly as they were -- the rule ``carrier_foreign_note`` and
+    ``empty_system_messages_note`` both state. Counts only: no substring of an
+    envelope, no summary text, no id.
+    """
+
+    if count <= 0:
+        return {}
+    noun = "carrier" if count == 1 else "carriers"
+    block = "a block" if count == 1 else "blocks"
+    return {
+        HISTORY_CARRIER_STRIPPED: (
+            f"removed {count} reasoning {noun} from {block} whose text was kept "
+            "(this host signs nothing)"
         )
     }
 

@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from enum import StrEnum
 from typing import Any
 
 from loguru import logger
@@ -18,7 +19,9 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.providers.openai_responses import (
     HISTORY_CARRIER_FOREIGN,
+    HISTORY_CARRIER_STRIPPED,
     carrier_foreign_note,
+    carrier_stripped_note,
 )
 
 _INTERNAL_FIELDS = frozenset(
@@ -66,9 +69,10 @@ def build_anthropic_messages_body(
     """Build one native Messages request without exposing FCC-only fields.
 
     ``wire_notes`` is a caller's mapping to receive what this build took out
-    of the client's history -- ``foreign_thinking_dropped``, counts only -- so
-    the sender records it beside the body it describes. Left untouched when
-    nothing was removed.
+    of the client's history -- ``foreign_thinking_dropped``, counts only, and
+    the two carrier lines ``history_carrier_foreign`` and
+    ``history_carrier_stripped`` -- so the sender records it beside the body it
+    describes. Left untouched when nothing was removed.
 
     ``signs_thinking`` states whether this host mints and checks signatures on
     the thinking blocks it returns (8.12.2). ``True`` -- ``api.anthropic.com``,
@@ -126,6 +130,7 @@ def build_anthropic_messages_body(
     # and nothing to refuse, and suppressing the field there is what made MCC
     # ask for no reasoning on 76.9 % of the turns that followed a visible one.
     carriers_dropped = carrier_counts.get(HISTORY_CARRIER_FOREIGN, 0)
+    carriers_stripped = carrier_counts.get(HISTORY_CARRIER_STRIPPED, 0)
     unsigned_tool_turn = (
         signs_thinking
         and bool(dropped_blocks or carriers_dropped)
@@ -166,6 +171,12 @@ def build_anthropic_messages_body(
         # there were none -- so every other request's recorded params are
         # exactly what they were.
         wire_notes.update(carrier_foreign_note(carriers_dropped))
+        # And its own key again (8.16.3), for the opposite fact: this history's
+        # envelope was removed from a block whose text was **kept**, because
+        # this host signs nothing and accepts an unsigned ``thinking`` block.
+        # Folding a strip into ``history_carrier_foreign`` would make that
+        # key's own sentence -- "dropped" -- false. Absent, not ``0``, here too.
+        wire_notes.update(carrier_stripped_note(carriers_stripped))
     _merge_extra_body(body, request.extra_body)
     if prompt_cache is not None:
         body = apply_prompt_cache_lifetime(body, prompt_cache, wire_notes)
@@ -313,22 +324,40 @@ def drop_foreign_thinking(
       per request is the spec's Q2, and the day a Messages-scoped carrier kind
       exists it mints under its own prefix and this guard does not fire on it.
 
-    ``carrier_counts``, when given, receives the number of carriers dropped
-    under ``history_carrier_foreign``. They are counted **separately** from
+    **8.16.3 splits the carrier verdict in three**, because a carrier and the
+    readable summary beside it are not the same thing and do not have the same
+    destination:
+
+    * a carrier in a ``thinking`` block's ``signature`` **with** readable text,
+      on a host that **signs nothing** -- the envelope is removed from a NEW
+      dict and the block, its text and its position are **kept**. This is the
+      only case where reasoning survives a hop, and it is the whole release;
+    * the same block on a host that **signs** -- dropped whole, exactly as
+      8.16.1 dropped it. An unsigned ``thinking`` block is a 400 at Anthropic,
+      so stripping there would only move the drop one rule later;
+    * a carrier with **no** readable text, or one in a ``redacted_thinking``
+      block's ``data`` -- dropped whole. There is no text field to keep.
+
+    ``carrier_counts``, when given, receives the number of carriers **dropped**
+    under ``history_carrier_foreign`` and the number **stripped** under
+    ``history_carrier_stripped``. They are counted **separately** from
     ``dropped_blocks``/``dropped_chars`` and never folded into either: a
     carrier is not thinking text, its length is not a character count of
-    anything a model wrote, and the two facts belong on two lines of the
-    request detail. The returned tuple keeps its arity so every existing caller
-    and test is untouched.
+    anything a model wrote, and the facts belong on their own lines of the
+    request detail. A stripped block is never ``foreign``, so it never reaches
+    ``foreign_thinking_dropped``'s sentence and never contributes to
+    ``dropped_chars``. The returned tuple keeps its arity so every existing
+    caller and test is untouched.
 
-    ``signs_thinking`` is the first rule's premise and nothing else's
-    (8.12.2). ``True`` -- every host that signs -- is the behaviour every
-    release before it had. ``False`` is a Messages host that signs nothing:
-    there, an unsigned ``thinking`` block is that host's own thinking, not
-    another model's, so it is kept. The ``redacted_thinking`` rule is about
-    the SHAPE of ``data`` and not about any host's signature, so it still
-    applies: a JSON object there is MCC's wrapper and no Messages host minted
-    it.
+    ``signs_thinking`` is the first rule's premise and, since 8.16.3, also the
+    choice between ``STRIP_SIGNATURE`` and ``DROP`` for a carrier-bearing block
+    that has text (8.12.2). ``True`` -- every host that signs -- is the
+    behaviour every release before it had. ``False`` is a Messages host that
+    signs nothing: there, an unsigned ``thinking`` block is that host's own
+    thinking, not another model's, so it is kept. The ``redacted_thinking``
+    rule is about the SHAPE of ``data`` and not about any host's signature, so
+    it still applies: a JSON object there is MCC's wrapper and no Messages host
+    minted it.
 
     Everything else is kept in its order, every non-blank signature included:
     a signature that is not Anthropic's cannot be told from one that is, and
@@ -339,22 +368,43 @@ def drop_foreign_thinking(
 
     A pure function of the history, so the trimmed prefix is the same on every
     later turn and the prompt cache stays byte-stable. When nothing matches,
-    the very list it was given comes back, so the body is byte-identical.
+    the very list it was given comes back, so the body is byte-identical. The
+    strip is a property of the **destination** and never of the history: it is
+    written into the outbound copy only, so a hop through a non-signing host
+    cannot change what a later turn to the signing model sends.
     """
 
     kept: list[dict[str, Any]] | None = None
     dropped_blocks = 0
     dropped_chars = 0
     carriers = 0
+    carriers_stripped = 0
     for index, message in enumerate(messages):
         content = message.get("content")
         foreign: list[Any] = []
         remaining: list[Any] = []
+        stripped = 0
         if message.get("role") == "assistant" and isinstance(content, list):
             for block in content:
-                is_foreign = _is_foreign_thinking(block, signs_thinking=signs_thinking)
-                if not is_foreign:
+                verdict = _thinking_verdict(block, signs_thinking=signs_thinking)
+                if verdict is _ThinkingVerdict.KEEP:
                     remaining.append(block)
+                elif verdict is _ThinkingVerdict.STRIP_SIGNATURE:
+                    # Decision 9: the carrier is host-bound, the text is not.
+                    # A NEW dict, never ``block.pop``: this function is
+                    # documented as a pure function of the history, and making
+                    # that depend on a caller's copy discipline is the latent
+                    # coupling that breaks two releases later. The block keeps
+                    # its position, its text and every other key; only the
+                    # envelope goes. Counted on its own line, never as a drop.
+                    remaining.append(
+                        {
+                            key: value
+                            for key, value in block.items()
+                            if key != "signature"
+                        }
+                    )
+                    stripped += 1
                 elif _carries_carrier(block):
                     # Counted on its own line, never as thinking text.
                     foreign.append(block)
@@ -363,7 +413,11 @@ def drop_foreign_thinking(
                     foreign.append(block)
                     dropped_blocks += 1
                     dropped_chars += _thinking_chars(block)
-        if not foreign:
+        # ``foreign`` alone is not enough: a turn whose only block was
+        # **stripped** has nothing foreign in it, and appending the message
+        # unchanged would put the envelope back on the wire. ``stripped`` is
+        # what makes the rebuilt message reach ``kept``.
+        if not foreign and not stripped:
             if kept is not None:
                 kept.append(message)
             continue
@@ -371,8 +425,12 @@ def drop_foreign_thinking(
             kept = list(messages[:index])
         if remaining:
             kept.append({**message, "content": remaining})
-    if carrier_counts is not None and carriers:
-        carrier_counts[HISTORY_CARRIER_FOREIGN] = carriers
+        carriers_stripped += stripped
+    if carrier_counts is not None:
+        if carriers:
+            carrier_counts[HISTORY_CARRIER_FOREIGN] = carriers
+        if carriers_stripped:
+            carrier_counts[HISTORY_CARRIER_STRIPPED] = carriers_stripped
     if kept is None:
         return messages, 0, 0
     return kept, dropped_blocks, dropped_chars
@@ -399,26 +457,120 @@ def _carries_carrier(block: Any) -> bool:
     return False
 
 
-def _is_foreign_thinking(block: Any, *, signs_thinking: bool = True) -> bool:
+class _ThinkingVerdict(StrEnum):
+    """What one block of an assistant turn is, for this destination.
+
+    Three answers, because there are three facts and two of them are not
+    "keep" (8.16.3):
+
+    * ``KEEP`` -- the block goes out exactly as the client sent it;
+    * ``STRIP_SIGNATURE`` -- the block goes out **without its ``signature``
+      key**, keeping its text and its position. This is the case the whole
+      release exists for: a carrier is host-bound, the readable summary beside
+      it is not, and a host that signs nothing accepts an unsigned block;
+    * ``DROP`` -- the block does not go out at all.
+
+    ``STRIP_SIGNATURE`` is only ever returned for a destination that declares
+    ``signs_thinking=False``. On a host that signs, the same block is ``DROP``:
+    an unsigned ``thinking`` block is a 400 there, so stripping would only move
+    the drop one rule later.
+    """
+
+    KEEP = "keep"
+    STRIP_SIGNATURE = "strip_signature"
+    DROP = "drop"
+
+
+def _has_readable_thinking(block: dict[str, Any]) -> bool:
+    """Whether this ``thinking`` block carries text a model could read.
+
+    A block whose ``thinking`` is absent, not a string, empty or **whitespace
+    only** has nothing to keep. The Messages API refuses a whitespace-only
+    ``thinking`` block outright ("each thinking block must contain
+    non-whitespace thinking"), so such a block is not a candidate for the strip
+    even on a host that signs nothing -- it is dropped, which is what 9router's
+    own branch does with the same test (``!String(block.thinking ?? "").trim()``).
+    """
+
+    text = block.get("thinking")
+    return isinstance(text, str) and bool(text.strip())
+
+
+def _thinking_verdict(block: Any, *, signs_thinking: bool = True) -> _ThinkingVerdict:
+    """The one predicate: what to do with ``block`` at this destination.
+
+    **The carrier test runs FIRST and unconditionally.** A carrier is not a
+    signature, and ``signs_thinking`` is a statement about signatures, so a host
+    that mints none must not short-circuit it -- that ordering is the whole of
+    mutation M2, and without it OpenCode Go's ``/messages`` door forwards an
+    envelope it never minted.
+
+    Three carrier cases (8.16.3), and the two non-carrier rules exactly as
+    PR-3 left them:
+
+    * **(a)** a carrier in a ``thinking`` block's ``signature`` **with**
+      readable text -- ``STRIP_SIGNATURE`` where the host signs nothing (the
+      text survives), ``DROP`` where it signs (an unsigned block is a 400
+      there, so the drop is only moved, not avoided);
+    * **(b)** the same carrier with **no** readable text -- ``DROP``: there is
+      nothing to keep, and the envelope cannot go;
+    * **(c)** a carrier in a ``redacted_thinking`` block's ``data`` --
+      ``DROP``: that block type has no text field at all.
+
+    Everything else is the two rules this function replaced, unchanged: a
+    ``thinking`` block whose ``signature`` is absent, not a string or blank is
+    dropped (unless the host signs nothing, where an unsigned block is its
+    own); a ``redacted_thinking`` whose ``data`` parses as a JSON object or
+    array is dropped. A block that is neither type is kept.
+    """
+
     if not isinstance(block, dict):
-        return False
-    if _carries_carrier(block):
-        # FIRST, and unconditional: a carrier is not a signature, and
-        # ``signs_thinking`` is a statement about signatures. A host that mints
-        # none (OpenCode Go's ``/messages`` door) still did not mint this blob,
-        # so the short-circuit below must never be reached for one -- that is
-        # the whole of mutation M2.
-        return True
+        return _ThinkingVerdict.KEEP
     kind = block.get("type")
     if kind == "thinking":
+        if is_carrier(block.get("signature")):
+            # (b) nothing readable to keep -> drop the block.
+            if not _has_readable_thinking(block):
+                return _ThinkingVerdict.DROP
+            # (a) readable text present. A host that signs refuses an unsigned
+            #     block, so stripping there would only move the drop one rule
+            #     later -- and would corrupt ``foreign_thinking_dropped``'s
+            #     sentence with a character count that is not thinking text.
+            if signs_thinking:
+                return _ThinkingVerdict.DROP
+            return _ThinkingVerdict.STRIP_SIGNATURE
+        # ---- existing rule 1, unchanged ------------------------------------
         if not signs_thinking:
             # This host mints no signature, so an unsigned block is its own.
-            return False
+            return _ThinkingVerdict.KEEP
         signature = block.get("signature")
-        return not isinstance(signature, str) or not signature.strip()
+        if not isinstance(signature, str) or not signature.strip():
+            return _ThinkingVerdict.DROP
+        return _ThinkingVerdict.KEEP
     if kind == "redacted_thinking":
-        return _is_json_container(block.get("data"))
-    return False
+        # (c) there is no text field on this block type -> drop.
+        if is_carrier(block.get("data")):
+            return _ThinkingVerdict.DROP
+        # ---- existing rule 2, unchanged ------------------------------------
+        if _is_json_container(block.get("data")):
+            return _ThinkingVerdict.DROP
+        return _ThinkingVerdict.KEEP
+    return _ThinkingVerdict.KEEP
+
+
+def _is_foreign_thinking(block: Any, *, signs_thinking: bool = True) -> bool:
+    """Whether ``block`` does not go out as the client sent it.
+
+    Kept under its own name and its own boolean contract because
+    :func:`_final_tool_turn_lost_its_thinking` calls it and must read the same
+    verdict the drop was made with. A block that is **stripped** is *kept* --
+    it is in the body, minus one key -- so it reads as not-foreign here, which
+    is correct: the turn did not lose its thinking.
+    """
+
+    return _thinking_verdict(block, signs_thinking=signs_thinking) is not (
+        _ThinkingVerdict.KEEP
+    )
 
 
 def _is_json_container(data: Any) -> bool:

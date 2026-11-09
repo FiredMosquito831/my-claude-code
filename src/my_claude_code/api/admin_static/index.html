@@ -2817,6 +2817,7 @@
                 <a href="#guide-prompt-cache-lifetime">Prompt cache lifetime</a>
                 <a href="#guide-responses-protocol">Responses protocol</a>
                 <a href="#guide-carrier-provenance">Reasoning carriers never cross hosts</a>
+                <a href="#guide-carrier-text-recovery">Keeping the reasoning text when only the envelope has to go</a>
                 <a href="#guide-inferhub">InferHub: set a price ceiling</a>
                 <a href="#guide-cli">Claude Code</a>
                 <a href="#guide-desktop">Claude Desktop</a>
@@ -4281,6 +4282,97 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   never forwarded because it looked broken, and a real Anthropic
                   signature can never match &mdash; base64 has no
                   <code>:</code> in its alphabet.
+                </p>
+
+                <h3 id="guide-carrier-text-recovery">Keeping the reasoning text when only the envelope has to go</h3>
+                <p>
+                  <strong>New in 8.16.3, and it has no setting either.</strong> A
+                  carrier and the readable summary beside it are two different
+                  things with two different rules: the envelope is bound to the
+                  host, model and account that minted it, and the text is not bound
+                  to anything. Until 8.16.3 the guard removed the whole block, so a
+                  block that held <em>both</em> lost its summary along with the
+                  envelope &mdash; reasoning that went out as plaintext came back
+                  encrypted and arrived as nothing.
+                </p>
+                <table class="guide-table">
+                  <thead>
+                    <tr><th>The block</th><th>The destination</th><th>What MCC sends</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>a carrier in a <code>thinking</code> block's
+                        <code>signature</code>, <strong>with</strong> readable text</td>
+                      <td>a Messages host that declares it <strong>signs
+                        nothing</strong> &mdash; OpenCode Go's <code>/messages</code>
+                        door today</td>
+                      <td><strong>the block, its text and its position, with no
+                        <code>signature</code> key</strong> &mdash; counted
+                        <code>history_carrier_stripped</code></td>
+                    </tr>
+                    <tr>
+                      <td>the same block</td>
+                      <td>a Messages host that <strong>signs</strong> &mdash;
+                        <code>anthropic</code>, <code>anthropic_oauth</code>,
+                        <code>commandcode</code>, every other Messages door</td>
+                      <td><strong>nothing</strong> &mdash; counted
+                        <code>history_carrier_foreign</code>, exactly as in 8.16.2</td>
+                    </tr>
+                    <tr>
+                      <td>a carrier with <strong>no</strong> readable text, or one in
+                        a <code>redacted_thinking</code> block's <code>data</code></td>
+                      <td>every door</td>
+                      <td><strong>nothing</strong> &mdash; counted
+                        <code>history_carrier_foreign</code></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p>
+                  The <code>signature</code> key is <strong>removed</strong>, not
+                  blanked. A host that signs nothing has no signature on its own
+                  thinking blocks either, so removing it reproduces a shape the host
+                  has already seen, where <code>signature: ""</code> would be one it
+                  has not.
+                </p>
+                <p class="guide-note">
+                  <strong>The Anthropic door still recovers nothing, and this
+                  release does not pretend otherwise.</strong> Anthropic requires a
+                  signature on every <code>thinking</code> block it is sent and
+                  answers a 400 to one that is missing, not a string, or blank
+                  &mdash; measured against the live API on three Claude models.
+                  Stripping there would not save the text; it would only move the
+                  drop one rule later and cost a failed request. That is a property
+                  of Anthropic's protocol, not a gap MCC can close.
+                </p>
+                <p class="guide-note">
+                  <strong>The Chat Completions door needed no change.</strong> It
+                  never reads a <code>thinking</code> block's signature at all
+                  &mdash; the conversion reads the block's <em>text</em> and nothing
+                  else &mdash; so the summary beside a carrier has always crossed
+                  there and still does. 8.16.3 pins that with tests rather than
+                  changing it.
+                </p>
+                <p>
+                  <strong>The strip is per request, never per history.</strong> It
+                  is written into the outbound copy for one attempt, so your client's
+                  transcript is untouched and a hop through a non-signing host cannot
+                  change what a later turn to the signing model sends. Return to the
+                  original model and its prefix is exactly what it would have been if
+                  the middle hop had never happened. The strip also appears
+                  identically on every turn to the same host, because it is a pure
+                  function of the block and the door's declaration, so a
+                  single-model conversation keeps a strict prefix turn to turn and no
+                  prompt cache is poisoned.
+                </p>
+                <p>
+                  The request detail gains one line on a request whose history had a
+                  carrier removed from a block that kept its text:
+                  <code>history_carrier_stripped</code> &mdash; <em>removed 1
+                  reasoning carrier from a block whose text was kept (this host signs
+                  nothing)</em>. It is a separate line from
+                  <code>history_carrier_foreign</code> on purpose: one says a block
+                  was lost, the other says the text survived and only the envelope
+                  went.
                 </p>
 
                 <h3 id="guide-inferhub">InferHub: set a price ceiling</h3>
