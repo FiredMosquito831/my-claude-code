@@ -92,15 +92,6 @@ ORIGIN = ReplayOrigin(
     model="gpt-6.1-sol",
 )
 
-#: A second host: same protocol, different provider and endpoint.
-OTHER_HOST = ReplayOrigin(
-    provider="opencode",
-    protocol="responses",
-    endpoint="https://opencode.ai/zen/v1",
-    connection=connection_id("sk-test"),
-    model="muse-spark-1.3-contributor-free",
-)
-
 #: The opaque payload a fake upstream returns. Shaped like base64 on purpose:
 #: the real ``encrypted_content`` is an opaque blob, never JSON.
 E1 = "gAAAAABpQ2Fycmllck9uZV9FbmNyeXB0ZWRDb250ZW50XzAxMjM0NTY3ODlh"
