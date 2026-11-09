@@ -1212,3 +1212,105 @@ def test_the_parallel_tool_calls_setting_reaches_both_responses_senders(
 
     assert chatgpt["parallel_tool_calls"] is expected
     assert shared["parallel_tool_calls"] is expected
+
+
+@pytest.mark.parametrize("value", [None, "true", "false"])
+def test_the_carrier_replay_setting_reaches_both_responses_senders(
+    value: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """8.16.0's RESPONSES_CARRIER_REPLAY, from ``Settings`` to the wire.
+
+    Two senders, one value, and the value *is* the switch: the setting decides
+    whether an origin is built at all, and the origin decides whether the
+    builder runs a carrier pass. So the observable is the ``reasoning`` item
+    the body carries -- present with the setting on and the history carrying a
+    matching envelope, absent with it off.
+
+    The setting is read by the *provider* (``_replay_origin`` /
+    ``replay_origin``), immediately before the body is built, not by the pure
+    builders -- which is what makes it hot: a dashboard save reaches the next
+    request with no restart and no provider rebuild. Both readers are exercised
+    here, and the shared transport's is followed all the way to the body.
+    """
+
+    from my_claude_code.config import settings as config_settings
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.openai_responses import (
+        ReplayOrigin,
+        connection_id,
+        encode_carrier,
+    )
+    from my_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+    from my_claude_code.providers.base import ProviderConfig
+    from my_claude_code.providers.chatgpt_oauth.provider import ChatGPTOAuthProvider
+    from my_claude_code.providers.openai_chat import create_openai_chat_provider
+    from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+    from tests.providers.support import passthrough_rate_limiter
+
+    expected = False if value is None else value == "true"
+    if value is None:
+        monkeypatch.delenv("RESPONSES_CARRIER_REPLAY", raising=False)
+    else:
+        monkeypatch.setenv("RESPONSES_CARRIER_REPLAY", value)
+    config_settings.get_settings.cache_clear()
+    try:
+        shared_origin = ReplayOrigin(
+            provider="opencode",
+            protocol="responses",
+            endpoint="https://opencode.ai/zen/v1",
+            connection=connection_id("sk-test"),
+            model="gpt-5.6-terra",
+        )
+        item = {
+            "id": "rs_1",
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [],
+            "content": [],
+            "encrypted_content": "opaque-payload",
+        }
+        carrier = encode_carrier(shared_origin, item)
+        assert carrier is not None
+
+        request = MessagesRequest.model_validate(
+            {
+                "model": "gpt-5.6-terra",
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "redacted_thinking", "data": carrier}],
+                    },
+                    {"role": "user", "content": "again"},
+                ],
+            }
+        )
+        provider = create_openai_chat_provider(
+            "opencode",
+            ProviderConfig(api_key="sk-test", base_url="https://opencode.ai/zen/v1"),
+            passthrough_rate_limiter(),
+            profile=OPENAI_CHAT_PROFILES["opencode"],
+        )
+        shared, _headers = provider._responses.build_body(
+            request,
+            reasoning=DEFAULT_REASONING_POLICY,
+            max_output_tokens=64,
+        )
+        chatgpt = ChatGPTOAuthProvider(
+            ProviderConfig(
+                api_key="test_token",
+                base_url="https://chatgpt.com/backend-api",
+                rate_limit=10,
+                rate_window=60,
+                max_concurrency=5,
+            ),
+            rate_limiter=passthrough_rate_limiter(),
+        )
+        chatgpt_origin = chatgpt._replay_origin(None, "gpt-5.6-terra")
+    finally:
+        config_settings.get_settings.cache_clear()
+
+    shared_kinds = [entry.get("type") for entry in shared["input"]]
+    assert ("reasoning" in shared_kinds) is expected
+    assert (chatgpt_origin is not None) is expected

@@ -244,3 +244,74 @@ def clone_body_without_reasoning_field(
         if not extra_body:
             cloned.pop("extra_body", None)
     return cloned if removed else None
+
+
+#: A location inside a Responses ``input`` array, spelled the way a validator
+#: names one -- ``input[3]``, ``input.3``, ``input/3``. The three separators are
+#: all in use: OpenAI's own validator writes ``Invalid 'input[3].name'``, some
+#: gateways write ``input.3``, and a JSON-pointer style error writes
+#: ``input/3``.
+_INPUT_LOCATION = re.compile(r"\binput\s*[\[./]\s*\d+")
+
+#: A complaint naming a reasoning item. ``reasoning`` on its own is enough --
+#: no other item type is called that -- and the two phrases a host uses when it
+#: knows the item is a reasoning item are matched explicitly.
+_REASONING_ITEM_NAMED = re.compile(
+    r"\breasoning\b|\bencrypted_content\b|\bencrypted content\b", re.IGNORECASE
+)
+
+#: The field only a replayed reasoning item carries. A complaint that names it
+#: is evidence about that item wherever the host says the fault is -- Bifrost's
+#: documented binding failure ("Encrypted content item_id did not match the
+#: target item id") names no index at all.
+_ENCRYPTED_CONTENT_NAMED = re.compile(
+    r"\bencrypted_content\b|\bencrypted content\b", re.IGNORECASE
+)
+
+
+def complaint_refuses_a_replayed_reasoning_item(complaint: str) -> bool:
+    """Whether a 400 is the host refusing a ``reasoning`` item in ``input[]``.
+
+    The one piece of evidence 8.16.0's carrier net acts on. Two shapes, and
+    both are needed:
+
+    * the fault is **located in the input array** -- ``input[3]``, ``input.3``
+      or ``input/3`` -- **and** the complaint names a reasoning item. A 400
+      that names ``reasoning`` at the top level is a refusal of the *field*,
+      which the strip ladder already answers; only an input location says the
+      replayed *item* is the problem;
+    * or the complaint names **``encrypted_content``**, the field only a
+      replayed reasoning item carries. Bifrost's documented failure --
+      ``Encrypted content item_id did not match the target item id`` -- names
+      no index, and it is precisely the failure this net exists for.
+
+    Reads lowercased text, so it serves a stored fact's evidence excerpt as well
+    as a live complaint -- the same contract
+    :func:`complaint_refuses_a_history_thinking_block` keeps.
+    """
+
+    text = complaint.lower()
+    if _ENCRYPTED_CONTENT_NAMED.search(text):
+        return True
+    if not _INPUT_LOCATION.search(text):
+        return False
+    return _REASONING_ITEM_NAMED.search(text) is not None
+
+
+def input_carries_reasoning_items(input_items: Any) -> bool:
+    """Whether this body's ``input`` actually replays a reasoning item.
+
+    The third piece of evidence, and the one that keeps the fact honest: a host
+    can fault an input index for anything, and a complaint that names
+    ``reasoning`` about a body MCC never sent a reasoning item in is not
+    evidence that replaying one is what broke it.
+
+    ``True`` for any input item whose ``type`` is ``"reasoning"``.
+    """
+
+    if not isinstance(input_items, list):
+        return False
+    return any(
+        isinstance(item, Mapping) and item.get("type") == "reasoning"
+        for item in input_items
+    )

@@ -1764,6 +1764,10 @@
       "control": "field-REQUEST_WATCHDOG_STALL_SECONDS",
       "page": "limits"
     },
+    "RESPONSES_CARRIER_REPLAY": {
+      "control": "field-RESPONSES_CARRIER_REPLAY",
+      "page": "model_config"
+    },
     "RESPONSES_PARALLEL_TOOL_CALLS": {
       "control": "field-RESPONSES_PARALLEL_TOOL_CALLS",
       "page": "model_config"

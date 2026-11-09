@@ -169,6 +169,35 @@ FACT_MEDIA_PARAM_REFUSED = "media_param_refused"
 #: does (IV.8).
 FACT_HISTORY_THINKING_REJECTED = "history_thinking_rejected"
 
+#: This model's host refused a **replayed ``reasoning`` item** in the request's
+#: ``input[]`` (8.16.0), in a 400 whose own words faulted an item of the input
+#: array rather than a top-level field. Value: ``True``.
+#:
+#: The net under the carrier replay. :data:`FACT_HISTORY_THINKING_REJECTED`
+#: above is a different shape: that one is a host refusing a *block* in an
+#: Anthropic ``messages`` history, and its reader is the Anthropic door's
+#: history trim. A Responses host refuses the *item* MCC replayed -- "Invalid
+#: 'input[2]'", "Encrypted content item_id did not match the target item id",
+#: "Item with id 'rs_...' not found" -- and nothing in the existing machinery
+#: answers that: the reasoning strip ladder pops a top-level body key, and the
+#: item lives inside ``input``.
+#:
+#: Without this fact the first host that refuses costs a failed request on
+#: every turn, forever, because the carrier is rebuilt from the client's
+#: transcript each time. With it, the next request for that model stops
+#: replaying carriers and the turn proceeds with the reasoning omitted, exactly
+#: as every release before 8.16.0 did.
+#:
+#: Per ``(provider, model)``, because the refusal is a statement about one
+#: deployment's input validator, and a gateway reselling twenty models does not
+#: owe them all the same one -- the same scope, and the same reason, as
+#: :data:`FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY`.
+#:
+#: Read only by the carrier pass: while it is fresh this model's requests build
+#: no ``reasoning`` item at all. Nothing about the refused request changes -- no
+#: retry is added and it fails over exactly as any 400 does (IV.8).
+FACT_RESPONSES_REASONING_ITEM_REJECTED = "responses_reasoning_item_rejected"
+
 #: A prompt-cache lifetime this model's host refused (7.104.0), in a 400 whose
 #: own words named the lifetime field of a marker carrying the lifetime MCC had
 #: chosen -- or the top-level marker MCC had added. ``detail`` is the lifetime
@@ -205,6 +234,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_MEDIA_PARAM_REFUSED,
         FACT_PROMPT_CACHE_LIFETIME_REFUSED,
         FACT_HISTORY_THINKING_REJECTED,
+        FACT_RESPONSES_REASONING_ITEM_REJECTED,
     }
 )
 
@@ -283,6 +313,12 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # the TTL, which is the benefit 8.12.2 measured -- so it expires on the
     # shorter clock, and the next real refusal re-confirms it.
     FACT_HISTORY_THINKING_REJECTED: INFERRED_FACT_TTL_SECONDS,
+    # The same clock, for the same reason: the host's sentence is evidence, but
+    # what MCC writes down ("this deployment will not take a replayed reasoning
+    # item back") is an inference from it, and the cost of a wrong row is that
+    # this model's continuity stops for the length of the TTL. The next real
+    # refusal re-confirms it, and a host that changes its mind is re-asked.
+    FACT_RESPONSES_REASONING_ITEM_REJECTED: INFERRED_FACT_TTL_SECONDS,
     # The same clock as the field rejection it narrows, deliberately: both are
     # inferences proven by a retry, and a coarse fact that outlived the fine
     # one would silently re-take the whole channel.

@@ -1183,6 +1183,30 @@ PROMPT_CACHE_TTL_MAX_MINUTES = 60
 # `False` for the same reason -- a caller that says nothing keeps those bytes.
 RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT = True
 
+# Whether a Responses body carries the host's own opaque reasoning item back to
+# it on the next turn (8.16.0). `RESPONSES_CARRIER_REPLAY`.
+#
+# The Responses API returns an `encrypted_content` blob beside a reasoning item
+# and, on a `store: false` conversation, that blob is the only way the reasoning
+# survives to the next turn. Until 8.16.0 MCC asked for it (`include:
+# ["reasoning.encrypted_content"]`) and threw it away: `history_thinking_omitted`
+# on 13,856 of 26,566 measured ChatGPT OAuth attempts (52.2 %), 96.5 % of
+# `gpt-6.1-sol` and 93.5 % of `gpt-6-luna`.
+#
+# **Off by default, and the flip is its own PR.** IV.7 requires that with no new
+# preference set the request bodies are byte-identical, which a default-on
+# setting cannot satisfy. Three things are true on the day this ships and false
+# later: the provenance guard (the next PR) has not shipped, so a provider
+# switch would send our envelope to Anthropic; the A/B that settles whether the
+# backend accepts its own item id on replay has not run; and the fail-soft for a
+# host that refuses a replayed item has not shipped either. The flip is one line
+# plus a recaptured equality baseline, gated on all four.
+#
+# `False` reproduces every byte v8.15.1 sent, which is what the equality
+# contracts pin. The builder's own keyword default (`origin=None`) stays the
+# same for the same reason.
+RESPONSES_CARRIER_REPLAY_DEFAULT = False
+
 # The longest edge, in pixels, an outbound image may have. The default is the
 # number Anthropic itself resizes to and the number Claude Code ships
 # (`maxTargetPx: 1568`, `maxTargetTokens: 1568`); combined with the destination

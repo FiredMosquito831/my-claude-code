@@ -234,7 +234,6 @@ def test_a_history_without_thinking_records_nothing() -> None:
         {
             "role": "assistant",
             "content": [
-                {"type": "redacted_thinking", "data": "opaque"},
                 {"type": "text", "text": "hello"},
             ],
         },
@@ -247,6 +246,36 @@ def test_a_history_without_thinking_records_nothing() -> None:
     assert notes == {}
     assert history_thinking_marker(notes) == {}
     assert history_thinking_marker(None) == {}
+
+
+def test_a_redacted_block_is_counted_as_omitted() -> None:
+    """8.16.0: an opaque ``redacted_thinking`` block is reasoning left out too.
+
+    It never reaches ``input`` in any mode -- there is no text to replay and no
+    carrier to decode unless its ``data`` is one of our envelopes -- so a note
+    that did not count it was under-reporting. Counts only: the payload's own
+    characters never appear in the note.
+    """
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": "opaque"},
+                {"type": "text", "text": "hello"},
+            ],
+        },
+        {"role": "user", "content": "bye"},
+    ]
+    notes: dict[str, str] = {}
+    build_responses_request_body(
+        _request(messages), reasoning=REASONING, wire_notes=notes
+    )
+    assert notes[HISTORY_THINKING_OMITTED].startswith(
+        "omitted 1 earlier thinking block (6 chars)"
+    )
+    assert "opaque" not in notes[HISTORY_THINKING_OMITTED]
 
 
 def test_one_block_is_spelled_in_the_singular() -> None:

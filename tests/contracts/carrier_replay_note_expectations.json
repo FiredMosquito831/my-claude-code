@@ -1,0 +1,16 @@
+{
+  "_what": "Finite, approved wire-note corrections for 8.16.0. The historical baselines stay intact beside these; an unlisted case must still equal its baseline. Only *_wire_notes cells appear here -- no body moved.",
+  "_recorded_on": "a79b7544 (v8.15.1) before any other edit, by measuring the builder on the same corpus the contract reads",
+  "cases": {
+    "empty": {
+      "fold_every_block/responses_wire_notes": {
+        "before": "sha256:bad37bf01b80d51dd8bd94c96f6ef14a8ffa6d14aaa2a3b19e688311dac1f0e6 bytes:137",
+        "after": "sha256:5061f13531fbb8ed1a0b3dadeb6bb8d695b8003248c9ca07684ed8cead249cfd bytes:138"
+      },
+      "fold_every_block/chatgpt_oauth_wire_notes": {
+        "before": "sha256:bad37bf01b80d51dd8bd94c96f6ef14a8ffa6d14aaa2a3b19e688311dac1f0e6 bytes:137",
+        "after": "sha256:5061f13531fbb8ed1a0b3dadeb6bb8d695b8003248c9ca07684ed8cead249cfd bytes:138"
+      }
+    }
+  }
+}

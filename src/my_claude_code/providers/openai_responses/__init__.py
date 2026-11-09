@@ -10,12 +10,17 @@ provider.
 """
 
 from .conversion import (
+    HISTORY_CARRIER_FOREIGN,
+    HISTORY_CARRIER_MALFORMED,
+    HISTORY_CARRIER_OVERSIZE,
+    HISTORY_CARRIER_REPLAYED,
     HISTORY_THINKING_OMITTED,
     RESPONSES_DEFAULT_REASONING_EFFORT,
     RESPONSES_DEFAULT_REASONING_SUMMARY,
     RESPONSES_REASONING_REPLAY,
     alias_responses_body_tool_names,
     build_responses_request_body,
+    history_carrier_marker,
     history_thinking_marker,
     responses_tool_call_to_anthropic,
     responses_tool_name_codec,
@@ -23,6 +28,7 @@ from .conversion import (
 from .streaming import (
     ResponsesStreamConverter,
     iter_responses_sse_events,
+    note_carrier_shape,
     note_responses_event_shape,
     note_responses_generation_delta,
 )
@@ -35,6 +41,10 @@ from .tool_schema_dialect import (
 )
 
 __all__ = [
+    "HISTORY_CARRIER_FOREIGN",
+    "HISTORY_CARRIER_MALFORMED",
+    "HISTORY_CARRIER_OVERSIZE",
+    "HISTORY_CARRIER_REPLAYED",
     "HISTORY_THINKING_OMITTED",
     "PERMISSIVE_TOOL_SCHEMA_DIALECT",
     "RESPONSES_DEFAULT_REASONING_EFFORT",
@@ -45,8 +55,10 @@ __all__ = [
     "ToolSchemaDialect",
     "alias_responses_body_tool_names",
     "build_responses_request_body",
+    "history_carrier_marker",
     "history_thinking_marker",
     "iter_responses_sse_events",
+    "note_carrier_shape",
     "note_responses_event_shape",
     "note_responses_generation_delta",
     "regex_construct",

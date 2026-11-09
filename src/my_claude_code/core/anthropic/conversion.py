@@ -178,6 +178,12 @@ def _tool_call_from_tool_use(block: Any) -> dict[str, Any]:
 @dataclass
 class _PlainSegment:
     messages: list[dict[str, Any]]
+    #: Responses ``reasoning`` items that belong *before* the first message of
+    #: this segment, or ``None``. Only an assistant turn ever carries any, and
+    #: an assistant turn's segment holds exactly one message; the field exists
+    #: on the plain segment because a turn with no tool call is emitted through
+    #: it. See :meth:`AnthropicToOpenAIConverter.convert_messages`.
+    reasoning: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -188,6 +194,9 @@ class _ToolTurnSegment:
     top_level_reasoning: str | None = None
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS
     assistant_emitted: bool = False
+    #: Responses ``reasoning`` items for this turn, emitted before the
+    #: assistant message. See :class:`_PlainSegment.reasoning`.
+    reasoning: list[dict[str, Any]] | None = None
 
 
 _TranscriptSegment = _PlainSegment | _ToolTurnSegment
@@ -538,10 +547,20 @@ class _OpenAIChatHistoryLedger:
         # this module is handed a message list and a scalar, and reaching for
         # settings from here would put configuration in a dialect converter.
         self._image_detail = image_detail
+        #: ``(assistant message, reasoning items)`` for every turn that carried
+        #: any, in emission order. Kept by object identity rather than by index
+        #: because the index of a message in the *returned* list is only known
+        #: after the tool-turn close and the user-message coalescing below have
+        #: run, and both can move it.
+        self._reasoning: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
 
-    def add_plain(self, messages: list[dict[str, Any]]) -> None:
+    def add_plain(
+        self,
+        messages: list[dict[str, Any]],
+        reasoning: list[dict[str, Any]] | None = None,
+    ) -> None:
         if messages:
-            self._segments.append(_PlainSegment(messages))
+            self._segments.append(_PlainSegment(messages, reasoning))
             self._drain_ready_segments()
 
     def add_tool_turn(self, segment: _ToolTurnSegment) -> None:
@@ -605,11 +624,13 @@ class _OpenAIChatHistoryLedger:
             segment = self._segments[0]
             if isinstance(segment, _PlainSegment):
                 self._output.extend(segment.messages)
+                self._record_reasoning(segment.messages, segment.reasoning)
                 self._segments.pop(0)
                 continue
 
             if not segment.assistant_emitted:
                 self._output.append(segment.assistant_message)
+                self._record_reasoning([segment.assistant_message], segment.reasoning)
                 segment.assistant_emitted = True
 
             missing = [
@@ -631,6 +652,7 @@ class _OpenAIChatHistoryLedger:
     def _emit_tool_turn(self, segment: _ToolTurnSegment) -> None:
         if not segment.assistant_emitted:
             self._output.append(segment.assistant_message)
+            self._record_reasoning([segment.assistant_message], segment.reasoning)
             segment.assistant_emitted = True
         for tool_id in segment.required_tool_ids:
             tool_result = self._tool_results.pop(tool_id, None)
@@ -639,6 +661,45 @@ class _OpenAIChatHistoryLedger:
         self._output.extend(
             AnthropicToOpenAIConverter._deferred_post_tool_to_messages(segment)
         )
+
+    def _record_reasoning(
+        self,
+        messages: list[dict[str, Any]],
+        reasoning: list[dict[str, Any]] | None,
+    ) -> None:
+        """Attach one turn's reasoning items to the message they precede.
+
+        The items belong at the head of the turn's ``input[]`` run, which is
+        exactly where this message lands, so the association is recorded
+        against the message object and resolved to an index once the returned
+        list is final.
+        """
+
+        if not reasoning or not messages:
+            return
+        self._reasoning.append((messages[0], reasoning))
+
+    def reasoning_by_output_index(
+        self, ordered: list[dict[str, Any]]
+    ) -> dict[int, list[dict[str, Any]]]:
+        """Resolve the recorded attachments against the final message list.
+
+        ``ordered`` is the list the caller will return, after the synthetic
+        tool-turn boundary and the user-message coalescing have run. Both of
+        those move indexes -- one inserts, one merges -- so the attachment is
+        tracked by object identity and resolved here, at the one moment the
+        answer is knowable.
+        """
+
+        if not self._reasoning:
+            return {}
+        index_of = {id(message): index for index, message in enumerate(ordered)}
+        resolved: dict[int, list[dict[str, Any]]] = {}
+        for message, items in self._reasoning:
+            index = index_of.get(id(message))
+            if index is not None:
+                resolved[index] = items
+        return resolved
 
     def _missing_required_tool_ids(self) -> list[str]:
         missing: list[str] = []
@@ -669,11 +730,33 @@ class AnthropicToOpenAIConverter:
         *,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
         image_detail: str | None = None,
+        reasoning_by_message: dict[int, list[dict[str, Any]]] | None = None,
     ) -> list[dict[str, Any]]:
+        """Convert an Anthropic history to OpenAI chat messages.
+
+        ``reasoning_by_message`` is the out-parameter the Responses door uses
+        to place replayed ``reasoning`` items at the head of each assistant
+        turn's ``input[]`` run. It is **in/out**, and the key space changes:
+
+        * on entry, keys are indices into ``messages`` (the Anthropic list) and
+          values are the ordered reasoning items belonging to that message;
+        * on return, the mapping is cleared and refilled with keys that are
+          indices into the **returned** list.
+
+        Two passes are needed because the returned list is not the list this
+        loop builds: a synthetic assistant boundary may be inserted before a
+        user turn that follows tool output, and adjacent user messages are
+        coalesced. Both move indexes, so the attachment is tracked by object
+        identity inside the ledger and resolved once the list is final.
+
+        ``None`` -- every caller but the Responses door -- skips all of it, so
+        the Chat Completions door returns exactly what it always returned.
+        """
+
         ledger = _OpenAIChatHistoryLedger(image_detail)
         left_out = 0
 
-        for msg in messages:
+        for index, msg in enumerate(messages):
             if _is_empty_inline_system_message(msg):
                 # Left out rather than refused: the transcript is then exactly
                 # the conversation without the marker, so tool-turn boundaries
@@ -686,6 +769,11 @@ class AnthropicToOpenAIConverter:
             content = msg.content
             reasoning_content = _clean_reasoning_content(
                 getattr(msg, "reasoning_content", None)
+            )
+            reasoning = (
+                reasoning_by_message.get(index)
+                if reasoning_by_message is not None
+                else None
             )
 
             if role == "user" and isinstance(content, list):
@@ -701,8 +789,9 @@ class AnthropicToOpenAIConverter:
             )
             for segment in segments:
                 if isinstance(segment, _PlainSegment):
-                    ledger.add_plain(segment.messages)
+                    ledger.add_plain(segment.messages, reasoning)
                 else:
+                    segment.reasoning = reasoning
                     ledger.add_tool_turn(segment)
 
         ordered_messages = ledger.finish()
@@ -711,7 +800,12 @@ class AnthropicToOpenAIConverter:
             # the refusal every such request has always had.
             raise OpenAIConversionError(_EMPTY_INLINE_SYSTEM_MESSAGE)
         closed_messages = _close_openai_tool_result_turns(ordered_messages)
-        return _coalesce_openai_user_messages(closed_messages)
+        final_messages = _coalesce_openai_user_messages(closed_messages)
+        if reasoning_by_message is not None:
+            resolved = ledger.reasoning_by_output_index(final_messages)
+            reasoning_by_message.clear()
+            reasoning_by_message.update(resolved)
+        return final_messages
 
     @staticmethod
     def _convert_message_to_segments(

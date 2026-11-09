@@ -259,6 +259,10 @@ FACT_KIND_LABELS: dict[str, str] = {
     # model's host refused a thinking block replayed in the conversation
     # history, so its unsigned blocks are left out again.
     "history_thinking_rejected": "history thinking refused",
+    # 8.16.0, labelled in the commit that introduces it, by the same rule: this
+    # model's Responses host refused a reasoning item MCC replayed in ``input``,
+    # so its requests stop replaying carriers until the fact expires.
+    "responses_reasoning_item_rejected": "reasoning item refused",
 }
 
 #: Kinds whose label the Models page payload's ``fact_labels`` table does not
@@ -272,6 +276,7 @@ PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
         "media_param_refused",
         "prompt_cache_lifetime_refused",
         "history_thinking_rejected",
+        "responses_reasoning_item_rejected",
     }
 )
 

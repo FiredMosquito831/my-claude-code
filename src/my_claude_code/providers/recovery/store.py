@@ -47,6 +47,7 @@ from .facts import (
     FACT_MODELS_ETAG,
     FACT_OUTPUT_CAP,
     FACT_REASONING_FIELD_REJECTED,
+    FACT_RESPONSES_REASONING_ITEM_REJECTED,
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
     FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
@@ -597,6 +598,8 @@ class LearnedFactStore:
                 memory.stream_usage_unsupported.add(fact.model_id)
             elif fact.fact_kind == FACT_HISTORY_THINKING_REJECTED:
                 memory.history_thinking_rejected.add(fact.model_id)
+            elif fact.fact_kind == FACT_RESPONSES_REASONING_ITEM_REJECTED:
+                memory.responses_reasoning_item_rejected.add(fact.model_id)
             elif fact.fact_kind == FACT_RESPONSES_TOOL_NAME_MAX_LENGTH and isinstance(
                 fact.value, int
             ):
@@ -642,6 +645,7 @@ class LearnedFactStore:
             memory.rejected_effort_values.clear()
             memory.stream_usage_unsupported.clear()
             memory.history_thinking_rejected.clear()
+            memory.responses_reasoning_item_rejected.clear()
             memory.responses_tool_name_max_length = None
             memory.responses_tools_max_count = None
             memory.responses_tool_choice_auto_only.clear()

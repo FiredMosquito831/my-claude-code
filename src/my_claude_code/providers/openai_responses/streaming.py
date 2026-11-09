@@ -22,7 +22,11 @@ from my_claude_code.core.anthropic.thinking import (
     ThinkTagParser,
 )
 from my_claude_code.core.generation_rate import GenerationClock
-from my_claude_code.core.openai_responses import call_id_from_item
+from my_claude_code.core.openai_responses import (
+    ReplayOrigin,
+    call_id_from_item,
+    encode_carrier,
+)
 from my_claude_code.core.reported_cost import (
     record_reported_reasoning,
     reported_reasoning_tokens,
@@ -188,6 +192,8 @@ class ResponsesStreamConverter:
         log_raw_events: bool = False,
         output_reasoning: bool = True,
         tool_names: OpenAIToolNameCodec | None = None,
+        origin: ReplayOrigin | None = None,
+        carrier_replay: bool = False,
     ) -> None:
         self._ledger = ledger
         #: The codec the request body was built with, when its host declared a
@@ -200,6 +206,25 @@ class ResponsesStreamConverter:
         #: has been told nothing that would justify dropping content the
         #: endpoint sent; ``stream_response`` passes the real intent.
         self._output_reasoning = output_reasoning
+        #: Where this stream's items will be replayed (8.16.0), or ``None`` --
+        #: which is every caller until the operator turns
+        #: ``RESPONSES_CARRIER_REPLAY`` on. Both this and
+        #: :attr:`_carrier_replay` must be set before a carrier is minted: the
+        #: setting says whether the feature is on, and the origin says which
+        #: host the envelope must be bound to. A host MCC cannot name mints
+        #: nothing rather than minting an envelope that could never match.
+        self._origin = origin
+        self._carrier_replay = carrier_replay
+        #: Carriers minted and items whose carrier would have exceeded
+        #: :data:`~my_claude_code.core.openai_responses.carrier.
+        #: CARRIER_MAX_CHARS`, for the reply's shape record. Counts only.
+        self._carrier_minted = 0
+        self._carrier_oversize = 0
+        #: The reasoning item whose text is currently in the open thinking
+        #: block, so a carrier is appended to the block it belongs to and never
+        #: to a previous item's. Reset implicitly: the ledger's own
+        #: ``thinking_started`` says whether any block is open at all.
+        self._thinking_block_item: str | None = None
         #: Summary/reasoning parts already streamed as deltas, keyed by
         #: ``(kind, item_id, index)``. A terminal ``.done`` frame repeats the
         #: whole part, so it must only be emitted for a part nobody streamed.
@@ -288,6 +313,7 @@ class ResponsesStreamConverter:
                 if key is not None and key not in self._reasoning_parts_streamed:
                     self._reasoning_parts_streamed.add(key)
                     yield from self._begin_reasoning_part()
+                self._note_thinking_owner(event.get("item_id"))
                 yield from self._emit_thinking(delta)
             return
 
@@ -297,6 +323,7 @@ class ResponsesStreamConverter:
             if key is not None and key not in self._reasoning_parts_streamed and text:
                 self._reasoning_parts_streamed.add(key)
                 yield from self._begin_reasoning_part()
+                self._note_thinking_owner(event.get("item_id"))
                 yield from self._emit_thinking(text)
             return
 
@@ -510,6 +537,9 @@ class ResponsesStreamConverter:
         other piece is answer text, exactly as it arrived.
         """
         if part.type is ContentType.THINKING:
+            # Answer text the tag parser classified as reasoning belongs to no
+            # reasoning *item*, so the block it opens must not adopt one.
+            self._note_thinking_owner(None)
             yield from self._emit_thinking(part.content)
             return
         if not part.content:
@@ -535,26 +565,110 @@ class ResponsesStreamConverter:
         and an item that carries ``encrypted_content`` and an empty ``summary``
         carries nothing to show -- which is the honest "it thought, and
         returned none of it" case that must stay ``thinking_chars = 0``.
+
+        Since 8.16.0 the same frame is also where a carrier is minted: the item
+        is the one the host wrote, and the client's transcript is the only
+        place that can carry it to the next turn. The text half is untouched --
+        the carrier is *appended* to the block as its signature, or emitted as
+        a standalone ``redacted_thinking`` block when there is no text block to
+        append it to. It never replaces or augments a single character of what
+        the host said.
         """
+
         item_id = item.get("id")
-        if not isinstance(item_id, str):
+        if isinstance(item_id, str):
+            for kind, field in (("summary", "summary"), ("text", "content")):
+                parts = item.get(field)
+                if not isinstance(parts, list):
+                    continue
+                for index, part in enumerate(parts):
+                    if not isinstance(part, Mapping):
+                        continue
+                    text = part.get("text")
+                    key = (kind, item_id, index)
+                    if not isinstance(text, str) or not text:
+                        continue
+                    if key in self._reasoning_parts_streamed:
+                        continue
+                    self._reasoning_parts_streamed.add(key)
+                    yield from self._begin_reasoning_part()
+                    self._note_thinking_owner(item_id)
+                    yield from self._emit_thinking(text)
+        yield from self._emit_carrier(item, item_id)
+
+    def _note_thinking_owner(self, item_id: Any) -> None:
+        """Remember which reasoning item the open thinking block belongs to.
+
+        Only when the text actually reached the block: with the client's policy
+        hiding reasoning, ``_emit_thinking`` is a no-op, so a block opened by an
+        *earlier* item may still be open and must not adopt this item's carrier.
+        ``None`` clears the owner, which is what answer text parsed into a
+        thinking block needs -- that block belongs to no reasoning item.
+        """
+
+        if not self._output_reasoning:
             return
-        for kind, field in (("summary", "summary"), ("text", "content")):
-            parts = item.get(field)
-            if not isinstance(parts, list):
-                continue
-            for index, part in enumerate(parts):
-                if not isinstance(part, Mapping):
-                    continue
-                text = part.get("text")
-                key = (kind, item_id, index)
-                if not isinstance(text, str) or not text:
-                    continue
-                if key in self._reasoning_parts_streamed:
-                    continue
-                self._reasoning_parts_streamed.add(key)
-                yield from self._begin_reasoning_part()
-                yield from self._emit_thinking(text)
+        self._thinking_block_item = item_id if isinstance(item_id, str) else None
+
+    def _emit_carrier(
+        self, item: Mapping[str, Any], item_id: str | None
+    ) -> Iterator[str]:
+        """Hand the client the opaque item this reasoning item came from.
+
+        The rule is the field consensus (LiteLLM, claude-code-router, Bifrost,
+        and the Responses adapter research): **a ``thinking`` block when the
+        item has readable summary text, a standalone ``redacted_thinking``
+        block when it does not, never both for one item, and never a
+        ``thinking`` block whose text is anything but what the host sent.**
+
+        A thinking block is reused only when it is open *for this item*. An
+        earlier item's block may still be open -- nothing closes it until text,
+        a tool call or the end of the stream -- and appending this item's
+        carrier to it would bind the wrong blob to the wrong block.
+
+        ``encrypted_content`` absent or empty means there is nothing to carry,
+        and the summary-only block is emitted exactly as it is today (Q8). An
+        item whose carrier would exceed the guard mints nothing at all: a
+        truncated blob is a corrupted blob, and the host would reject it, which
+        is worse than no continuity.
+        """
+
+        if not self._carrier_replay or self._origin is None:
+            return
+        encrypted = item.get("encrypted_content")
+        if not isinstance(encrypted, str) or not encrypted:
+            return
+        carrier = encode_carrier(self._origin, item)
+        if carrier is None:
+            self._carrier_oversize += 1
+            return
+        self._carrier_minted += 1
+        if (
+            self._ledger.blocks.thinking_started
+            and item_id is not None
+            and self._thinking_block_item == item_id
+        ):
+            yield self._ledger.content_block_delta(
+                self._ledger.blocks.thinking_index, "signature_delta", carrier
+            )
+            return
+        yield from self._ledger.close_content_blocks()
+        index = self._ledger.blocks.allocate_index()
+        yield self._ledger.content_block_start(index, "redacted_thinking", data=carrier)
+        yield self._ledger.content_block_stop(index)
+
+    @property
+    def carrier_counts(self) -> tuple[int, int]:
+        """``(minted, oversize)`` for this stream, for the reply's shape record.
+
+        Counts only. ``history_carrier_oversize`` cannot be a ``params.wire``
+        note: it is only knowable once the host has sent the item that would
+        have carried it, which is after this request's body was recorded. It
+        lands on the reply's shape instead, beside the reasoning tally it
+        belongs to, where the operator reads it against the turn it describes.
+        """
+
+        return self._carrier_minted, self._carrier_oversize
 
     def _read_usage(self, usage: Mapping[str, Any]) -> None:
         """Fold one Responses ``usage`` block into Anthropic's shape.
@@ -633,6 +747,28 @@ class ResponsesStreamConverter:
             usage_fields=self._usage_fields or None,
         )
         yield self._ledger.message_stop()
+
+
+def note_carrier_shape(
+    shape: ResponseShape | None, converter: ResponsesStreamConverter
+) -> None:
+    """Record a stream's carrier counts on the reply's own shape (8.16.0).
+
+    ``history_carrier_oversize`` cannot be a ``params.wire`` note: it is only
+    knowable once the host has sent the item that would have carried it, which
+    is after this request's body was recorded. It lands here instead, beside the
+    reasoning tally it belongs to, where the operator reads it against the turn
+    it describes. Counts only, and written only when non-zero, so a reply
+    without a carrier records exactly the payload it always recorded.
+    """
+
+    if shape is None:
+        return
+    minted, oversize = converter.carrier_counts
+    if minted:
+        shape.count_reasoning("carrier_minted", minted)
+    if oversize:
+        shape.count_reasoning("carrier_oversize", oversize)
 
 
 async def iter_responses_sse_events(

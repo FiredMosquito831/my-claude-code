@@ -58,6 +58,11 @@ from my_claude_code.core.anthropic.models import (
 )
 from my_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.openai_responses import (
+    CARRIER_PREFIX,
+    ReplayOrigin,
+    connection_id,
+)
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.openai_responses import ResponsesStreamConverter
 from my_claude_code.providers.openai_responses.conversion import (
@@ -293,15 +298,21 @@ def test_the_carrier_reaches_the_responses_upstream_as_nothing():
     assert CARRIER_DATA not in json.dumps(body)
 
 
-def test_the_omission_note_counts_the_thinking_block_and_not_the_carrier():
-    """``history_thinking_omitted`` counts ``thinking`` blocks, never the carrier.
+def test_the_omission_note_counts_the_thinking_block_and_the_carrier():
+    """``history_thinking_omitted`` counts every block whose reasoning was left out.
 
     The note is the operator's only signal that reasoning was left out, so it
     stays honest only if it counts what it actually omits. The history here has
-    exactly ONE ``thinking`` block and ONE carrier, and the count is 1 — the
-    carrier is omitted too, and PR-3's first change is to make the count
-    include it. An exact count is what makes that change visible; a "present or
-    absent" assertion would pass either way.
+    exactly ONE ``thinking`` block and ONE ``redacted_thinking`` block, and
+    since 8.16.0 the count is **2**: a ``redacted_thinking`` block is opaque
+    continuation data that never reaches ``input``, and leaving it out of the
+    count was the note under-reporting its own omission.
+
+    This assertion changed on purpose in 8.16.0 and is the only one in this
+    file that did. It changed for the *count*, not for the carrier: the block
+    below carries ``mcc-carrier-v1:`` rather than a real
+    ``mcc:reasoning:v1:`` envelope, so nothing here was replayed, and the
+    note still says nothing about the payload's text.
     """
 
     notes: dict[str, str] = {}
@@ -317,7 +328,7 @@ def test_the_omission_note_counts_the_thinking_block_and_not_the_carrier():
 
     assert "history_thinking_omitted" in notes
     assert notes["history_thinking_omitted"].startswith(
-        "omitted 1 earlier thinking block"
+        "omitted 2 earlier thinking blocks"
     )
     assert CARRIER_DATA not in json.dumps(notes)
 
@@ -412,6 +423,11 @@ def test_an_encrypted_only_item_opens_no_block_and_leaks_no_text():
     therefore invisible to the client today — which is exactly why PR-3 has to
     mint it deliberately rather than inherit it, and why nothing may start
     rendering the ciphertext as ``thinking`` text in the meantime.
+
+    **8.16.0 extended this without replacing it.** The assertion below is the
+    *setting-off* case and stays exactly as it was: with carrier replay off,
+    the stream carries no ``redacted_thinking`` block and no ciphertext. The
+    setting-on case is its own test, beside it.
     """
 
     ledger = AnthropicStreamLedger("msg_carrier", PROVIDER_MODEL, input_tokens=0)
@@ -430,3 +446,46 @@ def test_an_encrypted_only_item_opens_no_block_and_leaks_no_text():
     assert started == ["text"]
     assert CARRIER_DATA not in sse
     assert "redacted_thinking" not in sse
+    assert converter.carrier_counts == (0, 0)
+
+
+def test_with_carrier_replay_on_the_same_item_mints_a_redacted_block():
+    """The setting-on half of the test above, beside it, not replacing it.
+
+    An encrypted-only item still opens **no** ``thinking`` block -- that
+    decision stands, because an empty thinking block would claim text the host
+    never sent. What changes is that the item is handed to the client as a
+    standalone ``redacted_thinking`` block, which is a different block type and
+    does not claim text.
+    """
+
+    origin = ReplayOrigin(
+        provider="chatgpt_oauth",
+        protocol="responses",
+        endpoint="https://chatgpt.com/backend-api",
+        connection=connection_id("account-one"),
+        model=PROVIDER_MODEL,
+    )
+    ledger = AnthropicStreamLedger("msg_carrier", PROVIDER_MODEL, input_tokens=0)
+    converter = ResponsesStreamConverter(ledger, origin=origin, carrier_replay=True)
+    chunks = [ledger.message_start()]
+    for frame in _encrypted_only_frames():
+        chunks.extend(converter.feed(frame))
+    chunks.extend(converter.finish())
+    sse = "".join(chunks)
+
+    started = [
+        event.data["content_block"]["type"]
+        for event in parse_sse_text(sse)
+        if event.event == "content_block_start"
+    ]
+    assert started == ["redacted_thinking", "text"]
+    # The ciphertext is never rendered as text: it travels inside the envelope.
+    assert CARRIER_DATA not in sse
+    assert converter.carrier_counts == (1, 0)
+    blocks = [
+        event.data["content_block"]
+        for event in parse_sse_text(sse)
+        if event.event == "content_block_start"
+    ]
+    assert blocks[0]["data"].startswith(CARRIER_PREFIX)

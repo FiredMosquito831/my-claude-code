@@ -219,6 +219,7 @@ from .constants import (
     REQUEST_WATCHDOG_INTERVAL_SECONDS_DEFAULT,
     REQUEST_WATCHDOG_LOG_MAX_MB_DEFAULT,
     REQUEST_WATCHDOG_STALL_SECONDS_DEFAULT,
+    RESPONSES_CARRIER_REPLAY_DEFAULT,
     RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
     SERVER_GRACEFUL_SHUTDOWN_SECONDS_DEFAULT,
     SERVER_PORT_TAKEOVER_CHOICES,
@@ -1842,6 +1843,19 @@ class Settings(BaseSettings):
     responses_parallel_tool_calls: bool = Field(
         default=RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
         validation_alias="RESPONSES_PARALLEL_TOOL_CALLS",
+    )
+    # Whether a Responses body carries the host's own opaque reasoning item back
+    # to it on the next turn (8.16.0). One value for every Responses door, for
+    # the same reason the field above is: it is a property of the protocol, not
+    # of a host. Read where the body is built, so a save applies to the next
+    # request with no restart and no provider rebuild.
+    #
+    # False ships by the user's decision (2026-11-09, Q2): IV.7 requires that
+    # with no new preference set the bodies are byte-identical, and the flip is
+    # its own PR behind four gates. False reproduces every byte v8.15.1 sent.
+    responses_carrier_replay: bool = Field(
+        default=RESPONSES_CARRIER_REPLAY_DEFAULT,
+        validation_alias="RESPONSES_CARRIER_REPLAY",
     )
 
     # ==================== HTTP Client Timeouts ====================
@@ -3509,6 +3523,35 @@ def configured_responses_parallel_tool_calls() -> bool:
             settings,
             "responses_parallel_tool_calls",
             RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
+        )
+    )
+
+
+def configured_responses_carrier_replay() -> bool:
+    """Whether a Responses body carries the host's own reasoning item back (8.16.0).
+
+    Read per request, at the moment the body is built, for the same reason
+    :func:`configured_responses_parallel_tool_calls` is: a value captured when
+    a provider was constructed could not follow a dashboard save, and this
+    setting needs no restart. Both Responses senders call this and hand the
+    answer to their body builder, which turns it into a
+    :class:`~my_claude_code.core.openai_responses.carrier.ReplayOrigin` -- the
+    origin *is* the switch: ``None`` means the carrier pass never runs, so the
+    body is byte-identical to every release before 8.16.0.
+
+    ``getattr`` with the shipped default rather than a bare attribute read:
+    the settings object is rebuilt from the environment on every admin save
+    (``get_settings.cache_clear``), and a field this module no longer declared
+    would otherwise turn every Responses request into an ``AttributeError``
+    on the request path.
+    """
+
+    settings = get_settings()
+    return bool(
+        getattr(
+            settings,
+            "responses_carrier_replay",
+            RESPONSES_CARRIER_REPLAY_DEFAULT,
         )
     )
 
