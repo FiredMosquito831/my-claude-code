@@ -34,7 +34,7 @@ the builder owns so `--check` can detect a changed or stale generated file.
 ## Gates
 
 The builder fails the build, before writing, on: a secret-shaped string, a
-forbidden placeholder string, a broken internal link or fragment, page metadata
+forbidden stock phrase, a broken internal link or fragment, page metadata
 outside its bounds, an image without alt text, malformed JSON-LD, a sitemap entry
 with no file, an OG image that is not 1200×630, a literal colour in the CSS, a
 page below its revision-2 minimums, and a page with no claims or a claim with no
