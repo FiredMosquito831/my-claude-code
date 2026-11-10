@@ -1,0 +1,468 @@
+{
+  "path": "/glossary/",
+  "title": "Glossary | My Claude Code",
+  "description": "The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product's documentation.",
+  "nav": "Glossary",
+  "eyebrow": "Glossary",
+  "h1": "The words this product uses",
+  "intro": "MCC uses some ordinary words in a specific way. This page defines them once, from the product's own documentation, so a page elsewhere can use them without repeating the definition.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Glossary"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "A — C"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "adaptive-reasoning",
+          "term": "Adaptive reasoning",
+          "def": "A request, spelled <code>ADAPTIVE</code>, that asks the host to think as much as it decides it needs. It is not an effort level and not a budget; each door says it in the host's own words, and a host with no reasoning field is sent nothing."
+        },
+        {
+          "id": "bench",
+          "term": "Bench",
+          "def": "A time-bounded refusal to use a credential or a chain entry. A bench is scoped: a 429 benches a key and model pair, while an exhausted balance benches the whole key."
+        },
+        {
+          "id": "budget",
+          "term": "Budget",
+          "def": "An exact output allowance, or the reasoning budget a client supplied. MCC keeps the two separate, and never uses an output limit as a reasoning budget."
+        },
+        {
+          "id": "carrier",
+          "term": "Carrier",
+          "def": "MCC's envelope for a Responses host's opaque encrypted reasoning item, carried through the client's own transcript. A carrier is host-bound: it is replayed only to the provider, endpoint, account and model that minted it."
+        },
+        {
+          "id": "chain",
+          "term": "Chain",
+          "def": "An ordered list of stand-ins behind a route. A model listed twice is tried twice, and each listing is judged when it is reached."
+        },
+        {
+          "id": "commit-boundary",
+          "term": "Commit boundary",
+          "def": "The moment the first protocol chunk is sent and the HTTP status can no longer change. A failure before it is an HTTP error; a failure after it is an in-band event."
+        },
+        {
+          "id": "config-home",
+          "term": "Config home",
+          "def": "The one directory that holds the .env, the request log and the documents beside them. It is <code>~/.mcc</code> by default and is pinned by <code>MCC_CONFIG_DIR</code>."
+        },
+        {
+          "id": "country-refusal",
+          "term": "Country refusal",
+          "def": "A 403 that refuses the address rather than the credential. It never locks a key out, and the request still tries the next key, then the next model."
+        },
+        {
+          "id": "credential-pool",
+          "term": "Credential pool",
+          "def": "The comma-separated keys behind one provider, each with its own upstream client and rate-limit window, read in the order they are listed."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "D — F"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "dialect",
+          "term": "Dialect",
+          "def": "The reasoning fields one host parses: an effort field and its words, an on/off channel, a numeric budget, an OFF spelling or an adaptive channel. A control is emitted only where the model has the knob and the host has the field."
+        },
+        {
+          "id": "direct-ref",
+          "term": "Direct ref",
+          "def": "A model named as <code>provider/model</code>, resolved without a tier. It is one of the three forms the router accepts, beside gateway IDs and tier aliases."
+        },
+        {
+          "id": "door",
+          "term": "Door",
+          "def": "One of the four protocol surfaces a client can enter: Anthropic Messages, OpenAI Responses, Chat Completions or Google Gemini. All four meet the same router."
+        },
+        {
+          "id": "exit",
+          "term": "Exit",
+          "def": "One named address in a proxy chain. A refused or dropped request can move to another exit on the same model, within the chain's switch limit."
+        },
+        {
+          "id": "failover",
+          "term": "Failover",
+          "def": "Moving from the route's primary model to a stand-in after a failure. It happens before the first streamed chunk; after that, the response is committed."
+        },
+        {
+          "id": "fallback",
+          "term": "Fallback",
+          "def": "One entry in a chain, or the act of walking the chain. A fallback can be paused, which keeps its place and never tries it."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "G — I"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "gateway-id",
+          "term": "Gateway model ID",
+          "def": "A model identifier decoded by MCC's own gateway-ID codec, rather than a direct provider ref or a tier alias."
+        },
+        {
+          "id": "generation",
+          "term": "Generation",
+          "def": "One provider-runtime snapshot with its own provider instances, limiters and quota state. A hot replacement publishes a new generation; old request leases drain against the one they started on."
+        },
+        {
+          "id": "harness",
+          "term": "Harness",
+          "def": "The coding agent behind a request, identified from a header or the user-agent fingerprint. It drives per-agent tier maps and the request log's attribution."
+        },
+        {
+          "id": "headroom",
+          "term": "Headroom",
+          "def": "The context left after a prompt, which bounds how large an output allowance can be. It is applied after the floor, so it can lower a budget but never re-inflate one the context cannot hold."
+        },
+        {
+          "id": "inferhub",
+          "term": "InferHub",
+          "def": "A marketplace provider that resells pooled accounts behind one key. A profile sets a price ceiling, and MCC sends it on every attempt so a request is never charged above it."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "J — L"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "key-health",
+          "term": "Key health",
+          "def": "A key's state, decided only from signals about the credential: an auth rejection, a 429, or an exhausted balance. Timeouts, 5xx and other 4xx leave it untouched."
+        },
+        {
+          "id": "keyless-hop",
+          "term": "Keyless hop",
+          "def": "The last search hop, which reads DuckDuckGo's HTML page and then its lite page without a key. It is unofficial and may be rate-limited, which is reported as a rate limit rather than as no results."
+        },
+        {
+          "id": "learned-fact",
+          "term": "Learned fact",
+          "def": "A negative this install taught the router, shown with its evidence, expiring on a clock and forgettable per row. A reasoning field a host refused is one example."
+        },
+        {
+          "id": "lockout",
+          "term": "Lockout",
+          "def": "The escalating bench for a key the provider keeps rejecting with an auth error: five minutes, one hour and one day by default, one step per consecutive rejection."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "M — O"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "media-rail",
+          "term": "Media rail",
+          "def": "One of the image, speech, transcription and video routes. A media rail walks its chain like a chat route but keeps its own health, and is never offered to a coding agent."
+        },
+        {
+          "id": "model-kind",
+          "term": "Model kind",
+          "def": "What a model is for: chat, image, speech, transcription or video. A picker offers only its own kind, and a model whose kind is stated and is not chat is left out of the chat catalogue."
+        },
+        {
+          "id": "model-slug",
+          "term": "Model slug",
+          "def": "The <code>provider/model</code> string MCC builds from the provider ID and the exact provider model ID. Free-text entry stays available where a provider cannot list its models."
+        },
+        {
+          "id": "no-thinking-variant",
+          "term": "No-thinking variant",
+          "def": "A model-listing entry that forces reasoning off. It exists for compatibility, and the router treats the no-thinking name as a distinct route."
+        },
+        {
+          "id": "optimization-rule",
+          "term": "Optimization rule",
+          "def": "A narrow local rule that answers a common low-value request before a provider is asked. A request it answers records the rule and the tokens no provider received."
+        },
+        {
+          "id": "oauth-provider",
+          "term": "OAuth provider",
+          "def": "A provider whose credential is a sign-in rather than a pasted string: a Claude subscription, ChatGPT or Kimi For Coding. It sits in the same grid as a key-based provider."
+        },
+        {
+          "id": "output-allowance",
+          "term": "Output allowance",
+          "def": "The number of tokens a reply may use, resolved from the model, the route's ceiling and floor, context headroom and, when thinking is requested, the model's own published limit."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "P — R"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "provenance",
+          "term": "Provenance",
+          "def": "The recorded source of a value. A price carries the rung that stated it; a claim on this site carries the path or command that proves it."
+        },
+        {
+          "id": "provider-card",
+          "term": "Provider card",
+          "def": "One provider's entry on the Providers page: its badge, its key count, its rotation policy and its Configure and Refresh models controls."
+        },
+        {
+          "id": "proxy-token",
+          "term": "Proxy token",
+          "def": "The bearer token clients present to the proxy. It is generated for the machine on first start, and it is required once the host is not loopback."
+        },
+        {
+          "id": "rail",
+          "term": "Rail",
+          "def": "A route rendered as a row on Model Config: a primary model and its ordered fallbacks. A media rail is the same shape for a media endpoint."
+        },
+        {
+          "id": "rate-limit-window",
+          "term": "Rate-limit window",
+          "def": "One key's own quota state. Every key in a pool has its own, so one key saturating or stalling never throttles the others."
+        },
+        {
+          "id": "request-log",
+          "term": "Request log",
+          "def": "The local SQLite record of every completed request, with its attempts, tokens, cost and latency. Analytics is computed from it; it is not a second accounting system."
+        },
+        {
+          "id": "rotation",
+          "term": "Rotation",
+          "def": "Choosing which key in a pool serves a request: single, round robin, least used or failover. Rotation is per pool, and each key's order is the order the policy reads."
+        },
+        {
+          "id": "rung",
+          "term": "Rung",
+          "def": "One step of a resolution ladder, such as the pricing ladder or the metadata ladder. A value records the rung that answered it, so two surfaces cannot disagree about its source."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "S — U"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "safety-classifier",
+          "term": "Safety classifier",
+          "def": "Claude Code's narrow auto-mode prompt shape. It is a routing policy, not a short-circuit: MCC forces reasoning off so the client receives a parser-readable verdict."
+        },
+        {
+          "id": "search-chain",
+          "term": "Search chain",
+          "def": "An ordered list of search services with repeats, pause and drag. It is walked at the proxy, and its keys follow the same rotation and health rules as a model key."
+        },
+        {
+          "id": "server-tool",
+          "term": "Server tool",
+          "def": "A tool the protocol expects the server to run, such as web search or web fetch. MCC fulfils it at the proxy instead of sending it upstream."
+        },
+        {
+          "id": "subscription-window",
+          "term": "Subscription window",
+          "def": "A plan's usage limit with its reset time, as a provider reports it. A window and a cash balance are two blocks and never one total."
+        },
+        {
+          "id": "tier",
+          "term": "Tier",
+          "def": "A coding-agent route such as Fable, Opus, Sonnet or Haiku, mapped to a real model and a chain. A tier alias is the protocol name for one of those routes."
+        },
+        {
+          "id": "tier-alias",
+          "term": "Tier alias",
+          "def": "One of <code>mcc/cyber</code>, <code>mcc/best</code>, <code>mcc/good</code>, <code>mcc/medium</code>, <code>mcc/cheap</code> or <code>mcc/vision</code>. It is a pointer to a global route, not a model."
+        },
+        {
+          "id": "token-optimizer",
+          "term": "Token optimizer",
+          "def": "The page and the opt-in RTK integration that show what never reached a provider: tokens saved, rule counts and prompt-cache effectiveness."
+        },
+        {
+          "id": "tuning",
+          "term": "Tuning",
+          "def": "A parameter set for the shared rotation engine. The provider tuning excludes the generic cooldown ladder; the web-search tuning keeps it, because a search key that keeps erroring is worth resting."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "V — Z"
+    },
+    {
+      "type": "terms",
+      "items": [
+        {
+          "id": "vision-adapter",
+          "term": "Vision adapter",
+          "def": "The route that diverts an image request to a model that can see. In describe mode, a sighted model describes each image and the description is cached on the image's content address."
+        },
+        {
+          "id": "wire-capture",
+          "term": "Wire capture",
+          "def": "The recorded message and tool structure actually sent, bounded and inspectable. It is what lets a reasoning adaptation appear in the request detail."
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "ADAPTIVE is not an effort level and not a budget",
+      "evidence": "README.md §Reasoning and budgets"
+    },
+    {
+      "claim": "A 429 benches a key and model pair while an exhausted balance benches the whole key",
+      "evidence": "ARCHITECTURE.md §Credential Rotation and Key Health"
+    },
+    {
+      "claim": "MCC never uses an output limit as a reasoning budget",
+      "evidence": "ARCHITECTURE.md §Reasoning Ownership"
+    },
+    {
+      "claim": "A carrier is host-bound",
+      "evidence": "README.md §Reasoning and budgets"
+    },
+    {
+      "claim": "A model listed twice is tried twice",
+      "evidence": "README.md §Routing capability table"
+    },
+    {
+      "claim": "The commit boundary is the first protocol chunk",
+      "evidence": "ARCHITECTURE.md §HTTP Request Flow"
+    },
+    {
+      "claim": "The config home is ~/.mcc by default and MCC_CONFIG_DIR pins it",
+      "evidence": ".env.example header"
+    },
+    {
+      "claim": "A country refusal never locks a key out",
+      "evidence": "README.md §Providers and credentials capability table"
+    },
+    {
+      "claim": "Each key has its own upstream client and rate-limit window",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "A reasoning control needs the model knob and the host field",
+      "evidence": "ARCHITECTURE.md §Reasoning Ownership"
+    },
+    {
+      "claim": "A generation is a provider-runtime snapshot with its own quota state",
+      "evidence": "ARCHITECTURE.md §Provider Architecture"
+    },
+    {
+      "claim": "The harness is identified from a header or user-agent fingerprint",
+      "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"
+    },
+    {
+      "claim": "InferHub sends a profile's ceiling on every attempt",
+      "evidence": "README.md §Providers and credentials capability table"
+    },
+    {
+      "claim": "Key health is judged on three signals only",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "The keyless hop is unofficial and may be rate-limited",
+      "evidence": "docs/WEB-SEARCH.md §Search Providers"
+    },
+    {
+      "claim": "Learned facts expire and are forgettable per row",
+      "evidence": "README.md §Providers and credentials capability table"
+    },
+    {
+      "claim": "The lockout ladder defaults to 5 minutes, 1 hour and 1 day",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "A media rail keeps its own health and is not offered to a coding agent",
+      "evidence": "docs/ROUTING-REFERENCE.md §Fallback Chains"
+    },
+    {
+      "claim": "A picker offers only its own kind of model",
+      "evidence": "docs/MEDIA.md §Which lists offer a model"
+    },
+    {
+      "claim": "Model slugs are provider-id/exact-provider-model-id",
+      "evidence": "README.md §Model Providers"
+    },
+    {
+      "claim": "An optimization answer records the rule and tokens saved",
+      "evidence": "ARCHITECTURE.md §Local Optimizations And Server Tools"
+    },
+    {
+      "claim": "An OAuth provider is a sign-in in the same grid",
+      "evidence": "docs/OAUTH-PROVIDERS.md"
+    },
+    {
+      "claim": "Provenance records the rung that stated a value",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "The proxy token is generated on first start and required off loopback",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "The request log is local SQLite",
+      "evidence": "src/my_claude_code/config/paths.py"
+    },
+    {
+      "claim": "Rotation is per pool",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "The safety classifier forces reasoning off",
+      "evidence": "ARCHITECTURE.md §Local Optimizations And Server Tools"
+    },
+    {
+      "claim": "A subscription window and a cash balance are two blocks",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "Tier aliases are pointers to global routes",
+      "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"
+    },
+    {
+      "claim": "The provider tuning excludes the generic cooldown ladder",
+      "evidence": "ARCHITECTURE.md §Credential Rotation and Key Health"
+    },
+    {
+      "claim": "Describe mode caches a description on the image content address",
+      "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"
+    },
+    {
+      "claim": "Wire capture records the structure actually sent",
+      "evidence": "README.md §Observability and cost capability table"
+    }
+  ]
+}

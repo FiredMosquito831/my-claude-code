@@ -1,0 +1,242 @@
+{
+  "path": "/features/cli/",
+  "title": "The command line | My Claude Code",
+  "description": "The mcc-* launchers, headless mcc-apps controls, the installer's own flags, OAuth sign-in commands and the migration and removal tools.",
+  "nav": "CLI",
+  "eyebrow": "Feature · CLI",
+  "h1": "The commands MCC puts on your PATH",
+  "intro": "The dashboard is optional. Everything the page can do has a command, and the launchers are how most people start an agent. This page is the reference for the commands, with the flags that exist and the ones that do not.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features",
+      "href": "/features/"
+    },
+    {
+      "label": "CLI"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "An install puts <code>mcc-server</code> and the <code>mcc-*</code> launchers on your PATH, and adds the headless tools beside them. A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself."
+    },
+    {
+      "type": "p",
+      "text": "The launcher set is generated from one registry, so a new agent is a registry entry rather than a new script. A launcher whose agent is missing prints that agent's own install command and exits, which is why the CLI never installs an agent on its own."
+    },
+    {
+      "type": "h2",
+      "text": "The server and the launchers"
+    },
+    {
+      "type": "code",
+      "label": "Start the server",
+      "text": "mcc-server"
+    },
+    {
+      "type": "p",
+      "text": "<code>mcc-server --version</code> prints the running release. The server listens on loopback port 8082 by default, serves the dashboard at <code>/admin</code> and answers <code>/health</code>. Every other MCC server on the machine is left alone."
+    },
+    {
+      "type": "table",
+      "head": [
+        "Command",
+        "What it does"
+      ],
+      "rows": [
+        [
+          "<code>mcc-claude</code>",
+          "launch Claude Code against the proxy; <code>--discover-models</code> wires the native model picker, and <code>mcc-claude-old</code> keeps the older launch shape"
+        ],
+        [
+          "<code>mcc-codex</code>",
+          "launch Codex CLI over the OpenAI Responses surface"
+        ],
+        [
+          "<code>mcc-opencode</code>, <code>mcc-opencode2</code>",
+          "launch OpenCode over Anthropic Messages"
+        ],
+        [
+          "<code>mcc-gemini</code>",
+          "launch Gemini CLI over the Gemini API surface"
+        ],
+        [
+          "<code>mcc-crush</code>, <code>mcc-cline</code>, <code>mcc-goose</code>, <code>mcc-aider</code>",
+          "launch the matching agent"
+        ],
+        [
+          "<code>mcc-kimi</code>, <code>mcc-qwen</code>, <code>mcc-commandcode</code>",
+          "launch Kimi Code, Qwen Code and Command Code"
+        ],
+        [
+          "<code>mcc-openclaw</code>, <code>mcc-hermes</code>, <code>mcc-droid</code>, <code>mcc-pi</code>, <code>mcc-kilo</code>",
+          "launch the matching agent"
+        ]
+      ]
+    },
+    {
+      "type": "figure",
+      "shot": "cc-model-picker",
+      "caption": "Claude Code's native model picker after mcc-claude --discover-models, listing the routed models."
+    },
+    {
+      "type": "h2",
+      "text": "Headless app control"
+    },
+    {
+      "type": "p",
+      "text": "<code>mcc-apps</code> does what the Desktop apps cards do, which matters on a headless machine or over SSH. Its subcommands are <code>list</code>, <code>status</code>, <code>configure</code> (with <code>--preview</code> to show the change without writing it) and <code>undo</code> (with <code>--restore</code> to put back the exact values MCC replaced)."
+    },
+    {
+      "type": "code",
+      "label": "Preview a desktop-app change",
+      "text": "mcc-apps configure --preview"
+    },
+    {
+      "type": "h2",
+      "text": "Sign-in, migration and the token optimizer"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "<code>mcc-anthropic-oauth-login</code> signs in from a terminal. It takes <code>--paste</code>, <code>--no-browser</code>, <code>--list</code> and <code>--remove &lt;id&gt;</code>, and answers <code>--help</code> without starting anything.",
+        "<code>mcc-migrate</code> runs the legacy-home move by hand. It refuses while it can see a live server.",
+        "<code>mcc-rtk status|enable|disable|uninstall|apply</code> controls the opt-in token optimizer per agent, the same control the dashboard's Token optimizer card writes.",
+        "<code>mcc-desktop</code> fetches and verifies the desktop app, and refuses rather than pretending on a machine with no tray."
+      ]
+    },
+    {
+      "type": "figure",
+      "shot": "agent-session",
+      "caption": "A launcher starts the agent with the proxy address, the token and the catalogue in place; the agent itself looks unchanged."
+    },
+    {
+      "type": "h2",
+      "text": "The installer's flags"
+    },
+    {
+      "type": "p",
+      "text": "The one-liners accept <code>--dry-run</code> to see the plan without changing anything, <code>--version</code> to pin a release, <code>--desktop</code> to install the app too, <code>--no-restart</code> to leave a running server alone, <code>--no-start</code> to stop and start nothing, <code>--no-desktop</code> to leave the app alone and <code>--yes-sudo</code> to answer the sudo prompt for the Linux package step. The npm wrapper accepts <code>--server-only</code>, <code>--desktop-only</code>, <code>--no-desktop</code> and <code>--yes-sudo</code>, and reads <code>MCC_NPM_INSTALL=server|desktop|both|none</code>."
+    },
+    {
+      "type": "code",
+      "label": "See what an install would do",
+      "text": "curl -fsSL \"https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh\" | sh -s -- --dry-run"
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-launchers",
+      "caption": "The dashboard lists every launcher it installed, with its state and a copy button."
+    },
+    {
+      "type": "h2",
+      "text": "A first run, in order"
+    },
+    {
+      "type": "ol",
+      "items": [
+        "Install with the one-liner for your platform, then reopen the terminal so the PATH change is visible.",
+        "Run <code>mcc-server</code>; on first start it writes the configuration home and generates the proxy token.",
+        "Add one provider key on the Providers page, then set the tiers on Model Config.",
+        "Launch the agent with its own command, for example <code>mcc-claude</code>. The launcher passes the proxy address, the token and the generated catalogue, and the agent itself looks unchanged."
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Where the CLI and the dashboard meet"
+    },
+    {
+      "type": "p",
+      "text": "The command line and the dashboard are two front doors to one configuration. A command does not keep a private copy of a setting, and a page does not write somewhere the server will not read. <code>mcc-apps configure</code> shows the same diff preview the card shows, and <code>mcc-apps undo</code> performs the same two undo modes."
+    },
+    {
+      "type": "p",
+      "text": "The exceptions are the things that must be decided before the settings file exists. <code>MCC_CONFIG_DIR</code> is a shell variable, not a setting, and the install-time switches are flags rather than values. Everything else has one name and one place, which is what makes a command and a page safe to use interchangeably."
+    },
+    {
+      "type": "p",
+      "text": "A command that needs a provider key reads it from the same configuration home the server reads, through the same settings resolution. There is no separate credential path for the CLI, and no command that writes a key the dashboard would not show."
+    },
+    {
+      "type": "h2",
+      "text": "What the commands do not do"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "A launcher does not install its agent. It prints the agent's own install line and exits.",
+        "The installer does not install curl, and it does not upgrade your system Python. It uses Python 3.14 through uv.",
+        "The CLI does not write a file the dashboard does not also write; both go through the same configuration.",
+        "No command changes repository settings, DNS or a hosting account."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: the exact install commands"
+        },
+        {
+          "href": "/features/agents/",
+          "label": "Agents: what each launcher starts"
+        },
+        {
+          "href": "/features/platform/",
+          "label": "Platform: the desktop app and the update path"
+        },
+        {
+          "href": "/configuration/",
+          "label": "Configuration: how settings reach the commands"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "The installers put mcc-server and the mcc-* launchers on PATH",
+      "evidence": "README.md §Install"
+    },
+    {
+      "claim": "A launcher whose agent is missing prints the agent's install command and exits",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "mcc-server --version prints the release",
+      "evidence": "README.md §Install"
+    },
+    {
+      "claim": "The default dashboard address is http://127.0.0.1:8082/admin",
+      "evidence": "README.md §Dashboard"
+    },
+    {
+      "claim": "mcc-apps list|status|configure [--preview]|undo [--restore]",
+      "evidence": "README.md §Agents capability table"
+    },
+    {
+      "claim": "mcc-anthropic-oauth-login takes --paste, --no-browser, --list and --remove",
+      "evidence": "docs/OAUTH-PROVIDERS.md"
+    },
+    {
+      "claim": "mcc-migrate refuses while a live server is visible",
+      "evidence": "README.md §Four things that bite"
+    },
+    {
+      "claim": "mcc-rtk status|enable|disable|uninstall|apply",
+      "evidence": "docs/MESSAGING.md §Desktop & token optimizer"
+    },
+    {
+      "claim": "Installer flags include --dry-run, --version, --desktop, --no-restart, --no-start, --no-desktop, --yes-sudo",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "The npm wrapper accepts --server-only, --desktop-only and MCC_NPM_INSTALL",
+      "evidence": "README.md §Install"
+    }
+  ]
+}

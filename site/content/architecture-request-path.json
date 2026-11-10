@@ -1,0 +1,64 @@
+{
+  "path": "/architecture/request-path/",
+  "title": "Request path | My Claude Code",
+  "description": "Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response.",
+  "nav": "Request path",
+  "eyebrow": "Architecture · Request path",
+  "h1": "From a door to a committed reply",
+  "intro": "A request is authenticated once, correlated once, routed once and executed against one provider at a time. The hard part is not the happy path; it is deciding when a failure is still an HTTP error and when it is already part of a stream.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Request path"}],
+  "blocks": [
+    {"type": "h2", "text": "The routes"},
+    {"type": "p", "text": "The proxy exposes <code>POST /v1/messages</code> for Anthropic Messages, <code>POST /v1/responses</code> for OpenAI Responses, <code>POST /v1/chat/completions</code> for Chat Completions, <code>POST /v1/messages/count_tokens</code> for Anthropic token counting, <code>GET /v1/models</code> for the gateway and Claude-compatible model list, <code>GET /health</code>, <code>POST /stop</code>, and HEAD and OPTIONS probes on the supported endpoints. Google's surface lives in its own module because its path shape is unlike every other route: <code>POST /v1beta/models/{model}:generateContent</code> and its streaming, token-count and list siblings."},
+    {"type": "diagram", "name": "request-path-doors", "caption": "The four client protocols and the routes they enter.", "alt": "A diagram showing four client protocols entering four routes that meet one router."},
+
+    {"type": "h2", "text": "Authentication and correlation"},
+    {"type": "p", "text": "Proxy authentication is one function. If <code>ANTHROPIC_AUTH_TOKEN</code> is blank, proxy authentication is disabled. Otherwise the proxy accepts exactly a bearer token, and other credential headers are ignored, so a stale provider key cannot mask valid proxy authorization. The complete token is compared in constant time, and no model suffix or other token mutation is accepted."},
+    {"type": "p", "text": "A pure ASGI boundary creates one opaque request ID before routing, places it in the log context and request state, and adds it to the response while forwarding the real response-start message. The Responses surface and the shared model catalogue expose the same value as a request-id header. Provider execution receives that existing ID; it never creates a second one. Keeping the context around the whole inner call is what preserves correlation during streaming."},
+
+    {"type": "h2", "text": "Routing and shaping"},
+    {"type": "p", "text": "The product handler validates the request, resolves the model and the reasoning intent, applies Claude-only safety-classifier and local-optimization policy, handles local server tools, and then asks the executor to stream the routed request. The Responses handler is streaming-only and delegates its protocol work to an adapter that converts the payload into an Anthropic Messages request before execution and converts the streamed events back afterwards."},
+    {"type": "diagram", "name": "request-path-lifecycle", "caption": "Seven stages from ingress to a priced, logged reply.", "alt": "A numbered seven-stage pipeline: ingress, route, shape, credential, attempt, fallback and reply, ending in one price and log row."},
+    {"type": "figure", "shot": "dashboard-request-attempts", "caption": "The result of the pipeline: one request's attempts, with a reason beside every model it did not try."},
+
+    {"type": "h2", "text": "The commit boundary"},
+    {"type": "p", "text": "The executor resolves a provider from the current generation, synchronously preflights the upstream request, emits trace events, counts input tokens and returns an iterator of protocol events. The response layer then waits for the first protocol chunk before it returns a successful streaming response. That wait is the commit boundary. A provider failure before it stays a typed non-2xx JSON response, and that response carries a retry header set to false, because MCC retains ownership of upstream retry rather than causing a second client retry loop."},
+    {"type": "p", "text": "After the first chunk has escaped, HTTP status is committed. The Messages surface then emits an Anthropic error event and closes without a synthetic message-stop; the Responses surface emits a failed response with its original ID. Non-streaming Messages requests aggregate internally and return a non-2xx JSON for any terminal stream error, discarding incomplete content rather than presenting a partial success."},
+
+    {"type": "h2", "text": "Close ownership"},
+    {"type": "p", "text": "The public response chain follows a transitive close-ownership rule. A response owns its replay iterator; replay owns the active protocol adapter; each adapter owns its direct input; tracing owns the executor body; the executor body owns the provider iterator; and the provider runner owns its upstream stream. Each owner closes its direct input on normal completion, failure, cancellation and early consumer close. A generation lease is released only after the body chain has finished closing."},
+
+    {"type": "h2", "text": "Failures that are not provider failures"},
+    {"type": "p", "text": "Ingress authentication, request validation, model routing and deterministic preflight failures are ordinary HTTP errors and do not receive the terminal retry header. Missing provider configuration and a shutting-down request runtime are application-readiness errors: the Messages surface serialises them as Anthropic JSON and the Responses surface as OpenAI JSON, and neither is misclassified as an already-finalised provider failure."},
+
+    {"type": "h2", "text": "The Gemini difference"},
+    {"type": "p", "text": "The Gemini door keeps Google's error envelope, because Gemini CLI branches on the status string when it decides whether to retry. Its prompt token count includes the cached prompt, unlike Anthropic's, because Google's field includes it and reports the served part separately; a straight rename would under-report every cached request. Its stream has no done sentinel, because that is OpenAI's convention and Google's client would try to parse it as JSON."},
+    {"type": "figure", "shot": "dashboard-request-detail", "caption": "A request detail: what entered, what was routed, what was sent and what answered."},
+
+    {"type": "h2", "text": "Limits and behaviour"},
+    {"type": "ul", "items": [
+      "One request ID, created at ingress, is reused by every stage. There is no second identifier.",
+      "A failure after the first chunk cannot change the HTTP status; it is an in-band event.",
+      "A non-streaming request discards an incomplete reply rather than returning partial content as success.",
+      "The executor depends on a provider port, not on a provider implementation, which is why four doors can share one executor."
+    ]},
+    {"type": "related", "links": [
+      {"href": "/architecture/provider-routing/", "label": "Provider routing: what happens inside the routed stage"},
+      {"href": "/architecture/credential-health/", "label": "Credential health: what happens before an attempt"},
+      {"href": "/features/routing/", "label": "Feature: routing and fallback chains"},
+      {"href": "/glossary/", "label": "Glossary: commit boundary, generation lease, request ID"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "The four doors and their routes", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "Proxy auth accepts exactly a bearer token and compares it in constant time", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "One opaque request ID is created at ingress and reused", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "The response waits for the first protocol chunk before returning a successful stream", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "A failure before commit is typed non-2xx JSON with a false retry header", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "After the first chunk, Messages emits an error event and Responses emits response.failed", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "Non-streaming Messages aggregate and discard incomplete content on a terminal error", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "The close-ownership chain releases the lease only after the body chain closes", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "Gemini keeps Google's error envelope and its prompt count includes the cache", "evidence": "ARCHITECTURE.md §Protocol Conversion And Streaming Contracts"}
+  ]
+}

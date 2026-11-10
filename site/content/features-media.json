@@ -1,0 +1,71 @@
+{
+  "path": "/features/media/",
+  "title": "Media routing | My Claude Code",
+  "description": "Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine's retry, key, 429 and proxy rules.",
+  "nav": "Media",
+  "eyebrow": "Feature · Media",
+  "h1": "Image, speech and video over the same engine",
+  "intro": "Media is not bolted on. The image, speech, transcription and video endpoints run over their own rails, but they share the chat engine's retry, key rotation, 429 handling and proxy rules, with health records of their own so a media failure never benches a model for chat.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Features", "href": "/features/"}, {"label": "Media"}],
+  "blocks": [
+    {"type": "p", "text": "A media request names a model on a media rail. MCC walks that rail's chain exactly as it walks a chat chain: the same deadlines, pauses, skip kinds and retry rules, through a separate copy of the engine that a contract test holds to chat's decisions. The rails keep their own key, model and proxy health, so a failed image request does not bench anything for a chat."},
+    {"type": "table", "head": ["Endpoint", "Rail", "Settings"], "rows": [
+      ["<code>POST /v1/images/generations</code>", "Image", "<code>MODEL_IMAGE</code>, <code>MODEL_IMAGE_FALLBACKS</code>, <code>MODEL_IMAGE_PAUSED</code>"],
+      ["<code>POST /v1/images/edits</code>", "Image", "the same rail"],
+      ["<code>POST /v1/audio/speech</code>", "Speech", "<code>MODEL_TTS</code> and its chain"],
+      ["<code>POST /v1/audio/transcriptions</code>, <code>/v1/audio/translations</code>", "Transcription", "<code>MODEL_ASR</code> and its chain"],
+      ["<code>POST /v1/videos</code> and the job endpoints", "Video", "<code>MODEL_VIDEO</code> and its chain"],
+      ["Gemini <code>:generateContent</code> with image or audio output, <code>:predictLongRunning</code>", "Image, Speech, Video", "the same rails"]
+    ]},
+    {"type": "figure", "shot": "dashboard-media-image-rail", "caption": "The image rail on Model Config: the media endpoints it serves and the label each row carries."},
+
+    {"type": "h2", "text": "A provider serves only what it declares"},
+    {"type": "p", "text": "A provider serves a media operation only when it declares that endpoint. MCC never guesses from a model name. A model on a provider that declares nothing for the operation is skipped and not charged a failure; the request log shows it as <code>unsupported</code>. An edit therefore skips every model whose provider declares no edit endpoint, uncharged, and is served by the first one that does."},
+    {"type": "p", "text": "Most image providers are passed through field for field: the body the client sent is forwarded with the model replaced by the rail's model, so a parameter only one host understands still reaches it, and the host's answer is returned as it came. Gemini's native speech and transcription surfaces and Mistral's image surface are translated instead. MCC builds those requests itself, lists any field it has no place for under <code>not_forwarded</code> on the request row rather than guessing, and turns the host's answer back into what an OpenAI client reads."},
+    {"type": "p", "text": "Mistral images are the unusual wire: Mistral does not document an image-generation endpoint. MCC asks for the picture on <code>chat/completions</code> with the <code>image_generation</code> built-in tool, then fetches the result with a second call on the same key and the same proxy exit. Only the prompt is forwarded; the rest is recorded as not forwarded, and the image is recorded as unpriced because no source publishes a per-image rate."},
+
+    {"type": "h2", "text": "Uploads, edits and streaming"},
+    {"type": "p", "text": "An edit is forwarded in the client's own encoding. A multipart upload goes out as multipart, streamed from the server's spooled copy of each file, and re-read from the start if the rail falls back to the next model. The JSON variant goes out as JSON. <code>MEDIA_UPLOAD_MAX_MB</code> sets an optional upload limit: above zero, a file larger than that many megabytes is refused with a 413 before any provider is asked, so nothing is spent on it."},
+    {"type": "p", "text": "A request that asks to stream is routed to a surface documented to stream it. When a rail has no such surface, a streamed image or speech request is answered as one event rather than a stalled stream."},
+
+    {"type": "h2", "text": "What you see and what it costs"},
+    {"type": "p", "text": "The Models page lists every media-rail model with its declared endpoints and media health, and each model publishes the fields its request takes as a JSON Schema per operation, each with who said so. That schema is shown only; nothing sent changes. Clients can read it from <code>GET /v1/media/models</code>. Analytics has a separate Media card, and every row is labelled by its own API, so a generated image reads as such in the requests table."},
+    {"type": "figure", "shot": "dashboard-media-analytics", "caption": "Media analytics: image, speech and video rows with their own cost figures, separate from the chat totals."},
+    {"type": "p", "text": "Media requests are priced like chat ones: a provider figure first, then models.dev, then LiteLLM when it is on, else unpriced. Generated media can optionally be stored, controlled by <code>MEDIA_STORE_ENABLED</code>."},
+    {"type": "figure", "shot": "dashboard-models", "caption": "The Models page names each model's kind, so a media model is offered on its rail and not to a coding agent."},
+
+    {"type": "h2", "text": "Media tools for coding agents"},
+    {"type": "p", "text": "MCC's media server, <code>mcc-mcp</code>, exposes one tool per filled rail plus a free status tool over MCP. It can be added to an agent from the Coding agents page, or written into Codex's <code>config.toml</code>, OpenCode's <code>opencode.json</code> and Command Code's <code>mcp.json</code> from the Desktop apps cards. The change is shown first, written only on confirmation, backed up once, and removable back to the same bytes. An entry MCC did not add is left alone. The server is off for every agent by default."},
+
+    {"type": "h2", "text": "Configuration"},
+    {"type": "p", "text": "The rails are <code>MODEL_IMAGE</code>, <code>MODEL_TTS</code>, <code>MODEL_ASR</code> and <code>MODEL_VIDEO</code>, each with a <code>_FALLBACKS</code> and <code>_PAUSED</code> list. The upload cap is <code>MEDIA_UPLOAD_MAX_MB</code>, optional storage is <code>MEDIA_STORE_ENABLED</code>, and the agent tools are gated by <code>MCP_MEDIA_APPS</code>. None of the rails is a chat tier: nothing on them is listed in <code>/v1/models</code> or offered to a coding agent."},
+
+    {"type": "h2", "text": "Limits and behaviour"},
+    {"type": "ul", "items": [
+      "A model whose provider declares no endpoint for the operation is skipped uncharged and logged as unsupported.",
+      "A Mistral image fetch that fails after the host billed the picture fails the attempt, because the host has already charged it.",
+      "A media failure never benches a chat model; the rails keep their own health records.",
+      "An upload over the configured cap is refused before any provider is asked.",
+      "A field MCC cannot place on a translated surface is listed as not forwarded rather than silently dropped."
+    ]},
+    {"type": "related", "links": [
+      {"href": "/features/providers-and-credentials/", "label": "Providers: which hosts declare a media endpoint"},
+      {"href": "/features/observability-and-cost/", "label": "Observability: media rows and media cost"},
+      {"href": "/features/agents/", "label": "Agents: the media server over MCP"},
+      {"href": "/configuration/environment/", "label": "Configuration: the media variables, names only"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "Media endpoints and rails: image, speech, transcription, video", "evidence": "docs/MEDIA.md §What ships"},
+    {"claim": "Media rails share the chat engine's retry, key, 429 and proxy rules through a separate copy held to chat by a contract test", "evidence": "docs/ROUTING-REFERENCE.md §Fallback Chains; docs/MEDIA.md"},
+    {"claim": "A provider serves a media operation only when it declares that endpoint", "evidence": "docs/MEDIA.md §Which providers can serve it"},
+    {"claim": "An unsupported model is skipped uncharged and logged as unsupported", "evidence": "docs/MEDIA.md §Which providers can serve it"},
+    {"claim": "Mistral images use the image_generation tool and a second files fetch", "evidence": "docs/MEDIA.md §Which providers can serve it"},
+    {"claim": "MEDIA_UPLOAD_MAX_MB defaults to 0 (no limit) and a larger file is refused with 413", "evidence": "docs/MEDIA.md §Which providers can serve it"},
+    {"claim": "A streamed request is answered as one event when no provider streams", "evidence": "docs/MEDIA.md §Which providers can serve it; README.md §Platform capability table"},
+    {"claim": "GET /v1/media/models publishes request fields per model", "evidence": "docs/MEDIA.md §Request fields per model"},
+    {"claim": "Media requests are priced like chat ones, else unpriced", "evidence": "docs/MEDIA.md §What it costs"},
+    {"claim": "MCP_MEDIA_APPS gates the media server and it is off by default", "evidence": "docs/MEDIA.md §Coding agents; README.md §Platform capability table"}
+  ]
+}

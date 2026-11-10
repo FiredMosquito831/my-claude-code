@@ -1,0 +1,439 @@
+{
+  "path": "/configuration/environment/",
+  "title": "Environment reference | My Claude Code",
+  "description": "The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets.",
+  "nav": "Environment",
+  "eyebrow": "Configuration · Environment",
+  "h1": "Environment reference",
+  "intro": "This page names the settings, grouped by what they decide. It gives no values. For a secret-like variable it never shows an example, because a documentation page is not a place to invent one. The annotated .env.example in the repository carries the same names with inline comments.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Configuration",
+      "href": "/configuration/"
+    },
+    {
+      "label": "Environment"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "callout",
+      "kind": "warn",
+      "text": "<strong>Names, not values.</strong> Nothing on this page is a usable setting. Copy a name into your own .env and read its comment in <code>.env.example</code> before choosing a value."
+    },
+    {
+      "type": "h2",
+      "text": "Core server"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Name",
+        "What it decides"
+      ],
+      "rows": [
+        [
+          "<code>HOST</code>",
+          "the address the server listens on; loopback by default"
+        ],
+        [
+          "<code>PORT</code>",
+          "the port the server listens on; 8082 by default"
+        ],
+        [
+          "<code>ANTHROPIC_AUTH_TOKEN</code>",
+          "the bearer token proxy clients present; generated for this machine on first start; required once the host is not loopback"
+        ],
+        [
+          "<code>MCC_CONFIG_DIR</code>",
+          "the configuration home; environment-only, resolved before the .env is read"
+        ],
+        [
+          "<code>MCC_ENV_FILE</code>",
+          "an explicit dotenv file to load instead of the default one"
+        ],
+        [
+          "<code>LOG_LEVEL</code>",
+          "the server log level"
+        ],
+        [
+          "<code>SERVER_LOG_RETAIN_FILES</code>",
+          "how many rotated server log files are kept"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Request log and analytics"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Name",
+        "What it decides"
+      ],
+      "rows": [
+        [
+          "<code>REQUEST_LOG_ENABLED</code>",
+          "whether the persistent request log, and therefore Analytics, is on"
+        ],
+        [
+          "<code>REQUEST_LOG_MAX_ROWS</code>",
+          "the retention cap; the oldest rows are pruned periodically"
+        ],
+        [
+          "<code>LOG_RAW_API_PAYLOADS</code>",
+          "whether API payloads are kept raw"
+        ],
+        [
+          "<code>LOG_RAW_SSE_EVENTS</code>",
+          "whether streamed events are kept raw"
+        ],
+        [
+          "<code>LOG_RAW_UPSTREAM_BYTES</code>",
+          "whether the provider's own bytes are kept exactly as received; off by default"
+        ],
+        [
+          "<code>LOG_API_ERROR_TRACEBACKS</code>",
+          "whether API error tracebacks are kept"
+        ],
+        [
+          "<code>LOG_RAW_CLI_DIAGNOSTICS</code>",
+          "whether CLI diagnostics are kept raw"
+        ],
+        [
+          "<code>USAGE_AUTO_REFRESH_SECONDS</code>",
+          "how often the Usage page refreshes itself while open; zero turns it off"
+        ],
+        [
+          "<code>USAGE_LAYOUT</code>",
+          "which of the five Usage layouts is shown"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Models, tiers and reasoning"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Name",
+        "What it decides"
+      ],
+      "rows": [
+        [
+          "<code>MODEL</code>",
+          "the model used when nothing more specific matches"
+        ],
+        [
+          "<code>MODEL_MYTHOS</code>, <code>MODEL_FABLE</code>, <code>MODEL_OPUS</code>, <code>MODEL_SONNET</code>, <code>MODEL_HAIKU</code>",
+          "each coding-agent tier's model"
+        ],
+        [
+          "<code>MODEL_VISION</code>",
+          "the model the vision adapter routes an image request to"
+        ],
+        [
+          "<code>MODEL_*_FALLBACKS</code>",
+          "each route's ordered stand-ins"
+        ],
+        [
+          "<code>MODEL_*_PAUSED</code>",
+          "the entries kept in place but never tried"
+        ],
+        [
+          "<code>HARNESS_TIER_ALIASES</code>",
+          "whether the per-agent tier aliases are offered"
+        ],
+        [
+          "<code>VISION_ADAPTER_MODE</code>",
+          "route, describe or the behaviour the request would have had without the adapter"
+        ],
+        [
+          "<code>REASONING_POLICY</code>",
+          "the root reasoning policy"
+        ],
+        [
+          "<code>REASONING_MYTHOS</code>, <code>REASONING_FABLE</code>, <code>REASONING_OPUS</code>, <code>REASONING_SONNET</code>, <code>REASONING_HAIKU</code>",
+          "per-tier reasoning overrides"
+        ],
+        [
+          "<code>REASONING_EFFORT_BUDGET_RATIOS</code>",
+          "how much of the output allowance a thinking rung may take"
+        ],
+        [
+          "<code>REASONING_ANSWER_FLOOR_MAX</code>",
+          "the answer reserve kept aside from the thinking budget"
+        ],
+        [
+          "<code>PROMPT_CACHE_TTL</code>, <code>PROMPT_CACHE_TTL_*</code>",
+          "the prompt-cache lifetime per route or per tier; client by default"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Output budgets, retries and limits"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Name",
+        "What it decides"
+      ],
+      "rows": [
+        [
+          "<code>MAX_OUTPUT_TOKENS_CEILING</code>",
+          "the ceiling applied to an output budget; zero is the sentinel for none"
+        ],
+        [
+          "<code>MAX_OUTPUT_TOKENS_FLOOR</code>",
+          "the floor that stops a long prompt squeezing the reply to nothing"
+        ],
+        [
+          "<code>MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT</code>",
+          "the value used when no source publishes a model's limit"
+        ],
+        [
+          "<code>MAX_OUTPUT_TOKENS_CONTEXT_MARGIN</code>, <code>MAX_OUTPUT_TOKENS_CONTEXT_FLOOR</code>",
+          "the context-headroom bounds"
+        ],
+        [
+          "<code>FALLBACK_TOTAL_TIMEOUT</code>, <code>FALLBACK_FIRST_TOKEN_TIMEOUT</code>, <code>FALLBACK_STALL_TIMEOUT</code>",
+          "the deadlines that make a silent model a failure"
+        ],
+        [
+          "<code>FALLBACK_RETRY_FIRST</code>, <code>FALLBACK_SKIP_KINDS</code>",
+          "what the chain retries and what it skips"
+        ],
+        [
+          "<code>FALLBACK_BENCH_ENABLED</code>, <code>FALLBACK_EJECT_*</code>",
+          "whether and when a chain entry is benched"
+        ],
+        [
+          "<code>PROVIDER_RETRY_ATTEMPTS</code>, <code>PROVIDER_RETRY_BACKOFF_*</code>",
+          "the retry count and backoff"
+        ],
+        [
+          "<code>RATE_LIMIT_COOLDOWN_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MAX_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MODE</code>",
+          "what a 429 costs a key"
+        ],
+        [
+          "<code>RATE_LIMIT_ROUTES_AROUND_MODEL</code>",
+          "whether a 429 tries another model on the same provider"
+        ],
+        [
+          "<code>CREDENTIAL_LOCKOUT_TIERS</code>",
+          "the escalating bench for a rejected key"
+        ],
+        [
+          "<code>CREDENTIAL_MODEL_BENCH_ESCALATION</code>",
+          "how many models must be limited before the whole key is benched"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Web search and fetch"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Name",
+        "What it decides"
+      ],
+      "rows": [
+        [
+          "<code>WEB_SEARCH_PROVIDER</code>",
+          "auto, off, disabled or one search backend"
+        ],
+        [
+          "<code>WEB_SEARCH_FALLBACK_POLICY</code>",
+          "how far the search chain may move"
+        ],
+        [
+          "<code>WEB_SEARCH_CHAIN</code>, <code>WEB_SEARCH_CHAIN_PAUSED</code>",
+          "the ordered search services and the ones paused"
+        ],
+        [
+          "<code>ENABLE_WEB_SERVER_TOOLS</code>",
+          "whether web search and web fetch are fulfilled at the proxy"
+        ],
+        [
+          "<code>WEBSEARCH_PROXY</code>",
+          "an optional outbound proxy for search"
+        ],
+        [
+          "<code>WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS</code>",
+          "optional spacing between keyless-hop requests"
+        ],
+        [
+          "<code>WEBSEARCH_LOG_ENABLED</code>, <code>WEBSEARCH_LOG_MAX_ROWS</code>",
+          "the web-search log and its retention"
+        ],
+        [
+          "<code>DDGS_REGION</code>, <code>DDGS_TIMELIMIT</code>, <code>DDGS_BACKEND</code>, <code>DDGS_SAFESEARCH</code>",
+          "the keyless metasearch's region, freshness, engine and safe-search"
+        ],
+        [
+          "<code>WEB_FETCH_EXTRACTOR</code>",
+          "the page extractor; basic restores earlier bytes"
+        ],
+        [
+          "<code>WEB_FETCH_ALLOWED_SCHEMES</code>, <code>WEB_FETCH_ALLOW_PRIVATE_NETWORKS</code>",
+          "the web-fetch egress rules"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Media, messaging and the dashboard"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Name",
+        "What it decides"
+      ],
+      "rows": [
+        [
+          "<code>MODEL_IMAGE</code>, <code>MODEL_TTS</code>, <code>MODEL_ASR</code>, <code>MODEL_VIDEO</code>",
+          "the four media rails and their chains"
+        ],
+        [
+          "<code>MEDIA_UPLOAD_MAX_MB</code>",
+          "the optional media upload cap"
+        ],
+        [
+          "<code>MEDIA_STORE_ENABLED</code>, <code>MEDIA_STORE_MAX_MB</code>",
+          "whether generated media is stored, and its size cap"
+        ],
+        [
+          "<code>MCP_MEDIA_APPS</code>",
+          "the agents the media server is added to"
+        ],
+        [
+          "<code>MESSAGING_PLATFORM</code>",
+          "discord, telegram or none"
+        ],
+        [
+          "<code>MESSAGING_RATE_LIMIT</code>, <code>MESSAGING_RATE_WINDOW</code>",
+          "the outbound message rate"
+        ],
+        [
+          "<code>ADMIN_DESIGN</code>, <code>ADMIN_THEME</code>, <code>ADMIN_MODE</code>, <code>ADMIN_DENSITY</code>",
+          "the dashboard's machine-wide appearance"
+        ],
+        [
+          "<code>ENABLE_TITLE_GENERATION_SKIP</code>, <code>ENABLE_SUGGESTION_MODE_SKIP</code>",
+          "the local optimization rules"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Reading a name"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "A blank value means unset; the default applies.",
+        "A restart-required setting is labelled on the dashboard, because the running process read it at startup.",
+        "A value is never published here, and a secret-like name never gets an example."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/configuration/",
+          "label": "Configuration: how settings are provided"
+        },
+        {
+          "href": "/features/reasoning-and-budgets/",
+          "label": "Reasoning and budgets: what these settings decide"
+        },
+        {
+          "href": "/features/web-search/",
+          "label": "Web search: the search chain in practice"
+        },
+        {
+          "href": "/troubleshooting/",
+          "label": "Troubleshooting: when a setting does not take effect"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "HOST and PORT default to loopback and 8082",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "ANTHROPIC_AUTH_TOKEN is generated for this machine on first start",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "MCC_CONFIG_DIR is environment-only",
+      "evidence": "README.md §Configuration reference; .env.example header"
+    },
+    {
+      "claim": "REQUEST_LOG_ENABLED and REQUEST_LOG_MAX_ROWS control the log",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "SERVER_LOG_RETAIN_FILES caps server log files",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "LOG_RAW_UPSTREAM_BYTES is off by default",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "USAGE_AUTO_REFRESH_SECONDS defaults to 30 and zero turns it off",
+      "evidence": "README.md §Observability and cost capability table; .env.example"
+    },
+    {
+      "claim": "REASONING_POLICY and REASONING_<TIER> exist",
+      "evidence": ".env.example"
+    },
+    {
+      "claim": "PROMPT_CACHE_TTL defaults to client",
+      "evidence": ".env.example line 1787"
+    },
+    {
+      "claim": "The MAX_OUTPUT_TOKENS_* family exists",
+      "evidence": ".env.example"
+    },
+    {
+      "claim": "The rate-limit and credential settings named here exist",
+      "evidence": ".env.example; docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "WEB_SEARCH_PROVIDER and WEB_SEARCH_FALLBACK_POLICY exist",
+      "evidence": "docs/WEB-SEARCH.md"
+    },
+    {
+      "claim": "DDGS_REGION, DDGS_TIMELIMIT, DDGS_BACKEND and DDGS_SAFESEARCH exist",
+      "evidence": ".env.example lines 2190-2193"
+    },
+    {
+      "claim": "WEB_FETCH_EXTRACTOR exists",
+      "evidence": ".env.example; README.md §Platform capability table"
+    },
+    {
+      "claim": "MEDIA_UPLOAD_MAX_MB, MEDIA_STORE_ENABLED and MCP_MEDIA_APPS exist",
+      "evidence": ".env.example; docs/MEDIA.md"
+    },
+    {
+      "claim": "ADMIN_DESIGN, ADMIN_THEME, ADMIN_MODE and ADMIN_DENSITY exist",
+      "evidence": "README.md §Platform capability table; .env.example"
+    }
+  ]
+}

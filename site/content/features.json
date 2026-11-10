@@ -1,0 +1,139 @@
+{
+  "path": "/features/",
+  "title": "Features | My Claude Code",
+  "description": "Every capability area in My Claude Code: routing, reasoning and budgets, providers and credentials, agents, observability, web search, media and more.",
+  "nav": "Features",
+  "eyebrow": "Capabilities",
+  "h1": "Every capability, with a deep page for each",
+  "intro": "MCC is deep because a proxy that sits in front of every coding agent has to be. Each area below has its own page, written from the source and the product's own documentation, with real screenshots of the dashboard where the feature lives.",
+  "page_grid": false,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "The shortcut below is the whole product in one sentence: one address, every provider you configure, and a control plane that keeps the model, the credential, the reasoning setting and the cost in one place. The pages after it go one area at a time."
+    },
+    {
+      "type": "p",
+      "text": "The pages are written this way because the product is not one feature. A proxy that sits in front of sixteen agents and sixty providers has to answer the same question differently for each of them, and a one-page summary would either flatten that or repeat it. Each page takes one area and follows it through the code, the dashboard and the request log."
+    },
+    {
+      "type": "p",
+      "text": "The order is deliberate: a reader who wants the architecture can start there, and a reader who wants to install can stop after the quick start. Nothing on a page depends on having read another first, though the related links at the foot of each one point at the neighbour that explains a term in more depth."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-providers",
+      "caption": "The Providers page: one searchable card per provider, each naming the setting that holds its key."
+    },
+    {
+      "type": "cards",
+      "cards": [
+        {
+          "kicker": "Routing",
+          "title": "Model tiers and fallback chains",
+          "text": "Tier aliases, per-agent overrides, ordered fallbacks, pausing, the vision adapter and describe mode.",
+          "href": "/features/routing/"
+        },
+        {
+          "kicker": "Reasoning",
+          "title": "Reasoning and budgets",
+          "text": "One effort setting, adaptive reasoning, encrypted reasoning replay, prompt-cache lifetime, output ceilings and deadlines.",
+          "href": "/features/reasoning-and-budgets/"
+        },
+        {
+          "kicker": "Credentials",
+          "title": "Providers and credentials",
+          "text": "60 provider cards, custom providers, four rotation policies, key health, proxy chains and OAuth sign-ins.",
+          "href": "/features/providers-and-credentials/"
+        },
+        {
+          "kicker": "Agents",
+          "title": "Agent support",
+          "text": "Launchers, dashboard installs, desktop-app Configure and Undo, generated catalogues and per-agent attribution.",
+          "href": "/features/agents/"
+        },
+        {
+          "kicker": "Observability",
+          "title": "Analytics and cost",
+          "text": "The request log, search, rollups, latency, exports and cost with provenance.",
+          "href": "/features/observability-and-cost/"
+        },
+        {
+          "kicker": "Web",
+          "title": "Web search and fetch",
+          "text": "The native server-tool proxy, 15 search backends, a keyless fallback and web fetch extraction.",
+          "href": "/features/web-search/"
+        },
+        {
+          "kicker": "Messaging",
+          "title": "Messaging",
+          "text": "Discord and Telegram sessions, voice-note transcription, and the stop and clear commands.",
+          "href": "/features/messaging/"
+        },
+        {
+          "kicker": "Media",
+          "title": "Media routing",
+          "text": "Image, edit, speech, transcription, translation and video endpoints over their own rails.",
+          "href": "/features/media/"
+        },
+        {
+          "kicker": "Platform",
+          "title": "Platform and packaging",
+          "text": "Windows, macOS and Linux, the desktop app and tray, the update path, npm and PyPI.",
+          "href": "/features/platform/"
+        },
+        {
+          "kicker": "CLI",
+          "title": "The CLI",
+          "text": "The launchers, headless app control, the installer's flags and the migration command.",
+          "href": "/features/cli/"
+        },
+        {
+          "kicker": "Dashboard",
+          "title": "The dashboard",
+          "text": "Every setting, local-only, with appearance, updates and the in-app docs.",
+          "href": "/features/dashboard/"
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "How to read these pages"
+    },
+    {
+      "type": "p",
+      "text": "Each deep page answers the same questions in order: what the capability is, why it matters, how to use it with verified steps, what you see in the dashboard, and what its limits are. Configuration is named by variable, never by value. Where a feature depends on another, the related links at the foot of the page point at it."
+    },
+    {
+      "type": "p",
+      "text": "A capability is on this site only when the code or the tests prove it exists. Every number is either computed from the repository or recorded against the command that produced it. If a page is not here, the feature did not meet that bar."
+    }
+  ],
+  "claims": [
+    {
+      "claim": "15 search backends",
+      "evidence": "docs/WEB-SEARCH.md §Search Providers (DuckDuckGo, Ollama, Exa, Tavily, Brave, SearXNG, Jina, Serper, Firecrawl, Linkup, Perplexity, Parallel, SearchAPI, SerpAPI, Context7)"
+    },
+    {
+      "claim": "60 provider cards",
+      "evidence": "README.md provider table, lines 294-355"
+    },
+    {
+      "claim": "Four rotation policies",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation: single, round_robin, least_used, failover"
+    },
+    {
+      "claim": "A capability is on this site only when the code or tests prove it exists",
+      "evidence": "site build rule; every page carries a claims list"
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "path": "/features/agents/",
+  "title": "Agent support | My Claude Code",
+  "description": "One launcher per coding agent, dashboard installs, Configure and Undo for desktop apps, generated model catalogues and per-agent request attribution.",
+  "nav": "Agents",
+  "eyebrow": "Feature · Agents",
+  "h1": "A first-class client for every agent",
+  "intro": "Claude Code is one client here, not the frame around everything else. MCC can launch the CLI agents, configure the desktop apps it cannot launch, generate a real model catalogue for each one, and name the agent behind every request in the log.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features",
+      "href": "/features/"
+    },
+    {
+      "label": "Agents"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "Every agent MCC can launch is declared in one registry, and the Coding agents page shows each one's installed state, its commands and flags with a copy button, its protocol and its generated catalogue. Applications MCC does not launch get a Configure button on the same page instead, which edits the one file each of them reads."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-coding-agents",
+      "caption": "The Coding agents page: one card per agent, each with an Install or Configure button, its protocol and its catalogue."
+    },
+    {
+      "type": "h2",
+      "text": "The launchers"
+    },
+    {
+      "type": "p",
+      "text": "A launcher is a small command that points an agent at the local proxy and starts it. The set covers Claude Code (<code>mcc-claude</code>), Codex (<code>mcc-codex</code>), OpenCode and OpenCode 2 (<code>mcc-opencode</code>, <code>mcc-opencode2</code>), Gemini CLI (<code>mcc-gemini</code>), Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, OpenClaw, Hermes Agent, Droid, Pi and Kilo. <code>mcc-claude --discover-models</code> wires Claude Code's native <code>/model</code> picker to MCC's catalogue; <code>mcc-claude-old</code> keeps the older launch shape."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-launchers",
+      "caption": "The launchers list: every mcc-* command MCC puts on your PATH, with its install state."
+    },
+    {
+      "type": "figure",
+      "shot": "cc-model-picker",
+      "caption": "Claude Code's native model picker, listing the routed models through MCC's catalogue."
+    },
+    {
+      "type": "h2",
+      "text": "Installing an agent from the dashboard"
+    },
+    {
+      "type": "p",
+      "text": "An agent that is not installed gets an Install button on its card, with the vendor's own line beside it to copy instead. The plan is shown before anything runs: every download, command, permission prompt and PATH or profile change. The vendor's own installer is used first, npm only where it is the only way, and Node.js is installed first only when it is missing. MCC never runs <code>sudo</code> and never upgrades your Node.js."
+    },
+    {
+      "type": "h2",
+      "text": "Desktop apps: Configure and Undo"
+    },
+    {
+      "type": "p",
+      "text": "For an app MCC cannot launch, Configure writes MCC's keys into the one file that app reads and carries every other byte through. A <code>.mcc-backup</code> is taken before the first edit, a diff preview is shown before every write, and a drift badge appears after a hand-edit. Undo works two ways: remove only MCC's keys, or restore the exact values MCC replaced. The files MCC does not reformat are left alone."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-desktop-apps",
+      "caption": "Desktop apps: cards for the apps MCC does not launch, each with Configure, a backup note and an Undo path."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-claude-settings",
+      "caption": "Claude Code's settings, edited from the dashboard: every setting the CLI reads, with a backup taken before the write."
+    },
+    {
+      "type": "p",
+      "text": "The same work is available without a browser. <code>mcc-apps list</code>, <code>mcc-apps status</code>, <code>mcc-apps configure [--preview]</code> and <code>mcc-apps undo [--restore]</code> do what the buttons do, which matters on a headless machine."
+    },
+    {
+      "type": "figure",
+      "shot": "claude-desktop-gateway",
+      "caption": "Claude Desktop's connection dialog: a base URL and a gateway key field, the one place that app is pointed at MCC."
+    },
+    {
+      "type": "h2",
+      "text": "Generated catalogues"
+    },
+    {
+      "type": "p",
+      "text": "Each agent's model list is generated from the same metadata the router uses: real context windows, output ceilings, vision support, tool support and the host's own effort vocabulary. The composition bridge that writes a catalogue uses the same visibility filter, ref enumeration and projection as <code>/v1/models</code>, so a model cannot appear in one and not the other. Writes are atomic, identical bytes are not rewritten, and a last-known-good catalogue is preserved when a projection resolves no routable models."
+    },
+    {
+      "type": "h2",
+      "text": "Request attribution"
+    },
+    {
+      "type": "p",
+      "text": "Analytics names the coding agent behind every request. The harness is identified from the <code>x-mcc-harness</code> header or the request's user-agent fingerprint, and it drives both the log's attribution and the per-agent tier map. An unidentified request is not failed; it resolves against the global chain and is logged as unidentified."
+    },
+    {
+      "type": "p",
+      "text": "The same attribution is what lets one agent run a different tier map from another without a second proxy. Claude Code can route Opus-tier traffic to one model and Codex to another while both talk to the same address."
+    },
+    {
+      "type": "h2",
+      "text": "Media tools for an agent"
+    },
+    {
+      "type": "p",
+      "text": "MCC's media server, <code>mcc-mcp</code>, gives an agent one tool per filled media rail, plus a free status tool. It is added per agent with an Add MCP server button and taken out with Remove. The buttons write only MCC's own launch lines and configuration layers, never your files; the token stays in MCC's settings; each agent's own prompt asks before a paid tool. It is off for every agent by default."
+    },
+    {
+      "type": "h2",
+      "text": "Other clients"
+    },
+    {
+      "type": "p",
+      "text": "Anything that speaks OpenAI, Anthropic or Gemini can be pointed at the proxy, including VS Code's Copilot custom endpoint and the JetBrains ACP surface. The clients documentation carries an API reference with one runnable example per endpoint. An agent MCC cannot launch and an app MCC cannot configure are both still clients if the user points them here. A client that speaks one of the four protocols needs no plugin, and a client that speaks none of them is out of scope rather than half-supported."
+    },
+    {
+      "type": "figure",
+      "shot": "agent-session",
+      "caption": "A live Claude Code session running through the proxy, mid-conversation."
+    },
+    {
+      "type": "h2",
+      "text": "Limits and behaviour"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself.",
+        "A drift badge appears when a hand-edit moves a configured file away from what MCC wrote.",
+        "A tool-returned image and a media request share the same rails and the same cost accounting as chat.",
+        "The Media server is off for every agent until it is added, and no agent button writes to a file MCC did not create."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: install and launch your first agent"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers: what the agent is routed to"
+        },
+        {
+          "href": "/features/observability-and-cost/",
+          "label": "Observability: where the attribution appears"
+        },
+        {
+          "href": "/features/cli/",
+          "label": "The CLI: the launchers and headless controls"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "Every agent MCC can launch is declared in one registry",
+      "evidence": "README.md §Coding agents"
+    },
+    {
+      "claim": "Launchers include mcc-claude, mcc-codex, mcc-opencode, mcc-opencode2, mcc-gemini and the rest",
+      "evidence": "README.md §Coding agents table"
+    },
+    {
+      "claim": "mcc-claude --discover-models wires the native /model picker",
+      "evidence": "README.md §Coding agents table"
+    },
+    {
+      "claim": "The dashboard install shows a plan and never runs sudo or upgrades Node",
+      "evidence": "README.md §Agents capability table"
+    },
+    {
+      "claim": "Configure takes a .mcc-backup and shows a diff preview; Undo has two modes",
+      "evidence": "README.md §Agents capability table"
+    },
+    {
+      "claim": "mcc-apps list|status|configure [--preview]|undo [--restore]",
+      "evidence": "README.md §Agents capability table"
+    },
+    {
+      "claim": "The composition bridge writes catalogues from the same metadata as /v1/models",
+      "evidence": "ARCHITECTURE.md §Model Routing"
+    },
+    {
+      "claim": "Analytics names the coding agent behind every request",
+      "evidence": "README.md §Agents capability table"
+    },
+    {
+      "claim": "The media server is off by default",
+      "evidence": "README.md §Platform capability table"
+    },
+    {
+      "claim": "A launcher whose agent is missing prints the agent's install command",
+      "evidence": "README.md §Install"
+    }
+  ]
+}

@@ -1,0 +1,221 @@
+{
+  "path": "/architecture/",
+  "title": "Architecture | My Claude Code",
+  "description": "The system map behind My Claude Code: three runtime surfaces, eight packages with a least-privilege dependency policy and four protocol doors.",
+  "nav": "Architecture",
+  "eyebrow": "Architecture",
+  "h1": "How the system is put together",
+  "intro": "MCC is a local proxy, a set of launchers and an optional messaging bridge, built from eight packages with one dependency rule. This page is the map; the six pages after it go into the machinery a request actually touches.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Architecture"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "The repository documents its own architecture in a long, maintained file. This page condenses the parts that explain the behaviour you can see: why one address can serve four protocols, why a credential can be judged without judging the model, and why a request is priced once rather than reconstructed later."
+    },
+    {
+      "type": "h2",
+      "text": "Three runtime surfaces"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "<strong>The HTTP proxy.</strong> A FastAPI application exposes the Anthropic Messages, OpenAI Responses, Chat Completions and Gemini routes, the health and model-listing routes, and the admin surface.",
+        "<strong>The CLI launchers.</strong> Wrapper entrypoints prepare a coding agent, or a managed session, to target the local proxy.",
+        "<strong>The messaging bridge.</strong> Optional Discord or Telegram adapters turn chat messages into managed client sessions."
+      ]
+    },
+    {
+      "type": "diagram",
+      "name": "request-path-doors",
+      "caption": "Four protocol doors, one router and one executor.",
+      "alt": "A diagram of the four client protocols meeting one shared router and executor."
+    },
+    {
+      "type": "p",
+      "text": "All three surfaces end at the same proxy. A chat-driven request and a terminal-driven one are the same kind of request once they reach the router, which is why routing, keys, cost and health behave identically whichever surface sent them."
+    },
+    {
+      "type": "h2",
+      "text": "Eight packages, one dependency rule"
+    },
+    {
+      "type": "p",
+      "text": "The installable wheel is eight packages. <code>config</code> and <code>core</code> are dependency leaves and import nothing first-party. <code>application</code> depends on those two. <code>messaging</code> depends on <code>core</code>. <code>providers</code> depends on <code>application</code>, <code>config</code> and <code>core</code>. The <code>api</code> depends on the same three. The <code>cli</code> depends on <code>config</code> and <code>core</code>. The <code>runtime</code> is the composition root and depends on everything else. There is one deliberate exception: the CLI delegates server construction to the runtime's bootstrap."
+    },
+    {
+      "type": "diagram",
+      "name": "subsystem-map",
+      "caption": "The package graph and its allowed edges. An import-boundary test derives and checks it.",
+      "alt": "A diagram of eight packages: config and core as leaves, application, messaging, providers, api and cli above them, and runtime as the composition root."
+    },
+    {
+      "type": "p",
+      "text": "An import-boundary contract derives every static production edge with one AST scanner and checks the package matrix, the exact exception, facade ownership and lazy optional imports. The resulting graph must stay acyclic. The same contract rejects untyped provider collaborators and private provider access from helper modules. This is the structural reason the boundaries hold: they are tested, not merely documented."
+    },
+    {
+      "type": "h2",
+      "text": "One request, from door to log"
+    },
+    {
+      "type": "p",
+      "text": "A request enters a route, passes proxy authentication, acquires the current provider generation, is validated and routed, is shaped by reasoning and budget settings, and is executed against one provider at a time. The reply is translated back into the client's protocol. The whole exchange is priced and logged once. The next pages take that apart."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-request-detail",
+      "caption": "What the pipeline produces: one request's route attempts, the reasoning it sent and the fallback that answered."
+    },
+    {
+      "type": "h2",
+      "text": "Where the state lives"
+    },
+    {
+      "type": "p",
+      "text": "One configuration directory holds one <code>.env</code> and the documents beside it. The request log is a local SQLite database, with a search index and a prompt chunk store beside it. Catalogue snapshots, OAuth stores, proxy chains and learned facts are separate documents, so a settings save does not rewrite a credential and a credential refresh does not rewrite a setting."
+    },
+    {
+      "type": "diagram",
+      "name": "verification-loop",
+      "caption": "The loop the architecture is built to support: serve, log, inspect, change, re-measure.",
+      "alt": "A six-step loop from a served request through the log and analytics to a change and a re-measurement."
+    },
+    {
+      "type": "h2",
+      "text": "The six deep pages"
+    },
+    {
+      "type": "cards",
+      "cards": [
+        {
+          "kicker": "Request path",
+          "title": "The request path",
+          "text": "Ingress, auth, routing, the provider lease and the commit boundary of a streamed reply.",
+          "href": "/architecture/request-path/"
+        },
+        {
+          "kicker": "Routing",
+          "title": "Provider routing",
+          "text": "How a tier becomes a model, how the chain is walked, and how a platform narrows what a stream can say.",
+          "href": "/architecture/provider-routing/"
+        },
+        {
+          "kicker": "Credentials",
+          "title": "Credential health",
+          "text": "The rotation engine, the three health signals and the two ladders that can bench a key.",
+          "href": "/architecture/credential-health/"
+        },
+        {
+          "kicker": "Cost",
+          "title": "Cost provenance",
+          "text": "The pricing ladder, the rung stored beside each number, and why reported and estimated never merge.",
+          "href": "/architecture/cost-provenance/"
+        },
+        {
+          "kicker": "Data",
+          "title": "Data and storage",
+          "text": "The configuration home, the request log, the search index and the chunk store.",
+          "href": "/architecture/data-and-storage/"
+        },
+        {
+          "kicker": "Security",
+          "title": "Security model",
+          "text": "The principles the boundary is built on: local by default, a token once it leaves, narrow egress.",
+          "href": "/architecture/security-model/"
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Testing and CI"
+    },
+    {
+      "type": "p",
+      "text": "Deterministic tests cover API routes, configuration, provider conversion, upstream adapters, streaming contracts, messaging, CLI adapters, import boundaries and provider-catalogue contracts. Local and live smoke tests live apart, so a test that launches a subprocess or touches a real service cannot be mistaken for a unit test. The repository holds 905 test files, and the CI workflows name the checks that must pass before a change lands."
+    },
+    {
+      "type": "h2",
+      "text": "What this architecture does not claim"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "It does not claim a provider is available. Availability is the provider's, and the chain exists because it varies.",
+        "It does not claim a price is correct. It records the source that stated it and says when none did.",
+        "It does not claim a model can reason. It records the fields the host parses and sends only what both sides can express.",
+        "It does not claim the proxy is an authenticator. The subscription client gate reads an attribution field; it does not verify a claim."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/architecture/request-path/",
+          "label": "Request path"
+        },
+        {
+          "href": "/architecture/provider-routing/",
+          "label": "Provider routing"
+        },
+        {
+          "href": "/architecture/credential-health/",
+          "label": "Credential health"
+        },
+        {
+          "href": "/architecture/cost-provenance/",
+          "label": "Cost provenance"
+        },
+        {
+          "href": "/architecture/data-and-storage/",
+          "label": "Data and storage"
+        },
+        {
+          "href": "/architecture/security-model/",
+          "label": "Security model"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "Three runtime surfaces: HTTP proxy, CLI launchers, messaging bridge",
+      "evidence": "ARCHITECTURE.md §System Overview"
+    },
+    {
+      "claim": "Eight packages with the dependency edges stated",
+      "evidence": "ARCHITECTURE.md §Package Boundaries"
+    },
+    {
+      "claim": "The import-boundary contract derives every static production edge and requires an acyclic graph",
+      "evidence": "ARCHITECTURE.md §Testing And CI Strategy"
+    },
+    {
+      "claim": "The CLI delegates server construction to the runtime bootstrap",
+      "evidence": "ARCHITECTURE.md §Package Boundaries"
+    },
+    {
+      "claim": "The request is priced and logged once",
+      "evidence": "README.md §How it works; ARCHITECTURE.md §HTTP Request Flow"
+    },
+    {
+      "claim": "The request log is a local SQLite database",
+      "evidence": "src/my_claude_code/config/paths.py REQUEST_LOG_FILENAME = requests.db"
+    },
+    {
+      "claim": "905 test files",
+      "evidence": "find tests -name 'test_*.py' | wc -l → 905"
+    },
+    {
+      "claim": "The subscription gate reads an attribution field and does not authenticate it",
+      "evidence": "ARCHITECTURE.md §The Anthropic Subscription Client Gate"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "path": "/features/platform/",
+  "title": "Platform and packaging | My Claude Code",
+  "description": "Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging.",
+  "nav": "Platform",
+  "eyebrow": "Feature · Platform",
+  "h1": "Platform, desktop app and updates",
+  "intro": "MCC runs on Windows, macOS and Linux, as a server, as a native desktop app, or both. There is one update path, one configuration directory and one set of commands, whichever route you took in.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Features", "href": "/features/"}, {"label": "Platform"}],
+  "blocks": [
+    {"type": "p", "text": "The server is the product; the desktop app is a window onto it. Every install route ends at the same server, the same dashboard and the same configuration directory. The server one-liners are the right choice on a headless box, a VPS, over SSH or inside WSL, where there is no tray to draw into."},
+    {"type": "figure", "shot": "dashboard-get-started", "caption": "Get Started: the same checklist in a browser tab or inside the desktop window."},
+
+    {"type": "h2", "text": "What the installer does"},
+    {"type": "ul", "items": [
+      "Installs uv if it is missing, and replaces one below the required floor.",
+      "Installs Python 3.14 through uv, so no system Python is needed and none is used.",
+      "Downloads the latest release wheel and verifies the SHA-256 GitHub publishes for it.",
+      "Installs MCC into an isolated tool environment and puts every mcc-* command on your PATH.",
+      "Creates the configuration home, and with the desktop flag, installs the desktop app too."
+    ]},
+    {"type": "p", "text": "The installer needs no Node, no Python and no git. It cannot install curl on Linux, macOS or WSL: it names the exact package-manager line for your machine and stops. On Windows it uses the built-in PowerShell, and the Command Prompt route passes the execution-policy flag a saved script would otherwise need."},
+    {"type": "callout", "kind": "accent", "text": "<strong>After it finishes, close and reopen your terminal.</strong> The installer adds <code>~/.local/bin</code> to your PATH, and a shell that was already open cannot see it. That is the single most common reason <code>mcc-server</code> looks missing straight after a successful install."},
+
+    {"type": "h2", "text": "The desktop app and tray"},
+    {"type": "p", "text": "The desktop app is a real window with its own icon and tray, not a second copy of the server. It has three server modes: <code>spawn</code>, where it starts the server; <code>attach</code>, where it connects to one already running; and <code>off</code>, where it does neither. It can start at login, and its preferences persist in the configuration home. The tray menu covers Open Admin, Check Server Status, Restart Server, the server mode, Start at Login, Tray Enabled, a Token optimizer submenu and Quit."},
+    {"type": "p", "text": "Its own prerequisites travel with its packages: the Windows installer bootstraps WebView2, the <code>.deb</code> declares its webkit dependency, and macOS needs nothing extra. WSL has no tray, and the app says so and refuses rather than pretending."},
+
+    {"type": "h2", "text": "One update path"},
+    {"type": "p", "text": "The dashboard shows the running version, announces releases and installs them with checksum verification. The installer is the same path: re-running it always fetches the newest release. An update is atomic. The new version is built beside the running one, run once to prove it works, and swapped in by two directory renames; if it never answers the health endpoint, the previous version is put back and started. The server is down for the stop, the rename and the start, not for the download and the dependency resolve."},
+    {"type": "figure", "shot": "dashboard-update-banner", "caption": "A newer release is announced in the dashboard, with its changelog and a one-click update."},
+    {"type": "p", "text": "During an update the desktop window shows a stage timeline with timestamps, elapsed time and the installer's log tailed live. The progress document and the install log are written into the configuration home, so a failed update can be read afterwards."},
+    {"type": "figure", "shot": "dashboard-version", "caption": "The version panel: the running release and live status, in the dashboard sidebar."},
+
+    {"type": "h2", "text": "Packaging"},
+    {"type": "p", "text": "MCC ships as a Python wheel on PyPI, as an npm package that wraps the same digest-verified installer, and as native desktop installers for each platform. The npm route reads the machine before it installs anything: where there is a desktop session it also installs the native app, each verified against the release's checksum manifest; over SSH, in CI, on a headless box or in WSL without a display it installs the server alone and says why. The PyPI route is the one that assumes something: it requires Python 3.14 and provisions nothing for you."},
+
+    {"type": "h2", "text": "Update and uninstall"},
+    {"type": "p", "text": "Uninstall is one line, and it verifies every MCC command is gone before it reports success. The desktop app is removed separately, by the platform's own mechanism. A pre-6.40.0 install that lives in the legacy configuration home is migrated on first start by one atomic rename, nothing copied or merged, provided nothing is holding the directory open; <code>mcc-migrate</code> runs the same move by hand and refuses while it can see a live server."},
+    {"type": "code", "label": "Uninstall (Linux, macOS or WSL)", "text": "curl -fsSL \"https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/uninstall.sh\" | sh"},
+
+    {"type": "h2", "text": "Configuration"},
+    {"type": "p", "text": "The install-time switches are flags, not settings: <code>--dry-run</code>, <code>--version</code>, <code>--desktop</code>, <code>--no-restart</code>, <code>--no-start</code>, <code>--no-desktop</code> and <code>--yes-sudo</code>. <code>MCC_INSTALL_REF</code> points the installer at a branch, and <code>MCC_INSTALL_NO_START</code> and <code>MCC_INSTALL_NO_DESKTOP</code> carry the same intent as environment variables. The server's own host and port are <code>HOST</code> and <code>PORT</code>."},
+
+    {"type": "h2", "text": "Limits and behaviour"},
+    {"type": "ul", "items": [
+      "The Windows installer is unsigned, so SmartScreen asks for More info then Run anyway. Machines with Smart App Control on cannot run it; use the PowerShell one-liner there.",
+      "The macOS disk image is unsigned and quarantined, so moving the app across needs one quarantine-removal command. The server one-liner is never quarantined.",
+      "The installer cannot install curl, and it does not install Claude Code or any other agent.",
+      "Every other MCC server on the machine is listed and left running. A port held by something that is not MCC is reported rather than touched."
+    ]},
+    {"type": "related", "links": [
+      {"href": "/quick-start/", "label": "Quick start: install, first five minutes, update and uninstall"},
+      {"href": "/features/cli/", "label": "The CLI: the commands the installer puts on your PATH"},
+      {"href": "/features/dashboard/", "label": "The dashboard: the Update button and the version panel"},
+      {"href": "/license/", "label": "Licence: AGPL-3.0-or-later or commercial"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "MCC runs on Windows, macOS and Linux", "evidence": "README.md install table and platform badge"},
+    {"claim": "Every install route ends at the same server and configuration directory", "evidence": "README.md §Install"},
+    {"claim": "The installer installs uv, Python 3.14 through uv and verifies the wheel SHA-256", "evidence": "README.md §What the installer does"},
+    {"claim": "The installer needs no Node, Python or git", "evidence": "README.md §What the installer does"},
+    {"claim": "Three desktop server modes spawn, attach and off", "evidence": "README.md §Platform capability table"},
+    {"claim": "The desktop app's tray menu and preferences", "evidence": "docs/MESSAGING.md §Desktop & token optimizer"},
+    {"claim": "An update is built beside the running version and swapped by two renames", "evidence": "README.md §Update and uninstall"},
+    {"claim": "Update progress is written to the configuration home", "evidence": "README.md §Platform capability table"},
+    {"claim": "The npm route installs the desktop app where there is a display and the server alone otherwise", "evidence": "README.md §Install"},
+    {"claim": "The PyPI route requires Python 3.14 and provisions nothing", "evidence": "README.md §Install"},
+    {"claim": "Uninstall verifies every command is gone", "evidence": "README.md §Update and uninstall"},
+    {"claim": "SmartScreen and macOS quarantine apply to the unsigned desktop installers", "evidence": "README.md §Four things that bite"}
+  ]
+}

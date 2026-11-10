@@ -1,0 +1,193 @@
+{
+  "path": "/architecture/cost-provenance/",
+  "title": "Cost provenance | My Claude Code",
+  "description": "Each request is priced once with the source of every number stored beside it. Reported and estimated stay apart, and an unpriceable request is a dash.",
+  "nav": "Cost provenance",
+  "eyebrow": "Architecture · Cost",
+  "h1": "Where a price came from",
+  "intro": "A cost is only useful if you can tell how it was produced. MCC prices a request once, as it is logged, and stores the rung of the pricing ladder that answered each field beside the number. A figure no source states is shown as not priced, with the reason.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Architecture",
+      "href": "/architecture/"
+    },
+    {
+      "label": "Cost provenance"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "The ladder"
+    },
+    {
+      "type": "p",
+      "text": "Model metadata is resolved by a single ten-rung ladder, and cost is one of the fields it answers. The provider's own model list is the first rung; models.dev follows; the LiteLLM map is consulted when it is switched on; a cross-provider vote covers what remains; and a field no rung can answer is unpriced. The same resolver answers context, output limit, vision, tool support and the four cache prices, and the Models page and every generated agent catalogue read it, so they cannot disagree about a number or about where it came from."
+    },
+    {
+      "type": "diagram",
+      "name": "cost-ladder",
+      "caption": "The pricing ladder: each field walks its rungs, and the rung that answered is stored.",
+      "alt": "A diagram of five rungs: provider list, models.dev, LiteLLM when on, cross-provider vote, and unpriced."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-models-billed-est",
+      "caption": "A model's billed and estimated row: two figures kept apart, each with its own source."
+    },
+    {
+      "type": "p",
+      "text": "When the provider's own list states a value, the badge reads provider or models.dev with no rung, because the enrichment step that merged them keeps no record of which won. When the ladder supplied it, the rung is exact, down to a cross-provider vote over strangers who merely share a name, which is badged approximate. Nothing about a request is reconstructed after the fact."
+    },
+    {
+      "type": "h2",
+      "text": "One price, one log row"
+    },
+    {
+      "type": "p",
+      "text": "A request is priced at the moment it is logged, and the rung that answered each price is stored in the row. That is what makes a total traceable: a number on a card can be followed back to the requests that produced it, and each request names its source. The attempt-level export writes one row per model the chain tried, so a fallback that spent tokens is in the export even though it did not answer."
+    },
+    {
+      "type": "p",
+      "text": "Anthropic's split of cache writes into five-minute and one-hour writes is recorded, and a one-hour write is priced at a rate a source states, or shown as not priced with the reason. Requests that predate the split keep their five-minute price; a historical row is not repriced by a later release."
+    },
+    {
+      "type": "h2",
+      "text": "Reported, estimated, unpriced"
+    },
+    {
+      "type": "p",
+      "text": "Reported and estimated are two figures and are never summed. A reported figure is one a source stated; an estimated figure is one the install computed. Both are shown with their own priced-of-total denominator, so a partial figure cannot read as a complete one. A request no source could price is a dash, not a zero, and a request with no price does not quietly enter a total as if it cost nothing."
+    },
+    {
+      "type": "diagram",
+      "name": "cost-honest-totals",
+      "caption": "Reported, estimated and unpriced, with denominators that stop a partial figure reading as complete.",
+      "alt": "A diagram of three cost states, reported, estimated and unpriced, each with its own denominator and no summing."
+    },
+    {
+      "type": "figure",
+      "shot": "readme-analytics-cost",
+      "caption": "The Cost panel: reported and estimated kept apart, each total carrying its priced-of-total denominator."
+    },
+    {
+      "type": "p",
+      "text": "The all-time strip below the stat cards is never pruned, so it keeps counting after stored rows roll over at the retention cap. <em>All time</em> in a range control means all time still stored, and the two figures are labelled so they cannot be confused."
+    },
+    {
+      "type": "h2",
+      "text": "Usage is not cost"
+    },
+    {
+      "type": "p",
+      "text": "What a provider says is left is a different figure from what a request cost. The Usage page shows the Claude and ChatGPT subscription windows with their reset times, the credits and rate-limit figures that Nous Portal, DeepSeek, OpenRouter, Kimi and Command Code send on responses you already get, and a Read now button that asks seven providers for their own figure. A window and a cash balance are two blocks and never one total. A provider that publishes a percentage is shown as a percentage, with no currency sign beside it."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-request-contradiction",
+      "caption": "The honesty note on a cost panel: an unpriceable request is a dash, and every total names its denominator."
+    },
+    {
+      "type": "p",
+      "text": "A read can never charge a key or bench a provider. The page refreshes on its own only while it is open, at an interval you set, once per provider, and a hidden tab reads nothing. A 429 skips only the provider that sent it, and a repeatedly failing provider backs off on its own."
+    },
+    {
+      "type": "h2",
+      "text": "Media and the marketplace"
+    },
+    {
+      "type": "p",
+      "text": "Media requests are priced like chat ones: a provider figure, then models.dev, then LiteLLM when on, else unpriced. A Mistral image is recorded unpriced because no source publishes a per-image rate for it, and MCC never invents one. InferHub is a marketplace rather than an ordinary provider: a profile sets a price ceiling, and MCC sends that ceiling on every attempt so a request is never charged above it."
+    },
+    {
+      "type": "h2",
+      "text": "Limits and behaviour"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "A price is never invented, rounded up to a plausible number or copied from an old README.",
+        "A total with no denominator is not published.",
+        "A request whose cost came from an estimate is marked as estimated, not reported.",
+        "The all-time figure and the stored-window figure are separate and labelled.",
+        "A media model that a provider declares no price for stays unpriced."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/observability-and-cost/",
+          "label": "Feature: analytics and cost with provenance"
+        },
+        {
+          "href": "/architecture/data-and-storage/",
+          "label": "Data: where the priced row lives"
+        },
+        {
+          "href": "/architecture/provider-routing/",
+          "label": "Routing: which model the price belongs to"
+        },
+        {
+          "href": "/glossary/",
+          "label": "Glossary: rung, provenance, denominator"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "Each request is priced once as it is logged, with the rung stored",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "The pricing order is provider list, models.dev, LiteLLM when on, vote, unpriced",
+      "evidence": "docs/MEDIA.md §What it costs; docs/USAGE.md §output token budget"
+    },
+    {
+      "claim": "The same resolver answers context, output, vision, tools and the four cache prices",
+      "evidence": "docs/USAGE.md line 4610"
+    },
+    {
+      "claim": "A cross-provider vote is badged approximate",
+      "evidence": "docs/USAGE.md line 4610"
+    },
+    {
+      "claim": "The attempt-level export writes one row per model tried",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "1-hour cache writes are priced at a stated rate or shown as not priced",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "Reported and estimated are never summed and every total has a denominator",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "An unpriceable request shows a dash, never a zero",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "The all-time strip is never pruned",
+      "evidence": "README.md §Dashboard"
+    },
+    {
+      "claim": "A read can never charge a key or bench a provider",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "A hidden tab reads nothing and a 429 skips only that provider",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "Mistral images are recorded unpriced",
+      "evidence": "docs/MEDIA.md §Which providers can serve it"
+    }
+  ]
+}

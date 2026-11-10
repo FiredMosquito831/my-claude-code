@@ -1,0 +1,280 @@
+{
+  "path": "/features/routing/",
+  "title": "Routing and fallback chains | My Claude Code",
+  "description": "Tier routing, per-agent overrides and fallback chains: how a model name becomes a real model, what happens when it fails, and how every skip is recorded.",
+  "nav": "Routing",
+  "eyebrow": "Feature · Routing",
+  "h1": "Model tiers and fallback chains",
+  "intro": "A coding agent asks for a model by a name it knows. MCC turns that name into a real provider model, applies your reasoning and budget settings, and walks an ordered chain of stand-ins when the first model cannot serve the request. The chain is yours, and every step it took is in the log.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features",
+      "href": "/features/"
+    },
+    {
+      "label": "Routing"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "Routing is the reason a proxy can be useful at all. Without it, every coding tool carries its own model list, its own keys and its own idea of what to do when a provider says no. With it, one tier map serves every tool, and swapping a model is one edit on one page."
+    },
+    {
+      "type": "h2",
+      "text": "What a request can name"
+    },
+    {
+      "type": "p",
+      "text": "The router accepts three forms. A <strong>direct provider model ref</strong> such as <code>nvidia_nim/nvidia/model-name</code> names the provider and the exact model. A <strong>gateway model ID</strong> is decoded by MCC's own ID codec. And the <strong>five coding-agent tier aliases</strong> are intercepted ahead of both: <code>mcc/cyber</code>, <code>mcc/best</code>, <code>mcc/good</code>, <code>mcc/medium</code> and <code>mcc/cheap</code>. They are pointers, not models. Each names one of the router's own global routes, together with that route's fallback chain and pause list."
+    },
+    {
+      "type": "p",
+      "text": "A name that is not a direct ref or a tier alias is mapped by Claude tier. Names containing <code>fable</code>, <code>opus</code>, <code>sonnet</code> or <code>haiku</code> use the matching tier override when one is set, and otherwise fall back to <code>MODEL</code>. A blank <code>MODEL_HAIKU</code> follows <code>MODEL</code>, which is what a fresh install ships."
+    },
+    {
+      "type": "h2",
+      "text": "The tier map"
+    },
+    {
+      "type": "p",
+      "text": "Each tier has three settings: the model it routes to, an ordered comma-separated fallback chain, and a pause list. The dashboard renders them as one rail per tier, in the order the router walks them."
+    },
+    {
+      "type": "diagram",
+      "name": "routing-tiers",
+      "caption": "Five coding-agent tiers and their chains. A paused row keeps its place and is never tried.",
+      "alt": "A diagram of five tiers, each with a primary model and an ordered fallback chain, one row marked paused and the Haiku tier following the default model."
+    },
+    {
+      "type": "figure",
+      "shot": "readme-model-config",
+      "caption": "Six rails side by side, each with a primary model and up to ten numbered fallback rows. A struck-through row with an amber Paused badge keeps its place."
+    },
+    {
+      "type": "h2",
+      "text": "How a fallback chain behaves"
+    },
+    {
+      "type": "ol",
+      "items": [
+        "The router resolves the requested tier to its primary model and records the route on the request.",
+        "The executor attempts the primary model with a healthy credential.",
+        "If the model rate-limits, errors or refuses, the next entry in that tier's chain is tried, then the next.",
+        "The first attempt that succeeds ends the walk. Every later entry is recorded as not reached."
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The chain does not retry the same model forever. A 429 benches the <strong>(key, model) pair</strong> for the wait the provider published, and the key keeps serving its other models. An auth rejection locks that key out on an escalating ladder. A timeout, a 5xx, a 410 or a plain 400 is treated as the model's answer, and the chain moves to the next model instead of spending the rest of the key pool on it."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-request-attempts",
+      "caption": "One request's ladder: a model sat out a rate-limit cooldown, another was paused, one answered, and the rest were never reached."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-request-detail",
+      "caption": "A request detail: the route attempts the router walked, the reasoning fields it sent, and the fallback that answered."
+    },
+    {
+      "type": "diagram",
+      "name": "routing-fallback",
+      "caption": "A walked chain with a recorded reason beside every model.",
+      "alt": "A diagram of a four-model chain where the first was in a rate-limit cooldown, the second was paused, the third answered and the fourth was never reached."
+    },
+    {
+      "type": "h2",
+      "text": "Pausing one entry"
+    },
+    {
+      "type": "p",
+      "text": "Each row on a rail has a Pause button. A paused model keeps its place and stays fully on screen, but the router never tries it: no attempt is spent, no deadline is consumed, and the request log lists it as not tried with the reason <code>paused</code>. Unlike most of the page, a pause is written the moment you click it, with no Apply, and the status panel offers an Undo. Pausing is per route: the same model paused on Opus keeps serving Sonnet."
+    },
+    {
+      "type": "callout",
+      "kind": "warn",
+      "text": "<strong>Pausing is not hiding.</strong> Visibility changes on the Models page change what appears in <code>/v1/models</code> and never change routing; a pause changes routing and never changes listings. A route whose every model is paused fails with an error naming the key rather than quietly falling through to another route."
+    },
+    {
+      "type": "h2",
+      "text": "Per-agent tiers"
+    },
+    {
+      "type": "p",
+      "text": "A different agent can have a different tier map. MCC identifies the harness from the <code>x-mcc-harness</code> header or from the request's user-agent fingerprint, and resolves against that agent's override when one exists. The overrides live in <code>harness_tiers.json</code>, are parsed defensively and are cached on the file's own timestamp, so a dashboard write lands without a restart."
+    },
+    {
+      "type": "h2",
+      "text": "The vision adapter"
+    },
+    {
+      "type": "p",
+      "text": "An image request can be diverted to a model that can see, with its own chain. <code>VISION_ADAPTER_MODE=describe</code> adds a third behaviour for a blind tier: instead of dropping the image, MCC builds one ordinary routed plan per image over the vision chain, has a sighted model describe it, and sends the description onward. The description is cached on the image's content address, so a screenshot re-sent every turn is described once. Every failure returns to the behaviour the request would have had without the adapter: divert, or send the substitute image."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-vision-adapter-mode",
+      "caption": "The vision adapter on Model Config, with its own rail and the describe-mode control."
+    },
+    {
+      "type": "p",
+      "text": "Two image behaviours are automatic. Outbound pictures are resized to a 1568-pixel long edge on the router's own copy, never the client's. And an image a tool returns reaches the model as a picture rather than as base64 text: one walk finds an image or document inside a tool result, and the token estimator and the outbound converters call the same walk, so they cannot disagree about whether it is an image or 680,000 characters of text."
+    },
+    {
+      "type": "h2",
+      "text": "Where you see it"
+    },
+    {
+      "type": "p",
+      "text": "The tier map is on <strong>Model Config</strong>. The chain a request actually walked is on <strong>Analytics</strong>: the Failover panel counts every primary-to-stand-in pair that fired, and one request's detail shows each attempt with its key, timings and the reason it was or was not tried. The Models page lists what <code>/v1/models</code> advertises to clients."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-limits-retries",
+      "caption": "Retries, credential health and rotation policies, which decide what a chain does between attempts."
+    },
+    {
+      "type": "h2",
+      "text": "Configuration"
+    },
+    {
+      "type": "p",
+      "text": "Routing is configured by names, not values. The tier models are <code>MODEL</code>, <code>MODEL_MYTHOS</code>, <code>MODEL_FABLE</code>, <code>MODEL_OPUS</code>, <code>MODEL_SONNET</code>, <code>MODEL_HAIKU</code> and <code>MODEL_VISION</code>. Each has a <code>_FALLBACKS</code> list and a <code>_PAUSED</code> list. The media rails use <code>MODEL_IMAGE</code>, <code>MODEL_TTS</code>, <code>MODEL_ASR</code> and <code>MODEL_VIDEO</code>, and are not chat tiers: nothing on them is listed in <code>/v1/models</code> or offered to a coding agent."
+    },
+    {
+      "type": "table",
+      "head": [
+        "Setting",
+        "What it decides"
+      ],
+      "rows": [
+        [
+          "<code>MODEL</code>",
+          "the model used when nothing more specific matches"
+        ],
+        [
+          "<code>MODEL_MYTHOS</code>",
+          "Mythos-tier traffic, alias <code>mcc/cyber</code>"
+        ],
+        [
+          "<code>MODEL_FABLE</code>",
+          "Fable-tier traffic, alias <code>mcc/best</code>"
+        ],
+        [
+          "<code>MODEL_OPUS</code>",
+          "Opus-tier traffic, alias <code>mcc/good</code>"
+        ],
+        [
+          "<code>MODEL_SONNET</code>",
+          "Sonnet-tier traffic, alias <code>mcc/medium</code>"
+        ],
+        [
+          "<code>MODEL_HAIKU</code>",
+          "Haiku-tier traffic, alias <code>mcc/cheap</code>; blank follows <code>MODEL</code>"
+        ],
+        [
+          "<code>MODEL_*_FALLBACKS</code>",
+          "the ordered stand-ins walked after that route's model"
+        ],
+        [
+          "<code>MODEL_*_PAUSED</code>",
+          "the entries kept in place but never tried"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Limits and behaviour"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "Failover happens before the first streamed chunk. Once output has started, switching models would corrupt the response, so a mid-stream failure is surfaced to the client.",
+        "A request that carries no identifying harness resolves against the global chain. It is never failed for being unidentified."
+      ]
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-model-config",
+      "caption": "Model Config: one rail per tier, with drag handles, Pause buttons and the Apply control that writes the .env."
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/architecture/provider-routing/",
+          "label": "Architecture: how the router and the chain are built"
+        },
+        {
+          "href": "/features/reasoning-and-budgets/",
+          "label": "Reasoning and budgets: what is applied before an attempt"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers and credentials: what a chain entry points at"
+        },
+        {
+          "href": "/configuration/environment/",
+          "label": "Configuration: the settings named on this page"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "The router accepts direct refs, gateway model IDs and five coding-agent tier aliases",
+      "evidence": "ARCHITECTURE.md §Model Routing"
+    },
+    {
+      "claim": "Tier aliases are mcc/cyber, mcc/best, mcc/good, mcc/medium, mcc/cheap, mcc/vision",
+      "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"
+    },
+    {
+      "claim": "A blank MODEL_HAIKU follows MODEL",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "A model listed twice is tried twice; each listing is judged when it is reached",
+      "evidence": "README.md §Routing capability table"
+    },
+    {
+      "claim": "A 429 benches the (key, model) pair and the key keeps serving its other models",
+      "evidence": "ARCHITECTURE.md §Credential Rotation and Key Health"
+    },
+    {
+      "claim": "Pausing is written immediately with no Apply and offers Undo",
+      "evidence": "docs/ROUTING-REFERENCE.md §Fallback Chains"
+    },
+    {
+      "claim": "Per-agent tiers are stored in harness_tiers.json and cached on the file's stat",
+      "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"
+    },
+    {
+      "claim": "describe mode builds one routed plan per image and caches the description on the content address",
+      "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"
+    },
+    {
+      "claim": "Outbound images are resized to a 1568 px long edge",
+      "evidence": "README.md §Routing capability table"
+    },
+    {
+      "claim": "Failover happens before the first streamed chunk",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "A request with no identifying harness resolves against the global chain",
+      "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"
+    },
+    {
+      "claim": "Media rails are not chat tiers and are not listed in /v1/models",
+      "evidence": "docs/ROUTING-REFERENCE.md §Fallback Chains"
+    }
+  ]
+}

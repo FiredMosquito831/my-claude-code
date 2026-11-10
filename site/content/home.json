@@ -1,0 +1,352 @@
+{
+  "path": "/",
+  "title": "My Claude Code — local LLM gateway for coding agents",
+  "og_title": "My Claude Code — a local LLM gateway and control plane",
+  "description": "A local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, Gemini CLI and more: routing, credentials, cost and logs.",
+  "nav": "Home",
+  "eyebrow": "Local LLM gateway · control plane",
+  "h1": "One address in front of every model and every coding agent",
+  "intro": "My Claude Code is a local multi-provider proxy, model router and control plane for AI coding agents. Point Claude Code, Codex, OpenCode, Gemini CLI and the rest at one address on your machine, and manage providers, keys, fallback chains, reasoning, budgets, web search and cost in one place. Your models, your keys, your machine.",
+  "readouts": [
+    {
+      "label": "Release",
+      "value": "8.17.0"
+    },
+    {
+      "label": "Provider cards",
+      "value": "60"
+    },
+    {
+      "label": "Protocol doors",
+      "value": "4"
+    },
+    {
+      "label": "Test files",
+      "value": "905"
+    },
+    {
+      "label": "Runs on",
+      "value": "your machine"
+    }
+  ],
+  "page_grid": false,
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "What it is"
+    },
+    {
+      "type": "p",
+      "text": "MCC is a local LLM gateway, proxy and model router for AI coding agents. Instead of configuring providers, API keys, models, fallbacks, reasoning effort and spend tracking separately inside every coding tool you use, you point those tools at one address on your own machine and manage the routing layer once."
+    },
+    {
+      "type": "p",
+      "text": "It runs entirely on your machine. It has no telemetry and phones home to nothing; its only outbound traffic goes to the providers you configure. Your keys stay in one <code>.env</code> you own."
+    },
+    {
+      "type": "facts",
+      "items": [
+        {
+          "value": "60",
+          "label": "provider cards in the README's provider table"
+        },
+        {
+          "value": "4",
+          "label": "protocol doors behind one router"
+        },
+        {
+          "value": "905",
+          "label": "test files in the repository"
+        },
+        {
+          "value": "8.17.0",
+          "label": "the release this site documents"
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Why it exists"
+    },
+    {
+      "type": "p",
+      "text": "A coding agent is a client. It speaks one protocol, expects one model name, and has no idea which provider answered. MCC makes that separation real: the agent keeps its own interface, while the model behind it can be a cloud API, a subscription, a gateway or a local server, with a fallback chain behind every route."
+    },
+    {
+      "type": "p",
+      "text": "That separation is what makes the rest possible. A request can be re-routed when a model rate-limits. A key can be rotated without touching the agent's configuration. Reasoning effort can be translated once into each provider's own dialect. Every request can be priced at the moment it is logged, with the source of each number recorded beside it."
+    },
+    {
+      "type": "h2",
+      "text": "Who it is for"
+    },
+    {
+      "type": "p",
+      "text": "It is for the developer who runs more than one agent and more than one provider: Claude Code on one project, Codex on another, a local model for a private repository, and a paid API for the work that needs it. Each of those tools has its own configuration file, its own key store and its own idea of what a model is called. MCC gives them one address and one place to change the answer."
+    },
+    {
+      "type": "p",
+      "text": "It is also for the person who wants to know what a routing decision actually did. A fallback that fired, a key that was benched, a price that no source could state: each is a row in the log, not a story reconstructed from a terminal. That is why the analytics pages are as detailed as the settings pages."
+    },
+    {
+      "type": "p",
+      "text": "It is not a managed service. MCC runs on your machine, with your keys, and there is no account to create and no dashboard outside your own address."
+    },
+    {
+      "type": "h2",
+      "text": "The request path"
+    },
+    {
+      "type": "p",
+      "text": "Four protocol doors reach the same router. Claude Code, Pi, OpenCode, Crush, Kimi Code and Qwen Code speak Anthropic Messages; Codex speaks OpenAI Responses; Cline, Goose, Aider and every OpenAI-shaped SDK speak Chat Completions; Gemini CLI and Antigravity speak Google's Gemini API. The router resolves the requested tier to a real model, applies your reasoning and output-budget settings, picks a healthy credential and walks the fallback chain when a provider fails. The reply is translated back into the protocol the agent asked in, and the whole exchange is priced and logged once on its way out."
+    },
+    {
+      "type": "diagram",
+      "name": "request-path-doors",
+      "caption": "Four protocol doors, one router and one executor.",
+      "alt": "A diagram showing Claude Code, Codex, Cline and Gemini CLI entering four protocol doors that all meet one shared router and executor."
+    },
+    {
+      "type": "h2",
+      "text": "What you can do with it"
+    },
+    {
+      "type": "cards",
+      "cards": [
+        {
+          "kicker": "Routing",
+          "title": "Model tiers and fallback chains",
+          "text": "Route Fable, Opus, Sonnet and Haiku traffic to a model you chose, with an ordered stand-in list behind every tier.",
+          "href": "/features/routing/"
+        },
+        {
+          "kicker": "Reasoning",
+          "title": "Reasoning and budgets",
+          "text": "One effort setting translated into each provider's dialect, plus output ceilings, deadlines and a per-model calculator.",
+          "href": "/features/reasoning-and-budgets/"
+        },
+        {
+          "kicker": "Credentials",
+          "title": "Providers and credential health",
+          "text": "Cloud, subscription and local backends, multi-key rotation, per-key health and learned provider facts.",
+          "href": "/features/providers-and-credentials/"
+        },
+        {
+          "kicker": "Agents",
+          "title": "Agent support",
+          "text": "Launchers for the CLI agents, Configure and Undo for desktop apps, generated model catalogues and request attribution.",
+          "href": "/features/agents/"
+        },
+        {
+          "kicker": "Observability",
+          "title": "Analytics and cost provenance",
+          "text": "A searchable request log, rollups and latency, and cost that keeps reported and estimated figures apart.",
+          "href": "/features/observability-and-cost/"
+        },
+        {
+          "kicker": "Web",
+          "title": "Native web search and fetch",
+          "text": "Claude Code's web_search and web_fetch tools fulfilled at the proxy, with a chain of search providers and a keyless fallback.",
+          "href": "/features/web-search/"
+        },
+        {
+          "kicker": "Messaging",
+          "title": "Discord and Telegram sessions",
+          "text": "Run managed coding-agent sessions from a chat, with voice-note transcription and stop and clear commands.",
+          "href": "/features/messaging/"
+        },
+        {
+          "kicker": "Media",
+          "title": "Media routing",
+          "text": "Image, speech, transcription and video endpoints over rails with the chat engine's retry, key and proxy rules.",
+          "href": "/features/media/"
+        },
+        {
+          "kicker": "Platform",
+          "title": "Platform and packaging",
+          "text": "Windows, macOS and Linux, a desktop app and tray, one update path and npm and PyPI packaging.",
+          "href": "/features/platform/"
+        },
+        {
+          "kicker": "CLI",
+          "title": "The command line",
+          "text": "Launchers, the headless <code>mcc-apps</code> controls and the installer's own flags.",
+          "href": "/features/cli/"
+        },
+        {
+          "kicker": "Dashboard",
+          "title": "The local dashboard",
+          "text": "Every setting above, local-only, at one address, with its own appearance, updates and docs.",
+          "href": "/features/dashboard/"
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "A control plane, not a wrapper"
+    },
+    {
+      "type": "p",
+      "text": "The dashboard is the part you can see. It opens on a Get Started checklist and then gets out of the way. The Providers page is one searchable card per provider. Model Config is one rail per tier with its real fallback chain. Analytics is a request log and everything computed from it. Each of those pages reads and writes the same <code>.env</code> the server reads, so the dashboard and the file never disagree."
+    },
+    {
+      "type": "figure",
+      "shot": "readme-model-config",
+      "caption": "Six tier rails, each with its primary model and its numbered fallback chain. A struck-through row is paused and is never tried."
+    },
+    {
+      "type": "p",
+      "text": "The request log is the other half of the control plane. Every completed request is logged, priced and searchable across prompt, reply, reasoning and tool calls. A fallback that fired, a key that was benched, a reasoning field a host refused: each is a row with its reason, not a story you have to reconstruct from a terminal."
+    },
+    {
+      "type": "figure",
+      "shot": "readme-analytics-overview",
+      "caption": "Analytics: stored requests, success rate, fallback share and token totals, with an all-time strip that keeps counting after stored rows roll over."
+    },
+    {
+      "type": "h2",
+      "text": "Install it in one line"
+    },
+    {
+      "type": "p",
+      "text": "Every install route ends at the same server, the same dashboard and the same configuration directory. The one-liners install <code>uv</code> and a managed Python 3.14 if they are missing, verify the release wheel's SHA-256 and put every <code>mcc-*</code> command on your PATH."
+    },
+    {
+      "type": "code",
+      "label": "Linux, macOS or WSL",
+      "text": "curl -fsSL \"https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh\" | sh"
+    },
+    {
+      "type": "p",
+      "text": "Windows Command Prompt and PowerShell have their own one-liners, and there is a native desktop app for each platform. After any install, close and reopen your terminal: the installer adds <code>~/.local/bin</code> to your PATH, and a shell that was already open cannot see it."
+    },
+    {
+      "type": "callout",
+      "kind": "accent",
+      "text": "<strong>Then:</strong> run <code>mcc-server</code>, open <code>http://127.0.0.1:8082/admin</code>, add one provider key on <strong>Providers</strong>, set your tiers on <strong>Model Config</strong>, and launch an agent with <code>mcc-claude</code>."
+    },
+    {
+      "type": "h2",
+      "text": "Verified quick facts"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Fact",
+        "Value",
+        "Where it comes from"
+      ],
+      "rows": [
+        [
+          "Version",
+          "8.17.0",
+          "<code>pyproject.toml</code>"
+        ],
+        [
+          "Licence",
+          "AGPL-3.0-or-later or commercial",
+          "<code>LICENSE</code>, <code>COMMERCIAL-LICENSE.md</code>"
+        ],
+        [
+          "Provider cards",
+          "60",
+          "the README's provider table"
+        ],
+        [
+          "Protocol doors",
+          "4",
+          "<code>ARCHITECTURE.md</code>, HTTP request flow"
+        ],
+        [
+          "Test files",
+          "905",
+          "<code>tests/test_*.py</code>"
+        ],
+        [
+          "Platforms",
+          "Windows, macOS, Linux",
+          "installers and CI workflows"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Where to go next"
+    },
+    {
+      "type": "p",
+      "text": "If you are installing for the first time, the quick start walks the first five minutes and the update and uninstall paths. If you want to know how it works before you trust it, the architecture pages are written from the source and the product's own documentation. If you want to see the product, the gallery holds every reviewed screen with a caption."
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: install, first five minutes, update, uninstall"
+        },
+        {
+          "href": "/features/",
+          "label": "Every capability, with a deep page for each"
+        },
+        {
+          "href": "/architecture/",
+          "label": "Architecture: the system map and six deep pages"
+        },
+        {
+          "href": "/gallery/",
+          "label": "Gallery: the reviewed screenshots, grouped"
+        },
+        {
+          "href": "/faq/",
+          "label": "FAQ: the questions this site is asked most"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "A local multi-provider LLM proxy, model router and control plane for AI coding agents",
+      "evidence": "README.md §What is My Claude Code?"
+    },
+    {
+      "claim": "It has no telemetry and phones home to nothing; its only outbound traffic goes to the providers you configure",
+      "evidence": "README.md §What is My Claude Code?"
+    },
+    {
+      "claim": "Four protocol doors: Anthropic Messages, OpenAI Responses, Chat Completions, Google Gemini",
+      "evidence": "ARCHITECTURE.md §HTTP Request Flow"
+    },
+    {
+      "claim": "60 provider cards",
+      "evidence": "README.md provider table, lines 294-355 (60 rows)"
+    },
+    {
+      "claim": "905 test files",
+      "evidence": "find tests -name 'test_*.py' | wc -l → 905"
+    },
+    {
+      "claim": "Version 8.17.0",
+      "evidence": "pyproject.toml [project].version"
+    },
+    {
+      "claim": "AGPL-3.0-or-later or a commercial licence",
+      "evidence": "LICENSE header; COMMERCIAL-LICENSE.md"
+    },
+    {
+      "claim": "Every install route ends at the same server and configuration directory",
+      "evidence": "README.md §Install"
+    },
+    {
+      "claim": "The installer adds ~/.local/bin to PATH",
+      "evidence": "README.md §Install"
+    },
+    {
+      "claim": "Dashboard at http://127.0.0.1:8082/admin",
+      "evidence": "README.md §Dashboard; config defaults"
+    },
+    {
+      "claim": "The dashboard writes the same .env the server reads",
+      "evidence": "README.md §Configuration reference"
+    }
+  ]
+}

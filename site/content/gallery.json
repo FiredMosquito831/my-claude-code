@@ -1,0 +1,137 @@
+{
+  "path": "/gallery/",
+  "title": "Gallery | My Claude Code",
+  "description": "Every reviewed screenshot of My Claude Code, grouped by area and captioned: the dashboard, the request log, the model catalogue, search, agents and media.",
+  "nav": "Gallery",
+  "eyebrow": "Gallery",
+  "h1": "Every reviewed screen, grouped",
+  "intro": "These are the product's own captures, reviewed one by one before publication. Each was checked for keys, tokens, account names, file paths and real prompt text; where a capture carried something that did not belong on a public page, it was redacted on a copy and the original was left untouched. Every image below has a caption, and every caption describes the state the screen is actually in.",
+  "page_grid": false,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Gallery"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "The screens are grouped by the area of the product they belong to, in the same order as the features: the dashboard itself, providers and credentials, routing, reasoning and limits, observability and cost, web search, agents, media and messaging. A capture appears once, in the group where it is most useful."
+    },
+    {
+      "type": "ul",
+      "items": [
+        "<a href=\"#area-dashboard\">The dashboard</a>",
+        "<a href=\"#area-providers\">Providers and credentials</a>",
+        "<a href=\"#area-routing\">Routing and limits</a>",
+        "<a href=\"#area-reasoning\">Reasoning and budgets</a>",
+        "<a href=\"#area-observability\">Observability and cost</a>",
+        "<a href=\"#area-websearch\">Web search</a>",
+        "<a href=\"#area-agents\">Agents</a>",
+        "<a href=\"#area-media\">Media</a>",
+        "<a href=\"#area-messaging\">Messaging</a>"
+      ]
+    },
+    {
+      "type": "callout",
+      "kind": "note",
+      "text": "A capture shows the version that was running when it was taken. The version panel in each screen is the honest record; the current release is on the home page."
+    },
+    {
+      "type": "gallery_area",
+      "area": "dashboard",
+      "title": "The dashboard",
+      "intro": "The first-run checklist, the Providers page, the version panel and an announced update."
+    },
+    {
+      "type": "gallery_area",
+      "area": "providers",
+      "title": "Providers and credentials",
+      "intro": "The provider grid, the model catalogue, custom providers, credential health and per-key performance, plus the proxy and marketplace cards."
+    },
+    {
+      "type": "gallery_area",
+      "area": "routing",
+      "title": "Routing and limits",
+      "intro": "The tier rails, a walked fallback chain, the vision adapter and the resilience controls."
+    },
+    {
+      "type": "gallery_area",
+      "area": "reasoning",
+      "title": "Reasoning and budgets",
+      "intro": "Reasoning policy and overrides, the limits page and the deadline calculator."
+    },
+    {
+      "type": "gallery_area",
+      "area": "observability",
+      "title": "Observability and cost",
+      "intro": "The request log, analytics panels, latency, failover, storage and the token optimizer."
+    },
+    {
+      "type": "gallery_area",
+      "area": "websearch",
+      "title": "Web search",
+      "intro": "The search route, the chain editor and web-search analytics."
+    },
+    {
+      "type": "gallery_area",
+      "area": "agents",
+      "title": "Agents",
+      "intro": "The coding-agent cards, the launchers list, desktop-app configuration and two live agent sessions."
+    },
+    {
+      "type": "gallery_area",
+      "area": "media",
+      "title": "Media",
+      "intro": "The media rails and media analytics."
+    },
+    {
+      "type": "gallery_area",
+      "area": "messaging",
+      "title": "Messaging",
+      "intro": "The Discord and Telegram settings with the voice controls."
+    },
+    {
+      "type": "h2",
+      "text": "How the screens were reviewed"
+    },
+    {
+      "type": "p",
+      "text": "Every tracked image in the repository was inventoried, hashed and de-duplicated first. The survivors were reviewed on contact sheets and, where a leak was plausible, at full resolution. The verdicts were include, redact or exclude with a reason. Redactions are solid rectangles applied to a copy, and each rectangle is recorded with its coordinates. The excluded captures are the ones that were not product screens, or that could not be cleaned without destroying what they showed."
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/",
+          "label": "Features: the pages these screens illustrate"
+        },
+        {
+          "href": "/features/dashboard/",
+          "label": "The dashboard in depth"
+        },
+        {
+          "href": "/architecture/",
+          "label": "Architecture: what the screens are showing"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "Every image was reviewed and, where needed, redacted on a copy",
+      "evidence": "site/shots/manifest.json verdict and redactions fields"
+    },
+    {
+      "claim": "Redaction rectangles are recorded with coordinates",
+      "evidence": "site/shots/manifest.json redactions field"
+    },
+    {
+      "claim": "A capture shows the version running when it was taken",
+      "evidence": "the version panel visible in assets/admin-version.png and the sidebar of each capture"
+    }
+  ]
+}

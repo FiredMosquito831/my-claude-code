@@ -1,0 +1,247 @@
+{
+  "path": "/features/providers-and-credentials/",
+  "title": "Providers and credentials | My Claude Code",
+  "description": "Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key's own signals, custom providers and OAuth sign-ins.",
+  "nav": "Providers",
+  "eyebrow": "Feature · Providers",
+  "h1": "Providers, keys and credential health",
+  "intro": "Every provider MCC can route to is a card on one page. A card holds a key or a pool of keys, its rotation policy, its model list and its health. The rest of this page is what happens when a provider answers, refuses, or says nothing at all.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features",
+      "href": "/features/"
+    },
+    {
+      "label": "Providers and credentials"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "The provider table in the repository lists 60 cards across cloud APIs, subscription and OAuth sign-ins, gateways, local servers and marketplaces. MCC builds each model slug as <code>&lt;provider-id&gt;/&lt;exact-provider-model-id&gt;</code>, and free-text entry stays available when a provider cannot list its models."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-providers",
+      "caption": "The Providers page: a searchable card per provider, each badged Configured or Missing key and naming the setting that holds its key."
+    },
+    {
+      "type": "h2",
+      "text": "One key, or a pool"
+    },
+    {
+      "type": "p",
+      "text": "Put multiple API keys in one variable, comma-separated, and choose a policy with <code>{ENV}_ROTATION</code>. Every key in a pool gets its own upstream client and its own rate-limit window, so one key saturating or stalling never throttles the others. The order in the pool is the order the policies read."
+    },
+    {
+      "type": "table",
+      "head": [
+        "Policy",
+        "Behaviour"
+      ],
+      "rows": [
+        [
+          "<code>single</code>",
+          "always the first key; the default when one key is set"
+        ],
+        [
+          "<code>round_robin</code>",
+          "spread requests across healthy keys in turn"
+        ],
+        [
+          "<code>least_used</code>",
+          "the healthy key with the fewest requests goes first"
+        ],
+        [
+          "<code>failover</code> / <code>on_error</code>",
+          "stick to the first healthy key until it fails, then move to the next; the default when several keys are set"
+        ]
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Keys can be reordered without retyping the variable, and each key can carry a name. Names live in <code>credential_names.json</code>, keyed by a hash of the key and never by the key itself; they never reach an upstream request or the request log. A renamed key keeps its history, and two keys given one name read as the name plus their masked label."
+    },
+    {
+      "type": "h2",
+      "text": "Health is judged on the key, not on the weather"
+    },
+    {
+      "type": "p",
+      "text": "A key is only ever judged on signals about the credential. There are exactly three. A <strong>401 or 403</strong> walks an escalating lockout ladder of five minutes, one hour and one day, on its own counter. A <strong>429</strong> benches the <code>(key, model)</code> pair for exactly the wait the provider published, or a configured cooldown when it published none, and the key stays healthy for its other models. An <strong>exhausted-credit</strong> refusal, where the provider says in words that the account has no balance left, benches the whole key, because a wallet is not per model."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-credential-health",
+      "caption": "Credential health on Limits and Resilience: the two settings that can bench a key, and nothing else."
+    },
+    {
+      "type": "p",
+      "text": "Everything else, including timeouts, 5xx, a 410 model-gone, other 4xx and transport faults, leaves every key untouched. A model that will not answer is the model's problem: the fallback chain moves to the next model instead of spending the pool on it. A timeout is explicitly not read as a broken socket, so a model that never answered is not charged against the rest of the pool."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-key-performance",
+      "caption": "Per-key performance on Analytics, with the provider diagnostics each key actually returned."
+    },
+    {
+      "type": "h2",
+      "text": "Custom providers and the model catalogue"
+    },
+    {
+      "type": "p",
+      "text": "Any other OpenAI-compatible endpoint can be added as a custom provider from the same page. A custom provider is not a second kind of provider: it is an ordinary descriptor injected from a different source. Its definition lives in <code>custom_providers.json</code>, never in the <code>.env</code>, because its static credential travels on the descriptor rather than through a settings field. Deleting a custom provider removes its refs from every route; disabling it leaves the refs and pauses them."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-custom-provider",
+      "caption": "Custom provider cards: a base URL, a key pool and a measured reasoning dialect."
+    },
+    {
+      "type": "p",
+      "text": "A custom provider cannot inherit its host's <code>reasoning_effort</code> vocabulary, so MCC measures it. At most two 16-token chat completions are sent, the first with a deliberately invalid effort value, and the enum is read out of the 400 the host answers with. The learned words are persisted and bound to a reasoning encoder exactly as a static provider declaration would be."
+    },
+    {
+      "type": "p",
+      "text": "The Models page is the catalogue behind that: every model every configured provider publishes, with bulk visibility, capability probes, learned facts and an hourly background refresh. Each row names where its entry came from. Hiding a model changes what is listed, never what is routed."
+    },
+    {
+      "type": "figure",
+      "shot": "readme-models",
+      "caption": "The Models page: every model across every configured provider, each row naming the source its entry came from."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-models-learned",
+      "caption": "Learned facts: every negative this install taught MCC, shown with its evidence, expiring on a clock and forgettable per row."
+    },
+    {
+      "type": "h2",
+      "text": "OAuth sign-ins"
+    },
+    {
+      "type": "p",
+      "text": "An OAuth provider sits in the same grid and carries the same badges, but its credential is a sign-in rather than a string you paste. MCC supports a Claude subscription, ChatGPT and Kimi For Coding. The Claude subscription route is <strong>not permitted by Anthropic</strong>: Anthropic's published terms forbid routing Free, Pro or Max plan credentials on behalf of third-party users, and the risk is to your account. MCC limits it by admitting only Anthropic's own clients, using an attribution line that travels in the request body, and it documents the position rather than hiding it. Read <code>docs/ANTHROPIC-SUBSCRIPTION.md</code> before enabling it. The ChatGPT subscription has its own caveats and is documented in the same place."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-inferhub",
+      "caption": "InferHub is a marketplace, not an ordinary provider: a profile sets a price ceiling and MCC sends it on every attempt."
+    },
+    {
+      "type": "h2",
+      "text": "Proxy chains"
+    },
+    {
+      "type": "p",
+      "text": "A provider can go out through a named chain of proxy exits. A chain whose provider limits per address moves a refused or dropped request to another exit on the same model, within your switch limit, and remembers the refused exits across saves. A country refusal is about the address, not the key: it never locks a key out, on any route. Three ways to fill a chain are built in: a scan for a proxy you already run on this machine, a bring-your-own-tor card where each SOCKS port becomes one named identity, and VPN accounts, gateways and provider proxy lists. WireGuard files your VPN exports can be run by MCC as named loopback exits."
+    },
+    {
+      "type": "figure",
+      "shot": "proxy-chain-card",
+      "caption": "A proxy chain: named exits a request can move between on the same model, with their own keep-alive and recency controls."
+    },
+    {
+      "type": "h2",
+      "text": "Configuration"
+    },
+    {
+      "type": "p",
+      "text": "The provider credential settings are the environment variables named on the provider's card, for example <code>ANTHROPIC_API_KEY</code>, <code>OPENROUTER_API_KEY</code> or <code>GEMINI_API_KEY</code>. Rotation is <code>{ENV}_ROTATION</code>. The health knobs are <code>CREDENTIAL_LOCKOUT_TIERS</code>, <code>RATE_LIMIT_COOLDOWN_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MAX_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MODE</code> and <code>CREDENTIAL_MODEL_BENCH_ESCALATION</code>. Variables are named, never given example values."
+    },
+    {
+      "type": "h2",
+      "text": "Limits and behaviour"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "No bench duration is invented at the rotation layer: it comes from the provider's own Retry-After or the configured window.",
+        "A bare 402 that names no billing phrase rotates and falls through but charges nothing.",
+        "A key that fails 5xx or transport on every request is retried once per request rather than benched. That is the deliberate trade that stopped healthy keys being benched for faults they did not cause.",
+        "A custom provider's URL is called as typed; the generic profile deliberately does not normalise it.",
+        "Local providers (LM Studio, llama.cpp, Ollama) need a base URL rather than a key."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/architecture/credential-health/",
+          "label": "Architecture: the credential and health machinery"
+        },
+        {
+          "href": "/features/routing/",
+          "label": "Routing: what a key is asked to serve"
+        },
+        {
+          "href": "/configuration/environment/",
+          "label": "Configuration: the credential variables, names only"
+        },
+        {
+          "href": "/glossary/",
+          "label": "Glossary: rotation, bench, lockout, dial"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "The provider table lists 60 cards",
+      "evidence": "README.md provider table, lines 294-355"
+    },
+    {
+      "claim": "Model slugs are built as provider-id/exact-provider-model-id",
+      "evidence": "README.md §Model Providers"
+    },
+    {
+      "claim": "Four rotation policies: single, round_robin, least_used, failover/on_error",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "Each key gets its own upstream client and rate-limit window",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "Names live in credential_names.json keyed by sha256(key)[:16]",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "Health is judged on three signals: 401/403, 429 and exhausted credits",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "The lockout ladder default is 300,3600,86400 seconds",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "A timeout is explicitly excluded from transport faults",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "A custom provider's definition lives in custom_providers.json, never .env",
+      "evidence": "ARCHITECTURE.md §Custom Providers"
+    },
+    {
+      "claim": "A custom provider's reasoning dialect is measured with at most two 16-token calls",
+      "evidence": "ARCHITECTURE.md §Custom Providers"
+    },
+    {
+      "claim": "The Claude subscription route is not permitted by Anthropic",
+      "evidence": "docs/OAUTH-PROVIDERS.md; README.md provider table"
+    },
+    {
+      "claim": "A country refusal never locks a key out",
+      "evidence": "README.md §Providers and credentials"
+    },
+    {
+      "claim": "LM Studio, llama.cpp and Ollama use a base URL",
+      "evidence": "README.md §Model Providers"
+    }
+  ]
+}

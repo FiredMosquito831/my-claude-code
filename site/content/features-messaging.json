@@ -1,0 +1,227 @@
+{
+  "path": "/features/messaging/",
+  "title": "Messaging | My Claude Code",
+  "description": "Run managed Claude Code sessions from Discord or Telegram, with voice-note transcription, stop and clear commands, and per-chat session state.",
+  "nav": "Messaging",
+  "eyebrow": "Feature · Messaging",
+  "h1": "Coding-agent sessions over Discord and Telegram",
+  "intro": "Messaging is optional. When it is on, a chat message becomes an inbound turn to a managed coding-agent session, and the reply comes back to the chat. It is the same proxy underneath, with the same routing, keys and log. It is optional and off by default.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features",
+      "href": "/features/"
+    },
+    {
+      "label": "Messaging"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "The messaging bridge is skipped entirely when the platform is <code>none</code> or when the selected platform's token is missing. Nothing else in MCC depends on it. When it is configured, an inbound message is normalised by the platform adapter, handed to one platform-agnostic workflow, and answered through an outbound messenger that queues sends, edits and deletes."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-messaging",
+      "caption": "The Messaging page: the platform, its token fields, allowed channels or user IDs, an allowed directory and voice settings."
+    },
+    {
+      "type": "h2",
+      "text": "Discord"
+    },
+    {
+      "type": "ol",
+      "items": [
+        "Create a bot in the Discord Developer Portal.",
+        "Enable Message Content Intent and invite it with read, send, message-history and Manage Messages permissions, so clear can remove user prompts.",
+        "Set Messaging Platform to <code>discord</code>.",
+        "Enter the Discord bot token, the allowed channels and an absolute allowed directory.",
+        "Apply the settings and restart the server if the page asks for it."
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Telegram"
+    },
+    {
+      "type": "ol",
+      "items": [
+        "Create a bot with BotFather.",
+        "Get your numeric user ID from userinfobot. In groups, grant the bot permission to delete messages.",
+        "Set Messaging Platform to <code>telegram</code>.",
+        "Enter the Telegram bot token, the allowed user ID and an absolute allowed directory.",
+        "Apply the settings and restart the server if the page asks for it."
+      ]
+    },
+    {
+      "type": "p",
+      "text": "An allowed directory is required and absolute, so a chat cannot be pointed at an arbitrary path by a message. The bot is the only ingress, and a chat that is not allowed is not served."
+    },
+    {
+      "type": "h2",
+      "text": "Commands"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Usage",
+        "Behaviour"
+      ],
+      "rows": [
+        [
+          "<code>/stats</code>",
+          "show session state"
+        ],
+        [
+          "standalone <code>/stop</code>",
+          "cancel all work"
+        ],
+        [
+          "reply with <code>/stop</code>",
+          "cancel only the selected request while other queued requests continue"
+        ],
+        [
+          "standalone <code>/clear</code>",
+          "reset all MCC state and remove every tracked message in that chat, including user prompts, voice notes, MCC replies, Telegram's online notice and the clear command itself"
+        ],
+        [
+          "reply with <code>/clear</code>",
+          "delete the selected message and its literal platform reply subtree, preserving its ancestors and siblings"
+        ]
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The workflow keeps a per-chat generation and a global stop generation. A standalone stop invalidates every older provisional turn; a standalone clear invalidates only the invoking chat. Reply-scoped commands apply an exact reference transition, so a voice cancellation or an admitted tree wins without double-counting."
+    },
+    {
+      "type": "h2",
+      "text": "Voice notes"
+    },
+    {
+      "type": "p",
+      "text": "A voice note is downloaded, size-checked, transcribed and handed to the same inbound path as text. The transcription backend is chosen at install time: NVIDIA NIM, local Whisper on CPU or CUDA, or both. Local gated models need a Hugging Face key; NIM transcription needs the NVIDIA NIM key. Changing the credential an active voice backend uses requires a restart, while the same provider credential stays hot-replaceable when voice does not use it."
+    },
+    {
+      "type": "code",
+      "label": "Install a voice backend (Linux, macOS or WSL)",
+      "text": "curl -fsSL \"https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh\" | sh -s -- --voice-local"
+    },
+    {
+      "type": "p",
+      "text": "Pending voice notes have their own registry, which owns an optional status binding, cancellation by either message ID, and the exclusive handoff lease. A voice-transcribed stop or clear cannot cancel itself, and a stale flow cannot bind or remove a newer generation that reuses the same ID."
+    },
+    {
+      "type": "h2",
+      "text": "What you see"
+    },
+    {
+      "type": "p",
+      "text": "The Messaging page holds the platform, its token fields, the allowed channels or user ID, the allowed directory and the voice controls. The optional messaging step also appears in the Get Started checklist, so a new install is told it exists without being forced through it."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-get-started",
+      "caption": "Get Started: messaging is one of the optional steps after the provider, the tier map and the agent."
+    },
+    {
+      "type": "p",
+      "text": "Requests made through a messaging session are ordinary proxied requests and appear in Analytics like any other. The harness attribution names the agent behind them, so a chat-driven session can be told apart from a terminal one. A chat-driven request is not a special kind of request; it is the same proxy with a different ingress."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-analytics-harness",
+      "caption": "Analytics attributes each request to the coding agent harness that sent it, including sessions driven through messaging."
+    },
+    {
+      "type": "h2",
+      "text": "Configuration"
+    },
+    {
+      "type": "p",
+      "text": "The names are <code>MESSAGING_PLATFORM</code>, the platform token variables, <code>MESSAGING_RATE_LIMIT</code> and <code>MESSAGING_RATE_WINDOW</code>, and the voice settings for backend, device and model. A Telegram proxy URL is optional and used only for that transport. Values are configured on the Messaging page and written to the same <code>.env</code> the server reads; this site publishes no values."
+    },
+    {
+      "type": "h2",
+      "text": "Limits and behaviour"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "Messaging is off by default and skipped cleanly when it is not configured.",
+        "An allowed directory is required; a chat cannot widen it.",
+        "A voice note that fails transcription gets an error reply and is cleaned up; it does not leave a temp file behind.",
+        "A reply-scoped clear deletes only the selected subtree, never its ancestors.",
+        "The bridge is optional, but a request it makes is an ordinary request for routing, keys, cost and health."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/architecture/request-path/",
+          "label": "Architecture: the session and request path"
+        },
+        {
+          "href": "/features/agents/",
+          "label": "Agents: the sessions messaging drives"
+        },
+        {
+          "href": "/features/observability-and-cost/",
+          "label": "Observability: where a chat-driven request appears"
+        },
+        {
+          "href": "/configuration/environment/",
+          "label": "Configuration: the messaging variables, names only"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "Messaging is skipped when the platform is none or the token is missing",
+      "evidence": "ARCHITECTURE.md §Messaging Architecture"
+    },
+    {
+      "claim": "Discord needs Message Content Intent and Manage Messages for clear",
+      "evidence": "docs/MESSAGING.md §Discord bot"
+    },
+    {
+      "claim": "Telegram needs the numeric user ID and delete permission in groups",
+      "evidence": "docs/MESSAGING.md §Telegram bot"
+    },
+    {
+      "claim": "An allowed directory is required and absolute",
+      "evidence": "docs/MESSAGING.md §Discord bot and §Telegram bot"
+    },
+    {
+      "claim": "/stats, /stop and /clear with standalone and reply-scoped behaviour",
+      "evidence": "docs/MESSAGING.md §Messaging commands"
+    },
+    {
+      "claim": "Voice backends are --voice-nim, --voice-local and --voice-all",
+      "evidence": "docs/MESSAGING.md §Voice notes"
+    },
+    {
+      "claim": "Local gated models need HUGGINGFACE_API_KEY; NIM needs NVIDIA_NIM_API_KEY",
+      "evidence": "docs/MESSAGING.md §Voice notes"
+    },
+    {
+      "claim": "Changing the active voice credential requires a restart",
+      "evidence": "ARCHITECTURE.md §Messaging Architecture"
+    },
+    {
+      "claim": "MESSAGING_RATE_LIMIT and MESSAGING_RATE_WINDOW exist",
+      "evidence": "assets/admin-messaging.png; docs/MESSAGING.md"
+    },
+    {
+      "claim": "Request attribution names the harness behind each request",
+      "evidence": "README.md §Agents capability table"
+    }
+  ]
+}

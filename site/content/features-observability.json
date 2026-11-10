@@ -1,0 +1,218 @@
+{
+  "path": "/features/observability-and-cost/",
+  "title": "Observability and cost | My Claude Code",
+  "description": "A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator.",
+  "nav": "Observability",
+  "eyebrow": "Feature · Observability",
+  "h1": "The request log, analytics and cost with provenance",
+  "intro": "Every request through the proxy is logged, priced and searchable afterwards. That is what turns a router from a guess into a measurement: which model answered, which fallback spent the time, which key it cost, and where each price came from.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features",
+      "href": "/features/"
+    },
+    {
+      "label": "Observability and cost"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "The request log stores every completed request locally. It is searchable across prompt, reply, reasoning and tool calls, and it is the source of every number on the Analytics page: there is no second accounting system and no remote dashboard to reconcile against."
+    },
+    {
+      "type": "figure",
+      "shot": "readme-analytics-overview",
+      "caption": "Analytics: stored requests, success rate, fallback share and token totals, over an all-time strip that keeps counting after stored rows roll over."
+    },
+    {
+      "type": "h2",
+      "text": "The log"
+    },
+    {
+      "type": "p",
+      "text": "One row per completed request carries its endpoint, harness, provider, key, model, status, turn, tokens, cost, time to first token and duration. A request that a local optimization answered records no provider, because none served it, and carries the rule and the prompt tokens no provider ever received. A hidden tab reads nothing."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-requests",
+      "caption": "The request log: provider, model, key, harness, tokens, reasoning, cost and latency for a range of requests."
+    },
+    {
+      "type": "p",
+      "text": "A request's detail opens the attempts it walked, the key each one used, its timings, and the reasoning fields that went out. Raw diagnostics sit in five collapsed boxes below it: API payloads from both sides of the exchange, streamed events, the provider's raw output, API error tracebacks and CLI diagnostics, with a Raw or Normalized toggle. Every recorded line is shown a page at a time and never cut, and an empty box says which door or which setting is why."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-request-detail",
+      "caption": "One request expanded: its route attempts, the reasoning fields the router sent, and the fallback that answered."
+    },
+    {
+      "type": "h2",
+      "text": "Search and storage"
+    },
+    {
+      "type": "p",
+      "text": "The search index stores each distinct piece of text in its own file beside the log, so a search does not unpack every stored request. New requests are indexed as they are written; older ones are indexed when you press Build search index. The prompt chunk store keeps each repeated prompt part once, so turn N+1 of a conversation no longer stores turn N again. History is converted in the background, each prompt is read back byte for byte before it is replaced, and Pause and Continue sit beside the log's size."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-analytics-storage",
+      "caption": "The storage panel: the request log's size, its retention, and the controls that keep it bounded."
+    },
+    {
+      "type": "p",
+      "text": "Retention is a cap, not a promise. <code>REQUEST_LOG_ENABLED</code> turns the log and Analytics on or off, and <code>REQUEST_LOG_MAX_ROWS</code> prunes the oldest rows periodically. Once the cap is reached the log is a rolling window, so <em>All time</em> means all time still stored, and counts stop rising rather than the dashboard being broken. The all-time strip below the stat cards is never pruned, so it keeps counting after stored rows roll over."
+    },
+    {
+      "type": "h2",
+      "text": "Analytics"
+    },
+    {
+      "type": "p",
+      "text": "Analytics is range-aware: any period you like, not just the presets, converted per boundary in your own timezone. It computes p50 and p95 latency, provider and model breakdowns, top errors and a failover panel that counts each primary-to-stand-in pair that fired. The wide-search cost of a query is said under the search box before you run it, as advice only: never narrowed, never refused, never truncated."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-analytics-latency",
+      "caption": "Model latency, p50 and p95, per model."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-analytics-failover",
+      "caption": "Failover: every primary-to-stand-in pair that actually fired, with its count, beside the statuses that caused them."
+    },
+    {
+      "type": "h2",
+      "text": "Cost with provenance"
+    },
+    {
+      "type": "p",
+      "text": "Each request is priced once, as it is logged, and the rung of the pricing ladder that answered each field is stored beside the number. The provider's own model list is the first rung; models.dev follows; the LiteLLM map is consulted when it is switched on; a cross-provider vote covers what remains. A request no source can price is stored as unpriced and shown as a dash, never as a fabricated zero."
+    },
+    {
+      "type": "figure",
+      "shot": "readme-analytics-cost",
+      "caption": "The Cost panel: reported and estimated are two figures, never summed, and every total carries its priced denominator."
+    },
+    {
+      "type": "p",
+      "text": "Honest totals are the rule here. A request whose cost was reported by a source and a request whose cost MCC estimated are shown side by side and never added into one number. Every total carries an <em>N of M priced</em> denominator so a partial figure cannot read as a complete one. Anthropic's 5-minute and 1-hour cache writes are recorded separately, and a 1-hour write is priced at a rate a source states, or shown as not priced with the reason; requests before the split keep their 5-minute price."
+    },
+    {
+      "type": "h2",
+      "text": "Exports and raw output"
+    },
+    {
+      "type": "p",
+      "text": "A JSON export covers whatever the filters currently select, and an attempt-level export writes one row per model the chain tried, not per request, so the fallbacks that spent the time are in the file too. Raw diagnostics can be exported in any of the same formats, and the Analytics export itself takes an opt-in Raw diagnostics field, off by default and bounded."
+    },
+    {
+      "type": "p",
+      "text": "The provider's own bytes are available when you ask for them. With <code>LOG_RAW_UPSTREAM_BYTES</code> on, every chunk is kept exactly as the transport received it: stream comments, ID and retry lines, data prefixes, the done sentinel and in-band error frames all survive, and a refusal body is kept whole. It ships off, because raw output is the largest thing the log can hold."
+    },
+    {
+      "type": "h2",
+      "text": "The Token Optimizer"
+    },
+    {
+      "type": "p",
+      "text": "The Token Optimizer page shows what never reached a provider: tokens saved, rule fire counts and prompt-cache effectiveness. The local optimization rules that answer a request without a provider are listed there, and each request they answer records the rule and the tokens it saved."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-token-optimizer",
+      "caption": "The Token Optimizer: what never reached a provider, plus the opt-in trimming and RTK controls."
+    },
+    {
+      "type": "h2",
+      "text": "Limits and behaviour"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "Analytics is local-only, like the rest of the dashboard.",
+        "Every widget that aggregates history shows the window it covers; a chain from before a settings change is not read as the current config.",
+        "A read can never charge a key or bench a provider.",
+        "A request detail's empty diagnostic box names why it is empty rather than showing a blank panel.",
+        "Retention prunes the oldest rows; the all-time strip is the figure that survives it."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/architecture/cost-provenance/",
+          "label": "Architecture: how a request is priced and the rung stored"
+        },
+        {
+          "href": "/architecture/data-and-storage/",
+          "label": "Architecture: the log, the index and the chunk store"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers: the keys these costs are attributed to"
+        },
+        {
+          "href": "/configuration/environment/",
+          "label": "Configuration: retention and log variables, names only"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "Every completed request is stored locally and searchable across prompt, reply, reasoning and tool calls",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "The search index stores each distinct piece of text in its own file",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "The prompt chunk store keeps each repeated part once",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "Five collapsed raw-diagnostic boxes",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "LOG_RAW_UPSTREAM_BYTES is off by default",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "REQUEST_LOG_ENABLED and REQUEST_LOG_MAX_ROWS control the log and retention",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "Reported and estimated are never summed and every total has an N of M priced denominator",
+      "evidence": "README.md §Observability and cost capability table; assets/admin-analytics-cost.png"
+    },
+    {
+      "claim": "The all-time strip is never pruned",
+      "evidence": "README.md §Dashboard; assets/readme-analytics-overview.png"
+    },
+    {
+      "claim": "Each request is priced once with the rung stored beside it",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "The custom time window is converted per boundary in your own timezone",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "The wide-search cost is advice only",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "An attempt-level export writes one row per model tried",
+      "evidence": "README.md §Observability and cost capability table"
+    }
+  ]
+}
