@@ -43,10 +43,12 @@ NOJEKYLL = ".nojekyll"
 SECURITY_CONTACT = (
     "https://github.com/FiredMosquito831/my-claude-code/security/advisories/new"
 )
-# RFC 9116 asks for an Expires within a year of publication. The site's lastmod
-# is the deliberate date the owner sets in site.json, so the expiry is derived
-# from it rather than from the wall clock: the build stays deterministic.
-SECURITY_EXPIRES = "2027-11-10"
+# RFC 9116 asks for an Expires that is less than a year after the file is
+# published. The site's lastmod is the deliberate date the owner sets in
+# site.json, so the expiry is fixed beside it rather than read from the wall
+# clock: the build stays deterministic. Six months out, so a stale copy is
+# obvious before it lapses.
+SECURITY_EXPIRES = "2027-05-10"
 TECH_ARTICLE_PREFIXES = ("/features/", "/architecture/", "/configuration/")
 TECH_ARTICLE_PATHS = frozenset(
     {
