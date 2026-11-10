@@ -502,7 +502,7 @@ pre, .table-wrap { max-width: 100%; }
 }
 .footer-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
   gap: var(--space-8);
 }
 .site-footer h2 {
