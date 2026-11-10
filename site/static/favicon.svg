@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="My Claude Code">
+  <rect width="64" height="64" rx="14" fill="#0B0F14"/>
+  <path d="M32 9 51 20v24L32 55 13 44V20z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="6.5" fill="#3FB950"/>
+  <circle cx="32" cy="17" r="2.6" fill="#58A6FF"/>
+  <circle cx="45" cy="39.5" r="2.6" fill="#58A6FF"/>
+  <circle cx="19" cy="39.5" r="2.6" fill="#58A6FF"/>
+  <path d="M32 23v3M39.5 37.5l-2.6-1.5M24.5 36l2.6-1.5" stroke="#58A6FF" stroke-width="2" stroke-linecap="round"/>
+</svg>

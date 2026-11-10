@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% import "blocks.html" as helpers %}
+{% block content %}
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span> {{ eyebrow }}</p>
+      <h1>{{ h1 }}</h1>
+      <p class="lead">{{ intro | safe }}</p>
+      <div class="hero-actions">
+        <a class="button button--primary" href="/quick-start/">Install and run</a>
+        <a class="button" href="/features/">See every capability</a>
+        <a class="button" href="/gallery/">Browse the screens</a>
+      </div>
+    </div>
+    <aside class="status-board" aria-label="Verified quick facts">
+      <div class="status-board__head"><span>Control plane</span><span><span class="dot" aria-hidden="true"></span> local</span></div>
+      <div class="status-board__body">
+        {% for r in readouts %}
+        <div class="readout"><span class="readout__label">{{ r.label }}</span><span class="readout__value">{{ r.value }}</span></div>
+        {% endfor %}
+      </div>
+    </aside>
+  </div>
+</section>
+{% for b in blocks %}
+<div class="section">
+  <div class="wrap">
+    {{ helpers.render_block(b, shots) }}
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

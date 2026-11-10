@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<meta name="description" content="{{ description }}">
+{% if canonical %}<link rel="canonical" href="{{ canonical }}">{% endif %}
+{% if noindex %}<meta name="robots" content="noindex, follow">{% endif %}
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{ site.name }}">
+<meta property="og:title" content="{{ og_title }}">
+<meta property="og:description" content="{{ description }}">
+<meta property="og:url" content="{{ canonical or site.url }}">
+<meta property="og:image" content="{{ site.url }}og.png">
+<meta property="og:image:alt" content="{{ site.og_alt }}">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ og_title }}">
+<meta name="twitter:description" content="{{ description }}">
+<meta name="twitter:image" content="{{ site.url }}og.png">
+<meta name="theme-color" content="{{ theme_color }}">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+{% for block in jsonld %}
+<script type="application/ld+json">{{ block | safe }}</script>
+{% endfor %}
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+      {% include "_brand.svg" %}
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        {% for item in nav %}
+        <li><a href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+{% block content %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+          {% include "_brand.svg" %}
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="{{ site.repo }}">Repository</a></li>
+          <li><a href="{{ site.repo }}/releases/latest">Releases</a></li>
+          <li><a href="{{ site.repo }}/tree/main/docs">Documentation</a></li>
+          <li><a href="{{ site.repo }}/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">{{ site.licence_line }}</p>
+      <p>{{ site.non_affiliation }}</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; {{ site.copyright }} My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

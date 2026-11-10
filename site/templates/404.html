@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="wrap error-page">
+  <div>
+    <p class="eyebrow">HTTP 404 · no route matched</p>
+    <h1>404</h1>
+    <p class="lead">{{ intro | safe }}</p>
+    <div class="hero-actions" style="justify-content:center">
+      <a class="button button--primary" href="/">Back to the front door</a>
+      <a class="button" href="/features/">Browse every feature</a>
+      <a class="button" href="/quick-start/">Install it</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
