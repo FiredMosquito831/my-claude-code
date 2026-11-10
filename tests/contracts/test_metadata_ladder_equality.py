@@ -896,7 +896,11 @@ def _is_kind_entry(key: str) -> bool:
 
 
 def _is_k4_entry(value: Any) -> bool:
-    return isinstance(value, dict) and set(value) == {BEFORE_K4, AFTER_K4}
+    # A later release may add its own answer beside these two (8.18.0 does, to
+    # every entry whose vision panel or digest it moves), so the test is that
+    # the pair is present, never that it is the whole entry: a set equality
+    # would silently stop recognising the entries the earlier rule tests pin.
+    return isinstance(value, dict) and {BEFORE_K4, AFTER_K4} <= set(value)
 
 
 #: 8.13.0 (ADAPTIVE-EVERY-DOOR) moves exactly two entries, and both are the
@@ -917,28 +921,51 @@ ADAPTIVE_PAGE = "v8.13.0"
 
 
 def _is_adaptive_page_entry(value: Any) -> bool:
-    return isinstance(value, dict) and set(value) == {
+    # Subset, not equality, for the reason ``_is_k4_entry`` gives: 8.18.0 adds
+    # its own answer to the two page entries this predicate recognises.
+    return isinstance(value, dict) and {
         BEFORE_OCGO1,
         AFTER_OCGO1,
         ADAPTIVE_PAGE,
-    }
+    } <= set(value)
+
+
+#: 8.18.0 (VISION-LADDER) connects the provider's own modality pair to the
+#: vision rung of the ladder, and it moves 51 entries of this file. Every one of
+#: them is downstream of the same two facts -- a record whose provider states a
+#: pair now carries that answer at rung 1, and the page's "reads images" row now
+#: names the rung that answered instead of saying "provider /models or
+#: models.dev" -- plus the two records whose value actually changes in this
+#: fixture. Each moved entry keeps its historical answer and gains this
+#: release's beside it, exactly as ``AFTER_K4``, ``AFTER_OCGO1`` and
+#: ``ADAPTIVE_PAGE`` do; the release's own rule test names the moved set.
+BEFORE_8_18 = "v8.17.0"
+AFTER_8_18 = "v8.18.0"
+
+
+def _is_vision_ladder_entry(value: Any) -> bool:
+    """An entry 8.18.0 moves, which therefore carries this release's answer."""
+
+    return isinstance(value, dict) and AFTER_8_18 in value
 
 
 def _is_ocgo1_entry(value: Any) -> bool:
-    return isinstance(value, dict) and set(value) == {BEFORE_OCGO1, AFTER_OCGO1}
+    return isinstance(value, dict) and {BEFORE_OCGO1, AFTER_OCGO1} <= set(value)
 
 
 def _is_ocgo2_entry(value: Any) -> bool:
-    return isinstance(value, dict) and set(value) == {BEFORE_OCGO2, AFTER_OCGO2}
+    return isinstance(value, dict) and {BEFORE_OCGO2, AFTER_OCGO2} <= set(value)
 
 
 def _is_ocgo3_entry(value: Any) -> bool:
     """An entry 7.115.0 would have to write -- and never does (OCGO-3)."""
 
-    return isinstance(value, dict) and set(value) == {BEFORE_OCGO3, AFTER_OCGO3}
+    return isinstance(value, dict) and {BEFORE_OCGO3, AFTER_OCGO3} <= set(value)
 
 
 def _expected(key: str, value: Any) -> Any:
+    if _is_vision_ladder_entry(value):
+        return value[AFTER_8_18]
     if _is_adaptive_page_entry(value):
         return value[ADAPTIVE_PAGE]
     if _is_ocgo2_entry(value):
@@ -961,6 +988,11 @@ def _current_answer(group: str, key: str, value: Any) -> Any:
     correction's ``before`` be the 7.113.5 answer.
     """
 
+    if _is_vision_ladder_entry(value):
+        # 8.18.0's answer, resolved here for the same reason the 8.13.0 and
+        # 7.113.5 ones are: the entry carries its own newest answer, so the
+        # corrections file must not be consulted for it.
+        return value[AFTER_8_18]
     if _is_adaptive_page_entry(value):
         # 8.13.0's third answer, resolved here for the same reason the 7.113.5
         # one is: the entry carries its own newest answer, so the corrections

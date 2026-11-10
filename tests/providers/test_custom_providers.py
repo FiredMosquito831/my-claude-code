@@ -267,7 +267,9 @@ async def test_test_provider_caches_models_dev_enriched_infos(monkeypatch) -> No
 
     async def _enrich(model_infos, path=None, provider_id=None):
         assert provider_id == "custom_acme_ai"
-        return (ProviderModelInfo("m1", supports_thinking=True),)
+        return models_dev.ModelsDevEnrichment(
+            (ProviderModelInfo("m1", supports_thinking=True),)
+        )
 
     monkeypatch.setattr(models_dev, "enrich_provider_model_infos", _enrich)
 

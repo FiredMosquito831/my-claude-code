@@ -241,6 +241,42 @@ class ProviderModelDeclaration:
     description: str | None = None
 
 
+#: The bare word a modality list uses for an image, and the MIME family the
+#: OpenCode dialect uses instead. Both name an image; neither is a rewrite of
+#: the other, which is why the declaration keeps the words as published.
+IMAGE_MODALITY = "image"
+IMAGE_MEDIA_TYPE_PREFIX = "image/"
+
+
+def declared_accepts_images(declared: ProviderModelDeclaration | None) -> bool | None:
+    """Whether the row's own input list names an image, or ``None`` (8.18.0).
+
+    The provider's vocabulary is not one vocabulary: models.dev, OpenRouter,
+    Novita, Nous and Kilo publish bare words (``image``), while OpenCode Zen
+    and OpenCode Go publish MIME types (``image/gif``, ``image/jpeg``). Both
+    name an image, and a reader that spoke only the bare word would make
+    **88** OpenCode records blind -- every one of those models reads images.
+    So the test is the word *or* its media family, and nothing else is
+    rewritten: the declaration keeps the words the row published.
+
+    A row that states no pair has said nothing -- ``None``, never ``False``.
+    ``False`` is a real answer that routing acts on (it diverts the model's
+    images and drops it out of the vision adapter chain), so it may only ever
+    come from a row that published an input list with no image in it.
+
+    It lives here rather than beside the parser that fills the field because
+    the Models page has to read the same answer to badge it: two readers of one
+    declaration is how a page and a route start disagreeing about one model.
+    """
+
+    if declared is None or declared.modalities is None:
+        return None
+    return any(
+        word == IMAGE_MODALITY or word.startswith(IMAGE_MEDIA_TYPE_PREFIX)
+        for word in declared.modalities.inputs
+    )
+
+
 type ModelDefaultParameterValue = str | int | float | bool
 """A scalar a provider may pin as a per-model default request parameter."""
 

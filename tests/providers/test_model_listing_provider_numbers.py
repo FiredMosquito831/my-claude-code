@@ -178,7 +178,16 @@ def test_hypercharm_numbers_are_per_million_and_its_effort_list_says_it_reasons(
     assert (info.input_price, info.output_price) == (0.33, 1.31)
     assert (info.context_length, info.max_output_tokens) == (1048576, 262144)
     assert info.supports_thinking is True
-    # Vision is not one of the fields 7.83.0 reads.
+    # CHANGED IN 8.18.0, deliberately. Until this release the comment here read
+    # "Vision is not one of the fields 7.83.0 reads", and the assertion pinned
+    # `None`. 8.18.0 makes it one of them: the provider's own modality pair is
+    # the top rung of the metadata ladder for `supports_vision`, exactly as its
+    # context window, output limit, two prices and reasoning word already are,
+    # and `record_with_declared` folds it in. This row states no modality pair
+    # at all, so the fold is a no-op and the field still reads `None` -- which
+    # is the half of the rule that keeps every record without a pair
+    # byte-identical. The twin of this change is in
+    # `test_model_listing_declared.py::test_a_kilo_row_is_read_by_the_same_table`.
     assert info.supports_vision is None
 
 

@@ -71,9 +71,10 @@ async def cache_enriched_model_infos(
     57 unchanged lines an hour is noise, which is why ``quiet`` demotes the
     per-provider cache line to DEBUG for timer-driven sweeps.
     """
-    enriched = await models_dev.enrich_provider_model_infos(
+    enrichment = await models_dev.enrich_provider_model_infos(
         model_infos, provider_id=provider_id
     )
+    enriched = enrichment.infos
     current_ids = frozenset(info.model_id for info in enriched)
     if previous_ids is not None:
         _guard_against_a_collapsed_catalogue(provider_id, previous_ids, current_ids)
@@ -86,7 +87,67 @@ async def cache_enriched_model_infos(
         provider_id,
         len(enriched),
     )
+    if enrichment.refresh is not None:
+        _reenrich_when_the_first_fetch_lands(
+            enrichment.refresh, provider_id, enriched, cache
+        )
     return tuple(enriched)
+
+
+def _reenrich_when_the_first_fetch_lands(
+    refresh: asyncio.Task[bool],
+    provider_id: str,
+    infos: tuple[ProviderModelInfo, ...],
+    cache: ModelInfoCache,
+) -> None:
+    """One more enrichment pass for a catalogue built before models.dev existed (8.18.0, F4).
+
+    The first sweep of a fresh install runs with no models.dev cache, so every
+    generic provider's records are cached with the fields that cache would have
+    filled left ``None`` -- and the next sweep is an hour away. The Models page
+    reads the ladder live and recovers the moment the fetch lands, so for that
+    hour the page and every generated agent catalogue disagree about the same
+    models. This closes it: when the fetch this pass scheduled completes, the
+    same catalogue is enriched once more and cached again.
+
+    Once, and only on the first-run branch: a warm install's cache is present,
+    so ``enrichment.refresh`` is ``None`` and this is never called. The ids
+    cannot change here (the same records, more fields filled), so no shrink
+    guard and no catalogue-change line apply.
+    """
+
+    async def pass_once() -> None:
+        try:
+            refreshed = await refresh
+        except Exception:
+            return
+        if not refreshed:
+            return
+        cache_path = models_dev.models_dev_cache_path()
+        payload = models_dev.read_models_dev_cache(cache_path)
+        if payload is None:
+            return
+        cache(
+            provider_id,
+            models_dev.enrich_model_infos(infos, payload.index, provider_id),
+        )
+        logger.info(
+            "Provider model discovery re-enriched after the first models.dev"
+            " fetch: provider={} models={}",
+            provider_id,
+            len(infos),
+        )
+
+    task = asyncio.get_running_loop().create_task(pass_once())
+    task.add_done_callback(_swallow_background_outcome)
+
+
+def _swallow_background_outcome(task: asyncio.Task[None]) -> None:
+    """Retrieve a background task's exception so it is never logged as unretrieved."""
+
+    if task.cancelled():
+        return
+    task.exception()
 
 
 def _guard_against_a_collapsed_catalogue(

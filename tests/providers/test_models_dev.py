@@ -139,11 +139,14 @@ async def test_enrich_uses_cache_without_network(
 
     monkeypatch.setattr(models_dev, "fetch_models_dev_index", _boom)
 
-    enriched = await enrich_provider_model_infos(
+    enrichment = await enrich_provider_model_infos(
         [ProviderModelInfo(model_id="acme/llama-3.3-70b")], path
     )
 
-    assert enriched[0].context_length == 131072
+    assert enrichment.infos[0].context_length == 131072
+    # A cache present and fresh means nothing is being waited for, which is the
+    # branch every warm install takes (8.18.0, F4).
+    assert enrichment.refresh is None
 
 
 @pytest.mark.asyncio
@@ -165,11 +168,15 @@ async def test_enrich_without_cache_schedules_refresh_and_passes_through(
         models_dev, "schedule_models_dev_refresh", schedule_models_dev_refresh
     )
 
-    enriched = await enrich_provider_model_infos(
+    enrichment = await enrich_provider_model_infos(
         [ProviderModelInfo(model_id="acme/llama-3.3-70b")], path
     )
 
-    assert enriched[0].context_length is None
+    assert enrichment.infos[0].context_length is None
+    # 8.18.0 (F4): the fetch this pass scheduled is reported, so the seam that
+    # caches the catalogue can run one more pass when it lands. With no cache
+    # at all that is exactly the first-run branch.
+    assert enrichment.refresh is not None
     for _ in range(100):
         await asyncio.sleep(0.01)
         if path.is_file():
@@ -985,13 +992,36 @@ def test_a_provider_models_dev_does_not_know_still_gets_the_flat_index():
 
     Most gateways resell models they do not publish metadata for, so falling
     back to the cross-provider index is what keeps them described at all.
+
+    8.18.0 (Q4) qualifies the vision half of that, and this test is the one
+    that had to change rather than be deleted: the flat index answers only
+    where its carriers **agree**. Two namesakes that state opposite answers are
+    not evidence, so the field is withheld -- before this release the answer
+    was decided by whichever bucket models.dev happened to serialise first, and
+    reversing the bucket order flipped it. The numbers are unaffected: they
+    keep the first writer's value, which is the rule they have always had.
     """
     index = _two_providers_claiming_one_name()
     (info,) = enrich_model_infos(
         (ProviderModelInfo(model_id="shared-name"),), index, "some-gateway"
     )
-    assert info.supports_vision is not None
+    assert info.supports_vision is None, "two carriers disagree; the answer is withheld"
     assert info.context_length in {8_000, 128_000}
+
+    # And where the carriers agree, the flat index still answers: withholding
+    # is for a disagreement, never for a namesake.
+    agreeing = {
+        "first-alphabetically": {
+            "models": {"shared-name": {"modalities": {"input": ["text", "image"]}}}
+        },
+        "groq": {
+            "models": {"shared-name": {"modalities": {"input": ["text", "image"]}}}
+        },
+    }
+    (agreed,) = enrich_model_infos(
+        (ProviderModelInfo(model_id="shared-name"),), agreeing, "some-gateway"
+    )
+    assert agreed.supports_vision is True
 
 
 def test_a_sparse_provider_entry_does_not_strip_what_the_index_knows():

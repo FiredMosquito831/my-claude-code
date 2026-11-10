@@ -5,20 +5,23 @@ from typing import Any
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.providers.model_listing import (
+    ModelListParse,
     ModelListResponseError,
+    SkippedModelRow,
     declared_from_row,
     listing_date_field,
+    model_list_parse,
     published_parameters_from_row,
     published_row_text,
     record_with_declared,
 )
 
 
-def extract_anthropic_model_infos(
+def parse_anthropic_model_list(
     payload: Any,
     *,
     provider_name: str,
-) -> frozenset[ProviderModelInfo]:
+) -> ModelListParse:
     """Parse Anthropic's ``GET /v1/models`` page into model metadata.
 
     Anthropic reports ``id``, ``display_name`` and ``created_at`` per entry and
@@ -35,13 +38,23 @@ def extract_anthropic_model_infos(
         raise _malformed(provider_name, "expected top-level data array")
 
     model_infos: set[ProviderModelInfo] = set()
+    skipped: list[SkippedModelRow] = []
     # 7.85.0: Anthropic's ``created_at`` is the day it released the model,
     # read as that model's publication date where the list's values vary.
     date_field = listing_date_field(data)
-    for item in data:
+    for index, item in enumerate(data):
         model_id = _field(item, "id")
         if not isinstance(model_id, str) or not model_id.strip():
-            raise _malformed(provider_name, "expected every data item to include id")
+            # 8.18.0: one unreadable row is skipped and recorded, never raised
+            # -- the same partial-probe rule the generic parser follows.
+            skipped.append(
+                SkippedModelRow(
+                    index=index,
+                    model_id=None,
+                    reason=f"{provider_name} model-list row has no id",
+                )
+            )
+            continue
         # The same generic reader every listing parser calls: whatever this
         # row states about the model's kind is kept, as published, and any
         # number or flag it states fills the record at the provider rung.
@@ -59,7 +72,23 @@ def extract_anthropic_model_infos(
 
     if not model_infos:
         raise _malformed(provider_name, "response did not include any models")
-    return frozenset(model_infos)
+    return model_list_parse(provider_name, model_infos, skipped, len(data))
+
+
+def extract_anthropic_model_infos(
+    payload: Any,
+    *,
+    provider_name: str,
+) -> frozenset[ProviderModelInfo]:
+    """The records Anthropic's ``GET /v1/models`` page yielded.
+
+    The one-value form every caller has always got; since 8.18.0 an unreadable
+    row is skipped and reported rather than raised, and
+    :func:`parse_anthropic_model_list` is the same walk with the skips beside
+    the records.
+    """
+
+    return parse_anthropic_model_list(payload, provider_name=provider_name).infos
 
 
 def _field(item: Any, name: str) -> Any:
