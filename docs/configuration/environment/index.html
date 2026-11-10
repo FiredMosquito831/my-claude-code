@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Environment reference | My Claude Code</title>
+<meta name="description" content="The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/configuration/environment/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Environment reference | My Claude Code">
+<meta property="og:description" content="The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/configuration/environment/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Environment reference | My Claude Code">
+<meta name="twitter:description" content="The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Environment reference | My Claude Code", "url": "https://myclaudecode.danubelabs.net/configuration/environment/", "description": "The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Configuration", "item": "https://myclaudecode.danubelabs.net/configuration/"}, {"@type": "ListItem", "position": 4, "name": "Environment"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/configuration/">Configuration</a></li>
+        <li>Environment</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>Environment reference</h1>
+<p class="page-intro">This page names the settings, grouped by what they decide. It gives no values. For a secret-like variable it never shows an example, because a documentation page is not a place to invent one. The annotated .env.example in the repository carries the same names with inline comments.</p>        <div class="callout callout--warn"><strong>Names, not values.</strong> Nothing on this page is a usable setting. Copy a name into your own .env and read its comment in <code>.env.example</code> before choosing a value.</div>
+
+        <h2 id="core-server">Core server</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Name</th><th scope="col">What it decides</th></tr></thead>
+<tbody><tr><td><code>HOST</code></td><td>the address the server listens on; loopback by default</td></tr><tr><td><code>PORT</code></td><td>the port the server listens on; 8082 by default</td></tr><tr><td><code>ANTHROPIC_AUTH_TOKEN</code></td><td>the bearer token proxy clients present; generated for this machine on first start; required once the host is not loopback</td></tr><tr><td><code>MCC_CONFIG_DIR</code></td><td>the configuration home; environment-only, resolved before the .env is read</td></tr><tr><td><code>MCC_ENV_FILE</code></td><td>an explicit dotenv file to load instead of the default one</td></tr><tr><td><code>LOG_LEVEL</code></td><td>the server log level</td></tr><tr><td><code>SERVER_LOG_RETAIN_FILES</code></td><td>how many rotated server log files are kept</td></tr></tbody>
+</table></div>
+
+        <h2 id="request-log-and-analytics">Request log and analytics</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Name</th><th scope="col">What it decides</th></tr></thead>
+<tbody><tr><td><code>REQUEST_LOG_ENABLED</code></td><td>whether the persistent request log, and therefore Analytics, is on</td></tr><tr><td><code>REQUEST_LOG_MAX_ROWS</code></td><td>the retention cap; the oldest rows are pruned periodically</td></tr><tr><td><code>LOG_RAW_API_PAYLOADS</code></td><td>whether API payloads are kept raw</td></tr><tr><td><code>LOG_RAW_SSE_EVENTS</code></td><td>whether streamed events are kept raw</td></tr><tr><td><code>LOG_RAW_UPSTREAM_BYTES</code></td><td>whether the provider's own bytes are kept exactly as received; off by default</td></tr><tr><td><code>LOG_API_ERROR_TRACEBACKS</code></td><td>whether API error tracebacks are kept</td></tr><tr><td><code>LOG_RAW_CLI_DIAGNOSTICS</code></td><td>whether CLI diagnostics are kept raw</td></tr><tr><td><code>USAGE_AUTO_REFRESH_SECONDS</code></td><td>how often the Usage page refreshes itself while open; zero turns it off</td></tr><tr><td><code>USAGE_LAYOUT</code></td><td>which of the five Usage layouts is shown</td></tr></tbody>
+</table></div>
+
+        <h2 id="models-tiers-and-reasoning">Models, tiers and reasoning</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Name</th><th scope="col">What it decides</th></tr></thead>
+<tbody><tr><td><code>MODEL</code></td><td>the model used when nothing more specific matches</td></tr><tr><td><code>MODEL_MYTHOS</code>, <code>MODEL_FABLE</code>, <code>MODEL_OPUS</code>, <code>MODEL_SONNET</code>, <code>MODEL_HAIKU</code></td><td>each coding-agent tier's model</td></tr><tr><td><code>MODEL_VISION</code></td><td>the model the vision adapter routes an image request to</td></tr><tr><td><code>MODEL_*_FALLBACKS</code></td><td>each route's ordered stand-ins</td></tr><tr><td><code>MODEL_*_PAUSED</code></td><td>the entries kept in place but never tried</td></tr><tr><td><code>HARNESS_TIER_ALIASES</code></td><td>whether the per-agent tier aliases are offered</td></tr><tr><td><code>VISION_ADAPTER_MODE</code></td><td>route, describe or the behaviour the request would have had without the adapter</td></tr><tr><td><code>REASONING_POLICY</code></td><td>the root reasoning policy</td></tr><tr><td><code>REASONING_MYTHOS</code>, <code>REASONING_FABLE</code>, <code>REASONING_OPUS</code>, <code>REASONING_SONNET</code>, <code>REASONING_HAIKU</code></td><td>per-tier reasoning overrides</td></tr><tr><td><code>REASONING_EFFORT_BUDGET_RATIOS</code></td><td>how much of the output allowance a thinking rung may take</td></tr><tr><td><code>REASONING_ANSWER_FLOOR_MAX</code></td><td>the answer reserve kept aside from the thinking budget</td></tr><tr><td><code>PROMPT_CACHE_TTL</code>, <code>PROMPT_CACHE_TTL_*</code></td><td>the prompt-cache lifetime per route or per tier; client by default</td></tr></tbody>
+</table></div>
+
+        <h2 id="output-budgets-retries-and-limits">Output budgets, retries and limits</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Name</th><th scope="col">What it decides</th></tr></thead>
+<tbody><tr><td><code>MAX_OUTPUT_TOKENS_CEILING</code></td><td>the ceiling applied to an output budget; zero is the sentinel for none</td></tr><tr><td><code>MAX_OUTPUT_TOKENS_FLOOR</code></td><td>the floor that stops a long prompt squeezing the reply to nothing</td></tr><tr><td><code>MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT</code></td><td>the value used when no source publishes a model's limit</td></tr><tr><td><code>MAX_OUTPUT_TOKENS_CONTEXT_MARGIN</code>, <code>MAX_OUTPUT_TOKENS_CONTEXT_FLOOR</code></td><td>the context-headroom bounds</td></tr><tr><td><code>FALLBACK_TOTAL_TIMEOUT</code>, <code>FALLBACK_FIRST_TOKEN_TIMEOUT</code>, <code>FALLBACK_STALL_TIMEOUT</code></td><td>the deadlines that make a silent model a failure</td></tr><tr><td><code>FALLBACK_RETRY_FIRST</code>, <code>FALLBACK_SKIP_KINDS</code></td><td>what the chain retries and what it skips</td></tr><tr><td><code>FALLBACK_BENCH_ENABLED</code>, <code>FALLBACK_EJECT_*</code></td><td>whether and when a chain entry is benched</td></tr><tr><td><code>PROVIDER_RETRY_ATTEMPTS</code>, <code>PROVIDER_RETRY_BACKOFF_*</code></td><td>the retry count and backoff</td></tr><tr><td><code>RATE_LIMIT_COOLDOWN_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MAX_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MODE</code></td><td>what a 429 costs a key</td></tr><tr><td><code>RATE_LIMIT_ROUTES_AROUND_MODEL</code></td><td>whether a 429 tries another model on the same provider</td></tr><tr><td><code>CREDENTIAL_LOCKOUT_TIERS</code></td><td>the escalating bench for a rejected key</td></tr><tr><td><code>CREDENTIAL_MODEL_BENCH_ESCALATION</code></td><td>how many models must be limited before the whole key is benched</td></tr></tbody>
+</table></div>
+
+        <h2 id="web-search-and-fetch">Web search and fetch</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Name</th><th scope="col">What it decides</th></tr></thead>
+<tbody><tr><td><code>WEB_SEARCH_PROVIDER</code></td><td>auto, off, disabled or one search backend</td></tr><tr><td><code>WEB_SEARCH_FALLBACK_POLICY</code></td><td>how far the search chain may move</td></tr><tr><td><code>WEB_SEARCH_CHAIN</code>, <code>WEB_SEARCH_CHAIN_PAUSED</code></td><td>the ordered search services and the ones paused</td></tr><tr><td><code>ENABLE_WEB_SERVER_TOOLS</code></td><td>whether web search and web fetch are fulfilled at the proxy</td></tr><tr><td><code>WEBSEARCH_PROXY</code></td><td>an optional outbound proxy for search</td></tr><tr><td><code>WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS</code></td><td>optional spacing between keyless-hop requests</td></tr><tr><td><code>WEBSEARCH_LOG_ENABLED</code>, <code>WEBSEARCH_LOG_MAX_ROWS</code></td><td>the web-search log and its retention</td></tr><tr><td><code>DDGS_REGION</code>, <code>DDGS_TIMELIMIT</code>, <code>DDGS_BACKEND</code>, <code>DDGS_SAFESEARCH</code></td><td>the keyless metasearch's region, freshness, engine and safe-search</td></tr><tr><td><code>WEB_FETCH_EXTRACTOR</code></td><td>the page extractor; basic restores earlier bytes</td></tr><tr><td><code>WEB_FETCH_ALLOWED_SCHEMES</code>, <code>WEB_FETCH_ALLOW_PRIVATE_NETWORKS</code></td><td>the web-fetch egress rules</td></tr></tbody>
+</table></div>
+
+        <h2 id="media-messaging-and-the-dashboard">Media, messaging and the dashboard</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Name</th><th scope="col">What it decides</th></tr></thead>
+<tbody><tr><td><code>MODEL_IMAGE</code>, <code>MODEL_TTS</code>, <code>MODEL_ASR</code>, <code>MODEL_VIDEO</code></td><td>the four media rails and their chains</td></tr><tr><td><code>MEDIA_UPLOAD_MAX_MB</code></td><td>the optional media upload cap</td></tr><tr><td><code>MEDIA_STORE_ENABLED</code>, <code>MEDIA_STORE_MAX_MB</code></td><td>whether generated media is stored, and its size cap</td></tr><tr><td><code>MCP_MEDIA_APPS</code></td><td>the agents the media server is added to</td></tr><tr><td><code>MESSAGING_PLATFORM</code></td><td>discord, telegram or none</td></tr><tr><td><code>MESSAGING_RATE_LIMIT</code>, <code>MESSAGING_RATE_WINDOW</code></td><td>the outbound message rate</td></tr><tr><td><code>ADMIN_DESIGN</code>, <code>ADMIN_THEME</code>, <code>ADMIN_MODE</code>, <code>ADMIN_DENSITY</code></td><td>the dashboard's machine-wide appearance</td></tr><tr><td><code>ENABLE_TITLE_GENERATION_SKIP</code>, <code>ENABLE_SUGGESTION_MODE_SKIP</code></td><td>the local optimization rules</td></tr></tbody>
+</table></div>
+
+        <h2 id="reading-a-name">Reading a name</h2>
+
+        <ul><li>A blank value means unset; the default applies.</li><li>A restart-required setting is labelled on the dashboard, because the running process read it at startup.</li><li>A value is never published here, and a secret-like name never gets an example.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/configuration/">Configuration: how settings are provided</a></li><li><a href="/features/reasoning-and-budgets/">Reasoning and budgets: what these settings decide</a></li><li><a href="/features/web-search/">Web search: the search chain in practice</a></li><li><a href="/troubleshooting/">Troubleshooting: when a setting does not take effect</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#core-server">Core server</a></li>
+          <li><a href="#request-log-and-analytics">Request log and analytics</a></li>
+          <li><a href="#models-tiers-and-reasoning">Models, tiers and reasoning</a></li>
+          <li><a href="#output-budgets-retries-and-limits">Output budgets, retries and limits</a></li>
+          <li><a href="#web-search-and-fetch">Web search and fetch</a></li>
+          <li><a href="#media-messaging-and-the-dashboard">Media, messaging and the dashboard</a></li>
+          <li><a href="#reading-a-name">Reading a name</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

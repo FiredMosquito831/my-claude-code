@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Providers and credentials | My Claude Code</title>
+<meta name="description" content="Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key&#39;s own signals, custom providers and OAuth sign-ins.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/providers-and-credentials/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Providers and credentials | My Claude Code">
+<meta property="og:description" content="Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key&#39;s own signals, custom providers and OAuth sign-ins.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/providers-and-credentials/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Providers and credentials | My Claude Code">
+<meta name="twitter:description" content="Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key&#39;s own signals, custom providers and OAuth sign-ins.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Providers and credentials | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/providers-and-credentials/", "description": "Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key's own signals, custom providers and OAuth sign-ins."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Providers and credentials"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Providers and credentials</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>Providers, keys and credential health</h1>
+<p class="page-intro">Every provider MCC can route to is a card on one page. A card holds a key or a pool of keys, its rotation policy, its model list and its health. The rest of this page is what happens when a provider answers, refuses, or says nothing at all.</p>        <p>The provider table in the repository lists 60 cards across cloud APIs, subscription and OAuth sign-ins, gateways, local servers and marketplaces. MCC builds each model slug as <code>&lt;provider-id&gt;/&lt;exact-provider-model-id&gt;</code>, and free-text entry stays available when a provider cannot list its models.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-providers.webp" alt="The Providers page: a two-column grid of provider cards, each badged Configured or Missing key, with a Refresh model list button and custom providers on the left rail." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Providers page: a searchable card per provider, each badged Configured or Missing key and naming the setting that holds its key.</figcaption>
+</figure>
+
+        <h2 id="one-key-or-a-pool">One key, or a pool</h2>
+
+        <p>Put multiple API keys in one variable, comma-separated, and choose a policy with <code>{ENV}_ROTATION</code>. Every key in a pool gets its own upstream client and its own rate-limit window, so one key saturating or stalling never throttles the others. The order in the pool is the order the policies read.</p>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Policy</th><th scope="col">Behaviour</th></tr></thead>
+<tbody><tr><td><code>single</code></td><td>always the first key; the default when one key is set</td></tr><tr><td><code>round_robin</code></td><td>spread requests across healthy keys in turn</td></tr><tr><td><code>least_used</code></td><td>the healthy key with the fewest requests goes first</td></tr><tr><td><code>failover</code> / <code>on_error</code></td><td>stick to the first healthy key until it fails, then move to the next; the default when several keys are set</td></tr></tbody>
+</table></div>
+
+        <p>Keys can be reordered without retyping the variable, and each key can carry a name. Names live in <code>credential_names.json</code>, keyed by a hash of the key and never by the key itself; they never reach an upstream request or the request log. A renamed key keeps its history, and two keys given one name read as the name plus their masked label.</p>
+
+        <h2 id="health-is-judged-on-the-key-not-on-the-weather">Health is judged on the key, not on the weather</h2>
+
+        <p>A key is only ever judged on signals about the credential. There are exactly three. A <strong>401 or 403</strong> walks an escalating lockout ladder of five minutes, one hour and one day, on its own counter. A <strong>429</strong> benches the <code>(key, model)</code> pair for exactly the wait the provider published, or a configured cooldown when it published none, and the key stays healthy for its other models. An <strong>exhausted-credit</strong> refusal, where the provider says in words that the account has no balance left, benches the whole key, because a wallet is not per model.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-credential-health.webp" alt="The credential-health table: per-key health and rotation policy across multiple key pools." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Credential health on Limits and Resilience: the two settings that can bench a key, and nothing else.</figcaption>
+</figure>
+
+        <p>Everything else, including timeouts, 5xx, a 410 model-gone, other 4xx and transport faults, leaves every key untouched. A model that will not answer is the model's problem: the fallback chain moves to the next model instead of spending the pool on it. A timeout is explicitly not read as a broken socket, so a model that never answered is not charged against the rest of the pool.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-key-performance.webp" alt="The key-performance table with per-key request counts, and a Top errors panel listing provider diagnostics." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Per-key performance on Analytics, with the provider diagnostics each key actually returned.</figcaption>
+</figure>
+
+        <h2 id="custom-providers-and-the-model-catalogue">Custom providers and the model catalogue</h2>
+
+        <p>Any other OpenAI-compatible endpoint can be added as a custom provider from the same page. A custom provider is not a second kind of provider: it is an ordinary descriptor injected from a different source. Its definition lives in <code>custom_providers.json</code>, never in the <code>.env</code>, because its static credential travels on the descriptor rather than through a settings field. Deleting a custom provider removes its refs from every route; disabling it leaves the refs and pauses them.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-custom-provider.webp" alt="Two custom provider cards, B.AI and Agnes, each with a base URL, masked key and a model count." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Custom provider cards: a base URL, a key pool and a measured reasoning dialect.</figcaption>
+</figure>
+
+        <p>A custom provider cannot inherit its host's <code>reasoning_effort</code> vocabulary, so MCC measures it. At most two 16-token chat completions are sent, the first with a deliberately invalid effort value, and the enum is read out of the 400 the host answers with. The learned words are persisted and bound to a reasoning encoder exactly as a static provider declaration would be.</p>
+
+        <p>The Models page is the catalogue behind that: every model every configured provider publishes, with bulk visibility, capability probes, learned facts and an hourly background refresh. Each row names where its entry came from. Hiding a model changes what is listed, never what is routed.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/readme-models.webp" alt="The Models page tree with thousands of models across many providers, each row badged with its source and visibility state." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Models page: every model across every configured provider, each row naming the source its entry came from.</figcaption>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-models-learned.webp" alt="The learned-facts panel listing provider negatives this install taught the router, each with its evidence and an expiry clock." width="1170" height="345" loading="lazy" decoding="async">
+<figcaption>Learned facts: every negative this install taught MCC, shown with its evidence, expiring on a clock and forgettable per row.</figcaption>
+</figure>
+
+        <h2 id="oauth-sign-ins">OAuth sign-ins</h2>
+
+        <p>An OAuth provider sits in the same grid and carries the same badges, but its credential is a sign-in rather than a string you paste. MCC supports a Claude subscription, ChatGPT and Kimi For Coding. The Claude subscription route is <strong>not permitted by Anthropic</strong>: Anthropic's published terms forbid routing Free, Pro or Max plan credentials on behalf of third-party users, and the risk is to your account. MCC limits it by admitting only Anthropic's own clients, using an attribution line that travels in the request body, and it documents the position rather than hiding it. Read <code>docs/ANTHROPIC-SUBSCRIPTION.md</code> before enabling it. The ChatGPT subscription has its own caveats and is documented in the same place.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-inferhub.webp" alt="The InferHub page header: a price marketplace where a profile sets the ceiling each model is charged at." width="1500" height="640" loading="lazy" decoding="async">
+<figcaption>InferHub is a marketplace, not an ordinary provider: a profile sets a price ceiling and MCC sends it on every attempt.</figcaption>
+</figure>
+
+        <h2 id="proxy-chains">Proxy chains</h2>
+
+        <p>A provider can go out through a named chain of proxy exits. A chain whose provider limits per address moves a refused or dropped request to another exit on the same model, within your switch limit, and remembers the refused exits across saves. A country refusal is about the address, not the key: it never locks a key out, on any route. Three ways to fill a chain are built in: a scan for a proxy you already run on this machine, a bring-your-own-tor card where each SOCKS port becomes one named identity, and VPN accounts, gateways and provider proxy lists. WireGuard files your VPN exports can be run by MCC as named loopback exits.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/proxy-chain-card.webp" alt="A proxy chain card listing named exits with per-exit keep-alive and recency controls." width="956" height="1023" loading="lazy" decoding="async">
+<figcaption>A proxy chain: named exits a request can move between on the same model, with their own keep-alive and recency controls.</figcaption>
+</figure>
+
+        <h2 id="configuration">Configuration</h2>
+
+        <p>The provider credential settings are the environment variables named on the provider's card, for example <code>ANTHROPIC_API_KEY</code>, <code>OPENROUTER_API_KEY</code> or <code>GEMINI_API_KEY</code>. Rotation is <code>{ENV}_ROTATION</code>. The health knobs are <code>CREDENTIAL_LOCKOUT_TIERS</code>, <code>RATE_LIMIT_COOLDOWN_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MAX_SECONDS</code>, <code>RATE_LIMIT_COOLDOWN_MODE</code> and <code>CREDENTIAL_MODEL_BENCH_ESCALATION</code>. Variables are named, never given example values.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>No bench duration is invented at the rotation layer: it comes from the provider's own Retry-After or the configured window.</li><li>A bare 402 that names no billing phrase rotates and falls through but charges nothing.</li><li>A key that fails 5xx or transport on every request is retried once per request rather than benched. That is the deliberate trade that stopped healthy keys being benched for faults they did not cause.</li><li>A custom provider's URL is called as typed; the generic profile deliberately does not normalise it.</li><li>Local providers (LM Studio, llama.cpp, Ollama) need a base URL rather than a key.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/architecture/credential-health/">Architecture: the credential and health machinery</a></li><li><a href="/features/routing/">Routing: what a key is asked to serve</a></li><li><a href="/configuration/environment/">Configuration: the credential variables, names only</a></li><li><a href="/glossary/">Glossary: rotation, bench, lockout, dial</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#one-key-or-a-pool">One key, or a pool</a></li>
+          <li><a href="#health-is-judged-on-the-key-not-on-the-weather">Health is judged on the key, not on the weather</a></li>
+          <li><a href="#custom-providers-and-the-model-catalogue">Custom providers and the model catalogue</a></li>
+          <li><a href="#oauth-sign-ins">OAuth sign-ins</a></li>
+          <li><a href="#proxy-chains">Proxy chains</a></li>
+          <li><a href="#configuration">Configuration</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

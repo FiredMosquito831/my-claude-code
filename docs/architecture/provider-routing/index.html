@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provider routing | My Claude Code</title>
+<meta name="description" content="How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/provider-routing/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Provider routing | My Claude Code">
+<meta property="og:description" content="How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/provider-routing/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Provider routing | My Claude Code">
+<meta name="twitter:description" content="How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Provider routing | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/provider-routing/", "description": "How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Provider routing"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/" aria-current="page">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li>Provider routing</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>From a tier name to one real model</h1>
+<p class="page-intro">The router answers one question: which concrete provider model serves this request, with which reasoning preference, and what happens if it cannot. It is deliberately small, and the rules it follows are the product's contract.</p>        <h2 id="three-ways-to-name-a-model">Three ways to name a model</h2>
+
+        <p>Resolution takes three forms. A <strong>direct provider model ref</strong> names the provider and the exact model. A <strong>gateway model ID</strong> is decoded by the gateway-ID codec. The <strong>five tier aliases</strong> are intercepted ahead of both, and are pointers rather than models. If the incoming name is not direct, the router maps it by Claude tier: a name containing fable, opus, sonnet or haiku uses the matching tier override when set, and otherwise falls back to the default model.</p>
+
+        <p>The router also selects the reasoning preference. A direct ref uses the root policy; a Claude tier route uses a non-inherited tier override or the root fallback; the no-thinking gateway variant forces off. The application layer combines that preference with the concrete client request exactly once, and the resulting plan owns both the selected route and the final request-scoped policy.</p>
+
+        <figure class="figure figure--diagram" id="fig-routing-tiers">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t3 d3" font-family="ui-monospace, Consolas, monospace">
+<title id="t3">Tier map: five coding-agent tiers, each with a primary model and a fallback chain</title>
+<desc id="d3">Mythos, Fable, Opus, Sonnet and Haiku are protocol names. Each resolves to a primary model and an ordered fallback chain. A blank Haiku follows the default model. A paused row keeps its place and is never tried, and the same model paused on Opus still serves Sonnet.</desc>
+<g font-size="12">
+<g>
+<rect x="20" y="40" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="66" fill="#3FB950" font-size="13">mcc/cyber · Mythos</text>
+<text x="36" y="88" fill="#A9B7C6" font-size="11">primary → fallback 1 → fallback 2</text>
+<rect x="470" y="54" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="72" fill="#E6EDF3">primary model</text>
+<rect x="620" y="54" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="634" y="72" fill="#A9B7C6">1 · stand-in</text>
+</g>
+<g>
+<rect x="20" y="118" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="144" fill="#3FB950" font-size="13">mcc/best · Fable</text>
+<text x="36" y="166" fill="#A9B7C6" font-size="11">primary → fallback 1 → fallback 2 → fallback 3</text>
+<rect x="470" y="132" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="150" fill="#E6EDF3">primary model</text>
+<rect x="620" y="132" width="140" height="26" rx="5" fill="#18212C" stroke="#D29922"/><text x="634" y="150" fill="#D29922">paused</text>
+</g>
+<g>
+<rect x="20" y="196" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="222" fill="#3FB950" font-size="13">mcc/good · Opus</text>
+<text x="36" y="244" fill="#A9B7C6" font-size="11">primary → fallback 1 → fallback 2</text>
+<rect x="470" y="210" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="228" fill="#E6EDF3">primary model</text>
+<rect x="620" y="210" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="634" y="228" fill="#A9B7C6">2 · stand-in</text>
+</g>
+<g>
+<rect x="20" y="274" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="300" fill="#3FB950" font-size="13">mcc/medium · Sonnet</text>
+<text x="36" y="322" fill="#A9B7C6" font-size="11">primary → fallback 1</text>
+<rect x="470" y="288" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="306" fill="#E6EDF3">primary model</text>
+<rect x="620" y="288" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="634" y="306" fill="#A9B7C6">1 · stand-in</text>
+</g>
+<g>
+<rect x="20" y="352" width="760" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="380" fill="#3FB950" font-size="13">mcc/cheap · Haiku</text>
+<text x="220" y="380" fill="#A9B7C6" font-size="11">blank follows the default model</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="420">A model listed twice is tried twice; each listing is judged when it is reached.</text>
+</g>
+</g>
+</svg>
+</div>
+<figcaption>The tier map, with a primary model and an ordered chain per route.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of five tiers, each with a primary model and fallback rows, one paused.</p>
+</figure>
+
+        <h2 id="what-the-picker-is-told">What the picker is told</h2>
+
+        <p>The model-listing route advertises configured provider refs, cached provider-discovered models, no-thinking variants where appropriate, and built-in Claude model IDs for compatibility. A discovered model's thinking support is used for presentation only; it never selects request behaviour. A per-client picker is shaped outside the route: the composition bridge builds catalogue records from the same ladder, using the same visibility filter and projection, so a model cannot appear in one surface and not the other, and it writes each harness's catalogue without making a loopback HTTP request.</p>
+
+        <p>One consequence is worth stating because it is visible: a catalogue is a snapshot. The Codex App reads its catalogue at startup, so it must restart to see a later publication, and the Codex launcher remains a launch-time synchroniser for the same reason. An existing last-known-good catalogue is preserved when a projection resolves no routable models.</p>
+
+        <h2 id="aliases-are-pointers">Aliases are pointers</h2>
+
+        <p>The protocol names <code>mcc/cyber</code>, <code>mcc/best</code>, <code>mcc/good</code>, <code>mcc/medium</code>, <code>mcc/cheap</code> and <code>mcc/vision</code> serve harnesses that have no Claude vocabulary of their own. Each names one of the router's global routes, together with that route's fallback chain and pause list, and an unset route collapses onto the default model exactly as the Claude tier does. The provider ID <code>mcc</code> is reserved so a custom provider cannot make an alias ambiguous.</p>
+
+        <p>The tier segment is matched exactly, not by substring. The router takes an optional harness name from the request header or the user-agent fingerprint; an unidentified request resolves against the global chain rather than failing. The resolved tier route is recorded on the plan, which is what lets the request log name the tier, its source and its harness without adding a column to the log.</p>
+
+        <h2 id="walking-the-chain">Walking the chain</h2>
+
+        <p>Each route has a model and an ordered chain of stand-ins. The executor attempts the route's model first, then each entry in order. A model listed twice is tried twice, and each listing is judged when it is reached. A paused entry keeps its place and is never tried: no attempt is spent, no deadline is consumed, and the log records the reason.</p>
+
+        <figure class="figure figure--diagram" id="fig-routing-fallback">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t4 d4" font-family="ui-monospace, Consolas, monospace">
+<title id="t4">Walking a fallback chain with a recorded reason beside every model</title>
+<desc id="d4">A request walks an ordered chain. The first model sat out a rate-limit cooldown, the second was paused by the operator, the third answered, and the rest were never reached. The request log lists every entry with its reason, so a fallback is never invisible.</desc>
+<defs>
+<marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M190 80 H240" marker-end="url(#a4)"/>
+<path d="M420 80 H470" marker-end="url(#a4)"/>
+<path d="M650 80 H700" marker-end="url(#a4)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="50" width="170" height="60" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="34" y="74" fill="#D29922">1 · model A</text>
+<text x="34" y="94" fill="#A9B7C6" font-size="11">cooldown, not tried</text>
+<rect x="240" y="50" width="180" height="60" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="254" y="74" fill="#D29922">2 · model B</text>
+<text x="254" y="94" fill="#A9B7C6" font-size="11">paused by operator</text>
+<rect x="470" y="50" width="180" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="484" y="74" fill="#3FB950">3 · model C</text>
+<text x="484" y="94" fill="#A9B7C6" font-size="11">answered</text>
+<rect x="700" y="50" width="140" height="60" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="714" y="74" fill="#7D8FA3">4 · model D</text>
+<text x="714" y="94" fill="#7D8FA3" font-size="11">never reached</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="160">The router stops at the first attempt that succeeds. A skipped entry costs no attempt and no deadline.</text>
+<text x="20" y="182">A run of failures on one model moves to the next model; only auth, 429 and transport faults try another key.</text>
+<text x="20" y="204">A 429 benches the (key, model) pair, not the whole key, and the key keeps serving its other models.</text>
+</g>
+<g font-size="12">
+<rect x="20" y="236" width="820" height="156" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="262" fill="#E6EDF3" font-weight="700">Why a body that fails is not retried forever</text>
+<text x="36" y="286" fill="#A9B7C6">Timeouts, 5xx, a 410 and a plain 400 are properties of the model or the moment, and</text>
+<text x="36" y="306" fill="#A9B7C6">every key in the pool would meet the same answer.</text>
+<text x="36" y="326" fill="#A9B7C6">Those raise out of the rotating loop so the chain spends its time on a different model</text>
+<text x="36" y="346" fill="#A9B7C6">instead of the rest of the pool.</text>
+<text x="36" y="366" fill="#A9B7C6">Failover happens before the first streamed chunk; after output starts, a failure is</text>
+<text x="36" y="386" fill="#A9B7C6">surfaced, not silently retried.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="408" width="14" height="14" rx="3" fill="#111821" stroke="#D29922"/><text x="42" y="420">skipped</text>
+<rect x="130" y="408" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="152" y="420">answered</text>
+<rect x="250" y="408" width="14" height="14" rx="3" fill="#111821" stroke="#5D6E84"/><text x="272" y="420">not reached</text>
+</g>
+</svg>
+</div>
+<figcaption>A walked chain: skipped, answered and never reached, each with its reason.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of a four-model chain with a cooldown, a pause, an answer and an unreached model.</p>
+</figure>
+
+        <p>The chain's decision rules come from the failure, not from a general retry count. An auth rejection, a 429 and a transport fault can all be helped by a different key, so the pool rotates. A timeout, a 5xx, a 410 or a plain 400 cannot: every key talks to the same model and would hear the same answer, so those raise out of the rotating loop and the chain moves to the next model. A timeout is explicitly excluded from the transport-fault class, because a model that never answered is not a broken socket.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-request-attempts.webp" alt="The attempt-level view of one request: each model the chain tried, its status, tokens and cost, one row per attempt." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The chain as the request log shows it: each attempt with its key, timings and the reason it was or was not tried.</figcaption>
+</figure>
+
+        <h2 id="media-rails-are-not-chat-tiers">Media rails are not chat tiers</h2>
+
+        <p>The image, speech, transcription and video rails walk their chains under the same rules through a separate copy of the engine, and a contract test holds the two copies to the same decisions. They keep their own key, model and proxy health, so a media failure never benches anything for chat. Nothing on a media rail is listed in the model catalogue or offered to a coding agent.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>The router never inspects an upstream model name or version to choose reasoning behaviour.</li><li>A route whose every model is paused fails with an error naming the key rather than silently falling through.</li><li>A failure after the first streamed chunk is not retried; the response is already committed.</li><li>An unknown harness is served, not refused.</li><li>A catalogue write that resolves no routable models preserves the last good file.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/routing/">Feature: routing and fallback chains</a></li><li><a href="/architecture/request-path/">Request path: where resolution sits</a></li><li><a href="/architecture/credential-health/">Credential health: what the chain asks the pool</a></li><li><a href="/configuration/environment/">Configuration: MODEL_* and the chain variables</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#three-ways-to-name-a-model">Three ways to name a model</a></li>
+          <li><a href="#what-the-picker-is-told">What the picker is told</a></li>
+          <li><a href="#aliases-are-pointers">Aliases are pointers</a></li>
+          <li><a href="#walking-the-chain">Walking the chain</a></li>
+          <li><a href="#media-rails-are-not-chat-tiers">Media rails are not chat tiers</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

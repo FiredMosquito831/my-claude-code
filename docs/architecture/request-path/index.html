@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Request path | My Claude Code</title>
+<meta name="description" content="Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/request-path/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Request path | My Claude Code">
+<meta property="og:description" content="Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/request-path/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Request path | My Claude Code">
+<meta name="twitter:description" content="Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Request path | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/request-path/", "description": "Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Request path"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/" aria-current="page">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li>Request path</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>From a door to a committed reply</h1>
+<p class="page-intro">A request is authenticated once, correlated once, routed once and executed against one provider at a time. The hard part is not the happy path; it is deciding when a failure is still an HTTP error and when it is already part of a stream.</p>        <h2 id="the-routes">The routes</h2>
+
+        <p>The proxy exposes <code>POST /v1/messages</code> for Anthropic Messages, <code>POST /v1/responses</code> for OpenAI Responses, <code>POST /v1/chat/completions</code> for Chat Completions, <code>POST /v1/messages/count_tokens</code> for Anthropic token counting, <code>GET /v1/models</code> for the gateway and Claude-compatible model list, <code>GET /health</code>, <code>POST /stop</code>, and HEAD and OPTIONS probes on the supported endpoints. Google's surface lives in its own module because its path shape is unlike every other route: <code>POST /v1beta/models/{model}:generateContent</code> and its streaming, token-count and list siblings.</p>
+
+        <figure class="figure figure--diagram" id="fig-request-path-doors">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t1 d1" font-family="ui-monospace, Consolas, monospace">
+<title id="t1">Four protocol doors reach one router and one provider executor</title>
+<desc id="d1">Claude Code, Pi, OpenCode, Crush, Kimi and Qwen enter the Anthropic Messages door; Codex enters the Responses door; Cline, Goose and Aider enter the Chat Completions door; Gemini CLI and Antigravity enter the Gemini door. All four doors meet the same router, which resolves a tier to a model, then the provider executor walks the fallback chain and returns a reply in the protocol the client asked in.</desc>
+<defs>
+<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M200 60 H360" marker-end="url(#a1)"/>
+<path d="M200 140 H360" marker-end="url(#a1)"/>
+<path d="M200 220 H360" marker-end="url(#a1)"/>
+<path d="M200 300 H360" marker-end="url(#a1)"/>
+<path d="M600 180 H700" marker-end="url(#a1)"/>
+</g>
+<g font-size="13" fill="#E6EDF3">
+<rect x="20" y="40" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="65">Claude Code · Pi</text>
+<rect x="20" y="120" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="145">Codex</text>
+<rect x="20" y="200" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="225">Cline · Goose · Aider</text>
+<rect x="20" y="280" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="305">Gemini CLI · Antigravity</text>
+</g>
+<g font-size="12" fill="#3FB950">
+<rect x="380" y="40" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="58">POST /v1/messages</text>
+<text x="394" y="73" fill="#A9B7C6">Anthropic Messages</text>
+<rect x="380" y="120" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="138">POST /v1/responses</text>
+<text x="394" y="153" fill="#A9B7C6">OpenAI Responses</text>
+<rect x="380" y="200" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="218">POST /v1/chat/completions</text>
+<text x="394" y="233" fill="#A9B7C6">Chat Completions</text>
+<rect x="380" y="280" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="298">POST /v1beta/models/{model}</text>
+<text x="394" y="313" fill="#A9B7C6">Google Gemini</text>
+</g>
+<rect x="620" y="120" width="220" height="120" rx="8" fill="#111821" stroke="#58A6FF" stroke-width="2"/>
+<g font-size="13" fill="#E6EDF3">
+<text x="636" y="146" font-weight="700">Router + executor</text>
+<text x="636" y="168" fill="#A9B7C6">resolve tier → model</text>
+<text x="636" y="188" fill="#A9B7C6">reasoning · budget</text>
+<text x="636" y="208" fill="#A9B7C6">credential · fallback</text>
+<text x="636" y="228" fill="#A9B7C6">price · log once</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="370" width="14" height="14" rx="3" fill="#18212C" stroke="#5D6E84"/><text x="42" y="382">client</text>
+<rect x="130" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="152" y="382">protocol door</text>
+<rect x="280" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="302" y="382">shared router</text>
+<text x="430" y="382">The reply is translated back into the client's protocol.</text>
+</g>
+</svg>
+</div>
+<figcaption>The four client protocols and the routes they enter.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram showing four client protocols entering four routes that meet one router.</p>
+</figure>
+
+        <h2 id="authentication-and-correlation">Authentication and correlation</h2>
+
+        <p>Proxy authentication is one function. If <code>ANTHROPIC_AUTH_TOKEN</code> is blank, proxy authentication is disabled. Otherwise the proxy accepts exactly a bearer token, and other credential headers are ignored, so a stale provider key cannot mask valid proxy authorization. The complete token is compared in constant time, and no model suffix or other token mutation is accepted.</p>
+
+        <p>A pure ASGI boundary creates one opaque request ID before routing, places it in the log context and request state, and adds it to the response while forwarding the real response-start message. The Responses surface and the shared model catalogue expose the same value as a request-id header. Provider execution receives that existing ID; it never creates a second one. Keeping the context around the whole inner call is what preserves correlation during streaming.</p>
+
+        <h2 id="routing-and-shaping">Routing and shaping</h2>
+
+        <p>The product handler validates the request, resolves the model and the reasoning intent, applies Claude-only safety-classifier and local-optimization policy, handles local server tools, and then asks the executor to stream the routed request. The Responses handler is streaming-only and delegates its protocol work to an adapter that converts the payload into an Anthropic Messages request before execution and converts the streamed events back afterwards.</p>
+
+        <figure class="figure figure--diagram" id="fig-request-path-lifecycle">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t2 d2" font-family="ui-monospace, Consolas, monospace">
+<title id="t2">The lifecycle of one request through the proxy</title>
+<desc id="d2">Seven numbered stages: ingress authentication and request validation; tier and model resolution; reasoning and output-budget resolution; credential selection from a healthy key; an upstream attempt; the fallback chain when an attempt fails; and the reply, which is translated back to the client's protocol and priced and logged once.</desc>
+<defs>
+<marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M180 80 H240" marker-end="url(#a2)"/>
+<path d="M420 80 H480" marker-end="url(#a2)"/>
+<path d="M660 80 H700" marker-end="url(#a2)"/>
+<path d="M760 110 V190" marker-end="url(#a2)"/>
+<path d="M700 220 H660" marker-end="url(#a2)"/>
+<path d="M480 220 H420" marker-end="url(#a2)"/>
+<path d="M240 220 H180" marker-end="url(#a2)"/>
+</g>
+<g font-size="12">
+<g>
+<rect x="20" y="50" width="160" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="34" y="74" fill="#3FB950">1 · ingress</text>
+<text x="34" y="94" fill="#A9B7C6" font-size="11">auth, validate</text>
+</g>
+<g>
+<rect x="240" y="50" width="180" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="254" y="74" fill="#3FB950">2 · route</text>
+<text x="254" y="94" fill="#A9B7C6" font-size="11">tier → model</text>
+</g>
+<g>
+<rect x="480" y="50" width="180" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="494" y="74" fill="#3FB950">3 · shape</text>
+<text x="494" y="94" fill="#A9B7C6" font-size="11">reasoning · budget</text>
+</g>
+<g>
+<rect x="700" y="50" width="140" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="714" y="74" fill="#58A6FF">4 · credential</text>
+<text x="714" y="94" fill="#A9B7C6" font-size="11">a healthy key</text>
+</g>
+<g>
+<rect x="700" y="190" width="140" height="60" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="714" y="214" fill="#D29922">5 · attempt</text>
+<text x="714" y="234" fill="#A9B7C6" font-size="11">upstream call</text>
+</g>
+<g>
+<rect x="480" y="190" width="180" height="60" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="494" y="214" fill="#D29922">6 · fallback</text>
+<text x="494" y="234" fill="#A9B7C6" font-size="11">next model, next key</text>
+</g>
+<g>
+<rect x="240" y="190" width="180" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="254" y="214" fill="#3FB950">7 · reply</text>
+<text x="254" y="234" fill="#A9B7C6" font-size="11">translate back</text>
+</g>
+<g>
+<rect x="20" y="190" width="160" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="34" y="214" fill="#58A6FF">price · log once</text>
+<text x="34" y="234" fill="#A9B7C6" font-size="11">provenance kept</text>
+</g>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="300">A request stops at the first stage that fails, and the failure keeps the protocol's own envelope.</text>
+<text x="20" y="322">Once the first streamed chunk has left, status is committed: the client sees an in-band error, not a second HTTP status.</text>
+<text x="20" y="344">Every attempt, including the ones that were skipped, is a row in the request log.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="378" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="390">normal stage</text>
+<rect x="150" y="378" width="14" height="14" rx="3" fill="#111821" stroke="#D29922"/><text x="172" y="390">failure path</text>
+<rect x="290" y="378" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="312" y="390">state and accounting</text>
+</g>
+</svg>
+</div>
+<figcaption>Seven stages from ingress to a priced, logged reply.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A numbered seven-stage pipeline: ingress, route, shape, credential, attempt, fallback and reply, ending in one price and log row.</p>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-request-attempts.webp" alt="The attempt-level view of one request: each model the chain tried, its status, tokens and cost, one row per attempt." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The result of the pipeline: one request&#39;s attempts, with a reason beside every model it did not try.</figcaption>
+</figure>
+
+        <h2 id="the-commit-boundary">The commit boundary</h2>
+
+        <p>The executor resolves a provider from the current generation, synchronously preflights the upstream request, emits trace events, counts input tokens and returns an iterator of protocol events. The response layer then waits for the first protocol chunk before it returns a successful streaming response. That wait is the commit boundary. A provider failure before it stays a typed non-2xx JSON response, and that response carries a retry header set to false, because MCC retains ownership of upstream retry rather than causing a second client retry loop.</p>
+
+        <p>After the first chunk has escaped, HTTP status is committed. The Messages surface then emits an Anthropic error event and closes without a synthetic message-stop; the Responses surface emits a failed response with its original ID. Non-streaming Messages requests aggregate internally and return a non-2xx JSON for any terminal stream error, discarding incomplete content rather than presenting a partial success.</p>
+
+        <h2 id="close-ownership">Close ownership</h2>
+
+        <p>The public response chain follows a transitive close-ownership rule. A response owns its replay iterator; replay owns the active protocol adapter; each adapter owns its direct input; tracing owns the executor body; the executor body owns the provider iterator; and the provider runner owns its upstream stream. Each owner closes its direct input on normal completion, failure, cancellation and early consumer close. A generation lease is released only after the body chain has finished closing.</p>
+
+        <h2 id="failures-that-are-not-provider-failures">Failures that are not provider failures</h2>
+
+        <p>Ingress authentication, request validation, model routing and deterministic preflight failures are ordinary HTTP errors and do not receive the terminal retry header. Missing provider configuration and a shutting-down request runtime are application-readiness errors: the Messages surface serialises them as Anthropic JSON and the Responses surface as OpenAI JSON, and neither is misclassified as an already-finalised provider failure.</p>
+
+        <h2 id="the-gemini-difference">The Gemini difference</h2>
+
+        <p>The Gemini door keeps Google's error envelope, because Gemini CLI branches on the status string when it decides whether to retry. Its prompt token count includes the cached prompt, unlike Anthropic's, because Google's field includes it and reports the served part separately; a straight rename would under-report every cached request. Its stream has no done sentinel, because that is OpenAI's convention and Google's client would try to parse it as JSON.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-request-detail.webp" alt="A single request&#39;s detail view: its route attempts and the reasoning fields the router sent." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>A request detail: what entered, what was routed, what was sent and what answered.</figcaption>
+</figure>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>One request ID, created at ingress, is reused by every stage. There is no second identifier.</li><li>A failure after the first chunk cannot change the HTTP status; it is an in-band event.</li><li>A non-streaming request discards an incomplete reply rather than returning partial content as success.</li><li>The executor depends on a provider port, not on a provider implementation, which is why four doors can share one executor.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/architecture/provider-routing/">Provider routing: what happens inside the routed stage</a></li><li><a href="/architecture/credential-health/">Credential health: what happens before an attempt</a></li><li><a href="/features/routing/">Feature: routing and fallback chains</a></li><li><a href="/glossary/">Glossary: commit boundary, generation lease, request ID</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-routes">The routes</a></li>
+          <li><a href="#authentication-and-correlation">Authentication and correlation</a></li>
+          <li><a href="#routing-and-shaping">Routing and shaping</a></li>
+          <li><a href="#the-commit-boundary">The commit boundary</a></li>
+          <li><a href="#close-ownership">Close ownership</a></li>
+          <li><a href="#failures-that-are-not-provider-failures">Failures that are not provider failures</a></li>
+          <li><a href="#the-gemini-difference">The Gemini difference</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

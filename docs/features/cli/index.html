@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The command line | My Claude Code</title>
+<meta name="description" content="The mcc-* launchers, headless mcc-apps controls, the installer&#39;s own flags, OAuth sign-in commands and the migration and removal tools.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/cli/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="The command line | My Claude Code">
+<meta property="og:description" content="The mcc-* launchers, headless mcc-apps controls, the installer&#39;s own flags, OAuth sign-in commands and the migration and removal tools.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/cli/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="The command line | My Claude Code">
+<meta name="twitter:description" content="The mcc-* launchers, headless mcc-apps controls, the installer&#39;s own flags, OAuth sign-in commands and the migration and removal tools.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "The command line | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/cli/", "description": "The mcc-* launchers, headless mcc-apps controls, the installer's own flags, OAuth sign-in commands and the migration and removal tools."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "CLI"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>CLI</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>The commands MCC puts on your PATH</h1>
+<p class="page-intro">The dashboard is optional. Everything the page can do has a command, and the launchers are how most people start an agent. This page is the reference for the commands, with the flags that exist and the ones that do not.</p>        <p>An install puts <code>mcc-server</code> and the <code>mcc-*</code> launchers on your PATH, and adds the headless tools beside them. A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself.</p>
+
+        <p>The launcher set is generated from one registry, so a new agent is a registry entry rather than a new script. A launcher whose agent is missing prints that agent's own install command and exits, which is why the CLI never installs an agent on its own.</p>
+
+        <h2 id="the-server-and-the-launchers">The server and the launchers</h2>
+
+        <span class="code-label">Start the server</span><pre><code>mcc-server</code></pre>
+
+        <p><code>mcc-server --version</code> prints the running release. The server listens on loopback port 8082 by default, serves the dashboard at <code>/admin</code> and answers <code>/health</code>. Every other MCC server on the machine is left alone.</p>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+<tbody><tr><td><code>mcc-claude</code></td><td>launch Claude Code against the proxy; <code>--discover-models</code> wires the native model picker, and <code>mcc-claude-old</code> keeps the older launch shape</td></tr><tr><td><code>mcc-codex</code></td><td>launch Codex CLI over the OpenAI Responses surface</td></tr><tr><td><code>mcc-opencode</code>, <code>mcc-opencode2</code></td><td>launch OpenCode over Anthropic Messages</td></tr><tr><td><code>mcc-gemini</code></td><td>launch Gemini CLI over the Gemini API surface</td></tr><tr><td><code>mcc-crush</code>, <code>mcc-cline</code>, <code>mcc-goose</code>, <code>mcc-aider</code></td><td>launch the matching agent</td></tr><tr><td><code>mcc-kimi</code>, <code>mcc-qwen</code>, <code>mcc-commandcode</code></td><td>launch Kimi Code, Qwen Code and Command Code</td></tr><tr><td><code>mcc-openclaw</code>, <code>mcc-hermes</code>, <code>mcc-droid</code>, <code>mcc-pi</code>, <code>mcc-kilo</code></td><td>launch the matching agent</td></tr></tbody>
+</table></div>
+
+        <figure class="figure">
+<img src="/assets/shots/cc-model-picker.webp" alt="The Claude Code model picker in a terminal, listing the tiers routed through My Claude Code." width="1723" height="915" loading="lazy" decoding="async">
+<figcaption>Claude Code&#39;s native model picker after mcc-claude --discover-models, listing the routed models.</figcaption>
+</figure>
+
+        <h2 id="headless-app-control">Headless app control</h2>
+
+        <p><code>mcc-apps</code> does what the Desktop apps cards do, which matters on a headless machine or over SSH. Its subcommands are <code>list</code>, <code>status</code>, <code>configure</code> (with <code>--preview</code> to show the change without writing it) and <code>undo</code> (with <code>--restore</code> to put back the exact values MCC replaced).</p>
+
+        <span class="code-label">Preview a desktop-app change</span><pre><code>mcc-apps configure --preview</code></pre>
+
+        <h2 id="sign-in-migration-and-the-token-optimizer">Sign-in, migration and the token optimizer</h2>
+
+        <ul><li><code>mcc-anthropic-oauth-login</code> signs in from a terminal. It takes <code>--paste</code>, <code>--no-browser</code>, <code>--list</code> and <code>--remove &lt;id&gt;</code>, and answers <code>--help</code> without starting anything.</li><li><code>mcc-migrate</code> runs the legacy-home move by hand. It refuses while it can see a live server.</li><li><code>mcc-rtk status|enable|disable|uninstall|apply</code> controls the opt-in token optimizer per agent, the same control the dashboard's Token optimizer card writes.</li><li><code>mcc-desktop</code> fetches and verifies the desktop app, and refuses rather than pretending on a machine with no tray.</li></ul>
+
+        <figure class="figure">
+<img src="/assets/shots/agent-session.webp" alt="A Claude Code session in a terminal, showing the prompt and a model routing line." width="1713" height="910" loading="lazy" decoding="async">
+<figcaption>A launcher starts the agent with the proxy address, the token and the catalogue in place; the agent itself looks unchanged.</figcaption>
+</figure>
+
+        <h2 id="the-installer-s-flags">The installer's flags</h2>
+
+        <p>The one-liners accept <code>--dry-run</code> to see the plan without changing anything, <code>--version</code> to pin a release, <code>--desktop</code> to install the app too, <code>--no-restart</code> to leave a running server alone, <code>--no-start</code> to stop and start nothing, <code>--no-desktop</code> to leave the app alone and <code>--yes-sudo</code> to answer the sudo prompt for the Linux package step. The npm wrapper accepts <code>--server-only</code>, <code>--desktop-only</code>, <code>--no-desktop</code> and <code>--yes-sudo</code>, and reads <code>MCC_NPM_INSTALL=server|desktop|both|none</code>.</p>
+
+        <span class="code-label">See what an install would do</span><pre><code>curl -fsSL &#34;https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh&#34; | sh -s -- --dry-run</code></pre>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-launchers.webp" alt="The launchers list: every installed mcc-* command with its state and a copy button." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The dashboard lists every launcher it installed, with its state and a copy button.</figcaption>
+</figure>
+
+        <h2 id="a-first-run-in-order">A first run, in order</h2>
+
+        <ol><li>Install with the one-liner for your platform, then reopen the terminal so the PATH change is visible.</li><li>Run <code>mcc-server</code>; on first start it writes the configuration home and generates the proxy token.</li><li>Add one provider key on the Providers page, then set the tiers on Model Config.</li><li>Launch the agent with its own command, for example <code>mcc-claude</code>. The launcher passes the proxy address, the token and the generated catalogue, and the agent itself looks unchanged.</li></ol>
+
+        <h2 id="where-the-cli-and-the-dashboard-meet">Where the CLI and the dashboard meet</h2>
+
+        <p>The command line and the dashboard are two front doors to one configuration. A command does not keep a private copy of a setting, and a page does not write somewhere the server will not read. <code>mcc-apps configure</code> shows the same diff preview the card shows, and <code>mcc-apps undo</code> performs the same two undo modes.</p>
+
+        <p>The exceptions are the things that must be decided before the settings file exists. <code>MCC_CONFIG_DIR</code> is a shell variable, not a setting, and the install-time switches are flags rather than values. Everything else has one name and one place, which is what makes a command and a page safe to use interchangeably.</p>
+
+        <p>A command that needs a provider key reads it from the same configuration home the server reads, through the same settings resolution. There is no separate credential path for the CLI, and no command that writes a key the dashboard would not show.</p>
+
+        <h2 id="what-the-commands-do-not-do">What the commands do not do</h2>
+
+        <ul><li>A launcher does not install its agent. It prints the agent's own install line and exits.</li><li>The installer does not install curl, and it does not upgrade your system Python. It uses Python 3.14 through uv.</li><li>The CLI does not write a file the dashboard does not also write; both go through the same configuration.</li><li>No command changes repository settings, DNS or a hosting account.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/quick-start/">Quick start: the exact install commands</a></li><li><a href="/features/agents/">Agents: what each launcher starts</a></li><li><a href="/features/platform/">Platform: the desktop app and the update path</a></li><li><a href="/configuration/">Configuration: how settings reach the commands</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-server-and-the-launchers">The server and the launchers</a></li>
+          <li><a href="#headless-app-control">Headless app control</a></li>
+          <li><a href="#sign-in-migration-and-the-token-optimizer">Sign-in, migration and the token optimizer</a></li>
+          <li><a href="#the-installer-s-flags">The installer&#39;s flags</a></li>
+          <li><a href="#a-first-run-in-order">A first run, in order</a></li>
+          <li><a href="#where-the-cli-and-the-dashboard-meet">Where the CLI and the dashboard meet</a></li>
+          <li><a href="#what-the-commands-do-not-do">What the commands do not do</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

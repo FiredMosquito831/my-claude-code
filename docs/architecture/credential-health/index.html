@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Credential health | My Claude Code</title>
+<meta name="description" content="The rotation engine, the two questions it asks of every failure, and the three signals that can change a key&#39;s health. Everything else leaves the key untouched.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/credential-health/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Credential health | My Claude Code">
+<meta property="og:description" content="The rotation engine, the two questions it asks of every failure, and the three signals that can change a key&#39;s health. Everything else leaves the key untouched.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/credential-health/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Credential health | My Claude Code">
+<meta name="twitter:description" content="The rotation engine, the two questions it asks of every failure, and the three signals that can change a key&#39;s health. Everything else leaves the key untouched.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Credential health | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/credential-health/", "description": "The rotation engine, the two questions it asks of every failure, and the three signals that can change a key's health. Everything else leaves the key untouched."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Credential health"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/" aria-current="page">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li>Credential health</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>How a key earns a bench</h1>
+<p class="page-intro">A provider holding several keys has to answer two independent questions about one failure: should another key be tried, and does this failure cost the credential anything? MCC answers each from its own allow-list, rather than from one deny-list that defaults to blaming the key.</p>        <h2 id="question-one-try-another-key">Question one: try another key?</h2>
+
+        <p>Only three failures justify a different credential: an auth rejection, a 429 and a transport fault. A different credential means a different account or a different connection, so one of them might help. Nothing else does. Every key in the pool reaches the same model and would meet the same timeout, 5xx, 410 or 400, so those raise out of the rotating loop and the fallback chain moves on to the next model instead.</p>
+
+        <p>Credentials already tried in a request are passed to the pool as an avoid set, so rotation cannot end with keys untried. The timeout class is excluded by name, because a model that never answered is not a broken socket and spending the whole pool on it would be a self-inflicted outage.</p>
+
+        <figure class="figure figure--diagram" id="fig-credential-rotation">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t5 d5" font-family="ui-monospace, Consolas, monospace">
+<title id="t5">One provider's key pool, its four rotation policies and its health states</title>
+<desc id="d5">A provider holds an ordered pool of keys. Each key has its own upstream client and rate-limit window. Four policies read the pool order: single, round robin, least used, and failover. A key is healthy, benched for one model, locked out after an auth rejection, or benched whole after a billing refusal.</desc>
+<g font-size="12">
+<rect x="20" y="30" width="300" height="210" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="56" fill="#E6EDF3" font-weight="700">Key pool (order is read top to bottom)</text>
+<rect x="36" y="72" width="268" height="30" rx="5" fill="#18212C" stroke="#3FB950"/><text x="50" y="92" fill="#3FB950">key 1 · healthy</text>
+<rect x="36" y="110" width="268" height="30" rx="5" fill="#18212C" stroke="#3FB950"/><text x="50" y="130" fill="#3FB950">key 2 · healthy</text>
+<rect x="36" y="148" width="268" height="30" rx="5" fill="#18212C" stroke="#D29922"/><text x="50" y="168" fill="#D29922">key 3 · benched (one model)</text>
+<rect x="36" y="186" width="268" height="30" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="50" y="206" fill="#A9B7C6">key 4 · locked out (401/403)</text>
+<rect x="360" y="30" width="250" height="210" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="376" y="56" fill="#E6EDF3" font-weight="700">Rotation policy</text>
+<text x="376" y="84" fill="#A9B7C6">single</text>
+<text x="376" y="108" fill="#A9B7C6">round_robin</text>
+<text x="376" y="132" fill="#A9B7C6">least_used</text>
+<text x="376" y="156" fill="#A9B7C6">failover / on_error</text>
+<text x="376" y="190" fill="#7D8FA3" font-size="11">per pool, on the provider card</text>
+<rect x="630" y="30" width="210" height="210" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="646" y="56" fill="#E6EDF3" font-weight="700">Try another key?</text>
+<text x="646" y="84" fill="#3FB950">401 / 403</text>
+<text x="646" y="108" fill="#3FB950">429</text>
+<text x="646" y="132" fill="#3FB950">transport fault</text>
+<text x="646" y="166" fill="#7D8FA3" font-size="11">nothing else does</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="276">A different key means a different account or connection. A timeout, a 5xx, a 410 or a</text>
+<text x="20" y="298">plain 400 is the model's answer, and every key would hear it.</text>
+<text x="20" y="320">Every key tried in a request is remembered as an avoid set, so rotation cannot end with</text>
+<text x="20" y="342">keys untried. The pool never invents a ceiling: a wait comes from the provider's own</text>
+<text x="20" y="364">Retry-After, and a status comes from its own response.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="388" width="14" height="14" rx="3" fill="#18212C" stroke="#3FB950"/><text x="42" y="400">serving</text>
+<rect x="130" y="388" width="14" height="14" rx="3" fill="#18212C" stroke="#D29922"/><text x="152" y="400">benched</text>
+<rect x="240" y="388" width="14" height="14" rx="3" fill="#18212C" stroke="#5D6E84"/><text x="262" y="400">locked out</text>
+</g>
+</svg>
+</div>
+<figcaption>A key pool, the four rotation policies and the three failures that justify another key.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of a key pool with healthy, benched and locked-out keys, four rotation policies and the three failures that try another key.</p>
+</figure>
+
+        <h2 id="question-two-what-does-it-cost-the-credential">Question two: what does it cost the credential?</h2>
+
+        <p>Only the three signals that describe the credential charge it. A <strong>401 or 403</strong> walks an escalating lockout ladder: five minutes, one hour, one day by default, one step per consecutive rejection, staying at the last entry. A <strong>429</strong> is benched for exactly the wait the provider published, or for the configured cooldown when it published none, under the operator's ceiling. That bench is scoped to the <code>(key, model)</code> pair, and it leaves the slot healthy, because a gateway that limits one model has made no statement about the key's other models.</p>
+
+        <p>An <strong>exhausted-credit</strong> refusal is different. Where the provider says in words that the account behind the key has no balance left, the whole key is benched for the cooldown window, because a wallet is not per model. The matcher reads only the provider's own structured words, through an echo-safe reader, so a prompt that happens to contain a billing phrase cannot bench a key. A bare 402 that names no phrase rotates and falls through but charges nothing.</p>
+
+        <figure class="figure figure--diagram" id="fig-credential-health">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t6 d6" font-family="ui-monospace, Consolas, monospace">
+<title id="t6">The three signals that can change a key's health, and what each one costs</title>
+<desc id="d6">A 401 or 403 walks an escalating lockout ladder of five minutes, one hour and one day on its own counter. A 429 benches only the key-and-model pair for the provider's published wait, and the key stays healthy for its other models. An exhausted-credit refusal benches the whole key for the cooldown window. Timeouts, 5xx, 410 and other 4xx leave health untouched.</desc>
+<g font-size="12">
+<g>
+<rect x="20" y="30" width="250" height="100" rx="8" fill="#111821" stroke="#F85149"/>
+<text x="36" y="58" fill="#F85149" font-weight="700">401 / 403 rejected</text>
+<text x="36" y="82" fill="#A9B7C6">the provider refused the credential</text>
+<text x="36" y="104" fill="#A9B7C6" font-size="11">escalating lockout, own counter</text>
+</g>
+<g>
+<rect x="305" y="30" width="250" height="100" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="321" y="58" fill="#D29922" font-weight="700">429 throttled</text>
+<text x="321" y="82" fill="#A9B7C6">the provider limited one model</text>
+<text x="321" y="104" fill="#A9B7C6" font-size="11">bench the (key, model) pair</text>
+</g>
+<g>
+<rect x="590" y="30" width="250" height="100" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="606" y="58" fill="#D29922" font-weight="700">Credits exhausted</text>
+<text x="606" y="82" fill="#A9B7C6">the account behind the key is empty</text>
+<text x="606" y="104" fill="#A9B7C6" font-size="11">a wallet is not per model</text>
+</g>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="170" width="250" height="120" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="196" fill="#E6EDF3">Cost: the key, on its own ladder</text>
+<text x="36" y="222" fill="#A9B7C6" font-size="11">5 min → 1 h → 24 h</text>
+<text x="36" y="244" fill="#A9B7C6" font-size="11">one step per consecutive rejection</text>
+<text x="36" y="266" fill="#A9B7C6" font-size="11">stays at the last entry</text>
+<rect x="305" y="170" width="250" height="120" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="321" y="196" fill="#E6EDF3">Cost: one pair, one window</text>
+<text x="321" y="222" fill="#A9B7C6" font-size="11">exactly the provider's Retry-After</text>
+<text x="321" y="244" fill="#A9B7C6" font-size="11">key stays HEALTHY</text>
+<text x="321" y="266" fill="#A9B7C6" font-size="11">escalates only at N models at once</text>
+<rect x="590" y="170" width="250" height="120" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="606" y="196" fill="#E6EDF3">Cost: the whole key</text>
+<text x="606" y="222" fill="#A9B7C6" font-size="11">for the cooldown window</text>
+<text x="606" y="244" fill="#A9B7C6" font-size="11">a bare 402 with no phrase</text>
+<text x="606" y="266" fill="#A9B7C6" font-size="11">charges nothing</text>
+</g>
+<g font-size="12">
+<rect x="20" y="320" width="820" height="82" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="344" fill="#E6EDF3">Leaves health untouched: timeouts, 5xx, 410 model gone, overloaded, context overflow, other 4xx,</text>
+<text x="36" y="366" fill="#A9B7C6" font-size="11">and a country refusal (403 RegionError). Those are properties of the model, the request or the</text>
+<text x="36" y="388" fill="#A9B7C6" font-size="11">address, not of the credential.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="412" width="14" height="14" rx="3" fill="#111821" stroke="#F85149"/><text x="42" y="424">credential</text>
+<rect x="150" y="412" width="14" height="14" rx="3" fill="#111821" stroke="#D29922"/><text x="172" y="424">throttle or billing</text>
+</g>
+</svg>
+</div>
+<figcaption>The three signals and what each one costs. Everything else leaves health untouched.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of three health signals: a rejected credential walks a lockout ladder, a 429 benches a key-and-model pair, and an exhausted balance benches the whole key.</p>
+</figure>
+
+        <p>The key itself is benched only once a configured number of distinct models hold a live bench on it at the same time, for the longest window already published and never less than the triggering 429 asked for. No ladder and no escalation beyond that one step are invented.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-credential-health.webp" alt="The credential-health table: per-key health and rotation policy across multiple key pools." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The credential-health card: the lockout ladder and the rate-limit cooldown, plus the per-pool rotation policy.</figcaption>
+</figure>
+
+        <h2 id="rotate-the-pool-or-route-around-the-model">Rotate the pool, or route around the model?</h2>
+
+        <p>Not every 429 should rotate. When route-around is on, the pool reports the failure, decides health as usual, and then raises a typed model-rate-limited signal. The executor moves to the next chain model on that same provider, because that is where the evidence points: on one measured request all three keys refused one model inside 0.2 seconds each while another model answered on the first key in the same second. With no such model on the chain, one bounded diagnostic probe on a model the operator already configured there decides whether to keep the scoped bench or promote it to the whole key.</p>
+
+        <p>The probe's clock belongs to the executor; the pool holds none of its own. That deliberate cost is that a key failing 5xx or transport on every request is retried once per request rather than benched, because the failure classes that could identify a dead key were the same ones emptying healthy pools.</p>
+
+        <h2 id="one-mechanism-two-tunings">One mechanism, two tunings</h2>
+
+        <p>The rotation engine exists once, in core, and each frontend parameterises it. The provider tuning reaches neither the generic cooldown ladder nor the circuit breaker, because a provider adapter never classifies a failure as transient. The web-search tuning keeps both, because a search key that keeps erroring is worth resting. No half-open probe state remains: a slot reserved on acquire used to outlive a request that reported neither success nor failure, leaving the key unselectable until reset by hand, so a credential now wakes straight to healthy at the cost of at most one extra failed request.</p>
+
+        <h2 id="per-key-attribution">Per-key attribution</h2>
+
+        <p>Every request records which key answered, and the key is shown by name where a name exists and by a mask where it does not. The Analytics key filter still matches a renamed key's history by its mask, and the exports carry both the mask and the name. A masked label two keys share resolves to no name at all rather than to a guess.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-key-performance.webp" alt="The key-performance table with per-key request counts, and a Top errors panel listing provider diagnostics." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Per-key performance: requests, error rate, cache hit and latency, with the errors each key actually returned.</figcaption>
+</figure>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>A country refusal is about the address, not the key: it never locks a key out on any route.</li><li>The pool never invents a ceiling: a wait comes from the provider's own headers or the configured window.</li><li>A key's health is decided before the response is committed and is visible in the request log afterwards.</li><li>Rotation changes which key is tried, never which model a route points at.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/providers-and-credentials/">Feature: providers and credential health</a></li><li><a href="/architecture/provider-routing/">Provider routing: the chain that follows a key&#39;s refusal</a></li><li><a href="/features/observability-and-cost/">Observability: per-key attribution</a></li><li><a href="/configuration/environment/">Configuration: CREDENTIAL_* and RATE_LIMIT_*</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#question-one-try-another-key">Question one: try another key?</a></li>
+          <li><a href="#question-two-what-does-it-cost-the-credential">Question two: what does it cost the credential?</a></li>
+          <li><a href="#rotate-the-pool-or-route-around-the-model">Rotate the pool, or route around the model?</a></li>
+          <li><a href="#one-mechanism-two-tunings">One mechanism, two tunings</a></li>
+          <li><a href="#per-key-attribution">Per-key attribution</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

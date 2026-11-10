@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t11 d11" font-family="ui-monospace, Consolas, monospace">
+<title id="t11">The request log, its search index, its chunk store and the analytics built over them</title>
+<desc id="d11">A completed request is written once to logs/requests.db, with its attempts, tokens, cost and provenance. A search index stores each distinct piece of text in its own file beside the log. A prompt chunk store keeps each repeated prompt part once. Analytics reads rollups over the log, and the all-time strip keeps counting after stored rows roll over at the retention cap.</desc>
+<defs>
+<marker id="a11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M230 90 H300" marker-end="url(#a11)"/>
+<path d="M520 90 H590" marker-end="url(#a11)"/>
+<path d="M390 130 V200" marker-end="url(#a11)"/>
+<path d="M390 250 V300" marker-end="url(#a11)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="50" width="210" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="76" fill="#3FB950">request completes</text>
+<text x="36" y="98" fill="#A9B7C6" font-size="11">priced once, as it is logged</text>
+<text x="36" y="118" fill="#A9B7C6" font-size="11">one row, its attempts, its rung</text>
+<rect x="300" y="50" width="220" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="316" y="76" fill="#58A6FF">logs/requests.db</text>
+<text x="316" y="98" fill="#A9B7C6" font-size="11">prompt, reply, reasoning, tools</text>
+<text x="316" y="118" fill="#A9B7C6" font-size="11">retention cap prunes oldest rows</text>
+<rect x="590" y="50" width="250" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="606" y="76" fill="#3FB950">Analytics</text>
+<text x="606" y="98" fill="#A9B7C6" font-size="11">rollups, p50/p95, breakdowns</text>
+<text x="606" y="118" fill="#A9B7C6" font-size="11">all-time strip keeps counting</text>
+<rect x="300" y="200" width="220" height="50" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="316" y="222" fill="#58A6FF">search index</text>
+<text x="316" y="240" fill="#A9B7C6" font-size="11">one file per distinct text</text>
+<rect x="300" y="300" width="220" height="50" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="316" y="322" fill="#58A6FF">prompt chunk store</text>
+<text x="316" y="340" fill="#A9B7C6" font-size="11">each repeated part once</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="372">A hidden tab reads nothing. A read can never charge a key or bench a provider.</text>
+<text x="20" y="394">The search index returns the same results as a full scan; older rows are indexed on demand.</text>
+<text x="20" y="416">Raw diagnostics are off by default and bounded when enabled.</text>
+</g>
+</svg>

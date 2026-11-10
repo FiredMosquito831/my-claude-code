@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About | My Claude Code</title>
+<meta name="description" content="Who makes My Claude Code, what state it is in, and the honest history of a project that began as a fork and became a standalone routing layer.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/about/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="About | My Claude Code">
+<meta property="og:description" content="Who makes My Claude Code, what state it is in, and the honest history of a project that began as a fork and became a standalone routing layer.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/about/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="About | My Claude Code">
+<meta name="twitter:description" content="Who makes My Claude Code, what state it is in, and the honest history of a project that began as a fork and became a standalone routing layer.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "About | My Claude Code", "url": "https://myclaudecode.danubelabs.net/about/", "description": "Who makes My Claude Code, what state it is in, and the honest history of a project that began as a fork and became a standalone routing layer."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "About"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li>About</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>The project and its history</h1>
+<p class="page-intro">My Claude Code is an independent open-source project maintained by FiredMosquito831. It is a local routing layer for AI coding agents, and it says what it does without claiming more.</p>        <h2 id="status">Status</h2>
+
+        <p>The current release is 8.17.0. The project is active: providers, routing rules and protocol surfaces change release by release, and the documentation is updated beside the code. The repository is public, the test suite is in the repository, and the issue tracker is the place to report a defect. This site documents the behaviour the repository verifies; where a source disagrees with itself, the discrepancy is noted in the site's own record rather than smoothed over.</p>
+
+        <div class="facts">
+<div class="fact"><div class="fact__value">8.17.0</div><div class="fact__label">current release</div></div><div class="fact"><div class="fact__value">905</div><div class="fact__label">test files</div></div><div class="fact"><div class="fact__value">60</div><div class="fact__label">provider cards</div></div><div class="fact"><div class="fact__value">AGPL</div><div class="fact__label">or commercial</div></div></div>
+
+        <h2 id="how-it-got-here">How it got here</h2>
+
+        <p>This repository began as a fork of <a href="https://github.com/Alishahryar1/free-claude-code">Alishahryar1/free-claude-code</a> and became a standalone project on 2026-09-05. Every commit, branch and tag carried across unchanged: the Git history here is byte-for-byte the history it always had, and every release from v4.x onward is present with its original notes and assets.</p>
+
+        <p>GitHub pull requests are database records rather than Git objects, so they could not travel with the code. They are preserved as documents instead: the repository's <code>history/pull-requests/</code> directory holds all 284 of them with their descriptions, conversations, reviews and commit lists, plus the raw API payloads. Each one names the commit it merged as, and that commit is in this repository's history.</p>
+
+        <p>Two consequences are worth knowing. Pull request numbers written into old commit subjects refer to those archived records rather than to anything in this repository. And release publication dates all read 2026-09-05, because the API cannot backdate them; the tag and commit dates are the real ones.</p>
+
+        <h2 id="what-was-inherited">What was inherited</h2>
+
+        <p>The model-routing infrastructure inherited from the upstream project by Ali Khokhar stays under its original MIT license, and substantial portions of it remain in this project. The repository's licence file carries the full terms, including the MIT notice. The rest of the project is dual-licensed under the AGPL or a commercial licence, which the licence page sets out exactly.</p>
+
+        <h2 id="what-this-site-is">What this site is</h2>
+
+        <p>A product site, not a documentation reader. It is generated from the repository by a deterministic builder and committed alongside the documentation source, which it never modifies. Every capability page carries a claims list, every number is either computed from the repository or recorded against the command that produced it, and the screenshots are the product's own captures, reviewed and redacted on copies before publication.</p>
+
+        <p>The site is deliberately plain in one respect: it loads no external font, no content delivery network, no analytics and no embed. It reads as text with JavaScript disabled. That is a choice about trust, not a limitation of the tooling.</p>
+
+        <h2 id="contact">Contact</h2>
+
+        <p>The project's GitHub profile is the contact channel: <a href="https://github.com/FiredMosquito831">github.com/FiredMosquito831</a>. A defect or a feature request goes to the repository's issues. A vulnerability goes to the private security route named in the repository's policy, never to a public issue.</p>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/license/">Licence: AGPL-3.0-or-later or commercial, exactly</a></li><li><a href="/features/">Features: what the project actually does</a></li><li><a href="/architecture/">Architecture: how it is built</a></li><li><a href="https://github.com/FiredMosquito831/my-claude-code">The repository</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#status">Status</a></li>
+          <li><a href="#how-it-got-here">How it got here</a></li>
+          <li><a href="#what-was-inherited">What was inherited</a></li>
+          <li><a href="#what-this-site-is">What this site is</a></li>
+          <li><a href="#contact">Contact</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

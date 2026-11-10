@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary | My Claude Code</title>
+<meta name="description" content="The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product&#39;s documentation.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/glossary/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Glossary | My Claude Code">
+<meta property="og:description" content="The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product&#39;s documentation.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/glossary/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Glossary | My Claude Code">
+<meta name="twitter:description" content="The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product&#39;s documentation.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Glossary | My Claude Code", "url": "https://myclaudecode.danubelabs.net/glossary/", "description": "The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product's documentation."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Glossary"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/" aria-current="page">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li>Glossary</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>The words this product uses</h1>
+<p class="page-intro">MCC uses some ordinary words in a specific way. This page defines them once, from the product's own documentation, so a page elsewhere can use them without repeating the definition.</p>        <h2 id="a-c">A — C</h2>
+
+        <dl class="terms">
+<div class="term" id="adaptive-reasoning"><dt>Adaptive reasoning</dt><dd>A request, spelled <code>ADAPTIVE</code>, that asks the host to think as much as it decides it needs. It is not an effort level and not a budget; each door says it in the host's own words, and a host with no reasoning field is sent nothing.</dd></div><div class="term" id="bench"><dt>Bench</dt><dd>A time-bounded refusal to use a credential or a chain entry. A bench is scoped: a 429 benches a key and model pair, while an exhausted balance benches the whole key.</dd></div><div class="term" id="budget"><dt>Budget</dt><dd>An exact output allowance, or the reasoning budget a client supplied. MCC keeps the two separate, and never uses an output limit as a reasoning budget.</dd></div><div class="term" id="carrier"><dt>Carrier</dt><dd>MCC's envelope for a Responses host's opaque encrypted reasoning item, carried through the client's own transcript. A carrier is host-bound: it is replayed only to the provider, endpoint, account and model that minted it.</dd></div><div class="term" id="chain"><dt>Chain</dt><dd>An ordered list of stand-ins behind a route. A model listed twice is tried twice, and each listing is judged when it is reached.</dd></div><div class="term" id="commit-boundary"><dt>Commit boundary</dt><dd>The moment the first protocol chunk is sent and the HTTP status can no longer change. A failure before it is an HTTP error; a failure after it is an in-band event.</dd></div><div class="term" id="config-home"><dt>Config home</dt><dd>The one directory that holds the .env, the request log and the documents beside them. It is <code>~/.mcc</code> by default and is pinned by <code>MCC_CONFIG_DIR</code>.</dd></div><div class="term" id="country-refusal"><dt>Country refusal</dt><dd>A 403 that refuses the address rather than the credential. It never locks a key out, and the request still tries the next key, then the next model.</dd></div><div class="term" id="credential-pool"><dt>Credential pool</dt><dd>The comma-separated keys behind one provider, each with its own upstream client and rate-limit window, read in the order they are listed.</dd></div></dl>
+
+        <h2 id="d-f">D — F</h2>
+
+        <dl class="terms">
+<div class="term" id="dialect"><dt>Dialect</dt><dd>The reasoning fields one host parses: an effort field and its words, an on/off channel, a numeric budget, an OFF spelling or an adaptive channel. A control is emitted only where the model has the knob and the host has the field.</dd></div><div class="term" id="direct-ref"><dt>Direct ref</dt><dd>A model named as <code>provider/model</code>, resolved without a tier. It is one of the three forms the router accepts, beside gateway IDs and tier aliases.</dd></div><div class="term" id="door"><dt>Door</dt><dd>One of the four protocol surfaces a client can enter: Anthropic Messages, OpenAI Responses, Chat Completions or Google Gemini. All four meet the same router.</dd></div><div class="term" id="exit"><dt>Exit</dt><dd>One named address in a proxy chain. A refused or dropped request can move to another exit on the same model, within the chain's switch limit.</dd></div><div class="term" id="failover"><dt>Failover</dt><dd>Moving from the route's primary model to a stand-in after a failure. It happens before the first streamed chunk; after that, the response is committed.</dd></div><div class="term" id="fallback"><dt>Fallback</dt><dd>One entry in a chain, or the act of walking the chain. A fallback can be paused, which keeps its place and never tries it.</dd></div></dl>
+
+        <h2 id="g-i">G — I</h2>
+
+        <dl class="terms">
+<div class="term" id="gateway-id"><dt>Gateway model ID</dt><dd>A model identifier decoded by MCC's own gateway-ID codec, rather than a direct provider ref or a tier alias.</dd></div><div class="term" id="generation"><dt>Generation</dt><dd>One provider-runtime snapshot with its own provider instances, limiters and quota state. A hot replacement publishes a new generation; old request leases drain against the one they started on.</dd></div><div class="term" id="harness"><dt>Harness</dt><dd>The coding agent behind a request, identified from a header or the user-agent fingerprint. It drives per-agent tier maps and the request log's attribution.</dd></div><div class="term" id="headroom"><dt>Headroom</dt><dd>The context left after a prompt, which bounds how large an output allowance can be. It is applied after the floor, so it can lower a budget but never re-inflate one the context cannot hold.</dd></div><div class="term" id="inferhub"><dt>InferHub</dt><dd>A marketplace provider that resells pooled accounts behind one key. A profile sets a price ceiling, and MCC sends it on every attempt so a request is never charged above it.</dd></div></dl>
+
+        <h2 id="j-l">J — L</h2>
+
+        <dl class="terms">
+<div class="term" id="key-health"><dt>Key health</dt><dd>A key's state, decided only from signals about the credential: an auth rejection, a 429, or an exhausted balance. Timeouts, 5xx and other 4xx leave it untouched.</dd></div><div class="term" id="keyless-hop"><dt>Keyless hop</dt><dd>The last search hop, which reads DuckDuckGo's HTML page and then its lite page without a key. It is unofficial and may be rate-limited, which is reported as a rate limit rather than as no results.</dd></div><div class="term" id="learned-fact"><dt>Learned fact</dt><dd>A negative this install taught the router, shown with its evidence, expiring on a clock and forgettable per row. A reasoning field a host refused is one example.</dd></div><div class="term" id="lockout"><dt>Lockout</dt><dd>The escalating bench for a key the provider keeps rejecting with an auth error: five minutes, one hour and one day by default, one step per consecutive rejection.</dd></div></dl>
+
+        <h2 id="m-o">M — O</h2>
+
+        <dl class="terms">
+<div class="term" id="media-rail"><dt>Media rail</dt><dd>One of the image, speech, transcription and video routes. A media rail walks its chain like a chat route but keeps its own health, and is never offered to a coding agent.</dd></div><div class="term" id="model-kind"><dt>Model kind</dt><dd>What a model is for: chat, image, speech, transcription or video. A picker offers only its own kind, and a model whose kind is stated and is not chat is left out of the chat catalogue.</dd></div><div class="term" id="model-slug"><dt>Model slug</dt><dd>The <code>provider/model</code> string MCC builds from the provider ID and the exact provider model ID. Free-text entry stays available where a provider cannot list its models.</dd></div><div class="term" id="no-thinking-variant"><dt>No-thinking variant</dt><dd>A model-listing entry that forces reasoning off. It exists for compatibility, and the router treats the no-thinking name as a distinct route.</dd></div><div class="term" id="optimization-rule"><dt>Optimization rule</dt><dd>A narrow local rule that answers a common low-value request before a provider is asked. A request it answers records the rule and the tokens no provider received.</dd></div><div class="term" id="oauth-provider"><dt>OAuth provider</dt><dd>A provider whose credential is a sign-in rather than a pasted string: a Claude subscription, ChatGPT or Kimi For Coding. It sits in the same grid as a key-based provider.</dd></div><div class="term" id="output-allowance"><dt>Output allowance</dt><dd>The number of tokens a reply may use, resolved from the model, the route's ceiling and floor, context headroom and, when thinking is requested, the model's own published limit.</dd></div></dl>
+
+        <h2 id="p-r">P — R</h2>
+
+        <dl class="terms">
+<div class="term" id="provenance"><dt>Provenance</dt><dd>The recorded source of a value. A price carries the rung that stated it; a claim on this site carries the path or command that proves it.</dd></div><div class="term" id="provider-card"><dt>Provider card</dt><dd>One provider's entry on the Providers page: its badge, its key count, its rotation policy and its Configure and Refresh models controls.</dd></div><div class="term" id="proxy-token"><dt>Proxy token</dt><dd>The bearer token clients present to the proxy. It is generated for the machine on first start, and it is required once the host is not loopback.</dd></div><div class="term" id="rail"><dt>Rail</dt><dd>A route rendered as a row on Model Config: a primary model and its ordered fallbacks. A media rail is the same shape for a media endpoint.</dd></div><div class="term" id="rate-limit-window"><dt>Rate-limit window</dt><dd>One key's own quota state. Every key in a pool has its own, so one key saturating or stalling never throttles the others.</dd></div><div class="term" id="request-log"><dt>Request log</dt><dd>The local SQLite record of every completed request, with its attempts, tokens, cost and latency. Analytics is computed from it; it is not a second accounting system.</dd></div><div class="term" id="rotation"><dt>Rotation</dt><dd>Choosing which key in a pool serves a request: single, round robin, least used or failover. Rotation is per pool, and each key's order is the order the policy reads.</dd></div><div class="term" id="rung"><dt>Rung</dt><dd>One step of a resolution ladder, such as the pricing ladder or the metadata ladder. A value records the rung that answered it, so two surfaces cannot disagree about its source.</dd></div></dl>
+
+        <h2 id="s-u">S — U</h2>
+
+        <dl class="terms">
+<div class="term" id="safety-classifier"><dt>Safety classifier</dt><dd>Claude Code's narrow auto-mode prompt shape. It is a routing policy, not a short-circuit: MCC forces reasoning off so the client receives a parser-readable verdict.</dd></div><div class="term" id="search-chain"><dt>Search chain</dt><dd>An ordered list of search services with repeats, pause and drag. It is walked at the proxy, and its keys follow the same rotation and health rules as a model key.</dd></div><div class="term" id="server-tool"><dt>Server tool</dt><dd>A tool the protocol expects the server to run, such as web search or web fetch. MCC fulfils it at the proxy instead of sending it upstream.</dd></div><div class="term" id="subscription-window"><dt>Subscription window</dt><dd>A plan's usage limit with its reset time, as a provider reports it. A window and a cash balance are two blocks and never one total.</dd></div><div class="term" id="tier"><dt>Tier</dt><dd>A coding-agent route such as Fable, Opus, Sonnet or Haiku, mapped to a real model and a chain. A tier alias is the protocol name for one of those routes.</dd></div><div class="term" id="tier-alias"><dt>Tier alias</dt><dd>One of <code>mcc/cyber</code>, <code>mcc/best</code>, <code>mcc/good</code>, <code>mcc/medium</code>, <code>mcc/cheap</code> or <code>mcc/vision</code>. It is a pointer to a global route, not a model.</dd></div><div class="term" id="token-optimizer"><dt>Token optimizer</dt><dd>The page and the opt-in RTK integration that show what never reached a provider: tokens saved, rule counts and prompt-cache effectiveness.</dd></div><div class="term" id="tuning"><dt>Tuning</dt><dd>A parameter set for the shared rotation engine. The provider tuning excludes the generic cooldown ladder; the web-search tuning keeps it, because a search key that keeps erroring is worth resting.</dd></div></dl>
+
+        <h2 id="v-z">V — Z</h2>
+
+        <dl class="terms">
+<div class="term" id="vision-adapter"><dt>Vision adapter</dt><dd>The route that diverts an image request to a model that can see. In describe mode, a sighted model describes each image and the description is cached on the image's content address.</dd></div><div class="term" id="wire-capture"><dt>Wire capture</dt><dd>The recorded message and tool structure actually sent, bounded and inspectable. It is what lets a reasoning adaptation appear in the request detail.</dd></div></dl>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#a-c">A — C</a></li>
+          <li><a href="#d-f">D — F</a></li>
+          <li><a href="#g-i">G — I</a></li>
+          <li><a href="#j-l">J — L</a></li>
+          <li><a href="#m-o">M — O</a></li>
+          <li><a href="#p-r">P — R</a></li>
+          <li><a href="#s-u">S — U</a></li>
+          <li><a href="#v-z">V — Z</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Media routing | My Claude Code</title>
+<meta name="description" content="Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine&#39;s retry, key, 429 and proxy rules.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/media/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Media routing | My Claude Code">
+<meta property="og:description" content="Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine&#39;s retry, key, 429 and proxy rules.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/media/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Media routing | My Claude Code">
+<meta name="twitter:description" content="Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine&#39;s retry, key, 429 and proxy rules.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Media routing | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/media/", "description": "Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine's retry, key, 429 and proxy rules."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Media"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Media</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>Image, speech and video over the same engine</h1>
+<p class="page-intro">Media is not bolted on. The image, speech, transcription and video endpoints run over their own rails, but they share the chat engine's retry, key rotation, 429 handling and proxy rules, with health records of their own so a media failure never benches a model for chat.</p>        <p>A media request names a model on a media rail. MCC walks that rail's chain exactly as it walks a chat chain: the same deadlines, pauses, skip kinds and retry rules, through a separate copy of the engine that a contract test holds to chat's decisions. The rails keep their own key, model and proxy health, so a failed image request does not bench anything for a chat.</p>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Endpoint</th><th scope="col">Rail</th><th scope="col">Settings</th></tr></thead>
+<tbody><tr><td><code>POST /v1/images/generations</code></td><td>Image</td><td><code>MODEL_IMAGE</code>, <code>MODEL_IMAGE_FALLBACKS</code>, <code>MODEL_IMAGE_PAUSED</code></td></tr><tr><td><code>POST /v1/images/edits</code></td><td>Image</td><td>the same rail</td></tr><tr><td><code>POST /v1/audio/speech</code></td><td>Speech</td><td><code>MODEL_TTS</code> and its chain</td></tr><tr><td><code>POST /v1/audio/transcriptions</code>, <code>/v1/audio/translations</code></td><td>Transcription</td><td><code>MODEL_ASR</code> and its chain</td></tr><tr><td><code>POST /v1/videos</code> and the job endpoints</td><td>Video</td><td><code>MODEL_VIDEO</code> and its chain</td></tr><tr><td>Gemini <code>:generateContent</code> with image or audio output, <code>:predictLongRunning</code></td><td>Image, Speech, Video</td><td>the same rails</td></tr></tbody>
+</table></div>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-media-image-rail.webp" alt="The image rail on Model Config, with the media endpoints it serves and their labels." width="910" height="233" loading="lazy" decoding="async">
+<figcaption>The image rail on Model Config: the media endpoints it serves and the label each row carries.</figcaption>
+</figure>
+
+        <h2 id="a-provider-serves-only-what-it-declares">A provider serves only what it declares</h2>
+
+        <p>A provider serves a media operation only when it declares that endpoint. MCC never guesses from a model name. A model on a provider that declares nothing for the operation is skipped and not charged a failure; the request log shows it as <code>unsupported</code>. An edit therefore skips every model whose provider declares no edit endpoint, uncharged, and is served by the first one that does.</p>
+
+        <p>Most image providers are passed through field for field: the body the client sent is forwarded with the model replaced by the rail's model, so a parameter only one host understands still reaches it, and the host's answer is returned as it came. Gemini's native speech and transcription surfaces and Mistral's image surface are translated instead. MCC builds those requests itself, lists any field it has no place for under <code>not_forwarded</code> on the request row rather than guessing, and turns the host's answer back into what an OpenAI client reads.</p>
+
+        <p>Mistral images are the unusual wire: Mistral does not document an image-generation endpoint. MCC asks for the picture on <code>chat/completions</code> with the <code>image_generation</code> built-in tool, then fetches the result with a second call on the same key and the same proxy exit. Only the prompt is forwarded; the rest is recorded as not forwarded, and the image is recorded as unpriced because no source publishes a per-image rate.</p>
+
+        <h2 id="uploads-edits-and-streaming">Uploads, edits and streaming</h2>
+
+        <p>An edit is forwarded in the client's own encoding. A multipart upload goes out as multipart, streamed from the server's spooled copy of each file, and re-read from the start if the rail falls back to the next model. The JSON variant goes out as JSON. <code>MEDIA_UPLOAD_MAX_MB</code> sets an optional upload limit: above zero, a file larger than that many megabytes is refused with a 413 before any provider is asked, so nothing is spent on it.</p>
+
+        <p>A request that asks to stream is routed to a surface documented to stream it. When a rail has no such surface, a streamed image or speech request is answered as one event rather than a stalled stream.</p>
+
+        <h2 id="what-you-see-and-what-it-costs">What you see and what it costs</h2>
+
+        <p>The Models page lists every media-rail model with its declared endpoints and media health, and each model publishes the fields its request takes as a JSON Schema per operation, each with who said so. That schema is shown only; nothing sent changes. Clients can read it from <code>GET /v1/media/models</code>. Analytics has a separate Media card, and every row is labelled by its own API, so a generated image reads as such in the requests table.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-media-analytics.webp" alt="The media analytics panel: image, speech and video rows with their own cost figures." width="1160" height="538" loading="lazy" decoding="async">
+<figcaption>Media analytics: image, speech and video rows with their own cost figures, separate from the chat totals.</figcaption>
+</figure>
+
+        <p>Media requests are priced like chat ones: a provider figure first, then models.dev, then LiteLLM when it is on, else unpriced. Generated media can optionally be stored, controlled by <code>MEDIA_STORE_ENABLED</code>.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-models.webp" alt="The Models page: a provider tree with filter chips, one provider expanded, each model row carrying chips naming where its entry came from." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Models page names each model&#39;s kind, so a media model is offered on its rail and not to a coding agent.</figcaption>
+</figure>
+
+        <h2 id="media-tools-for-coding-agents">Media tools for coding agents</h2>
+
+        <p>MCC's media server, <code>mcc-mcp</code>, exposes one tool per filled rail plus a free status tool over MCP. It can be added to an agent from the Coding agents page, or written into Codex's <code>config.toml</code>, OpenCode's <code>opencode.json</code> and Command Code's <code>mcp.json</code> from the Desktop apps cards. The change is shown first, written only on confirmation, backed up once, and removable back to the same bytes. An entry MCC did not add is left alone. The server is off for every agent by default.</p>
+
+        <h2 id="configuration">Configuration</h2>
+
+        <p>The rails are <code>MODEL_IMAGE</code>, <code>MODEL_TTS</code>, <code>MODEL_ASR</code> and <code>MODEL_VIDEO</code>, each with a <code>_FALLBACKS</code> and <code>_PAUSED</code> list. The upload cap is <code>MEDIA_UPLOAD_MAX_MB</code>, optional storage is <code>MEDIA_STORE_ENABLED</code>, and the agent tools are gated by <code>MCP_MEDIA_APPS</code>. None of the rails is a chat tier: nothing on them is listed in <code>/v1/models</code> or offered to a coding agent.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>A model whose provider declares no endpoint for the operation is skipped uncharged and logged as unsupported.</li><li>A Mistral image fetch that fails after the host billed the picture fails the attempt, because the host has already charged it.</li><li>A media failure never benches a chat model; the rails keep their own health records.</li><li>An upload over the configured cap is refused before any provider is asked.</li><li>A field MCC cannot place on a translated surface is listed as not forwarded rather than silently dropped.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/providers-and-credentials/">Providers: which hosts declare a media endpoint</a></li><li><a href="/features/observability-and-cost/">Observability: media rows and media cost</a></li><li><a href="/features/agents/">Agents: the media server over MCP</a></li><li><a href="/configuration/environment/">Configuration: the media variables, names only</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#a-provider-serves-only-what-it-declares">A provider serves only what it declares</a></li>
+          <li><a href="#uploads-edits-and-streaming">Uploads, edits and streaming</a></li>
+          <li><a href="#what-you-see-and-what-it-costs">What you see and what it costs</a></li>
+          <li><a href="#media-tools-for-coding-agents">Media tools for coding agents</a></li>
+          <li><a href="#configuration">Configuration</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

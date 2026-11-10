@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent support | My Claude Code</title>
+<meta name="description" content="One launcher per coding agent, dashboard installs, Configure and Undo for desktop apps, generated model catalogues and per-agent request attribution.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/agents/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Agent support | My Claude Code">
+<meta property="og:description" content="One launcher per coding agent, dashboard installs, Configure and Undo for desktop apps, generated model catalogues and per-agent request attribution.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/agents/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Agent support | My Claude Code">
+<meta name="twitter:description" content="One launcher per coding agent, dashboard installs, Configure and Undo for desktop apps, generated model catalogues and per-agent request attribution.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Agent support | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/agents/", "description": "One launcher per coding agent, dashboard installs, Configure and Undo for desktop apps, generated model catalogues and per-agent request attribution."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Agents"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Agents</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>A first-class client for every agent</h1>
+<p class="page-intro">Claude Code is one client here, not the frame around everything else. MCC can launch the CLI agents, configure the desktop apps it cannot launch, generate a real model catalogue for each one, and name the agent behind every request in the log.</p>        <p>Every agent MCC can launch is declared in one registry, and the Coding agents page shows each one's installed state, its commands and flags with a copy button, its protocol and its generated catalogue. Applications MCC does not launch get a Configure button on the same page instead, which edits the one file each of them reads.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-coding-agents.webp" alt="The Coding agents page: a grid of agent cards, each with an Install or Configure button, protocol and catalogue." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Coding agents page: one card per agent, each with an Install or Configure button, its protocol and its catalogue.</figcaption>
+</figure>
+
+        <h2 id="the-launchers">The launchers</h2>
+
+        <p>A launcher is a small command that points an agent at the local proxy and starts it. The set covers Claude Code (<code>mcc-claude</code>), Codex (<code>mcc-codex</code>), OpenCode and OpenCode 2 (<code>mcc-opencode</code>, <code>mcc-opencode2</code>), Gemini CLI (<code>mcc-gemini</code>), Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, OpenClaw, Hermes Agent, Droid, Pi and Kilo. <code>mcc-claude --discover-models</code> wires Claude Code's native <code>/model</code> picker to MCC's catalogue; <code>mcc-claude-old</code> keeps the older launch shape.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-launchers.webp" alt="The launchers list: every installed mcc-* command with its state and a copy button." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The launchers list: every mcc-* command MCC puts on your PATH, with its install state.</figcaption>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/cc-model-picker.webp" alt="The Claude Code model picker in a terminal, listing the tiers routed through My Claude Code." width="1723" height="915" loading="lazy" decoding="async">
+<figcaption>Claude Code&#39;s native model picker, listing the routed models through MCC&#39;s catalogue.</figcaption>
+</figure>
+
+        <h2 id="installing-an-agent-from-the-dashboard">Installing an agent from the dashboard</h2>
+
+        <p>An agent that is not installed gets an Install button on its card, with the vendor's own line beside it to copy instead. The plan is shown before anything runs: every download, command, permission prompt and PATH or profile change. The vendor's own installer is used first, npm only where it is the only way, and Node.js is installed first only when it is missing. MCC never runs <code>sudo</code> and never upgrades your Node.js.</p>
+
+        <h2 id="desktop-apps-configure-and-undo">Desktop apps: Configure and Undo</h2>
+
+        <p>For an app MCC cannot launch, Configure writes MCC's keys into the one file that app reads and carries every other byte through. A <code>.mcc-backup</code> is taken before the first edit, a diff preview is shown before every write, and a drift badge appears after a hand-edit. Undo works two ways: remove only MCC's keys, or restore the exact values MCC replaced. The files MCC does not reformat are left alone.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-desktop-apps.webp" alt="The Desktop apps page: cards for apps MCC does not launch, each with a Configure button and a backup note." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Desktop apps: cards for the apps MCC does not launch, each with Configure, a backup note and an Undo path.</figcaption>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-claude-settings.webp" alt="The Claude Code settings view in the dashboard, showing the env block MCC writes and an Apply and restart button." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Claude Code&#39;s settings, edited from the dashboard: every setting the CLI reads, with a backup taken before the write.</figcaption>
+</figure>
+
+        <p>The same work is available without a browser. <code>mcc-apps list</code>, <code>mcc-apps status</code>, <code>mcc-apps configure [--preview]</code> and <code>mcc-apps undo [--restore]</code> do what the buttons do, which matters on a headless machine.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/claude-desktop-gateway.webp" alt="Claude Desktop&#39;s connection dialog: a base URL and a gateway API key field, with the key value redacted." width="739" height="568" loading="lazy" decoding="async">
+<figcaption>Claude Desktop&#39;s connection dialog: a base URL and a gateway key field, the one place that app is pointed at MCC.</figcaption>
+</figure>
+
+        <h2 id="generated-catalogues">Generated catalogues</h2>
+
+        <p>Each agent's model list is generated from the same metadata the router uses: real context windows, output ceilings, vision support, tool support and the host's own effort vocabulary. The composition bridge that writes a catalogue uses the same visibility filter, ref enumeration and projection as <code>/v1/models</code>, so a model cannot appear in one and not the other. Writes are atomic, identical bytes are not rewritten, and a last-known-good catalogue is preserved when a projection resolves no routable models.</p>
+
+        <h2 id="request-attribution">Request attribution</h2>
+
+        <p>Analytics names the coding agent behind every request. The harness is identified from the <code>x-mcc-harness</code> header or the request's user-agent fingerprint, and it drives both the log's attribution and the per-agent tier map. An unidentified request is not failed; it resolves against the global chain and is logged as unidentified.</p>
+
+        <p>The same attribution is what lets one agent run a different tier map from another without a second proxy. Claude Code can route Opus-tier traffic to one model and Codex to another while both talk to the same address.</p>
+
+        <h2 id="media-tools-for-an-agent">Media tools for an agent</h2>
+
+        <p>MCC's media server, <code>mcc-mcp</code>, gives an agent one tool per filled media rail, plus a free status tool. It is added per agent with an Add MCP server button and taken out with Remove. The buttons write only MCC's own launch lines and configuration layers, never your files; the token stays in MCC's settings; each agent's own prompt asks before a paid tool. It is off for every agent by default.</p>
+
+        <h2 id="other-clients">Other clients</h2>
+
+        <p>Anything that speaks OpenAI, Anthropic or Gemini can be pointed at the proxy, including VS Code's Copilot custom endpoint and the JetBrains ACP surface. The clients documentation carries an API reference with one runnable example per endpoint. An agent MCC cannot launch and an app MCC cannot configure are both still clients if the user points them here. A client that speaks one of the four protocols needs no plugin, and a client that speaks none of them is out of scope rather than half-supported.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/agent-session.webp" alt="A Claude Code session in a terminal, showing the prompt and a model routing line." width="1713" height="910" loading="lazy" decoding="async">
+<figcaption>A live Claude Code session running through the proxy, mid-conversation.</figcaption>
+</figure>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself.</li><li>A drift badge appears when a hand-edit moves a configured file away from what MCC wrote.</li><li>A tool-returned image and a media request share the same rails and the same cost accounting as chat.</li><li>The Media server is off for every agent until it is added, and no agent button writes to a file MCC did not create.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/quick-start/">Quick start: install and launch your first agent</a></li><li><a href="/features/providers-and-credentials/">Providers: what the agent is routed to</a></li><li><a href="/features/observability-and-cost/">Observability: where the attribution appears</a></li><li><a href="/features/cli/">The CLI: the launchers and headless controls</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-launchers">The launchers</a></li>
+          <li><a href="#installing-an-agent-from-the-dashboard">Installing an agent from the dashboard</a></li>
+          <li><a href="#desktop-apps-configure-and-undo">Desktop apps: Configure and Undo</a></li>
+          <li><a href="#generated-catalogues">Generated catalogues</a></li>
+          <li><a href="#request-attribution">Request attribution</a></li>
+          <li><a href="#media-tools-for-an-agent">Media tools for an agent</a></li>
+          <li><a href="#other-clients">Other clients</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

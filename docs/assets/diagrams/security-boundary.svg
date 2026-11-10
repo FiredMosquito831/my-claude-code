@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t12 d12" font-family="ui-monospace, Consolas, monospace">
+<title id="t12">The security boundary: loopback admin, an optional proxy token, and outbound traffic only to configured providers</title>
+<desc id="d12">The dashboard and admin API listen on loopback only. The proxy accepts a bearer token when ANTHROPIC_AUTH_TOKEN is set; with HOST open to other machines and the token empty, the server refuses to start. The only outbound traffic goes to providers the operator configured. Web fetch blocks private-network targets unless explicitly allowed. Values under key-like, token-like and secret-like names are redacted where structured traces are emitted.</desc>
+<g font-size="12">
+<rect x="20" y="30" width="820" height="120" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="58" fill="#3FB950" font-weight="700">Inside the machine</text>
+<rect x="40" y="76" width="240" height="56" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="54" y="100" fill="#E6EDF3">dashboard + admin API</text>
+<text x="54" y="120" fill="#A9B7C6" font-size="11">loopback only</text>
+<rect x="300" y="76" width="240" height="56" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="314" y="100" fill="#E6EDF3">proxy endpoints</text>
+<text x="314" y="120" fill="#A9B7C6" font-size="11">bearer token when set</text>
+<rect x="560" y="76" width="260" height="56" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="574" y="100" fill="#E6EDF3">configuration home</text>
+<text x="574" y="120" fill="#A9B7C6" font-size="11">one .env, owner-only files</text>
+</g>
+<g font-size="12">
+<rect x="20" y="170" width="390" height="110" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="36" y="196" fill="#D29922" font-weight="700">The refusal that protects the proxy</text>
+<text x="36" y="222" fill="#A9B7C6" font-size="11">HOST open to other machines</text>
+<text x="36" y="242" fill="#A9B7C6" font-size="11">+ ANTHROPIC_AUTH_TOKEN empty</text>
+<text x="36" y="262" fill="#E6EDF3" font-size="11">→ the server refuses to start</text>
+<rect x="430" y="170" width="410" height="110" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="446" y="196" fill="#58A6FF" font-weight="700">The only outbound traffic</text>
+<text x="446" y="222" fill="#A9B7C6" font-size="11">the providers you configured, nothing else</text>
+<text x="446" y="242" fill="#A9B7C6" font-size="11">no telemetry, no call home</text>
+<text x="446" y="262" fill="#A9B7C6" font-size="11">web fetch blocks private-network targets</text>
+</g>
+<g font-size="12">
+<rect x="20" y="300" width="820" height="70" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="326" fill="#E6EDF3">Trace helpers redact values under keys that look like an API key, an authorization, a token or a secret.</text>
+<text x="36" y="350" fill="#A9B7C6" font-size="11">API payloads and streamed events are not logged raw unless explicitly enabled, and the server log is bounded and rotated.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="396" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="408">local surface</text>
+<rect x="160" y="396" width="14" height="14" rx="3" fill="#111821" stroke="#D29922"/><text x="182" y="408">guard</text>
+<rect x="250" y="396" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="272" y="408">outbound path</text>
+</g>
+</svg>

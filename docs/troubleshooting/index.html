@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting | My Claude Code</title>
+<meta name="description" content="Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/troubleshooting/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Troubleshooting | My Claude Code">
+<meta property="og:description" content="Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/troubleshooting/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Troubleshooting | My Claude Code">
+<meta name="twitter:description" content="Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Troubleshooting | My Claude Code", "url": "https://myclaudecode.danubelabs.net/troubleshooting/", "description": "Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Troubleshooting"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li>Troubleshooting</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>When a step does not work</h1>
+<p class="page-intro">Each entry below is a symptom the product's own documentation names, its verified cause, and the fix it gives. If your case is not here, the repository's issue tracker is the right channel.</p>        <h2 id="mcc-server-is-not-found-after-a-successful-install">mcc-server is not found after a successful install</h2>
+
+        <p><strong>Symptom:</strong> the installer finished, but <code>mcc-server</code> is not recognised. <strong>Cause:</strong> the installer added <code>~/.local/bin</code> to your PATH, and a terminal that was already open cannot see the change. <strong>Fix:</strong> close and reopen the terminal, then check <code>mcc-server --version</code>.</p>
+
+        <h2 id="windows-smartscreen-refuses-the-desktop-installer">Windows SmartScreen refuses the desktop installer</h2>
+
+        <p><strong>Symptom:</strong> Windows blocks the unsigned installer. <strong>Cause:</strong> the desktop installer is unsigned. <strong>Fix:</strong> choose More info, then Run anyway. On a machine with Smart App Control on, the app cannot run at all; use the PowerShell server one-liner instead.</p>
+
+        <h2 id="macos-will-not-open-the-app">macOS will not open the app</h2>
+
+        <p><strong>Symptom:</strong> the app is blocked after it is dragged across. <strong>Cause:</strong> the disk image is unsigned and macOS quarantines it. <strong>Fix:</strong> clear the quarantine once with the <code>xattr</code> command the documentation gives, or take the server one-liner and let the desktop command fetch the same binary, which is never quarantined.</p>
+
+        <h2 id="the-tray-is-missing-in-wsl">The tray is missing in WSL</h2>
+
+        <p><strong>Symptom:</strong> the desktop app refuses to start in WSL. <strong>Cause:</strong> WSL has no tray. <strong>Fix:</strong> run the server in WSL and reach the dashboard in a Windows browser. The app says so and refuses rather than pretending.</p>
+
+        <h2 id="the-dashboard-will-not-open">The dashboard will not open</h2>
+
+        <p><strong>Symptom:</strong> the admin address does not answer. <strong>Cause:</strong> one of three things: the server is not running, it is on a different port, or a launcher and the server resolved different configuration directories. <strong>Fix:</strong> start the server and read the startup log, which names the directory in use; check <code>PORT</code>; and if you set <code>MCC_CONFIG_DIR</code>, set it for the launchers too.</p>
+
+        <h2 id="the-install-reports-a-port-it-will-not-touch">The install reports a port it will not touch</h2>
+
+        <p><strong>Symptom:</strong> the installer says the port is held by something that is not MCC. <strong>Cause:</strong> another program owns the port. <strong>Fix:</strong> MCC reports it and leaves it alone rather than killing an unknown process. Choose another <code>PORT</code> or stop the other program yourself.</p>
+
+        <h2 id="every-key-is-benched">Every key is benched</h2>
+
+        <p><strong>Symptom:</strong> a provider card says every key is benched until a time. <strong>Cause:</strong> the provider rate-limited the keys or refused the balance. <strong>Fix:</strong> wait for the bench to expire, or read the credential-health card to see which signal caused it. A 429 bench lasts the wait the provider published; an exhausted balance benches the whole key for the cooldown window.</p>
+
+        <h2 id="a-request-fails-with-a-readiness-error">A request fails with a readiness error</h2>
+
+        <p><strong>Symptom:</strong> a request returns an error before any provider is called. <strong>Cause:</strong> a missing provider configuration or a request runtime that is shutting down. This is an application-readiness error, not a provider failure. <strong>Fix:</strong> open Providers, confirm the card is configured, and Validate and Apply. A request that never reached a provider is not a credential problem.</p>
+
+        <h2 id="web-fetch-refuses-a-page">Web fetch refuses a page</h2>
+
+        <p><strong>Symptom:</strong> a fetch to a local or private address is refused. <strong>Cause:</strong> web-fetch egress enforces its allowed URL schemes and blocks private-network targets by default. <strong>Fix:</strong> this is the intended boundary. If the target is genuinely intended, the operator can allow private networks explicitly; do not widen it to make one page load.</p>
+
+        <h2 id="a-model-is-missing-from-the-picker">A model is missing from the picker</h2>
+
+        <p><strong>Symptom:</strong> a model a provider publishes does not appear in <code>/v1/models</code> or an agent's picker. <strong>Cause:</strong> the model is hidden, or its stated kind is not chat, or a catalogue snapshot predates the latest refresh. <strong>Fix:</strong> check visibility on the Models page, check the model's kind, and restart the client that reads a startup catalogue. Hiding changes listings and never routing.</p>
+
+        <h2 id="a-media-request-is-skipped-as-unsupported">A media request is skipped as unsupported</h2>
+
+        <p><strong>Symptom:</strong> an image or speech request moves past a model without trying it. <strong>Cause:</strong> the provider declares no endpoint for that operation. MCC never guesses from a model name. <strong>Fix:</strong> put a model whose provider declares the endpoint on that rail. The skipped model is not charged a failure.</p>
+
+        <h2 id="an-update-does-not-finish">An update does not finish</h2>
+
+        <p><strong>Symptom:</strong> an update runs but the new version never answers the health check. <strong>Cause:</strong> the new build failed to start. <strong>Fix:</strong> the previous version is put back and started automatically. Read the install log and the progress document in the configuration home to see where it stopped, then re-run the update.</p>
+
+        <h2 id="a-setting-does-not-take-effect">A setting does not take effect</h2>
+
+        <p><strong>Symptom:</strong> a saved setting appears to be ignored. <strong>Cause:</strong> the setting is restart-required, so the running process still holds the value it read at startup. <strong>Fix:</strong> the dashboard marks these settings for exactly this reason. Restart the server, or use the update's restart, after saving.</p>
+
+        <h2 id="a-launcher-will-not-start-its-agent">A launcher will not start its agent</h2>
+
+        <p><strong>Symptom:</strong> a launcher exits instead of starting the agent. <strong>Cause:</strong> the agent is not installed. <strong>Fix:</strong> the launcher prints that agent's own install command and exits, and the Coding agents page has an Install button for the same job. MCC does not install agents on its own.</p>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/quick-start/">Quick start: the install and first-run steps</a></li><li><a href="/features/providers-and-credentials/">Providers: key health and rotation</a></li><li><a href="/configuration/environment/">Configuration: HOST, PORT, MCC_CONFIG_DIR</a></li><li><a href="/faq/">FAQ: the broader questions</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#mcc-server-is-not-found-after-a-successful-install">mcc-server is not found after a successful install</a></li>
+          <li><a href="#windows-smartscreen-refuses-the-desktop-installer">Windows SmartScreen refuses the desktop installer</a></li>
+          <li><a href="#macos-will-not-open-the-app">macOS will not open the app</a></li>
+          <li><a href="#the-tray-is-missing-in-wsl">The tray is missing in WSL</a></li>
+          <li><a href="#the-dashboard-will-not-open">The dashboard will not open</a></li>
+          <li><a href="#the-install-reports-a-port-it-will-not-touch">The install reports a port it will not touch</a></li>
+          <li><a href="#every-key-is-benched">Every key is benched</a></li>
+          <li><a href="#a-request-fails-with-a-readiness-error">A request fails with a readiness error</a></li>
+          <li><a href="#web-fetch-refuses-a-page">Web fetch refuses a page</a></li>
+          <li><a href="#a-model-is-missing-from-the-picker">A model is missing from the picker</a></li>
+          <li><a href="#a-media-request-is-skipped-as-unsupported">A media request is skipped as unsupported</a></li>
+          <li><a href="#an-update-does-not-finish">An update does not finish</a></li>
+          <li><a href="#a-setting-does-not-take-effect">A setting does not take effect</a></li>
+          <li><a href="#a-launcher-will-not-start-its-agent">A launcher will not start its agent</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

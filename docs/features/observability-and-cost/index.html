@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observability and cost | My Claude Code</title>
+<meta name="description" content="A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/observability-and-cost/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Observability and cost | My Claude Code">
+<meta property="og:description" content="A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/observability-and-cost/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Observability and cost | My Claude Code">
+<meta name="twitter:description" content="A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Observability and cost | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/observability-and-cost/", "description": "A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Observability and cost"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Observability and cost</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>The request log, analytics and cost with provenance</h1>
+<p class="page-intro">Every request through the proxy is logged, priced and searchable afterwards. That is what turns a router from a guess into a measurement: which model answered, which fallback spent the time, which key it cost, and where each price came from.</p>        <p>The request log stores every completed request locally. It is searchable across prompt, reply, reasoning and tool calls, and it is the source of every number on the Analytics page: there is no second accounting system and no remote dashboard to reconcile against.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/readme-analytics-overview.webp" alt="Rows of stat cards counting stored requests, success rate, fallback share and token totals, above an all-time strip and a per-model table." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Analytics: stored requests, success rate, fallback share and token totals, over an all-time strip that keeps counting after stored rows roll over.</figcaption>
+</figure>
+
+        <h2 id="the-log">The log</h2>
+
+        <p>One row per completed request carries its endpoint, harness, provider, key, model, status, turn, tokens, cost, time to first token and duration. A request that a local optimization answered records no provider, because none served it, and carries the rule and the prompt tokens no provider ever received. A hidden tab reads nothing.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-requests.webp" alt="The request-log table: provider, model, key, harness, tokens, reasoning, cost and latency for a range of requests." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The request log: provider, model, key, harness, tokens, reasoning, cost and latency for a range of requests.</figcaption>
+</figure>
+
+        <p>A request's detail opens the attempts it walked, the key each one used, its timings, and the reasoning fields that went out. Raw diagnostics sit in five collapsed boxes below it: API payloads from both sides of the exchange, streamed events, the provider's raw output, API error tracebacks and CLI diagnostics, with a Raw or Normalized toggle. Every recorded line is shown a page at a time and never cut, and an empty box says which door or which setting is why.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-request-detail.webp" alt="A single request&#39;s detail view: its route attempts and the reasoning fields the router sent." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>One request expanded: its route attempts, the reasoning fields the router sent, and the fallback that answered.</figcaption>
+</figure>
+
+        <h2 id="search-and-storage">Search and storage</h2>
+
+        <p>The search index stores each distinct piece of text in its own file beside the log, so a search does not unpack every stored request. New requests are indexed as they are written; older ones are indexed when you press Build search index. The prompt chunk store keeps each repeated prompt part once, so turn N+1 of a conversation no longer stores turn N again. History is converted in the background, each prompt is read back byte for byte before it is replaced, and Pause and Continue sit beside the log's size.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-analytics-storage.webp" alt="The request-log storage panel: current database size and a pruning note, with a Build search index button." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The storage panel: the request log&#39;s size, its retention, and the controls that keep it bounded.</figcaption>
+</figure>
+
+        <p>Retention is a cap, not a promise. <code>REQUEST_LOG_ENABLED</code> turns the log and Analytics on or off, and <code>REQUEST_LOG_MAX_ROWS</code> prunes the oldest rows periodically. Once the cap is reached the log is a rolling window, so <em>All time</em> means all time still stored, and counts stop rising rather than the dashboard being broken. The all-time strip below the stat cards is never pruned, so it keeps counting after stored rows roll over.</p>
+
+        <h2 id="analytics">Analytics</h2>
+
+        <p>Analytics is range-aware: any period you like, not just the presets, converted per boundary in your own timezone. It computes p50 and p95 latency, provider and model breakdowns, top errors and a failover panel that counts each primary-to-stand-in pair that fired. The wide-search cost of a query is said under the search box before you run it, as advice only: never narrowed, never refused, never truncated.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-analytics-latency.webp" alt="The model latency panel: p50 and p95 latency bars per model." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Model latency, p50 and p95, per model.</figcaption>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-analytics-failover.webp" alt="The Analytics failover panel showing how many requests each fallback provider served." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Failover: every primary-to-stand-in pair that actually fired, with its count, beside the statuses that caused them.</figcaption>
+</figure>
+
+        <h2 id="cost-with-provenance">Cost with provenance</h2>
+
+        <p>Each request is priced once, as it is logged, and the rung of the pricing ladder that answered each field is stored beside the number. The provider's own model list is the first rung; models.dev follows; the LiteLLM map is consulted when it is switched on; a cross-provider vote covers what remains. A request no source can price is stored as unpriced and shown as a dash, never as a fabricated zero.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/readme-analytics-cost.webp" alt="A requests-over-time chart and a tokens-by-model chart above a Cost panel with reported and estimated totals kept separate." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Cost panel: reported and estimated are two figures, never summed, and every total carries its priced denominator.</figcaption>
+</figure>
+
+        <p>Honest totals are the rule here. A request whose cost was reported by a source and a request whose cost MCC estimated are shown side by side and never added into one number. Every total carries an <em>N of M priced</em> denominator so a partial figure cannot read as a complete one. Anthropic's 5-minute and 1-hour cache writes are recorded separately, and a 1-hour write is priced at a rate a source states, or shown as not priced with the reason; requests before the split keep their 5-minute price.</p>
+
+        <h2 id="exports-and-raw-output">Exports and raw output</h2>
+
+        <p>A JSON export covers whatever the filters currently select, and an attempt-level export writes one row per model the chain tried, not per request, so the fallbacks that spent the time are in the file too. Raw diagnostics can be exported in any of the same formats, and the Analytics export itself takes an opt-in Raw diagnostics field, off by default and bounded.</p>
+
+        <p>The provider's own bytes are available when you ask for them. With <code>LOG_RAW_UPSTREAM_BYTES</code> on, every chunk is kept exactly as the transport received it: stream comments, ID and retry lines, data prefixes, the done sentinel and in-band error frames all survive, and a refusal body is kept whole. It ships off, because raw output is the largest thing the log can hold.</p>
+
+        <h2 id="the-token-optimizer">The Token Optimizer</h2>
+
+        <p>The Token Optimizer page shows what never reached a provider: tokens saved, rule fire counts and prompt-cache effectiveness. The local optimization rules that answer a request without a provider are listed there, and each request they answer records the rule and the tokens it saved.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-token-optimizer.webp" alt="The Token Optimizer page: tokens saved, rule fire counts and prompt-cache effectiveness." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Token Optimizer: what never reached a provider, plus the opt-in trimming and RTK controls.</figcaption>
+</figure>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>Analytics is local-only, like the rest of the dashboard.</li><li>Every widget that aggregates history shows the window it covers; a chain from before a settings change is not read as the current config.</li><li>A read can never charge a key or bench a provider.</li><li>A request detail's empty diagnostic box names why it is empty rather than showing a blank panel.</li><li>Retention prunes the oldest rows; the all-time strip is the figure that survives it.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/architecture/cost-provenance/">Architecture: how a request is priced and the rung stored</a></li><li><a href="/architecture/data-and-storage/">Architecture: the log, the index and the chunk store</a></li><li><a href="/features/providers-and-credentials/">Providers: the keys these costs are attributed to</a></li><li><a href="/configuration/environment/">Configuration: retention and log variables, names only</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-log">The log</a></li>
+          <li><a href="#search-and-storage">Search and storage</a></li>
+          <li><a href="#analytics">Analytics</a></li>
+          <li><a href="#cost-with-provenance">Cost with provenance</a></li>
+          <li><a href="#exports-and-raw-output">Exports and raw output</a></li>
+          <li><a href="#the-token-optimizer">The Token Optimizer</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

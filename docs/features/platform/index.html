@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platform and packaging | My Claude Code</title>
+<meta name="description" content="Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging.">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/platform/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Platform and packaging | My Claude Code">
+<meta property="og:description" content="Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/platform/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Platform and packaging | My Claude Code">
+<meta name="twitter:description" content="Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Platform and packaging | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/platform/", "description": "Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Platform"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Platform</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>Platform, desktop app and updates</h1>
+<p class="page-intro">MCC runs on Windows, macOS and Linux, as a server, as a native desktop app, or both. There is one update path, one configuration directory and one set of commands, whichever route you took in.</p>        <p>The server is the product; the desktop app is a window onto it. Every install route ends at the same server, the same dashboard and the same configuration directory. The server one-liners are the right choice on a headless box, a VPS, over SSH or inside WSL, where there is no tray to draw into.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-get-started.webp" alt="The Get Started checklist: connect a provider, set a fallback model, point Claude Code at MCC, then optional steps for messaging, analytics and limits." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Get Started: the same checklist in a browser tab or inside the desktop window.</figcaption>
+</figure>
+
+        <h2 id="what-the-installer-does">What the installer does</h2>
+
+        <ul><li>Installs uv if it is missing, and replaces one below the required floor.</li><li>Installs Python 3.14 through uv, so no system Python is needed and none is used.</li><li>Downloads the latest release wheel and verifies the SHA-256 GitHub publishes for it.</li><li>Installs MCC into an isolated tool environment and puts every mcc-* command on your PATH.</li><li>Creates the configuration home, and with the desktop flag, installs the desktop app too.</li></ul>
+
+        <p>The installer needs no Node, no Python and no git. It cannot install curl on Linux, macOS or WSL: it names the exact package-manager line for your machine and stops. On Windows it uses the built-in PowerShell, and the Command Prompt route passes the execution-policy flag a saved script would otherwise need.</p>
+
+        <div class="callout callout--accent"><strong>After it finishes, close and reopen your terminal.</strong> The installer adds <code>~/.local/bin</code> to your PATH, and a shell that was already open cannot see it. That is the single most common reason <code>mcc-server</code> looks missing straight after a successful install.</div>
+
+        <h2 id="the-desktop-app-and-tray">The desktop app and tray</h2>
+
+        <p>The desktop app is a real window with its own icon and tray, not a second copy of the server. It has three server modes: <code>spawn</code>, where it starts the server; <code>attach</code>, where it connects to one already running; and <code>off</code>, where it does neither. It can start at login, and its preferences persist in the configuration home. The tray menu covers Open Admin, Check Server Status, Restart Server, the server mode, Start at Login, Tray Enabled, a Token optimizer submenu and Quit.</p>
+
+        <p>Its own prerequisites travel with its packages: the Windows installer bootstraps WebView2, the <code>.deb</code> declares its webkit dependency, and macOS needs nothing extra. WSL has no tray, and the app says so and refuses rather than pretending.</p>
+
+        <h2 id="one-update-path">One update path</h2>
+
+        <p>The dashboard shows the running version, announces releases and installs them with checksum verification. The installer is the same path: re-running it always fetches the newest release. An update is atomic. The new version is built beside the running one, run once to prove it works, and swapped in by two directory renames; if it never answers the health endpoint, the previous version is put back and started. The server is down for the stop, the rename and the start, not for the download and the dependency resolve.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-update-banner.webp" alt="The update banner in the dashboard: a newer release is available, with its changelog, an Update now button and a dismiss control." width="1260" height="120" loading="lazy" decoding="async">
+<figcaption>A newer release is announced in the dashboard, with its changelog and a one-click update.</figcaption>
+</figure>
+
+        <p>During an update the desktop window shows a stage timeline with timestamps, elapsed time and the installer's log tailed live. The progress document and the install log are written into the configuration home, so a failed update can be read afterwards.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-version.webp" alt="The version panel in the dashboard sidebar showing the running My Claude Code version and a running status dot." width="1144" height="173" loading="lazy" decoding="async">
+<figcaption>The version panel: the running release and live status, in the dashboard sidebar.</figcaption>
+</figure>
+
+        <h2 id="packaging">Packaging</h2>
+
+        <p>MCC ships as a Python wheel on PyPI, as an npm package that wraps the same digest-verified installer, and as native desktop installers for each platform. The npm route reads the machine before it installs anything: where there is a desktop session it also installs the native app, each verified against the release's checksum manifest; over SSH, in CI, on a headless box or in WSL without a display it installs the server alone and says why. The PyPI route is the one that assumes something: it requires Python 3.14 and provisions nothing for you.</p>
+
+        <h2 id="update-and-uninstall">Update and uninstall</h2>
+
+        <p>Uninstall is one line, and it verifies every MCC command is gone before it reports success. The desktop app is removed separately, by the platform's own mechanism. A pre-6.40.0 install that lives in the legacy configuration home is migrated on first start by one atomic rename, nothing copied or merged, provided nothing is holding the directory open; <code>mcc-migrate</code> runs the same move by hand and refuses while it can see a live server.</p>
+
+        <span class="code-label">Uninstall (Linux, macOS or WSL)</span><pre><code>curl -fsSL &#34;https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/uninstall.sh&#34; | sh</code></pre>
+
+        <h2 id="configuration">Configuration</h2>
+
+        <p>The install-time switches are flags, not settings: <code>--dry-run</code>, <code>--version</code>, <code>--desktop</code>, <code>--no-restart</code>, <code>--no-start</code>, <code>--no-desktop</code> and <code>--yes-sudo</code>. <code>MCC_INSTALL_REF</code> points the installer at a branch, and <code>MCC_INSTALL_NO_START</code> and <code>MCC_INSTALL_NO_DESKTOP</code> carry the same intent as environment variables. The server's own host and port are <code>HOST</code> and <code>PORT</code>.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>The Windows installer is unsigned, so SmartScreen asks for More info then Run anyway. Machines with Smart App Control on cannot run it; use the PowerShell one-liner there.</li><li>The macOS disk image is unsigned and quarantined, so moving the app across needs one quarantine-removal command. The server one-liner is never quarantined.</li><li>The installer cannot install curl, and it does not install Claude Code or any other agent.</li><li>Every other MCC server on the machine is listed and left running. A port held by something that is not MCC is reported rather than touched.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/quick-start/">Quick start: install, first five minutes, update and uninstall</a></li><li><a href="/features/cli/">The CLI: the commands the installer puts on your PATH</a></li><li><a href="/features/dashboard/">The dashboard: the Update button and the version panel</a></li><li><a href="/license/">Licence: AGPL-3.0-or-later or commercial</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#what-the-installer-does">What the installer does</a></li>
+          <li><a href="#the-desktop-app-and-tray">The desktop app and tray</a></li>
+          <li><a href="#one-update-path">One update path</a></li>
+          <li><a href="#packaging">Packaging</a></li>
+          <li><a href="#update-and-uninstall">Update and uninstall</a></li>
+          <li><a href="#configuration">Configuration</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>
