@@ -14,6 +14,7 @@ from .carrier import (
     encode_carrier,
     is_carrier,
     normalise_endpoint,
+    normalised_model,
 )
 from .errors import (
     openai_error_payload,
@@ -39,6 +40,7 @@ __all__ = [
     "encode_carrier",
     "is_carrier",
     "normalise_endpoint",
+    "normalised_model",
     "openai_error_payload",
     "openai_error_type_for_failure",
     "openai_failure_payload",

@@ -4970,6 +4970,10 @@ The attachment is now resolved during conversion, by **object identity**, agains
 
 **Why it also helps the cache.** The old attachment depended on a turn's *relative* position among the detail-bearing turns, so adding a turn could change what an earlier turn sent. The attachment is now a pure function of the turn's own blocks, so a single-model conversation keeps a strict prefix turn to turn.
 
+#### One model, two spellings
+
+**New in 8.18.2, and it has no setting either.** A carrier replays to the same model even when one turn names its dated snapshot and the other names the alias. The envelope records the routed model verbatim, and the comparison used to be byte-exact — so `claude-haiku-4-5` on one turn and `claude-haiku-4-5-20251001` on the next was enough for MCC to refuse **its own** carrier and lose the reasoning silently. The two spellings are now compared after trimming, lower-casing and removing a trailing `-YYYYMMDD`, and nothing else: a vendor prefix is still part of the model id, and a four-digit suffix still distinguishes two genuinely different models (`mistral-medium-2505` from `mistral-medium-2604`). The envelope's own bytes did not move, so every carrier already in a transcript still decodes and still matches.
+
 #### Readable reasoning replay on the Responses door
 
 **New in 8.17.0, and on by default.** The two sections above are about the **encrypted** blob a Responses host mints. A model's reasoning can also be plain text — a `thinking` block's text, or an assistant turn's top-level `reasoning_content` — and on this door MCC sent neither: the Responses history converter is pinned to `ReasoningReplayMode.DISABLED`, which is the 7.58.1 fix. So a fallback **into** the Responses door (the ChatGPT subscription, or the shared transport OpenCode Zen and Go are served on) lost whatever readable reasoning the previous model had written, carrier or no carrier, on every model.
