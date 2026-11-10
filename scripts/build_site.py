@@ -906,9 +906,7 @@ class Build:
                 continue
             entry = text.split(f"<loc>{url}</loc>", 1)[1].split("</url>", 1)[0]
             if "<priority>0.6</priority>" not in entry:
-                self.problems.append(
-                    f"sitemap: {url} is not at priority 0.6"
-                )
+                self.problems.append(f"sitemap: {url} is not at priority 0.6")
         # llms.txt and security.txt are not pages and must not be in the sitemap.
         for name in (LLMS_TXT, LLMS_FULL_TXT, SECURITY_TXT):
             if f"/{name}</loc>" in text:
@@ -1127,6 +1125,7 @@ class Build:
         if path == "/license/":
             return "0.4"
         return "0.6"
+
     # ------------------------------------------------- machine-readable files
     def page_prose(self, path: str) -> str:
         """A page's main prose as plain text, without navigation or chrome.
@@ -1166,7 +1165,9 @@ class Build:
                     parts.append(plain_text(fact.get("value", "")))
                     parts.append(plain_text(fact.get("label", "")))
             elif kind == "related":
-                parts.extend(plain_text(l.get("label", "")) for l in block.get("links", []))
+                parts.extend(
+                    plain_text(link.get("label", "")) for link in block.get("links", [])
+                )
             elif kind == "faq":
                 for item in block.get("items", []):
                     parts.append(plain_text(item.get("q", "")))
