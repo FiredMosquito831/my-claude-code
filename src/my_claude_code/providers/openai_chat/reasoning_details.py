@@ -90,19 +90,6 @@ def _reasoning_details(delta: Any) -> Sequence[Any]:
     return details if _is_sequence(details) else ()
 
 
-def _assistant_reasoning_details(messages: Any) -> list[list[dict[str, Any]]]:
-    if not _is_sequence(messages):
-        return []
-    result: list[list[dict[str, Any]]] = []
-    for message in messages:
-        if _field(message, "role") != "assistant":
-            continue
-        details = _redacted_reasoning_details(_field(message, "content"))
-        if details:
-            result.append(details)
-    return result
-
-
 def carrier_foreign_note_for_history(messages: Any) -> dict[str, str]:
     """The ``history_carrier_foreign`` record for one Chat history, or ``{}``.
 
