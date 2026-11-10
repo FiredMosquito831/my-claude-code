@@ -47,6 +47,7 @@ import base64
 import binascii
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -212,6 +213,49 @@ class ReplayOrigin:
         return cls(**fields)
 
 
+#: A trailing ``-YYYYMMDD`` -- the only suffix :func:`normalised_model` removes.
+#:
+#: Eight digits and no other width, measured rather than chosen. Against MCC's
+#: own catalogues (models-dev 235 providers / 8,967 ids, openrouter 708 ids):
+#: an 8-digit strip joins **16** alias/snapshot pairs and collides **0** times;
+#: a 4-digit strip collides **11** times (``mistral-medium-2505`` vs
+#: ``mistral-medium-2604``, ``gpt-3.5-turbo-0125`` vs ``gpt-3.5-turbo-1106``);
+#: a 6-digit strip collides **2** times (``seed-1-6-250615`` vs
+#: ``seed-1-6-250915``). A rule that is right for one pair and wrong for eleven
+#: is not a rule.
+_DATED_SNAPSHOT = re.compile(r"-\d{8}$")
+
+
+def normalised_model(model: str) -> str:
+    """The form two spellings of one model share.
+
+    Trimmed, lower-cased, and with a trailing ``-YYYYMMDD`` removed. Nothing
+    else: no vendor prefix, no other suffix width, no punctuation folding.
+
+    **The order is fixed and load-bearing.** Trimming first means a trailing
+    newline cannot hide a suffix; lower-casing before the suffix test is safe
+    because the pattern is digits only.
+
+    **Why no vendor prefix.** Measured against MCC's own catalogues, stripping
+    the last ``/`` segment produces **0 joins and ~195 collisions** -- it would
+    merge ``bytedance/doubao-seed-2.0-code`` with ``volcengine/…`` on
+    ``zenmux``, and ``cerebras/gpt-oss-120b`` with ``fireworks/…`` and
+    ``groq/…`` on ``impossibl``. It buys nothing and costs correctness. MCC's
+    ``parse_model_name`` already strips the *provider* prefix, so the vendor
+    prefix that remains is part of the model id.
+
+    **This is not a model-name branch** (IV.6): it reads no model name, holds no
+    table and no allow-list. It applies one regular expression to whatever
+    string it is given.
+
+    A string that is *entirely* a dated suffix (``"-20250929"``) normalises to
+    ``""``. :func:`accepts` refuses an empty normalised form, so two such values
+    can never match each other.
+    """
+
+    return _DATED_SNAPSHOT.sub("", model.strip().lower())
+
+
 def accepts(destination: ReplayOrigin | None, source: ReplayOrigin) -> bool:
     """Whether ``destination`` may be sent a blob ``source`` minted.
 
@@ -220,6 +264,27 @@ def accepts(destination: ReplayOrigin | None, source: ReplayOrigin) -> bool:
     ``source.endpoint``/``source.connection`` as "match anything", but that rule
     exists for its legacy ``fcc:anthropic-reasoning:v1:`` records. MCC's v1
     envelope always writes all five, so an empty field fails the match here.
+
+    **``model`` is the one field compared on its normalised form** (8.18.2).
+    The same model can be spelled with and without its dated snapshot
+    (``claude-haiku-4-5`` / ``claude-haiku-4-5-20251001``) and MCC's own
+    configuration can name either on either turn -- a fallback chain whose rungs
+    differ only in the suffix, or a route edited between turns. Compared
+    byte-exactly, MCC then refuses **its own** carrier and the continuity chain
+    breaks silently, with the only symptom a ``history_carrier_foreign`` count
+    nobody reads.
+
+    The other four stay byte-exact, because they are not spellings of anything:
+    ``provider`` is a catalogue key, ``protocol`` is one of two values,
+    ``endpoint`` is already normalised at mint by :func:`normalise_endpoint`,
+    and ``connection`` is a hash that must not drift.
+
+    **Normalised here, at accept, and never at mint.** :func:`encode_carrier`
+    writes ``origin.to_dict()`` verbatim, so a carrier minted by any release
+    before 8.18.2 still decodes and still matches: both sides are normalised at
+    compare time. Normalising at mint would move every carrier's bytes, break
+    every carrier already in a client's transcript, and destroy MCC's own
+    record of which model it routed to.
 
     This is the predicate the provenance guard (the next PR) calls once per
     door, and the reason it is a free function rather than a method: one rule,
@@ -230,12 +295,19 @@ def accepts(destination: ReplayOrigin | None, source: ReplayOrigin) -> bool:
         return False
     if not destination.is_complete() or not source.is_complete():
         return False
+    destination_model = normalised_model(destination.model)
+    source_model = normalised_model(source.model)
     return (
         destination.provider == source.provider
         and destination.protocol == source.protocol
         and destination.endpoint == source.endpoint
         and destination.connection == source.connection
-        and destination.model == source.model
+        # ``model`` is the one field compared on its normalised form (8.18.2).
+        # An empty normalised form fails, exactly as an empty raw field does:
+        # ``is_complete()`` tests the RAW fields, so ``"-20250929"`` passes it
+        # and would otherwise match every other all-suffix value.
+        and bool(destination_model)
+        and destination_model == source_model
     )
 
 
@@ -352,4 +424,5 @@ __all__ = [
     "encode_carrier",
     "is_carrier",
     "normalise_endpoint",
+    "normalised_model",
 ]
