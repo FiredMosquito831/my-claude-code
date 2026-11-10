@@ -4960,6 +4960,16 @@ The `signature` key is **removed**, not blanked. A host that signs nothing has n
 
 A save applies to the next request, with no restart.
 
+#### Which turn a replayed detail belongs to
+
+**New in 8.18.1, and it has no setting either.** The Chat Completions door replays a `redacted_thinking` block as `reasoning_details` on the assistant turn that produced it. Before 8.18.1 that attachment was **positional**: each turn's details were collected into a list and attached to the next assistant message *in order*, so an assistant turn that carried no `redacted_thinking` — the common case — shifted every later turn's details up by one, and a model could read another turn's reasoning as its own.
+
+The attachment is now resolved during conversion, by **object identity**, against the message list the turn actually became. Two things that move a message's position are handled where they happen: the synthetic assistant boundary MCC inserts to close a tool round, and the image hoist that adds a user message for a tool result carrying a picture.
+
+**What changes on the wire.** A history where every assistant turn carried a `redacted_thinking` is byte-identical. A history where one did not now sends that turn's details on the **right** turn instead of the wrong one — or not at all. The body differs, and that is the fix.
+
+**Why it also helps the cache.** The old attachment depended on a turn's *relative* position among the detail-bearing turns, so adding a turn could change what an earlier turn sent. The attachment is now a pure function of the turn's own blocks, so a single-model conversation keeps a strict prefix turn to turn.
+
 #### Readable reasoning replay on the Responses door
 
 **New in 8.17.0, and on by default.** The two sections above are about the **encrypted** blob a Responses host mints. A model's reasoning can also be plain text — a `thinking` block's text, or an assistant turn's top-level `reasoning_content` — and on this door MCC sent neither: the Responses history converter is pinned to `ReasoningReplayMode.DISABLED`, which is the 7.58.1 fix. So a fallback **into** the Responses door (the ChatGPT subscription, or the shared transport OpenCode Zen and Go are served on) lost whatever readable reasoning the previous model had written, carrier or no carrier, on every model.

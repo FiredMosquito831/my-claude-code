@@ -24,6 +24,9 @@ from my_claude_code.providers.nous_portal.client import (
 from my_claude_code.providers.openai_chat.request_policy import (
     build_openai_chat_request_body,
 )
+from my_claude_code.providers.openrouter_gateway import (
+    assistant_reasoning_details as gateway_reasoning_details,
+)
 from tests.providers.request_factory import make_messages_request
 
 
@@ -92,6 +95,22 @@ class TestNousUserTag:
 
         assert body["extra_body"]["tags"] == [NOUS_PORTAL_USER_TAG_DEFAULT]
 
-    def test_reasoning_replay_postprocessor_is_still_registered(self):
-        """The tag must be added to the gateway chain, not replace it."""
-        assert len(_PROFILE.postprocessors) >= 2
+    def test_reasoning_replay_is_still_declared_beside_the_tag(self):
+        """The tag must be added to the gateway chain, not replace it.
+
+        Until 8.18.1 the replay was a **postprocessor** on this chain, so "the
+        chain still has more than the tag" was the way to say this. 8.18.1
+        moved the replay into the conversion (``reasoning_details_source``), so
+        the chain now holds the tag alone -- and the invariant that matters is
+        unchanged: adding the tag did not cost this profile its replay.
+
+        Asserted on both halves, because either alone can be satisfied by the
+        wrong tree: the tag is still registered, **and** the policy still
+        declares the gateway copy's extractor.
+        """
+
+        assert apply_nous_user_tag in _PROFILE.postprocessors
+        assert (
+            _PROFILE.request_policy.reasoning_details_source
+            is gateway_reasoning_details
+        )

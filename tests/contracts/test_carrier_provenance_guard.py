@@ -22,6 +22,9 @@ send it anywhere else, and there are three seams a carrier can reach:
   ``core/anthropic/conversion.py`` deliberately dropped that block. The
   conversion's guard was bypassed by a second pass that never learned about it.
   ``nous_portal`` — the largest provider in the request log — is in that path.
+  **8.18.1 deleted that pass** (the replay now attaches during conversion, by
+  object identity); the guard it exercised lives on in
+  ``assistant_reasoning_details``, which the cases below still assert.
 
 **8.16.3 narrows what is dropped, never whether a foreign carrier is sent.**
 A carrier and the readable summary beside it are different things with
@@ -1192,7 +1195,8 @@ def test_a_carrier_never_reaches_a_chat_upstream(provider_id: str) -> None:
     ``request.messages`` directly -- the **client's** blocks, not the converted
     messages -- and turned any non-JSON ``data`` into
     ``{"type": "reasoning.encrypted", "data": …}``. A base64 ``mcc:`` envelope
-    therefore reached the host verbatim.
+    therefore reached the host verbatim. 8.18.1 deleted that pass; the guard
+    moved into ``assistant_reasoning_details`` and this case still pins it.
     """
 
     body = _chat_body(provider_id, _carrier_in_data())

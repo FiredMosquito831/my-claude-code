@@ -38,6 +38,10 @@ OpenAIChatPostprocessor = Callable[
     [dict[str, Any], MessagesRequest, ReasoningPolicy], None
 ]
 ExtraBodyValidator = Callable[[dict[str, Any]], None]
+#: One host's ``reasoning_details`` extractor: a source history in,
+#: ``{source message index: details}`` out. See
+#: :attr:`OpenAIChatRequestPolicy.reasoning_details_source`.
+ReasoningDetailsSource = Callable[[Any], dict[int, list[dict[str, Any]]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +58,18 @@ class OpenAIChatRequestPolicy:
     strip_message_names: bool = False
     unsupported_body_keys: frozenset[str] = field(default_factory=frozenset)
     normalize_n_to_one: bool = False
+    # This host's own extractor for the ``reasoning_details`` replay. ``None``
+    # -- every profile but ``cline``, ``zenmux`` and the OpenRouter-dialect
+    # gateways -- means the body carries no such field, which is what keeps
+    # every other Chat provider byte-identical to what it sent before 8.18.1.
+    #
+    # A **callable declared per policy** rather than a flag the builder keys on,
+    # because the two copies of the extractor live in two files with no shared
+    # owner (Q6: both, or neither). A flag would make the builder reach for one
+    # copy and leave the other dead code, so a fix to the copy nobody called
+    # would pass every test. Declared here, each policy names its own file's
+    # function.
+    reasoning_details_source: ReasoningDetailsSource | None = None
 
 
 def _last_resort_max_tokens(policy: OpenAIChatRequestPolicy) -> int | None:
@@ -112,6 +128,18 @@ def build_openai_chat_request_body(
         request_data.model,
         len(request_data.messages),
     )
+    # The replay mapping is computed **before** the build and passed *into* it,
+    # because the build is the only place that knows which converted message a
+    # source turn became: a synthetic tool-turn boundary, a user coalescing and
+    # the image hoist all move indexes, and only object identity survives all
+    # three. ``None`` for every profile that declares no extractor, which is
+    # every Chat provider but ``cline``, ``zenmux`` and the OpenRouter-dialect
+    # gateways -- so their bodies are byte-identical to what they sent before.
+    assistant_details = (
+        policy.reasoning_details_source(request_data.messages)
+        if policy.reasoning_details_source is not None
+        else None
+    )
     try:
         body = build_base_request_body(
             request_data,
@@ -121,6 +149,7 @@ def build_openai_chat_request_body(
             # ``config``; read per request, because a value captured at import
             # could not follow a dashboard save. ``auto`` emits nothing.
             image_detail=configured_image_detail(),
+            reasoning_by_message=assistant_details,
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
@@ -139,6 +168,18 @@ def build_openai_chat_request_body(
             body["extra_body"] = extra_body
 
     _apply_common_openai_chat_policy(body, policy)
+
+    if assistant_details:
+        # Written **here**, in the provider layer, and not in
+        # ``build_base_request_body``: ``reasoning_details`` is a dialect field
+        # and ``core/`` must not know a provider's dialect (III.5). ``core``
+        # resolved the positions; this layer spells the key.
+        #
+        # After ``_apply_common_openai_chat_policy`` because that is the last
+        # step that touches ``messages`` -- and it only strips ``name`` keys, so
+        # the indexes are already final; attaching after it makes that true by
+        # construction rather than by inspection.
+        _attach_reasoning_details(body, assistant_details)
 
     for postprocess in postprocessors:
         postprocess(body, request_data, reasoning)
@@ -289,6 +330,35 @@ def _encode_openai_tool_names(body: dict[str, Any], codec: OpenAIToolNameCodec) 
         **tool_choice,
         "function": {**function, "name": encoded},
     }
+
+
+def _attach_reasoning_details(
+    body: dict[str, Any], assistant_details: Mapping[int, list[dict[str, Any]]]
+) -> None:
+    """Write each turn's replayed details onto the message that owns them.
+
+    ``assistant_details`` is already keyed by the index into ``body["messages"]``
+    -- ``build_base_request_body`` resolved it by object identity after the
+    conversion and the image hoist, and shifted it for a leading system message
+    -- so this is a straight write, never a search.
+
+    An index that no longer names an assistant message is **skipped** rather
+    than forced: a caller whose profile also mutates ``messages`` gets one
+    request without a replay instead of a ``reasoning_details`` key on a user
+    turn. Nothing in this module does that today, which is why the guard is a
+    guard and not a code path.
+    """
+
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for index, details in assistant_details.items():
+        if not 0 <= index < len(messages):
+            continue
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        message["reasoning_details"] = list(details)
 
 
 def _apply_common_openai_chat_policy(
