@@ -236,6 +236,21 @@ MODALITY_SYNONYMS: Mapping[str, str] = {
     "transcription": "text",
 }
 
+#: The media families a provider may publish as a MIME type instead of the bare
+#: word (8.18.0). OpenCode Zen and Go publish ``image/png``, ``audio/mpeg`` and
+#: ``video/mp4`` where every other list publishes ``image``, ``audio`` and
+#: ``video``, and a reader that spoke only the bare word read those rows as
+#: saying nothing about the family at all -- which made 88 OpenCode models look
+#: blind to images and every audio-capable OpenCode model look unable to hear.
+#: One mapping, read by every consumer of a modality list, so the kind, the
+#: vision rung and the media rails cannot disagree about one row.
+MODALITY_MEDIA_FAMILIES: frozenset[str] = frozenset({"image", "audio", "video"})
+
+#: MIME types whose family is not the part before the slash.
+MODALITY_MIME_TYPES: Mapping[str, str] = {
+    "application/pdf": "pdf",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ModelKind:
@@ -314,8 +329,29 @@ def kinds_from_modalities(modalities: DeclaredModalities) -> frozenset[str]:
 
 
 def _modality_words(items: Iterable[str]) -> set[str]:
-    words = {item.strip().lower() for item in items}
-    return {MODALITY_SYNONYMS.get(word, word) for word in words}
+    return {modality_word(item) for item in items}
+
+
+def modality_word(word: str) -> str:
+    """One published modality word as the bare word this module reads (8.18.0).
+
+    Lower-cased and trimmed, then mapped: a MIME type loses its subtype
+    (``image/png`` is ``image``, ``audio/mpeg`` is ``audio``, ``video/mp4`` is
+    ``video``), ``application/pdf`` is ``pdf``, and the two dialect words
+    :data:`MODALITY_SYNONYMS` names become their models.dev spelling. Anything
+    else is returned as published -- ``file``, ``text`` and a word nobody has
+    published yet included -- because a mapping table that guesses is worse
+    than one that says "not a word I know".
+    """
+
+    trimmed = word.strip().lower()
+    family, separator, _subtype = trimmed.partition("/")
+    if separator and family in MODALITY_MEDIA_FAMILIES:
+        return family
+    mapped = MODALITY_MIME_TYPES.get(trimmed)
+    if mapped is not None:
+        return mapped
+    return MODALITY_SYNONYMS.get(trimmed, trimmed)
 
 
 def kind_word_key(word: str) -> str:

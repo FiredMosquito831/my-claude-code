@@ -100,10 +100,10 @@ class ConfiguredModelValidator:
                 # enriched records a sweep had already stored, so a configured
                 # provider's window, limits and modalities read "unknown"
                 # until the next sweep (7.97.0).
-                enriched = await models_dev.enrich_provider_model_infos(
+                enrichment = await models_dev.enrich_provider_model_infos(
                     result, provider_id=provider_id
                 )
-                self._model_cache.cache_model_infos(provider_id, enriched)
+                self._model_cache.cache_model_infos(provider_id, enrichment.infos)
                 failures.extend(
                     self._format_missing_model_failure(ref)
                     for ref in provider_refs

@@ -95,8 +95,8 @@ from my_claude_code.providers.http import (
 )
 from my_claude_code.providers.model_listing import (
     extract_openai_model_ids,
-    extract_openai_model_infos,
     merge_model_list_pages,
+    parse_openai_model_list,
     validate_model_list_page,
 )
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
@@ -590,7 +590,12 @@ class OpenAIChatProvider(BaseProvider):
                 payload, marketplace, provider_name=self._provider_name
             )
         listing = self._profile.model_listing
-        return extract_openai_model_infos(
+        # 8.18.0: a row this list cannot read is skipped and recorded, never
+        # raised -- one bad row used to discard the other four hundred, which
+        # on a fresh install left the provider with no models at all. The
+        # parser logs the count and the ids; the records it did read are what
+        # the sweep caches, so the sweep takes the record half.
+        return parse_openai_model_list(
             payload,
             provider_name=self._provider_name,
             collection_field=listing.collection_field,
@@ -604,7 +609,7 @@ class OpenAIChatProvider(BaseProvider):
             thinking_tag=listing.thinking_tag,
             non_thinking_tag=listing.non_thinking_tag,
             thinking_boolean_path=listing.thinking_boolean_path,
-        )
+        ).infos
 
     async def _list_models_payload(self) -> Any:
         """Fetch one OpenAI-compatible model-list payload through the fetcher."""

@@ -122,14 +122,24 @@ class DescribeResult:
 
     ``applied`` false means the caller must route exactly as it always has --
     the mode is ``route``, nothing was visual, the primary can see, no vision
-    model is configured, or a describe call failed. There is no partial state:
-    either every image in the request became text, or none did.
+    model is configured, or **no** image could be described.
+
+    Since 8.18.0 ``applied`` true does not promise every image became a
+    description. A partial describe is a success: ``undescribed`` counts the
+    images that could not be and whose place is held by
+    :data:`DESCRIBE_FAILED_TEXT`, while every image that was described travels
+    as its description. Before this release the first failing image discarded
+    the whole batch.
     """
 
     applied: bool
     described: int = 0
     cached: int = 0
     describing_model: str | None = None
+    #: Images that could not be described while others could (8.18.0). Their
+    #: place in the transcript holds the failure sentence, so the model that
+    #: cannot see is never handed the pixels.
+    undescribed: int = 0
     #: Set when describe mode was in play and could not finish. The caller
     #: falls back to route mode, and to the placeholder if route mode has
     #: nowhere to go either.
@@ -196,17 +206,26 @@ class VisionDescribeAdapter:
 
         cached = self._cached_descriptions(targets)
         pending = [target for target in targets if target.sha not in cached]
-        fresh, unreachable = await self._describe_all(
+        fresh, unreachable, failed = await self._describe_all(
             pending, chain, request_id=request_id, on_attempt=on_attempt
         )
-        if fresh is None:
+        descriptions = {**cached, **fresh}
+        if not descriptions:
+            # Nothing was described and there is nothing cached: this request
+            # is exactly where it was before the adapter ran, so the caller
+            # climbs down its own ladder -- route mode first, then the
+            # placeholder sentence.
             return DescribeResult(
                 applied=False, failed=True, unreachable_refs=unreachable
             )
-
-        descriptions = {**cached, **fresh}
+        # Per image, not per request (8.18.0). An image that was described
+        # travels as its description even when a sibling failed; the ones that
+        # could not be described say so in place and the rest of the transcript
+        # is untouched.
         texts = [
             _wrap(descriptions[target.sha][0], descriptions[target.sha][1], target)
+            if target.sha in descriptions
+            else DESCRIBE_FAILED_TEXT
             for target in targets
         ]
         replaced = replace_request_media_with_text(
@@ -226,8 +245,17 @@ class VisionDescribeAdapter:
                 len(targets),
             )
             return DescribeResult(applied=False, failed=True)
+        if failed:
+            logger.warning(
+                "VISION DESCRIBE: {} of {} image(s) could not be described;"
+                " keeping the {} that were",
+                len(failed),
+                len(targets),
+                len(descriptions),
+            )
         logger.info(
-            "VISION DESCRIBE: {} image(s) described by '{}' ({} from cache)",
+            "VISION DESCRIBE: {} of {} image(s) described by '{}' ({} from cache)",
+            len(descriptions),
             len(targets),
             model_ref,
             len(cached),
@@ -237,6 +265,7 @@ class VisionDescribeAdapter:
             described=len(fresh),
             cached=len(cached),
             describing_model=model_ref,
+            undescribed=len(failed),
         )
 
     # ------------------------------------------------------------ internals ---
@@ -295,15 +324,23 @@ class VisionDescribeAdapter:
         *,
         request_id: str,
         on_attempt: DescribeAttemptObserver | None,
-    ) -> tuple[dict[str, tuple[str, str]] | None, frozenset[str]]:
-        """Describe every uncached image, or report that one could not be.
+    ) -> tuple[dict[str, tuple[str, str]], frozenset[str], frozenset[str]]:
+        """Describe every uncached image, keeping the ones that worked.
 
-        The second half of the answer is which vision refs turned out to be
-        unreachable, which is what tells the caller whether route mode is a
-        fallback or a second walk into the same wall.
+        Three halves: the descriptions that succeeded by content address, which
+        vision refs turned out to be unreachable, and the content addresses of
+        the images that could not be described at all.
+
+        Before 8.18.0 this returned ``None`` for the whole batch on the FIRST
+        failure, so one bad image threw away every description that had already
+        been paid for -- and the caller then fell back to route mode for all of
+        them, paying their latency again. A partial describe is a success: the
+        caller decides per image, replacing the ones that worked and saying so
+        for the ones that did not (``describe_failure_texts``). Only the
+        client going away cancels the batch, and it still propagates.
         """
         if not targets:
-            return {}, frozenset()
+            return {}, frozenset(), frozenset()
         semaphore = asyncio.Semaphore(self._concurrency)
         unreachable: set[str] = set()
 
@@ -321,6 +358,7 @@ class VisionDescribeAdapter:
             *(one(target) for target in targets), return_exceptions=True
         )
         described: dict[str, tuple[str, str]] = {}
+        failed: set[str] = set()
         for target, result in zip(targets, results, strict=True):
             if isinstance(result, BaseException) or result is None:
                 if isinstance(result, asyncio.CancelledError):
@@ -328,9 +366,10 @@ class VisionDescribeAdapter:
                     # cancellation semantics intact rather than turning a
                     # disconnect into a fallback nobody is waiting for.
                     raise result
-                return None, frozenset(unreachable)
+                failed.add(target.sha)
+                continue
             described[target.sha] = result
-        return described, frozenset(unreachable)
+        return described, frozenset(unreachable), frozenset(failed)
 
     async def _describe_one(
         self,

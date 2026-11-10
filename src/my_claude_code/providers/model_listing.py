@@ -3,10 +3,12 @@
 import json
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
+
+from loguru import logger
 
 from my_claude_code.application.model_metadata import (
     DeclaredModalities,
@@ -14,6 +16,7 @@ from my_claude_code.application.model_metadata import (
     ModelDefaultParameterValue,
     ModelReasoningCapability,
     ProviderModelDeclaration,
+    declared_accepts_images,
 )
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
@@ -34,6 +37,73 @@ class ModelListResponseError(ValueError):
         self.message = message
 
 
+@dataclass(frozen=True, slots=True)
+class SkippedModelRow:
+    """One row of a provider's model list that could not be read (8.18.0).
+
+    A partial probe is a success. Every check in the per-row loop is a
+    statement about ONE row, so a row that fails one has said nothing about the
+    other four hundred -- and before this release it discarded all of them,
+    which on a fresh install with nothing cached meant the provider showed
+    **zero** models and no capabilities at all.
+
+    ``index`` is the row's position in the list as served, ``model_id`` the id
+    it carried when it got that far (``None`` when the id itself is what could
+    not be read), and ``reason`` the sentence the parser would have raised.
+    """
+
+    index: int
+    model_id: str | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelListParse:
+    """Every record a listing yielded, and every row it could not read.
+
+    The parser's public answer, so a caller can say *"3 of 428 rows could not
+    be read"* instead of silently showing 425. ``infos`` is exactly what the
+    parser returned before this release; ``skipped`` is empty for every list
+    that parsed cleanly, which is every list measured on the operator's own
+    catalogue.
+    """
+
+    infos: frozenset[_ProviderModelInfo]
+    skipped: tuple[SkippedModelRow, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        """Whether every row of the list was read."""
+
+        return not self.skipped
+
+
+def model_list_parse(
+    provider_name: str,
+    infos: Iterable[_ProviderModelInfo],
+    skipped: Sequence[SkippedModelRow],
+    total: int,
+) -> ModelListParse:
+    """One parser's answer, with every row it could not read recorded and logged.
+
+    Shared by all three listing parsers so the sentence an operator reads is
+    the same whichever dialect produced it: the count, the provider, and the
+    ids that were skipped. A list with nothing skipped logs nothing -- which is
+    every list measured on the operator's own catalogue.
+    """
+
+    if skipped:
+        logger.warning(
+            "Provider model list: {} of {} rows could not be read and were"
+            " skipped: provider={} ids={}",
+            len(skipped),
+            total,
+            provider_name,
+            [row.model_id for row in skipped][:20],
+        )
+    return ModelListParse(frozenset(infos), tuple(skipped))
+
+
 def model_infos_from_ids(
     model_ids: Iterable[str], *, supports_thinking: bool | None = None
 ) -> frozenset[_ProviderModelInfo]:
@@ -43,6 +113,91 @@ def model_infos_from_ids(
         for model_id in model_ids
         if model_id.strip()
     )
+
+
+def parse_openai_model_list(
+    payload: Any,
+    *,
+    provider_name: str,
+    collection_field: str | None = "data",
+    id_field: str = "id",
+    aliases_field: str | None = None,
+    required_path_values: RequiredPathValues = (),
+    required_null_field: str | None = None,
+    required_sequence_items: tuple[tuple[str, str], ...] = (),
+    exclude_missing_sequence_fields: bool = False,
+    tags_field: str | None = None,
+    thinking_tag: str = "reasoning",
+    non_thinking_tag: str | None = None,
+    thinking_boolean_path: tuple[str, ...] | None = None,
+) -> ModelListParse:
+    """Extract routable IDs from an OpenAI-compatible model-list response.
+
+    A row that cannot be read is **skipped and recorded**, never raised: every
+    check below is a statement about one row, and before 8.18.0 one bad row
+    discarded the whole provider's list. On a fresh install with nothing cached
+    that meant the provider contributed *zero* models and no capabilities at
+    all, while a warm install kept the previous sweep's records and looked
+    fine -- the most likely explanation for "it doesn't properly detect model
+    capabilities" on a new machine.
+
+    A provider whose list is **entirely** unreadable is still a failure: that
+    is not a partial probe, it is a list nobody can read, and the caller must
+    see it as one. The list-level checks (the payload not being a list at all)
+    still raise for the same reason.
+    """
+    model_infos: dict[str, _ProviderModelInfo] = {}
+    skipped: list[SkippedModelRow] = []
+    item_location = collection_field or "root-array"
+    items = model_list_items(
+        payload,
+        provider_name=provider_name,
+        collection_field=collection_field,
+    )
+    # 7.85.0: whether this listing's own per-row date is a date at all, decided
+    # once over the whole list (a stamp repeats on every row).
+    date_field = listing_date_field(items)
+    for index, item in enumerate(items):
+        try:
+            _read_one_row(
+                item,
+                index=index,
+                model_infos=model_infos,
+                provider_name=provider_name,
+                item_location=item_location,
+                id_field=id_field,
+                aliases_field=aliases_field,
+                required_path_values=required_path_values,
+                required_null_field=required_null_field,
+                required_sequence_items=required_sequence_items,
+                exclude_missing_sequence_fields=exclude_missing_sequence_fields,
+                tags_field=tags_field,
+                thinking_tag=thinking_tag,
+                non_thinking_tag=non_thinking_tag,
+                thinking_boolean_path=thinking_boolean_path,
+                date_field=date_field,
+            )
+        except ModelListResponseError as exc:
+            skipped.append(
+                SkippedModelRow(
+                    index=index,
+                    model_id=_row_id(item, id_field),
+                    reason=exc.message,
+                )
+            )
+
+    if not model_infos:
+        if skipped:
+            # Every row failed. That is not a partial probe: the list is
+            # unreadable, and the caller must treat it as a failed sweep rather
+            # than adopt an empty catalogue.
+            raise _malformed(
+                provider_name,
+                f"none of {len(skipped)} {item_location} items could be read;"
+                f" first: {skipped[0].reason}",
+            )
+        raise _malformed(provider_name, "response did not include any model ids")
+    return model_list_parse(provider_name, model_infos.values(), skipped, len(items))
 
 
 def extract_openai_model_infos(
@@ -61,113 +216,193 @@ def extract_openai_model_infos(
     non_thinking_tag: str | None = None,
     thinking_boolean_path: tuple[str, ...] | None = None,
 ) -> frozenset[_ProviderModelInfo]:
-    """Extract routable IDs from an OpenAI-compatible model-list response."""
-    model_infos: dict[str, _ProviderModelInfo] = {}
-    item_location = collection_field or "root-array"
-    items = model_list_items(
+    """The records an OpenAI-compatible model list yielded.
+
+    The answer every caller has always got. Since 8.18.0 the rows that could
+    not be read are skipped and reported rather than raised, and a caller that
+    wants that report calls :func:`parse_openai_model_list` for the same walk
+    with the skips beside the records; this keeps the one-value form so a
+    reader that does not care about them is unchanged.
+    """
+
+    return parse_openai_model_list(
         payload,
         provider_name=provider_name,
         collection_field=collection_field,
-    )
-    # 7.85.0: whether this listing's own per-row date is a date at all, decided
-    # once over the whole list (a stamp repeats on every row).
-    date_field = listing_date_field(items)
-    for item in items:
-        model_id = _field(item, id_field)
-        if not isinstance(model_id, str) or not model_id.strip():
+        id_field=id_field,
+        aliases_field=aliases_field,
+        required_path_values=required_path_values,
+        required_null_field=required_null_field,
+        required_sequence_items=required_sequence_items,
+        exclude_missing_sequence_fields=exclude_missing_sequence_fields,
+        tags_field=tags_field,
+        thinking_tag=thinking_tag,
+        non_thinking_tag=non_thinking_tag,
+        thinking_boolean_path=thinking_boolean_path,
+    ).infos
+
+
+def _row_id(item: Any, id_field: str) -> str | None:
+    """The id a row carried, for a skip report; ``None`` when it had none."""
+
+    value = _field(item, id_field)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _read_one_row(
+    item: Any,
+    *,
+    index: int,
+    model_infos: dict[str, _ProviderModelInfo],
+    provider_name: str,
+    item_location: str,
+    id_field: str,
+    aliases_field: str | None,
+    required_path_values: RequiredPathValues,
+    required_null_field: str | None,
+    required_sequence_items: tuple[tuple[str, str], ...],
+    exclude_missing_sequence_fields: bool,
+    tags_field: str | None,
+    thinking_tag: str,
+    non_thinking_tag: str | None,
+    thinking_boolean_path: tuple[str, ...] | None,
+    date_field: str | None,
+) -> None:
+    """Read one row into ``model_infos``, or raise :class:`ModelListResponseError`.
+
+    Split out of the loop so the loop has exactly one place to catch: every
+    ``raise _malformed`` in here is a statement about THIS row, and the caller
+    turns each one into a recorded skip instead of a lost catalogue. ``index``
+    is carried for the skip report only.
+    """
+
+    model_id = _field(item, id_field)
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise _malformed(
+            provider_name,
+            f"expected every {item_location} item to include {id_field}",
+        )
+    included = True
+    for path, allowed_values in required_path_values:
+        path_value = _path(item, path)
+        matching_types = tuple(
+            allowed for allowed in allowed_values if type(path_value) is type(allowed)
+        )
+        if path_value is _MISSING or not matching_types:
+            expected_types = "/".join(
+                dict.fromkeys(_scalar_type_name(value) for value in allowed_values)
+            )
             raise _malformed(
                 provider_name,
-                f"expected every {item_location} item to include {id_field}",
+                f"expected every {item_location} item to include "
+                f"{'.'.join(path)} as {expected_types}",
             )
-        included = True
-        for path, allowed_values in required_path_values:
-            path_value = _path(item, path)
-            matching_types = tuple(
-                allowed
-                for allowed in allowed_values
-                if type(path_value) is type(allowed)
+        if path_value not in matching_types:
+            included = False
+
+    if required_null_field is not None:
+        if not _has_field(item, required_null_field):
+            raise _malformed(
+                provider_name,
+                f"expected every {item_location} item to include {required_null_field}",
             )
-            if path_value is _MISSING or not matching_types:
-                expected_types = "/".join(
-                    dict.fromkeys(_scalar_type_name(value) for value in allowed_values)
-                )
-                raise _malformed(
-                    provider_name,
-                    f"expected every {item_location} item to include "
-                    f"{'.'.join(path)} as {expected_types}",
-                )
-            if path_value not in matching_types:
-                included = False
+        if _field(item, required_null_field) is not None:
+            included = False
 
-        if required_null_field is not None:
-            if not _has_field(item, required_null_field):
-                raise _malformed(
-                    provider_name,
-                    f"expected every {item_location} item to include "
-                    f"{required_null_field}",
-                )
-            if _field(item, required_null_field) is not None:
-                included = False
-
-        missing_sequence_field = False
-        for field_name, required_item in required_sequence_items:
-            values = _field(item, field_name)
-            if values is None and exclude_missing_sequence_fields:
-                missing_sequence_field = True
-                continue
-            if not _is_sequence(values) or any(
-                not isinstance(value, str) or not value.strip() for value in values
-            ):
-                raise _malformed(
-                    provider_name,
-                    f"expected every {item_location} item to include "
-                    f"{field_name} string array",
-                )
-            if required_item not in values:
-                included = False
-
-        if missing_sequence_field:
+    missing_sequence_field = False
+    for field_name, required_item in required_sequence_items:
+        values = _field(item, field_name)
+        if values is None and exclude_missing_sequence_fields:
+            missing_sequence_field = True
             continue
+        if not _is_sequence(values) or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            raise _malformed(
+                provider_name,
+                f"expected every {item_location} item to include "
+                f"{field_name} string array",
+            )
+        if required_item not in values:
+            included = False
 
-        supports_thinking: bool | None = None
-        if tags_field is not None:
-            tags_value = _field(item, tags_field)
-            if not _is_sequence(tags_value) or any(
-                not isinstance(tag, str) or not tag.strip() for tag in tags_value
-            ):
+    if missing_sequence_field:
+        return
+
+    supports_thinking: bool | None = None
+    if tags_field is not None:
+        tags_value = _field(item, tags_field)
+        if not _is_sequence(tags_value) or any(
+            not isinstance(tag, str) or not tag.strip() for tag in tags_value
+        ):
+            raise _malformed(
+                provider_name,
+                f"expected every {item_location} item to include "
+                f"{tags_field} string array",
+            )
+        tags = frozenset(tags_value)
+        if thinking_tag in tags:
+            supports_thinking = True
+        elif non_thinking_tag is not None and non_thinking_tag in tags:
+            supports_thinking = False
+
+    if thinking_boolean_path is not None:
+        capability = _path(item, thinking_boolean_path)
+        if capability is not _MISSING:
+            if not isinstance(capability, bool):
                 raise _malformed(
                     provider_name,
-                    f"expected every {item_location} item to include "
-                    f"{tags_field} string array",
+                    f"expected {'.'.join(thinking_boolean_path)} to be boolean",
                 )
-            tags = frozenset(tags_value)
-            if thinking_tag in tags:
-                supports_thinking = True
-            elif non_thinking_tag is not None and non_thinking_tag in tags:
-                supports_thinking = False
+            supports_thinking = capability
 
-        if thinking_boolean_path is not None:
-            capability = _path(item, thinking_boolean_path)
-            if capability is not _MISSING:
-                if not isinstance(capability, bool):
-                    raise _malformed(
-                        provider_name,
-                        f"expected {'.'.join(thinking_boolean_path)} to be boolean",
-                    )
-                supports_thinking = capability
+    if not included:
+        return
 
-        if not included:
-            continue
+    # The alias list is read BEFORE anything is written, so a malformed one
+    # costs this row and only this row: a half-written row would be counted
+    # both as kept and as skipped, and the skip report would then overstate
+    # what was lost.
+    aliases: tuple[str, ...] = ()
+    if aliases_field is not None:
+        listed = _field(item, aliases_field)
+        if not _is_sequence(listed):
+            raise _malformed(
+                provider_name,
+                f"expected every {item_location} item to include {aliases_field} array",
+            )
+        for alias in listed:
+            if not isinstance(alias, str) or not alias.strip():
+                raise _malformed(
+                    provider_name,
+                    f"expected every {aliases_field} item to be a model id",
+                )
+        aliases = tuple(listed)
 
-        declared = declared_from_row(item, listing_date=date_field)
-        supported_parameters = published_parameters_from_row(item)
-        # 7.86.0: the row itself, verbatim, for the "Everything known" view.
-        published_row = published_row_text(item)
+    declared = declared_from_row(item, listing_date=date_field)
+    supported_parameters = published_parameters_from_row(item)
+    # 7.86.0: the row itself, verbatim, for the "Everything known" view.
+    published_row = published_row_text(item)
+    model_infos.setdefault(
+        model_id,
+        record_with_declared(
+            _ProviderModelInfo(
+                model_id=model_id,
+                supports_thinking=supports_thinking,
+                supported_parameters=supported_parameters,
+                declared=declared,
+                published_row=published_row,
+            )
+        ),
+    )
+    for alias in aliases:
+        # An alias is the same row under another name, so it states what its
+        # row states.
         model_infos.setdefault(
-            model_id,
+            alias,
             record_with_declared(
                 _ProviderModelInfo(
-                    model_id=model_id,
+                    model_id=alias,
                     supports_thinking=supports_thinking,
                     supported_parameters=supported_parameters,
                     declared=declared,
@@ -175,38 +410,6 @@ def extract_openai_model_infos(
                 )
             ),
         )
-        if aliases_field is not None:
-            aliases = _field(item, aliases_field)
-            if not _is_sequence(aliases):
-                raise _malformed(
-                    provider_name,
-                    f"expected every {item_location} item to include "
-                    f"{aliases_field} array",
-                )
-            for alias in aliases:
-                if not isinstance(alias, str) or not alias.strip():
-                    raise _malformed(
-                        provider_name,
-                        f"expected every {aliases_field} item to be a model id",
-                    )
-                # An alias is the same row under another name, so it states
-                # what its row states.
-                model_infos.setdefault(
-                    alias,
-                    record_with_declared(
-                        _ProviderModelInfo(
-                            model_id=alias,
-                            supports_thinking=supports_thinking,
-                            supported_parameters=supported_parameters,
-                            declared=declared,
-                            published_row=published_row,
-                        )
-                    ),
-                )
-
-    if not model_infos:
-        raise _malformed(provider_name, "response did not include any model ids")
-    return frozenset(model_infos.values())
 
 
 def extract_tool_capable_model_infos(
@@ -1008,15 +1211,32 @@ def record_with_declared(info: _ProviderModelInfo) -> _ProviderModelInfo:
 
     Each listing parser reads its dialect's own fields first and leaves this to
     fill only what that left unset (``None``): the row's context window,
-    output limit and two listed prices into the fields of the same name, and
-    its reasoning statement into ``supports_thinking``. Nothing a parser set is
-    replaced -- an OpenRouter-dialect row's thinking flag stays the one its
-    ``supported_parameters`` list states -- and a row that states nothing
+    output limit and two listed prices into the fields of the same name, its
+    reasoning statement into ``supports_thinking``, and (8.18.0) its own
+    modality pair into ``supports_vision``. Nothing a parser set is replaced --
+    an OpenRouter-dialect row's thinking flag stays the one its
+    ``supported_parameters`` list states, and its vision flag stays the one
+    ``architecture.input_modalities`` states -- and a row that states nothing
     returns the record unchanged, the very same object.
 
     This is what makes a provider's own number rung 1 of the ladder: every
     lookup reads these record fields before it consults models.dev, and the
     discovery-time models.dev fill only ever writes a field still ``None``.
+
+    8.18.0 fills vision here for the reason the other five fields are filled
+    here: ``supports_vision`` was the one field of the ladder whose top rung
+    was never connected, so a provider that published
+    ``input_modalities: ["text", "image"]`` was answered by models.dev's own
+    bucket instead -- and the Models page printed "accepts: text, image" beside
+    "reads images: no" for the same model. The fold is **fill, never replace**,
+    which is also what keeps it safe: it runs inside the parser on a freshly
+    built record, where ``supports_vision`` is ``None`` for every
+    provider-listing parser, and ``enrich_model_infos`` runs afterwards and
+    only ever writes a field still ``None``.
+
+    Two refactorings would silently undo that and must not be made: moving this
+    call to run *after* ``enrich_model_infos``, and making any parser set
+    ``supports_vision`` before the fold.
     """
 
     declared = info.declared
@@ -1030,6 +1250,9 @@ def record_with_declared(info: _ProviderModelInfo) -> _ProviderModelInfo:
         output_price=_first_known(info.output_price, declared.output_price),
         max_output_tokens=_first_known(
             info.max_output_tokens, declared.max_output_tokens
+        ),
+        supports_vision=_first_known(
+            info.supports_vision, declared_accepts_images(declared)
         ),
     )
     return info if filled == info else filled

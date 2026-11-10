@@ -719,3 +719,140 @@ async def test_an_attached_image_records_its_estimated_share() -> None:
     # 1920x1080 on the Anthropic fallback: resized to 1456x819 and billed at
     # 52 x 30 patches, which is the number in Anthropic's own worked example.
     assert row["est_image_tokens"] == 1560
+
+
+# ------------------------------------------------------- partial describe ---
+
+
+def _two_image_request() -> MessagesRequest:
+    """Two different pictures in one turn, so one can fail while the other works."""
+
+    second = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    return MessagesRequest.model_validate(
+        {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 64,
+            "stream": False,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": PIXEL,
+                            },
+                        },
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": second,
+                            },
+                        },
+                        {"type": "text", "text": "?"},
+                    ],
+                }
+            ],
+        }
+    )
+
+
+class _OneImageFails:
+    """A vision model that describes the first picture and dies on the second."""
+
+    def __init__(self, model: str, text: str) -> None:
+        self.model = model
+        self.text = text
+        self.requests: list[MessagesRequest] = []
+
+    def throttle_remaining(self, model: str | None = None) -> float:
+        return 0.0
+
+    @property
+    def credential_label(self) -> str | None:
+        return None
+
+    def preflight_stream(
+        self, request: MessagesRequest, *, reasoning: ReasoningPolicy
+    ) -> None:
+        return None
+
+    async def cleanup(self) -> None:
+        return None
+
+    async def list_model_ids(self) -> frozenset[str]:
+        return frozenset({self.model})
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        self.requests.append(request)
+        # The describe call carries exactly one image; fail the second one.
+        if len(self.requests) > 1:
+            raise RuntimeError("the vision model gave up on this picture")
+        for event in _text_stream(self.text, self.model):
+            yield event
+
+    def body_text(self, index: int = 0) -> str:
+        return json.dumps(self.requests[index].model_dump(), default=str)
+
+
+@pytest.mark.asyncio
+async def test_one_failed_image_keeps_the_description_that_worked() -> None:
+    """8.18.0: a partial describe is a success, not a discarded batch.
+
+    Before this release `_describe_all` returned ``None`` for the whole batch on
+    the FIRST failure, throwing away every description that had already been
+    paid for and sending the request back to route mode for all of them. The
+    user's rule is the same one the partial-probe fix applies to a provider
+    list: *don't drop all probe results if one or more models fail to probe*.
+    """
+
+    settings = _settings("describe")
+    blind = RecordingProvider("blind", "answer")
+    eyes = _OneImageFails("eyes", DESCRIPTION)
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(await handler.create(_two_image_request(), request_id="req_partial"))
+
+    # Both pictures were offered to the vision model; one came back.
+    assert len(eyes.requests) == 2
+    # The blind model answered the request it was asked -- not a diversion.
+    assert len(blind.requests) == 1
+    body = blind.body_text()
+    assert DESCRIPTION in body, "the description that succeeded must survive"
+    assert PIXEL not in body, "no pixels reach a model that cannot read them"
+    row = _row(settings, "req_partial")
+    assert row["route_diversion"] == "vision_described"
+    assert row["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_every_image_failing_still_falls_back_to_route_mode() -> None:
+    """The all-failed case is unchanged: nothing was described, so climb down.
+
+    This is the half that keeps the old behaviour exactly where it belongs --
+    with no description in hand the request is where it was before the adapter
+    ran, and route mode is the first rung of the ladder.
+    """
+
+    settings = _settings("describe")
+    settings.model_sonnet_fallbacks = "nvidia_nim/backup"
+    blind = RecordingProvider("blind", "answer")
+    eyes = RecordingProvider("eyes", DESCRIPTION, fail=True)
+    handler, _ = _handler(settings, {"nvidia_nim": blind, "groq": eyes})
+
+    await _drain(await handler.create(_two_image_request(), request_id="req_all_fail"))
+
+    row = _row(settings, "req_all_fail")
+    assert row["route_diversion"] == "vision"
+    assert row["status"] == "success"

@@ -86,6 +86,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ResponseSurface,
     ResponseSurfaceSource,
+    declared_accepts_images,
 )
 from my_claude_code.application.openrouter_live import (
     LIVE_NOTE,
@@ -867,6 +868,72 @@ def _provider_first(
     )
 
 
+def _vision_field(
+    cached_value: Any,
+    declared: ProviderModelDeclaration | None,
+    provider_tier: ResolutionTier | None,
+    resolved: tuple[Any, ResolutionTier | None],
+) -> dict[str, Any]:
+    """The "reads images" row: the provider's own pair first, the second source beside it (8.18.0).
+
+    Three provenances, and the badge names the one that answered:
+
+    * **The provider's own row stated it** -- ``declared_accepts_images``
+      answers and the record holds that answer, because the parser's fold
+      wrote it at rung 1. Badged ``provider /models`` at the tier the record
+      was found at, which is what makes the row say *tier 1* or *tier 2*
+      instead of naming no rung at all.
+    * **The record holds a value the pair cannot explain** -- models.dev's
+      discovery-time fill wrote it, and that fill records no rung. It is
+      badged ``models.dev``, which is the truthful answer and the one the page
+      used to get wrong: ``provider /models or models.dev`` read as if the
+      provider had said it. This is the case the spec's F3 is about: a record
+      whose ``False`` comes off models.dev's flat index while the vote for the
+      same model says image.
+    * **The record holds nothing** -- the ladder answers exactly as it always
+      has, badge and rung included.
+
+    One edge the pair cannot see, measured at **0 rows** on the operator's
+    catalogue and named here so a future reader does not have to rediscover
+    it: the OpenRouter dialect's parser reads ``architecture.input_modalities``
+    alone, while ``declared.modalities`` keeps a pair only when both halves
+    (or the ``architecture.modality`` summary) are published. A row with the
+    input list and neither of the other two would therefore hold a
+    provider-stated value that this row badges ``models.dev``. Zero rows in
+    the stored catalogue are in that state.
+
+    Where the answer the page shows differs from what models.dev's own ladder
+    says about the same model, the ladder's answer is shown beside it
+    (``also_stated``), through the mechanism the page already uses for a
+    second source. That is the row that makes the next disagreement visible
+    without another investigation: ``novita/openai/gpt-oss-120b`` reads
+    *"yes -- provider /models"* with *"also stated: no (models.dev bucket,
+    exact id)"* beside it. Display only; nothing routes on either statement.
+    """
+
+    stated = declared_accepts_images(declared)
+    ladder_value, ladder_tier = resolved
+    second = None
+    if ladder_value is not None:
+        second = _sourced(ladder_value, SOURCE_MODELS_DEV, ladder_tier)
+    if cached_value is None:
+        return _laddered(None, SOURCE_UNKNOWN, None, resolved)
+    if stated is not None and cached_value == stated:
+        field = _sourced(cached_value, SOURCE_PROVIDER, provider_tier)
+    elif stated is not None:
+        # The pair states one answer and the record holds another: only a
+        # record built before this release can be in that state, and the value
+        # it holds is models.dev's.
+        field = _sourced(cached_value, SOURCE_MODELS_DEV)
+    else:
+        # The pair is silent and the record holds a value: models.dev's
+        # discovery-time fill, which is the only other writer of this field.
+        field = _sourced(cached_value, SOURCE_MODELS_DEV)
+    if second is not None and second["value"] != cached_value:
+        field["also_stated"] = _statement(second)
+    return field
+
+
 def _provider_reasoning(
     info: ProviderModelInfo | None,
 ) -> ModelReasoningCapability | None:
@@ -1468,10 +1535,10 @@ def _capability_payload(
         model_context_length_tiered(provider_id, model_id),
         note=CONTEXT_LENGTH_SOURCE_NOTE,
     )
-    vision = _laddered(
+    vision = _vision_field(
         info.supports_vision if info is not None else None,
-        SOURCE_PROVIDER_OR_MODELS_DEV,
-        None,
+        declared,
+        provider_tier,
         model_vision_tiered(provider_id, model_id),
     )
     # Tool support is derived from the gateway's own parameter list first --

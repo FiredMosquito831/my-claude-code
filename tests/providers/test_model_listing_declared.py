@@ -196,8 +196,23 @@ def test_a_kilo_row_is_read_by_the_same_table() -> None:
     assert info.declared == ProviderModelDeclaration(
         modalities=_pair(("image", "text"), ("text",))
     )
-    # This entry point never read vision, and still does not.
-    assert info.supports_vision is None
+    # CHANGED IN 8.18.0, deliberately. Until this release the comment here read
+    # "This entry point never read vision, and still does not", and the
+    # assertion pinned `None`. That was the defect, not a decision worth
+    # keeping: `supports_vision` was the one field of the metadata ladder whose
+    # top rung was never connected, so a provider that published
+    # `input_modalities: ["text", "image"]` was answered by models.dev's bucket
+    # instead -- and the Models page printed "accepts: text, image" beside
+    # "reads images: no" for the same model.
+    #
+    # `record_with_declared` now folds the row's own pair into the record at
+    # rung 1, exactly as it already folded the row's context window, output
+    # limit, two prices and reasoning word. The fold is FILL, never replace, so
+    # `_openrouter_accepts_images` keeps precedence where it fired; this entry
+    # point passes `read_vision=False`, so nothing has fired and the fold is
+    # what answers. The twin of this change is in
+    # `test_model_listing_provider_numbers.py`.
+    assert info.supports_vision is True
 
 
 def test_an_empty_architecture_states_nothing() -> None:

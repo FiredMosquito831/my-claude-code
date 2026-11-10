@@ -411,13 +411,19 @@ def _touch_models_dev_cache(cache_path: Path) -> bool:
     return True
 
 
-def schedule_models_dev_refresh(path: Path | None = None) -> None:
-    """Fire-and-forget background refresh; a later run picks up the cache."""
+def schedule_models_dev_refresh(path: Path | None = None) -> asyncio.Task[bool] | None:
+    """Fire-and-forget background refresh; a later run picks up the cache.
+
+    Returns the task so a caller that has something to do when the fetch lands
+    can await it (8.18.0, F4). ``None`` when there is no running loop to
+    schedule on, which is what a synchronous caller gets.
+    """
     try:
         task = asyncio.get_running_loop().create_task(refresh_models_dev_cache(path))
     except RuntimeError:
-        return
+        return None
     task.add_done_callback(_swallow_refresh_outcome)
+    return task
 
 
 def _swallow_refresh_outcome(task: asyncio.Task[bool]) -> None:
@@ -487,8 +493,29 @@ def _flatten_index_uncached(
     providers disagree about whether the model reads images. Accumulating
     cannot remove anything and does not depend on that order for whether a
     field is populated at all.
+
+    8.18.0 (Q4) closes the other half of that: accumulating decided *which*
+    value won by that same serialisation order, because
+    :func:`_merge_metadata` keeps the first writer's answer. Measured on the
+    operator's catalogue: 168 of 4,931 flat-index keys have carriers that
+    disagree about vision, and **34** of their records flip their answer when
+    the bucket list is reversed -- 31 of them live, because the record's own
+    value *is* this index's answer. So vision is accumulated
+    **order-independently** here: a key whose carriers state two different
+    answers is **withheld** (``None``), and a withheld key is never resurrected
+    by a later carrier. A withheld answer is honest; a coin-flip is not
+    (IV.16), and the alternative -- a True-favouring OR -- was measured and
+    rejected: it moves 24 records ``False -> True``, including
+    ``gpt-3.5-turbo``, ``o3-mini`` and ``gpt-3.5-turbo-instruct``, which are
+    certainly text-only. A stranger's ``True`` is not evidence.
+
+    The other three fields keep the first-writer rule they have always had:
+    this release changes vision and nothing else, because vision is the field
+    the disagreement was measured on and a number that two strangers report
+    differently is a different question with its own proof to make.
     """
     flattened: dict[str, _ModelsDevModelMetadata] = {}
+    disputed_vision: set[str] = set()
     for provider_bucket in index.values():
         if not isinstance(provider_bucket, Mapping):
             continue
@@ -501,10 +528,35 @@ def _flatten_index_uncached(
             parsed = _parse_models_dev_metadata(metadata)
             for candidate in normalize_candidates(model_id):
                 existing = flattened.get(candidate)
-                flattened[candidate] = (
-                    parsed if existing is None else _merge_metadata(existing, parsed)
-                )
+                if existing is None:
+                    flattened[candidate] = parsed
+                    continue
+                merged, vision_disputed = _merge_accumulated(existing, parsed)
+                if candidate in disputed_vision or vision_disputed:
+                    disputed_vision.add(candidate)
+                    merged = replace(merged, supports_vision=None)
+                flattened[candidate] = merged
     return flattened
+
+
+def _merge_accumulated(
+    existing: _ModelsDevModelMetadata, parsed: _ModelsDevModelMetadata
+) -> tuple[_ModelsDevModelMetadata, bool]:
+    """Accumulate one more carrier's row, and say whether vision is disputed.
+
+    ``existing`` and ``parsed`` are two rows for the same normalized id from
+    two different models.dev buckets. The three numbers keep the first writer's
+    value, as they always have; vision is the caller's to withhold, and this
+    reports the one case that needs it -- both carriers state an answer and the
+    answers differ. Two carriers that agree, or one that is silent, are not a
+    disagreement.
+    """
+
+    merged = _merge_metadata(existing, parsed)
+    left, right = existing.supports_vision, parsed.supports_vision
+    if left is not None and right is not None and left != right:
+        return merged, True
+    return merged, False
 
 
 def _parse_models_dev_metadata(
@@ -728,23 +780,53 @@ def enrich_model_infos(
     return tuple(enriched)
 
 
+@dataclass(frozen=True, slots=True)
+class ModelsDevEnrichment:
+    """One discovery-time enrichment, and the fetch it is still waiting for.
+
+    ``refresh`` is the fire-and-forget fetch this pass scheduled **because
+    there was no cache at all**, and it is ``None`` in every other case: a
+    cache that is present but stale schedules one too, and that one is not
+    reported here because the catalogue it produced was already enriched from
+    the bytes on disk. A caller that can cache may await it and run one more
+    pass when it lands (8.18.0, F4); a caller that cannot simply ignores it.
+    """
+
+    infos: tuple[ProviderModelInfo, ...]
+    refresh: asyncio.Task[bool] | None = None
+
+
 async def enrich_provider_model_infos(
     model_infos: Iterable[ProviderModelInfo],
     path: Path | None = None,
     provider_id: str | None = None,
-) -> tuple[ProviderModelInfo, ...]:
+) -> ModelsDevEnrichment:
     """Enrich model infos from the models.dev cache; schedule a refresh.
 
     Never performs blocking network I/O: a missing or stale cache schedules a
     fire-and-forget refresh and the current infos pass through unchanged.
+
+    8.18.0 (F4) reports the fetch it scheduled when the cache was **absent**,
+    so the seam that caches the catalogue can run one more enrichment pass
+    when it lands. Before that, a fresh install cached `supports_vision=None`
+    (and every other unfilled field) for every generic provider until the next
+    sweep -- `MODEL_DISCOVERY_REFRESH_SECONDS`, an hour -- while the Models
+    page, which reads the ladder live, recovered the moment the fetch landed.
+    The page and the agent catalogues therefore disagreed for that hour, which
+    is the same class of defect this release is about.
     """
     infos = tuple(model_infos)
     cache = read_models_dev_cache(path)
+    refresh: asyncio.Task[bool] | None = None
     if cache is None or not cache.fresh:
-        schedule_models_dev_refresh(path)
+        refresh = schedule_models_dev_refresh(path)
+        if cache is not None:
+            # A stale cache still answered; re-running the pass when the fetch
+            # lands would move values mid-hour for no measured reason.
+            refresh = None
     if cache is None:
-        return infos
-    return enrich_model_infos(infos, cache.index, provider_id)
+        return ModelsDevEnrichment(infos, refresh)
+    return ModelsDevEnrichment(enrich_model_infos(infos, cache.index, provider_id))
 
 
 # --------------------------------------------------------------------------
