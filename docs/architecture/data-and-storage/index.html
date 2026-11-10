@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Data and storage | My Claude Code</title>
-<meta name="description" content="One configuration home, one .env, a SQLite request log, a search index, a prompt chunk store and the documents that must not live in a settings file.">
+<title>Data and storage: what MCC keeps and where</title>
+<meta name="description" content="What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.">
+<meta name="keywords" content="llm gateway storage, request log storage, local llm data, gateway data layout, where claude code proxy stores data, mcc config directory, request log sqlite, local first storage">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/data-and-storage/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Data and storage | My Claude Code">
-<meta property="og:description" content="One configuration home, one .env, a SQLite request log, a search index, a prompt chunk store and the documents that must not live in a settings file.">
+<meta property="og:title" content="Data and storage: what MCC keeps and where">
+<meta property="og:description" content="What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/data-and-storage/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Data and storage | My Claude Code">
-<meta name="twitter:description" content="One configuration home, one .env, a SQLite request log, a search index, a prompt chunk store and the documents that must not live in a settings file.">
+<meta name="twitter:title" content="Data and storage: what MCC keeps and where">
+<meta name="twitter:description" content="What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Data and storage | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/data-and-storage/", "description": "One configuration home, one .env, a SQLite request log, a search index, a prompt chunk store and the documents that must not live in a settings file."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Data and storage: what MCC keeps and where", "url": "https://myclaudecode.danubelabs.net/architecture/data-and-storage/", "description": "What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Data and storage"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Data and storage: what MCC keeps and where", "description": "What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.", "url": "https://myclaudecode.danubelabs.net/architecture/data-and-storage/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>What is stored, and where</h1>
-<p class="page-intro">Everything MCC keeps is under one configurable directory on your machine. There is no remote database, no account and no second copy. What is stored is deliberately split between a settings file, a request log and a set of documents that a settings save must never rewrite.</p>        <h2 id="the-configuration-home">The configuration home</h2>
+<p class="page-intro">Everything MCC keeps is under one configurable directory on your machine. There is no remote database, no account and no second copy. What is stored is deliberately split between a settings file, a request log and a set of documents that a settings save must never rewrite. This page is the LLM gateway storage layout: what is written, where it lives, and what is never stored at all.</p>        <h2 id="the-configuration-home">The configuration home</h2>
 
         <p>A new install keeps everything in <code>~/.mcc</code>: the <code>.env</code>, the request log under <code>logs/</code>, the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file because they hold more than a scalar. <code>MCC_CONFIG_DIR</code> pins the directory to an absolute path and must be set in the shell, because the directory has to be known before there is a file to read.</p>
 
@@ -248,6 +250,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Configuration | My Claude Code</title>
-<meta name="description" content="How My Claude Code is configured: one .env in one configuration home, written by the dashboard or by hand, plus the few variables that resolve first.">
+<title>Configuration: how MCC settings are provided</title>
+<meta name="description" content="Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.">
+<meta name="keywords" content="llm gateway configuration, claude code proxy config, mcc settings, proxy configuration, gateway config file, mcc config dir, dotenv configuration, configuration home">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/configuration/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Configuration | My Claude Code">
-<meta property="og:description" content="How My Claude Code is configured: one .env in one configuration home, written by the dashboard or by hand, plus the few variables that resolve first.">
+<meta property="og:title" content="Configuration: how MCC settings are provided">
+<meta property="og:description" content="Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/configuration/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Configuration | My Claude Code">
-<meta name="twitter:description" content="How My Claude Code is configured: one .env in one configuration home, written by the dashboard or by hand, plus the few variables that resolve first.">
+<meta name="twitter:title" content="Configuration: how MCC settings are provided">
+<meta name="twitter:description" content="Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Configuration | My Claude Code", "url": "https://myclaudecode.danubelabs.net/configuration/", "description": "How My Claude Code is configured: one .env in one configuration home, written by the dashboard or by hand, plus the few variables that resolve first."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Configuration: how MCC settings are provided", "url": "https://myclaudecode.danubelabs.net/configuration/", "description": "Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Configuration"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Configuration: how MCC settings are provided", "description": "Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.", "url": "https://myclaudecode.danubelabs.net/configuration/", "about": {"@type": "Thing", "name": "My Claude Code configuration"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -62,7 +64,7 @@
     <div class="page-grid">
       <div>
         <h1>How settings are provided</h1>
-<p class="page-intro">MCC has one configuration home, one .env and one set of documents beside it. The dashboard writes the file, the server reads it, and the launchers resolve the same directory. There is no second configuration system to reconcile.</p>        <h2 id="the-configuration-home">The configuration home</h2>
+<p class="page-intro">MCC has one configuration home, one .env and one set of documents beside it. The dashboard writes the file, the server reads it, and the launchers resolve the same directory. There is no second configuration system to reconcile. This page is the LLM gateway configuration map: the home, the file, the documents beside it and the variables that are read before the file is.</p>        <h2 id="the-configuration-home">The configuration home</h2>
 
         <p>A new install keeps everything in <code>~/.mcc</code>. That directory holds the <code>.env</code>, the request log under <code>logs/</code>, the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file: custom provider definitions, per-agent tier overrides, credential names, OAuth stores, model overrides, learned facts, proxy chains and marketplace profiles. An install from before 6.40.0 is migrated from its legacy directory on its first start by one atomic rename, nothing copied or merged, and the startup log always names the directory in use.</p>
 
@@ -136,6 +138,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

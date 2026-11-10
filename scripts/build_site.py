@@ -870,7 +870,7 @@ class Build:
 
     def gate_harness_pages(self) -> None:
         """The four harness pages exist, each names its harness, and each gives
-        that harness's own command."""
+        that harness's own command in its visible text."""
         for path in HARNESS_PAGES:
             if path not in self.rendered:
                 self.problems.append(f"harness: {path} does not exist")
@@ -881,17 +881,19 @@ class Build:
                 self.problems.append(
                     f"harness: {path}: title does not name {harness}: {page['title']}"
                 )
-            if command not in self.rendered[path]:
+            # The body only: a command that appears in a meta description but
+            # not in the page is not a command the reader is given.
+            main = re.search(r"(?is)<main[^>]*>(.*?)</main>", self.rendered[path])
+            body = main.group(1) if main else self.rendered[path]
+            if command not in body:
                 self.problems.append(
                     f"harness: {path}: the page does not give the {command} command"
                 )
-            if BASE_URL + "/features/agents/" not in self.rendered[path]:
+            if 'href="/features/agents/"' not in body:
                 self.problems.append(
                     f"harness: {path}: no link back to /features/agents/"
                 )
-            if BASE_URL + "/quick-start/" not in self.rendered[path] and (
-                'href="/quick-start/"' not in self.rendered[path]
-            ):
+            if 'href="/quick-start/"' not in body:
                 self.problems.append(f"harness: {path}: no link back to /quick-start/")
 
     def gate_sitemap_priority(self) -> None:

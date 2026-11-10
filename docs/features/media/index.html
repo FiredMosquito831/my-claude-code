@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Media routing | My Claude Code</title>
-<meta name="description" content="Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine&#39;s retry, key, 429 and proxy rules.">
+<title>Media handling in the local LLM gateway</title>
+<meta name="description" content="How MCC handles media requests and media tool responses through the same proxy path, with the same logging, routing and cost accounting as text requests.">
+<meta name="keywords" content="llm media, image request proxy, llm multimodal proxy, media tool response, gateway media, image generation proxy, text to speech proxy, transcription proxy, video generation proxy">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/media/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Media routing | My Claude Code">
-<meta property="og:description" content="Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine&#39;s retry, key, 429 and proxy rules.">
+<meta property="og:title" content="Media handling in the local LLM gateway">
+<meta property="og:description" content="How MCC handles media requests and media tool responses through the same proxy path, with the same logging, routing and cost accounting as text requests.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/media/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Media routing | My Claude Code">
-<meta name="twitter:description" content="Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine&#39;s retry, key, 429 and proxy rules.">
+<meta name="twitter:title" content="Media handling in the local LLM gateway">
+<meta name="twitter:description" content="How MCC handles media requests and media tool responses through the same proxy path, with the same logging, routing and cost accounting as text requests.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Media routing | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/media/", "description": "Image, edit, speech, transcription, translation and video endpoints routed over their own rails, with the chat engine's retry, key, 429 and proxy rules."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Media handling in the local LLM gateway", "url": "https://myclaudecode.danubelabs.net/features/media/", "description": "How MCC handles media requests and media tool responses through the same proxy path, with the same logging, routing and cost accounting as text requests."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Media"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Media handling in the local LLM gateway", "description": "How MCC handles media requests and media tool responses through the same proxy path, with the same logging, routing and cost accounting as text requests.", "url": "https://myclaudecode.danubelabs.net/features/media/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>Image, speech and video over the same engine</h1>
-<p class="page-intro">Media is not bolted on. The image, speech, transcription and video endpoints run over their own rails, but they share the chat engine's retry, key rotation, 429 handling and proxy rules, with health records of their own so a media failure never benches a model for chat.</p>        <p>A media request names a model on a media rail. MCC walks that rail's chain exactly as it walks a chat chain: the same deadlines, pauses, skip kinds and retry rules, through a separate copy of the engine that a contract test holds to chat's decisions. The rails keep their own key, model and proxy health, so a failed image request does not bench anything for a chat.</p>
+<p class="page-intro">Media is not bolted on. The image, speech, transcription and video endpoints run over their own rails, but they share the chat engine's retry, key rotation, 429 handling and proxy rules, with health records of their own so a media failure never benches a model for chat. This page is the LLM media path: four rails, one engine, and the same logging and cost accounting as text.</p>        <p>A media request names a model on a media rail. MCC walks that rail's chain exactly as it walks a chat chain: the same deadlines, pauses, skip kinds and retry rules, through a separate copy of the engine that a contract test holds to chat's decisions. The rails keep their own key, model and proxy health, so a failed image request does not bench anything for a chat.</p>
 
         <div class="table-wrap"><table>
 <thead><tr><th scope="col">Endpoint</th><th scope="col">Rail</th><th scope="col">Settings</th></tr></thead>
@@ -163,6 +165,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

@@ -1,4 +1,6 @@
 [
+  ".nojekyll",
+  ".well-known/security.txt",
   "404.html",
   "CNAME",
   "about/index.html",
@@ -158,13 +160,20 @@
   "features/reasoning-and-budgets/index.html",
   "features/routing/index.html",
   "features/web-search/index.html",
+  "for/claude-code/index.html",
+  "for/codex/index.html",
+  "for/gemini-cli/index.html",
+  "for/opencode/index.html",
   "gallery/index.html",
   "glossary/index.html",
   "index.html",
   "license/index.html",
+  "llms-full.txt",
+  "llms.txt",
   "og.png",
   "quick-start/index.html",
   "robots.txt",
+  "security.txt",
   "sitemap.xml",
   "troubleshooting/index.html"
 ]

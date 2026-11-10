@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Request path | My Claude Code</title>
-<meta name="description" content="Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response.">
+<title>Request path: from a door to a committed reply</title>
+<meta name="description" content="What happens between an agent sending a request and the reply being committed: the door, model resolution, the routing ladder, the provider call and the log.">
+<meta name="keywords" content="llm request path, proxy request lifecycle, protocol door, request routing llm, llm proxy internals, commit boundary streaming, anthropic messages route, streaming proxy failure">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/request-path/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Request path | My Claude Code">
-<meta property="og:description" content="Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response.">
+<meta property="og:title" content="Request path: from a door to a committed reply">
+<meta property="og:description" content="What happens between an agent sending a request and the reply being committed: the door, model resolution, the routing ladder, the provider call and the log.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/request-path/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Request path | My Claude Code">
-<meta name="twitter:description" content="Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response.">
+<meta name="twitter:title" content="Request path: from a door to a committed reply">
+<meta name="twitter:description" content="What happens between an agent sending a request and the reply being committed: the door, model resolution, the routing ladder, the provider call and the log.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Request path | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/request-path/", "description": "Ingress authentication, one request ID, model routing, the provider generation lease and the commit boundary where a streamed reply becomes a real response."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Request path: from a door to a committed reply", "url": "https://myclaudecode.danubelabs.net/architecture/request-path/", "description": "What happens between an agent sending a request and the reply being committed: the door, model resolution, the routing ladder, the provider call and the log."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Request path"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Request path: from a door to a committed reply", "description": "What happens between an agent sending a request and the reply being committed: the door, model resolution, the routing ladder, the provider call and the log.", "url": "https://myclaudecode.danubelabs.net/architecture/request-path/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>From a door to a committed reply</h1>
-<p class="page-intro">A request is authenticated once, correlated once, routed once and executed against one provider at a time. The hard part is not the happy path; it is deciding when a failure is still an HTTP error and when it is already part of a stream.</p>        <h2 id="the-routes">The routes</h2>
+<p class="page-intro">A request is authenticated once, correlated once, routed once and executed against one provider at a time. The hard part is not the happy path; it is deciding when a failure is still an HTTP error and when it is already part of a stream. This page is the LLM request path, from the door the client entered by to the point the reply is committed.</p>        <h2 id="the-routes">The routes</h2>
 
         <p>The proxy exposes <code>POST /v1/messages</code> for Anthropic Messages, <code>POST /v1/responses</code> for OpenAI Responses, <code>POST /v1/chat/completions</code> for Chat Completions, <code>POST /v1/messages/count_tokens</code> for Anthropic token counting, <code>GET /v1/models</code> for the gateway and Claude-compatible model list, <code>GET /health</code>, <code>POST /stop</code>, and HEAD and OPTIONS probes on the supported endpoints. Google's surface lives in its own module because its path shape is unlike every other route: <code>POST /v1beta/models/{model}:generateContent</code> and its streaming, token-count and list siblings.</p>
 
@@ -289,6 +291,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

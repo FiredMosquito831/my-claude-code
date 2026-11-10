@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Web search and fetch | My Claude Code</title>
-<meta name="description" content="Claude Code&#39;s web_search and web_fetch tools fulfilled at the proxy by fifteen search backends, a keyless fallback, per-key rotation and full-page extraction.">
+<title>Native web search and fetch proxy for any model</title>
+<meta name="description" content="Fulfil Claude Code&#39;s web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.">
+<meta name="keywords" content="web search proxy, web fetch proxy, claude code web search, llm web search, native web search, search without anthropic credits, keyless web search, agent web search">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/web-search/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Web search and fetch | My Claude Code">
-<meta property="og:description" content="Claude Code&#39;s web_search and web_fetch tools fulfilled at the proxy by fifteen search backends, a keyless fallback, per-key rotation and full-page extraction.">
+<meta property="og:title" content="Native web search and fetch proxy for any model">
+<meta property="og:description" content="Fulfil Claude Code&#39;s web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/web-search/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Web search and fetch | My Claude Code">
-<meta name="twitter:description" content="Claude Code&#39;s web_search and web_fetch tools fulfilled at the proxy by fifteen search backends, a keyless fallback, per-key rotation and full-page extraction.">
+<meta name="twitter:title" content="Native web search and fetch proxy for any model">
+<meta name="twitter:description" content="Fulfil Claude Code&#39;s web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Web search and fetch | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/web-search/", "description": "Claude Code's web_search and web_fetch tools fulfilled at the proxy by fifteen search backends, a keyless fallback, per-key rotation and full-page extraction."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Native web search and fetch proxy for any model", "url": "https://myclaudecode.danubelabs.net/features/web-search/", "description": "Fulfil Claude Code's web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Web search"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Native web search and fetch proxy for any model", "description": "Fulfil Claude Code's web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.", "url": "https://myclaudecode.danubelabs.net/features/web-search/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>The native web-search and web-fetch proxy</h1>
-<p class="page-intro">Claude Code's web_search and web_fetch are Anthropic server tools: normally Anthropic runs the search and bills you for it. MCC fulfils them at the proxy instead, against a provider you choose or a keyless fallback, and streams the result back as ordinary text. No Anthropic search credits are used, and it works with any model provider.</p>        <p>A client emits a <code>web_search</code> tool-use block. MCC runs the search against the configured chain and returns the results as a regular text block, so a model that has never heard of the tool still receives useful text. The same shape covers <code>web_fetch</code>, which retrieves a page and returns its main content.</p>
+<p class="page-intro">Claude Code's web_search and web_fetch are Anthropic server tools: normally Anthropic runs the search and bills you for it. MCC fulfils them at the proxy instead, against a provider you choose or a keyless fallback, and streams the result back as ordinary text. No Anthropic search credits are used, and it works with any model provider. It is a web search proxy and a web fetch proxy, in front of fifteen search backends.</p>        <p>A client emits a <code>web_search</code> tool-use block. MCC runs the search against the configured chain and returns the results as a regular text block, so a model that has never heard of the tool still receives useful text. The same shape covers <code>web_fetch</code>, which retrieves a page and returns its main content.</p>
 
         <figure class="figure">
 <img src="/assets/shots/dashboard-websearch.webp" alt="The Web Search page: a route policy control, provider cards with key health and a chain editor, plus advanced options." width="1500" height="949" loading="lazy" decoding="async">
@@ -213,6 +215,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Providers and credentials | My Claude Code</title>
-<meta name="description" content="Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key&#39;s own signals, custom providers and OAuth sign-ins.">
+<title>60 providers, keys and credential health</title>
+<meta name="description" content="Sixty providers behind one address, each with its own keys, rotation and credential health: see which key served a request and which needs rotating.">
+<meta name="keywords" content="llm providers, multi provider proxy, api key rotation llm, credential health, llm api keys, provider accounts llm, anthropic openai gemini proxy, llm key management, 60 providers">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/providers-and-credentials/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Providers and credentials | My Claude Code">
-<meta property="og:description" content="Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key&#39;s own signals, custom providers and OAuth sign-ins.">
+<meta property="og:title" content="60 providers, keys and credential health">
+<meta property="og:description" content="Sixty providers behind one address, each with its own keys, rotation and credential health: see which key served a request and which needs rotating.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/providers-and-credentials/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Providers and credentials | My Claude Code">
-<meta name="twitter:description" content="Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key&#39;s own signals, custom providers and OAuth sign-ins.">
+<meta name="twitter:title" content="60 providers, keys and credential health">
+<meta name="twitter:description" content="Sixty providers behind one address, each with its own keys, rotation and credential health: see which key served a request and which needs rotating.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Providers and credentials | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/providers-and-credentials/", "description": "Sixty provider cards behind one address: multi-key rotation, credential health judged only on the key's own signals, custom providers and OAuth sign-ins."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "60 providers, keys and credential health", "url": "https://myclaudecode.danubelabs.net/features/providers-and-credentials/", "description": "Sixty providers behind one address, each with its own keys, rotation and credential health: see which key served a request and which needs rotating."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Providers and credentials"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "60 providers, keys and credential health", "description": "Sixty providers behind one address, each with its own keys, rotation and credential health: see which key served a request and which needs rotating.", "url": "https://myclaudecode.danubelabs.net/features/providers-and-credentials/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>Providers, keys and credential health</h1>
-<p class="page-intro">Every provider MCC can route to is a card on one page. A card holds a key or a pool of keys, its rotation policy, its model list and its health. The rest of this page is what happens when a provider answers, refuses, or says nothing at all.</p>        <p>The provider table in the repository lists 60 cards across cloud APIs, subscription and OAuth sign-ins, gateways, local servers and marketplaces. MCC builds each model slug as <code>&lt;provider-id&gt;/&lt;exact-provider-model-id&gt;</code>, and free-text entry stays available when a provider cannot list its models.</p>
+<p class="page-intro">Every provider MCC can route to is a card on one page. A card holds a key or a pool of keys, its rotation policy, its model list and its health. The rest of this page is what happens when a provider answers, refuses, or says nothing at all. Sixty LLM providers sit behind that one page, each with its own keys and its own health.</p>        <p>The provider table in the repository lists 60 cards across cloud APIs, subscription and OAuth sign-ins, gateways, local servers and marketplaces. MCC builds each model slug as <code>&lt;provider-id&gt;/&lt;exact-provider-model-id&gt;</code>, and free-text entry stays available when a provider cannot list its models.</p>
 
         <figure class="figure">
 <img src="/assets/shots/dashboard-providers.webp" alt="The Providers page: a two-column grid of provider cards, each badged Configured or Missing key, with a Refresh model list button and custom providers on the left rail." width="1500" height="949" loading="lazy" decoding="async">
@@ -193,6 +195,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

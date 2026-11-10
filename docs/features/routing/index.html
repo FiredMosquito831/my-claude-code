@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Routing and fallback chains | My Claude Code</title>
-<meta name="description" content="Tier routing, per-agent overrides and fallback chains: how a model name becomes a real model, what happens when it fails, and how every skip is recorded.">
+<title>Model routing and fallback chains for coding agents</title>
+<meta name="description" content="Turn the model name an agent asks for into a real provider model, then walk an ordered chain of stand-ins when it cannot serve, with a logged reason per step.">
+<meta name="keywords" content="llm model routing, fallback chain llm, claude code model routing, model tier routing, provider fallback, llm router, route model requests, failover llm provider, claude code fallback model">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/routing/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Routing and fallback chains | My Claude Code">
-<meta property="og:description" content="Tier routing, per-agent overrides and fallback chains: how a model name becomes a real model, what happens when it fails, and how every skip is recorded.">
+<meta property="og:title" content="Model routing and fallback chains for coding agents">
+<meta property="og:description" content="Turn the model name an agent asks for into a real provider model, then walk an ordered chain of stand-ins when it cannot serve, with a logged reason per step.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/routing/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Routing and fallback chains | My Claude Code">
-<meta name="twitter:description" content="Tier routing, per-agent overrides and fallback chains: how a model name becomes a real model, what happens when it fails, and how every skip is recorded.">
+<meta name="twitter:title" content="Model routing and fallback chains for coding agents">
+<meta name="twitter:description" content="Turn the model name an agent asks for into a real provider model, then walk an ordered chain of stand-ins when it cannot serve, with a logged reason per step.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Routing and fallback chains | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/routing/", "description": "Tier routing, per-agent overrides and fallback chains: how a model name becomes a real model, what happens when it fails, and how every skip is recorded."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Model routing and fallback chains for coding agents", "url": "https://myclaudecode.danubelabs.net/features/routing/", "description": "Turn the model name an agent asks for into a real provider model, then walk an ordered chain of stand-ins when it cannot serve, with a logged reason per step."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Routing"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Model routing and fallback chains for coding agents", "description": "Turn the model name an agent asks for into a real provider model, then walk an ordered chain of stand-ins when it cannot serve, with a logged reason per step.", "url": "https://myclaudecode.danubelabs.net/features/routing/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>Model tiers and fallback chains</h1>
-<p class="page-intro">A coding agent asks for a model by a name it knows. MCC turns that name into a real provider model, applies your reasoning and budget settings, and walks an ordered chain of stand-ins when the first model cannot serve the request. The chain is yours, and every step it took is in the log.</p>        <p>Routing is the reason a proxy can be useful at all. Without it, every coding tool carries its own model list, its own keys and its own idea of what to do when a provider says no. With it, one tier map serves every tool, and swapping a model is one edit on one page.</p>
+<p class="page-intro">A coding agent asks for a model by a name it knows. This page is LLM model routing: MCC turns that name into a real provider model, applies your reasoning and budget settings, and walks an ordered chain of stand-ins when the first cannot serve the request. The chain is yours, and every step is in the log.</p>        <p>Routing is the reason a proxy can be useful at all. Without it, every coding tool carries its own model list, its own keys and its own idea of what to do when a provider says no. With it, one tier map serves every tool, and swapping a model is one edit on one page.</p>
 
         <h2 id="what-a-request-can-name">What a request can name</h2>
 
@@ -293,6 +295,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

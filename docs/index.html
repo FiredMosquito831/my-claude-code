@@ -3,25 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>My Claude Code — local LLM gateway for coding agents</title>
-<meta name="description" content="A local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, Gemini CLI and more: routing, credentials, cost and logs.">
+<title>My Claude Code: local LLM gateway for coding agents</title>
+<meta name="description" content="A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost.">
+<meta name="keywords" content="claude code proxy, llm gateway, local llm proxy, model router, claude code router, ai coding agent gateway, multi provider llm proxy, llm control plane, codex proxy, opencode proxy, gemini cli proxy, llm cost tracking, self hosted llm gateway, anthropic api proxy">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
 <meta property="og:title" content="My Claude Code — a local LLM gateway and control plane">
-<meta property="og:description" content="A local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, Gemini CLI and more: routing, credentials, cost and logs.">
+<meta property="og:description" content="A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="My Claude Code — a local LLM gateway and control plane">
-<meta name="twitter:description" content="A local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, Gemini CLI and more: routing, credentials, cost and logs.">
+<meta name="twitter:description" content="A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "My Claude Code — local LLM gateway for coding agents", "url": "https://myclaudecode.danubelabs.net/", "description": "A local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, Gemini CLI and more: routing, credentials, cost and logs."}</script>
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "My Claude Code", "alternateName": "my-claude-code", "description": "A local multi-provider LLM proxy, model router and control plane for AI coding agents.", "applicationCategory": "DeveloperApplication", "operatingSystem": "Windows, macOS, Linux", "softwareVersion": "8.17.0", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://www.gnu.org/licenses/agpl-3.0.html", "isAccessibleForFree": true, "featureList": ["Tier routing with fallback chains", "Multi-key credential rotation and health", "Reasoning control and encrypted reasoning replay", "A native web-search and web-fetch tool proxy", "Request log, analytics and cost with provenance", "Fifteen agent launchers and desktop app configuration", "Media routing over image, speech, transcription and video rails"], "codeRepository": "https://github.com/FiredMosquito831/my-claude-code", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "My Claude Code: local LLM gateway for coding agents", "url": "https://myclaudecode.danubelabs.net/", "description": "A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "My Claude Code", "alternateName": "my-claude-code", "description": "A local multi-provider LLM proxy, model router and control plane for AI coding agents.", "applicationCategory": "DeveloperApplication", "operatingSystem": "Windows, macOS, Linux", "softwareVersion": "8.17.0", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://www.gnu.org/licenses/agpl-3.0.html", "isAccessibleForFree": true, "featureList": ["Tier routing with fallback chains", "Multi-key credential rotation and health", "Reasoning control and encrypted reasoning replay", "A native web-search and web-fetch tool proxy", "Request log, analytics and cost with provenance", "Sixteen agent launchers and desktop app configuration", "Media routing over image, speech, transcription and video rails"], "codeRepository": "https://github.com/FiredMosquito831/my-claude-code", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -56,7 +57,7 @@
     <div>
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span> Local LLM gateway · control plane</p>
       <h1>One address in front of every model and every coding agent</h1>
-      <p class="lead">My Claude Code is a local multi-provider proxy, model router and control plane for AI coding agents. Point Claude Code, Codex, OpenCode, Gemini CLI and the rest at one address on your machine, and manage providers, keys, fallback chains, reasoning, budgets, web search and cost in one place. Your models, your keys, your machine.</p>
+      <p class="lead">My Claude Code is a local multi-provider proxy, model router and control plane for AI coding agents. Point Claude Code, Codex, OpenCode, Gemini CLI and the rest at one address on your machine, and manage providers, keys, fallback chains, reasoning, budgets, web search and cost in one place. Your models, your keys, your machine. It is a Claude Code proxy first, and a proxy for every other coding agent beside it.</p>
       <div class="hero-actions">
         <a class="button button--primary" href="/quick-start/">Install and run</a>
         <a class="button" href="/features/">See every capability</a>
@@ -412,6 +413,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

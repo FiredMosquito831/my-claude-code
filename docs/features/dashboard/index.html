@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The dashboard | My Claude Code</title>
-<meta name="description" content="Every setting on one local-only page at 127.0.0.1:8082/admin: providers, tiers, models, search, limits, analytics, appearance, updates and the in-app docs.">
+<title>The local control-plane dashboard</title>
+<meta name="description" content="The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.">
+<meta name="keywords" content="llm dashboard, local llm dashboard, claude code dashboard, llm control plane, gateway dashboard, llm admin ui, local admin ui, llm gateway web ui, dashboard configuration">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/dashboard/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="The dashboard | My Claude Code">
-<meta property="og:description" content="Every setting on one local-only page at 127.0.0.1:8082/admin: providers, tiers, models, search, limits, analytics, appearance, updates and the in-app docs.">
+<meta property="og:title" content="The local control-plane dashboard">
+<meta property="og:description" content="The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/dashboard/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="The dashboard | My Claude Code">
-<meta name="twitter:description" content="Every setting on one local-only page at 127.0.0.1:8082/admin: providers, tiers, models, search, limits, analytics, appearance, updates and the in-app docs.">
+<meta name="twitter:title" content="The local control-plane dashboard">
+<meta name="twitter:description" content="The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "The dashboard | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/dashboard/", "description": "Every setting on one local-only page at 127.0.0.1:8082/admin: providers, tiers, models, search, limits, analytics, appearance, updates and the in-app docs."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "The local control-plane dashboard", "url": "https://myclaudecode.danubelabs.net/features/dashboard/", "description": "The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Dashboard"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "The local control-plane dashboard", "description": "The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.", "url": "https://myclaudecode.danubelabs.net/features/dashboard/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>The local control panel</h1>
-<p class="page-intro">The Admin UI is local-only and is where everything is configured. It opens on a Get Started checklist and gets out of the way once dismissed. It reads and writes the same .env the server reads, so the page and the file never disagree.</p>        <p>The dashboard is served by the server it configures, on loopback, at <code>http://127.0.0.1:8082/admin</code>. It has no login because it is not reachable from another machine. A change is collected on the page and written only when you press Apply, at the foot of the page, which validates first.</p>
+<p class="page-intro">The Admin UI is local-only and is where everything is configured. It opens on a Get Started checklist and gets out of the way once dismissed. It reads and writes the same .env the server reads, so the page and the file never disagree. It is the LLM dashboard: the local control panel, and the one place every setting can be changed.</p>        <p>The dashboard is served by the server it configures, on loopback, at <code>http://127.0.0.1:8082/admin</code>. It has no login because it is not reachable from another machine. A change is collected on the page and written only when you press Apply, at the foot of the page, which validates first.</p>
 
         <figure class="figure">
 <img src="/assets/shots/dashboard-get-started.webp" alt="The Get Started checklist: connect a provider, set a fallback model, point Claude Code at MCC, then optional steps for messaging, analytics and limits." width="1500" height="949" loading="lazy" decoding="async">
@@ -165,6 +167,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

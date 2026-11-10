@@ -3,24 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Troubleshooting | My Claude Code</title>
-<meta name="description" content="Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open.">
+<title>Troubleshooting the local gateway</title>
+<meta name="description" content="Verified fixes for the problems people hit: a provider that will not answer, a key that stopped working, a request never logged, an agent that cannot connect.">
+<meta name="keywords" content="llm gateway troubleshooting, claude code proxy errors, provider not working, key failing, proxy connection problem, mcc-server not found, smartscreen installer blocked, macos quarantine app">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/troubleshooting/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Troubleshooting | My Claude Code">
-<meta property="og:description" content="Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open.">
+<meta property="og:title" content="Troubleshooting the local gateway">
+<meta property="og:description" content="Verified fixes for the problems people hit: a provider that will not answer, a key that stopped working, a request never logged, an agent that cannot connect.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/troubleshooting/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Troubleshooting | My Claude Code">
-<meta name="twitter:description" content="Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open.">
+<meta name="twitter:title" content="Troubleshooting the local gateway">
+<meta name="twitter:description" content="Verified fixes for the problems people hit: a provider that will not answer, a key that stopped working, a request never logged, an agent that cannot connect.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Troubleshooting | My Claude Code", "url": "https://myclaudecode.danubelabs.net/troubleshooting/", "description": "Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Troubleshooting the local gateway", "url": "https://myclaudecode.danubelabs.net/troubleshooting/", "description": "Verified fixes for the problems people hit: a provider that will not answer, a key that stopped working, a request never logged, an agent that cannot connect."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Troubleshooting"}]}</script>
 </head>
 <body>
@@ -62,7 +63,7 @@
     <div class="page-grid">
       <div>
         <h1>When a step does not work</h1>
-<p class="page-intro">Each entry below is a symptom the product's own documentation names, its verified cause, and the fix it gives. If your case is not here, the repository's issue tracker is the right channel.</p>        <h2 id="mcc-server-is-not-found-after-a-successful-install">mcc-server is not found after a successful install</h2>
+<p class="page-intro">Each entry below is a symptom the product's own documentation names, its verified cause, and the fix it gives. If your case is not here, the repository's issue tracker is the right channel. It is the LLM gateway troubleshooting page: the failures this site can verify, with the fix for each.</p>        <h2 id="mcc-server-is-not-found-after-a-successful-install">mcc-server is not found after a successful install</h2>
 
         <p><strong>Symptom:</strong> the installer finished, but <code>mcc-server</code> is not recognised. <strong>Cause:</strong> the installer added <code>~/.local/bin</code> to your PATH, and a terminal that was already open cannot see the change. <strong>Fix:</strong> close and reopen the terminal, then check <code>mcc-server --version</code>.</p>
 
@@ -172,6 +173,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

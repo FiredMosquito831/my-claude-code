@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cost provenance | My Claude Code</title>
-<meta name="description" content="Each request is priced once with the source of every number stored beside it. Reported and estimated stay apart, and an unpriceable request is a dash.">
+<title>Cost provenance: where every number comes from</title>
+<meta name="description" content="How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.">
+<meta name="keywords" content="cost provenance, llm cost attribution, token cost calculation, price per request, llm billing accuracy, pricing ladder, unpriced model, models.dev pricing">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/cost-provenance/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Cost provenance | My Claude Code">
-<meta property="og:description" content="Each request is priced once with the source of every number stored beside it. Reported and estimated stay apart, and an unpriceable request is a dash.">
+<meta property="og:title" content="Cost provenance: where every number comes from">
+<meta property="og:description" content="How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/cost-provenance/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Cost provenance | My Claude Code">
-<meta name="twitter:description" content="Each request is priced once with the source of every number stored beside it. Reported and estimated stay apart, and an unpriceable request is a dash.">
+<meta name="twitter:title" content="Cost provenance: where every number comes from">
+<meta name="twitter:description" content="How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Cost provenance | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/cost-provenance/", "description": "Each request is priced once with the source of every number stored beside it. Reported and estimated stay apart, and an unpriceable request is a dash."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Cost provenance: where every number comes from", "url": "https://myclaudecode.danubelabs.net/architecture/cost-provenance/", "description": "How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Cost provenance"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Cost provenance: where every number comes from", "description": "How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.", "url": "https://myclaudecode.danubelabs.net/architecture/cost-provenance/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>Where a price came from</h1>
-<p class="page-intro">A cost is only useful if you can tell how it was produced. MCC prices a request once, as it is logged, and stores the rung of the pricing ladder that answered each field beside the number. A figure no source states is shown as not priced, with the reason.</p>        <h2 id="the-ladder">The ladder</h2>
+<p class="page-intro">A cost is only useful if you can tell how it was produced. MCC prices a request once, as it is logged, and stores the rung of the pricing ladder that answered each field beside the number. A figure no source states is shown as not priced, with the reason. That is what cost provenance means here: every number carries the source that stated it.</p>        <h2 id="the-ladder">The ladder</h2>
 
         <p>Model metadata is resolved by a single ten-rung ladder, and cost is one of the fields it answers. The provider's own model list is the first rung; models.dev follows; the LiteLLM map is consulted when it is switched on; a cross-provider vote covers what remains; and a field no rung can answer is unpriced. The same resolver answers context, output limit, vision, tool support and the four cache prices, and the Models page and every generated agent catalogue read it, so they cannot disagree about a number or about where it came from.</p>
 
@@ -252,6 +254,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

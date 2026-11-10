@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Environment reference | My Claude Code</title>
-<meta name="description" content="The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets.">
+<title>Environment variables and settings reference</title>
+<meta name="description" content="Every environment variable MCC reads, what each one controls, whether it is required, and where in the code it is read: names and purposes, never values.">
+<meta name="keywords" content="llm gateway environment variables, claude code proxy env, mcc environment, proxy env vars, gateway settings reference, mcc env file, request log environment variables, media environment variables">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/configuration/environment/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Environment reference | My Claude Code">
-<meta property="og:description" content="The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets.">
+<meta property="og:title" content="Environment variables and settings reference">
+<meta property="og:description" content="Every environment variable MCC reads, what each one controls, whether it is required, and where in the code it is read: names and purposes, never values.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/configuration/environment/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Environment reference | My Claude Code">
-<meta name="twitter:description" content="The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets.">
+<meta name="twitter:title" content="Environment variables and settings reference">
+<meta name="twitter:description" content="Every environment variable MCC reads, what each one controls, whether it is required, and where in the code it is read: names and purposes, never values.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Environment reference | My Claude Code", "url": "https://myclaudecode.danubelabs.net/configuration/environment/", "description": "The variable names My Claude Code reads, grouped by area, with what each one decides. Names and purposes only: no values, and no sample secrets."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Environment variables and settings reference", "url": "https://myclaudecode.danubelabs.net/configuration/environment/", "description": "Every environment variable MCC reads, what each one controls, whether it is required, and where in the code it is read: names and purposes, never values."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Configuration", "item": "https://myclaudecode.danubelabs.net/configuration/"}, {"@type": "ListItem", "position": 4, "name": "Environment"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Environment variables and settings reference", "description": "Every environment variable MCC reads, what each one controls, whether it is required, and where in the code it is read: names and purposes, never values.", "url": "https://myclaudecode.danubelabs.net/configuration/environment/", "about": {"@type": "Thing", "name": "My Claude Code configuration"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>Environment reference</h1>
-<p class="page-intro">This page names the settings, grouped by what they decide. It gives no values. For a secret-like variable it never shows an example, because a documentation page is not a place to invent one. The annotated .env.example in the repository carries the same names with inline comments.</p>        <div class="callout callout--warn"><strong>Names, not values.</strong> Nothing on this page is a usable setting. Copy a name into your own .env and read its comment in <code>.env.example</code> before choosing a value.</div>
+<p class="page-intro">This page is the LLM gateway environment variables reference. It names the settings, grouped by what they decide, and gives no values. For a secret-like variable it never shows an example: a documentation page is not a place to invent one. The annotated .env.example carries the same names, with comments.</p>        <div class="callout callout--warn"><strong>Names, not values.</strong> Nothing on this page is a usable setting. Copy a name into your own .env and read its comment in <code>.env.example</code> before choosing a value.</div>
 
         <h2 id="core-server">Core server</h2>
 
@@ -158,6 +160,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

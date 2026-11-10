@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Observability and cost | My Claude Code</title>
-<meta name="description" content="A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator.">
+<title>Request log, analytics and cost with provenance</title>
+<meta name="description" content="Every request logged with the model that served it, the tokens it used and what it cost, with provenance: which provider, key and price produced the number.">
+<meta name="keywords" content="llm observability, llm cost tracking, token usage analytics, api cost provenance, claude code analytics, llm request log, ai spend tracking, llm dashboard, cost per request llm">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/observability-and-cost/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Observability and cost | My Claude Code">
-<meta property="og:description" content="A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator.">
+<meta property="og:title" content="Request log, analytics and cost with provenance">
+<meta property="og:description" content="Every request logged with the model that served it, the tokens it used and what it cost, with provenance: which provider, key and price produced the number.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/observability-and-cost/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Observability and cost | My Claude Code">
-<meta name="twitter:description" content="A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator.">
+<meta name="twitter:title" content="Request log, analytics and cost with provenance">
+<meta name="twitter:description" content="Every request logged with the model that served it, the tokens it used and what it cost, with provenance: which provider, key and price produced the number.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Observability and cost | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/observability-and-cost/", "description": "A searchable request log, range-aware analytics, attempt-level exports and cost with provenance: reported and estimated kept apart, each with its denominator."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Request log, analytics and cost with provenance", "url": "https://myclaudecode.danubelabs.net/features/observability-and-cost/", "description": "Every request logged with the model that served it, the tokens it used and what it cost, with provenance: which provider, key and price produced the number."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Observability and cost"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Request log, analytics and cost with provenance", "description": "Every request logged with the model that served it, the tokens it used and what it cost, with provenance: which provider, key and price produced the number.", "url": "https://myclaudecode.danubelabs.net/features/observability-and-cost/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>The request log, analytics and cost with provenance</h1>
-<p class="page-intro">Every request through the proxy is logged, priced and searchable afterwards. That is what turns a router from a guess into a measurement: which model answered, which fallback spent the time, which key it cost, and where each price came from.</p>        <p>The request log stores every completed request locally. It is searchable across prompt, reply, reasoning and tool calls, and it is the source of every number on the Analytics page: there is no second accounting system and no remote dashboard to reconcile against.</p>
+<p class="page-intro">Every request through the proxy is logged, priced and searchable afterwards. That is what turns a router from a guess into a measurement: which model answered, which fallback spent the time, which key it cost, and where each price came from. This page is LLM observability and cost tracking in one place: the request log, the analytics and the source of every number.</p>        <p>The request log stores every completed request locally. It is searchable across prompt, reply, reasoning and tool calls, and it is the source of every number on the Analytics page: there is no second accounting system and no remote dashboard to reconcile against.</p>
 
         <figure class="figure">
 <img src="/assets/shots/readme-analytics-overview.webp" alt="Rows of stat cards counting stored requests, success rate, fallback share and token totals, above an all-time strip and a per-model table." width="1500" height="949" loading="lazy" decoding="async">
@@ -188,6 +190,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

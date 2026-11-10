@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Provider routing | My Claude Code</title>
-<meta name="description" content="How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour.">
+<title>Provider routing and the fallback ladder</title>
+<meta name="description" content="How MCC resolves a model name to a provider model, orders the fallback ladder, and decides when to move to the next rung: verified against the code.">
+<meta name="keywords" content="provider routing internals, fallback ladder, model resolution llm, routing internals, llm failover design, model tier alias, gateway model id, media rail routing">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/provider-routing/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Provider routing | My Claude Code">
-<meta property="og:description" content="How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour.">
+<meta property="og:title" content="Provider routing and the fallback ladder">
+<meta property="og:description" content="How MCC resolves a model name to a provider model, orders the fallback ladder, and decides when to move to the next rung: verified against the code.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/provider-routing/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Provider routing | My Claude Code">
-<meta name="twitter:description" content="How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour.">
+<meta name="twitter:title" content="Provider routing and the fallback ladder">
+<meta name="twitter:description" content="How MCC resolves a model name to a provider model, orders the fallback ladder, and decides when to move to the next rung: verified against the code.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Provider routing | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/provider-routing/", "description": "How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Provider routing and the fallback ladder", "url": "https://myclaudecode.danubelabs.net/architecture/provider-routing/", "description": "How MCC resolves a model name to a provider model, orders the fallback ladder, and decides when to move to the next rung: verified against the code."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Provider routing"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Provider routing and the fallback ladder", "description": "How MCC resolves a model name to a provider model, orders the fallback ladder, and decides when to move to the next rung: verified against the code.", "url": "https://myclaudecode.danubelabs.net/architecture/provider-routing/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>From a tier name to one real model</h1>
-<p class="page-intro">The router answers one question: which concrete provider model serves this request, with which reasoning preference, and what happens if it cannot. It is deliberately small, and the rules it follows are the product's contract.</p>        <h2 id="three-ways-to-name-a-model">Three ways to name a model</h2>
+<p class="page-intro">The router answers one question: which concrete provider model serves this request, with which reasoning preference, and what happens if it cannot. It is deliberately small, and the rules it follows are the product's contract. This page is the provider routing internals: the three ways to name a model, the tier map, and the order the fallback ladder is walked in.</p>        <h2 id="three-ways-to-name-a-model">Three ways to name a model</h2>
 
         <p>Resolution takes three forms. A <strong>direct provider model ref</strong> names the provider and the exact model. A <strong>gateway model ID</strong> is decoded by the gateway-ID codec. The <strong>five tier aliases</strong> are intercepted ahead of both, and are pointers rather than models. If the incoming name is not direct, the router maps it by Claude tier: a name containing fable, opus, sonnet or haiku uses the matching tier override when set, and otherwise falls back to the default model.</p>
 
@@ -246,6 +248,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

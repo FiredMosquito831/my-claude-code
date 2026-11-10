@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Credential health | My Claude Code</title>
-<meta name="description" content="The rotation engine, the two questions it asks of every failure, and the three signals that can change a key&#39;s health. Everything else leaves the key untouched.">
+<title>Credential health and key rotation</title>
+<meta name="description" content="How keys are stored, checked, rotated and attributed to requests: the credential layer behind the providers page, and what happens when a key starts failing.">
+<meta name="keywords" content="credential health internals, api key rotation design, llm key storage, key health check, credential layer, key rotation policy, per key attribution, 429 bench">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/credential-health/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Credential health | My Claude Code">
-<meta property="og:description" content="The rotation engine, the two questions it asks of every failure, and the three signals that can change a key&#39;s health. Everything else leaves the key untouched.">
+<meta property="og:title" content="Credential health and key rotation">
+<meta property="og:description" content="How keys are stored, checked, rotated and attributed to requests: the credential layer behind the providers page, and what happens when a key starts failing.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/credential-health/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Credential health | My Claude Code">
-<meta name="twitter:description" content="The rotation engine, the two questions it asks of every failure, and the three signals that can change a key&#39;s health. Everything else leaves the key untouched.">
+<meta name="twitter:title" content="Credential health and key rotation">
+<meta name="twitter:description" content="How keys are stored, checked, rotated and attributed to requests: the credential layer behind the providers page, and what happens when a key starts failing.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Credential health | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/credential-health/", "description": "The rotation engine, the two questions it asks of every failure, and the three signals that can change a key's health. Everything else leaves the key untouched."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Credential health and key rotation", "url": "https://myclaudecode.danubelabs.net/architecture/credential-health/", "description": "How keys are stored, checked, rotated and attributed to requests: the credential layer behind the providers page, and what happens when a key starts failing."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Credential health"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Credential health and key rotation", "description": "How keys are stored, checked, rotated and attributed to requests: the credential layer behind the providers page, and what happens when a key starts failing.", "url": "https://myclaudecode.danubelabs.net/architecture/credential-health/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>How a key earns a bench</h1>
-<p class="page-intro">A provider holding several keys has to answer two independent questions about one failure: should another key be tried, and does this failure cost the credential anything? MCC answers each from its own allow-list, rather than from one deny-list that defaults to blaming the key.</p>        <h2 id="question-one-try-another-key">Question one: try another key?</h2>
+<p class="page-intro">A provider holding several keys has to answer two independent questions about one failure: should another key be tried, and does this failure cost the credential anything? MCC answers each from its own allow-list, rather than from one deny-list that defaults to blaming the key. This page is the credential health internals: the two questions, the allow-list behind each, and the per-key attribution that follows.</p>        <h2 id="question-one-try-another-key">Question one: try another key?</h2>
 
         <p>Only three failures justify a different credential: an auth rejection, a 429 and a transport fault. A different credential means a different account or a different connection, so one of them might help. Nothing else does. Every key in the pool reaches the same model and would meet the same timeout, 5xx, 410 or 400, so those raise out of the rotating loop and the fallback chain moves on to the next model instead.</p>
 
@@ -251,6 +253,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Platform and packaging | My Claude Code</title>
-<meta name="description" content="Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging.">
+<title>Platform support: Windows, macOS and Linux</title>
+<meta name="description" content="Where MCC runs, what the installer does on each platform, and what it deliberately does not touch: the supported platforms, verified from the build and CI.">
+<meta name="keywords" content="llm gateway update path, llm gateway windows, llm proxy macos, llm proxy linux, claude code windows, local llm windows, install llm gateway, desktop app llm gateway, llm gateway wsl">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/platform/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Platform and packaging | My Claude Code">
-<meta property="og:description" content="Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging.">
+<meta property="og:title" content="Platform support: Windows, macOS and Linux">
+<meta property="og:description" content="Where MCC runs, what the installer does on each platform, and what it deliberately does not touch: the supported platforms, verified from the build and CI.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/platform/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Platform and packaging | My Claude Code">
-<meta name="twitter:description" content="Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging.">
+<meta name="twitter:title" content="Platform support: Windows, macOS and Linux">
+<meta name="twitter:description" content="Where MCC runs, what the installer does on each platform, and what it deliberately does not touch: the supported platforms, verified from the build and CI.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Platform and packaging | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/platform/", "description": "Windows, macOS and Linux, a native desktop app with a tray, one atomic update path with checksum verification, and npm and PyPI packaging."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Platform support: Windows, macOS and Linux", "url": "https://myclaudecode.danubelabs.net/features/platform/", "description": "Where MCC runs, what the installer does on each platform, and what it deliberately does not touch: the supported platforms, verified from the build and CI."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Platform"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Platform support: Windows, macOS and Linux", "description": "Where MCC runs, what the installer does on each platform, and what it deliberately does not touch: the supported platforms, verified from the build and CI.", "url": "https://myclaudecode.danubelabs.net/features/platform/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>Platform, desktop app and updates</h1>
-<p class="page-intro">MCC runs on Windows, macOS and Linux, as a server, as a native desktop app, or both. There is one update path, one configuration directory and one set of commands, whichever route you took in.</p>        <p>The server is the product; the desktop app is a window onto it. Every install route ends at the same server, the same dashboard and the same configuration directory. The server one-liners are the right choice on a headless box, a VPS, over SSH or inside WSL, where there is no tray to draw into.</p>
+<p class="page-intro">MCC runs on Windows, macOS and Linux, as a server, as a native desktop app, or both. There is one update path, one configuration directory and one set of commands, whichever route you took in. This page is the LLM gateway update path, and the platform support behind it: what the installer does on each system, and what it deliberately does not touch.</p>        <p>The server is the product; the desktop app is a window onto it. Every install route ends at the same server, the same dashboard and the same configuration directory. The server one-liners are the right choice on a headless box, a VPS, over SSH or inside WSL, where there is no tray to draw into.</p>
 
         <figure class="figure">
 <img src="/assets/shots/dashboard-get-started.webp" alt="The Get Started checklist: connect a provider, set a fallback model, point Claude Code at MCC, then optional steps for messaging, analytics and limits." width="1500" height="949" loading="lazy" decoding="async">
@@ -165,6 +167,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

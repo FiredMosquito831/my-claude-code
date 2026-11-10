@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reasoning and budgets | My Claude Code</title>
-<meta name="description" content="One reasoning effort translated into each provider&#39;s dialect, adaptive reasoning on every door, encrypted replay, prompt-cache lifetime and output budgets.">
+<title>Reasoning control and output budgets per request</title>
+<meta name="description" content="Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.">
+<meta name="keywords" content="llm reasoning control, output token budget, reasoning effort claude, llm budget per request, token budget llm, reasoning replay, claude code reasoning, adaptive reasoning, prompt cache lifetime, reasoning dialect translation">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Reasoning and budgets | My Claude Code">
-<meta property="og:description" content="One reasoning effort translated into each provider&#39;s dialect, adaptive reasoning on every door, encrypted replay, prompt-cache lifetime and output budgets.">
+<meta property="og:title" content="Reasoning control and output budgets per request">
+<meta property="og:description" content="Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Reasoning and budgets | My Claude Code">
-<meta name="twitter:description" content="One reasoning effort translated into each provider&#39;s dialect, adaptive reasoning on every door, encrypted replay, prompt-cache lifetime and output budgets.">
+<meta name="twitter:title" content="Reasoning control and output budgets per request">
+<meta name="twitter:description" content="Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Reasoning and budgets | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/", "description": "One reasoning effort translated into each provider's dialect, adaptive reasoning on every door, encrypted replay, prompt-cache lifetime and output budgets."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Reasoning control and output budgets per request", "url": "https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/", "description": "Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Reasoning and budgets"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Reasoning control and output budgets per request", "description": "Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.", "url": "https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>Reasoning control and output budgets</h1>
-<p class="page-intro">Every provider spells reasoning differently. MCC keeps one neutral policy, then lets each provider adapter translate only the subset its wire API can express. The same page also decides how long a model may think, how many tokens it may spend, and how long the router waits before it calls a silent model a failure.</p>        <p>Reasoning is not one setting. It is three independent facts: whether the client wants reasoning on, off or by default; the named effort it asked for, when it named one; and an exact token budget, when it supplied one. MCC resolves those facts once, at the application boundary, and passes one immutable policy to the provider. Provider adapters alone decide how to spell it.</p>
+<p class="page-intro">Every provider spells reasoning differently. MCC keeps one neutral policy, then lets each provider adapter translate only the subset its wire API can express. The same page also decides how long a model may think, how many tokens it may spend, and how long the router waits before it calls a silent model a failure. This page is LLM reasoning control and the output token budget that goes with it.</p>        <p>Reasoning is not one setting. It is three independent facts: whether the client wants reasoning on, off or by default; the named effort it asked for, when it named one; and an exact token budget, when it supplied one. MCC resolves those facts once, at the application boundary, and passes one immutable policy to the provider. Provider adapters alone decide how to spell it.</p>
 
         <h2 id="one-scale-many-dialects">One scale, many dialects</h2>
 
@@ -171,6 +173,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

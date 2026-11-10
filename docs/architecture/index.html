@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Architecture | My Claude Code</title>
-<meta name="description" content="The system map behind My Claude Code: three runtime surfaces, eight packages with a least-privilege dependency policy and four protocol doors.">
+<title>Architecture: how the local LLM gateway works</title>
+<meta name="description" content="The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.">
+<meta name="keywords" content="llm gateway architecture, proxy architecture, llm router architecture, claude code proxy design, request lifecycle llm, protocol doors, four protocol doors, fastapi llm proxy, llm proxy internals">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Architecture | My Claude Code">
-<meta property="og:description" content="The system map behind My Claude Code: three runtime surfaces, eight packages with a least-privilege dependency policy and four protocol doors.">
+<meta property="og:title" content="Architecture: how the local LLM gateway works">
+<meta property="og:description" content="The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Architecture | My Claude Code">
-<meta name="twitter:description" content="The system map behind My Claude Code: three runtime surfaces, eight packages with a least-privilege dependency policy and four protocol doors.">
+<meta name="twitter:title" content="Architecture: how the local LLM gateway works">
+<meta name="twitter:description" content="The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Architecture | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/", "description": "The system map behind My Claude Code: three runtime surfaces, eight packages with a least-privilege dependency policy and four protocol doors."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Architecture: how the local LLM gateway works", "url": "https://myclaudecode.danubelabs.net/architecture/", "description": "The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Architecture: how the local LLM gateway works", "description": "The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.", "url": "https://myclaudecode.danubelabs.net/architecture/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -62,7 +64,7 @@
     <div class="page-grid">
       <div>
         <h1>How the system is put together</h1>
-<p class="page-intro">MCC is a local proxy, a set of launchers and an optional messaging bridge, built from eight packages with one dependency rule. This page is the map; the six pages after it go into the machinery a request actually touches.</p>        <p>The repository documents its own architecture in a long, maintained file. This page condenses the parts that explain the behaviour you can see: why one address can serve four protocols, why a credential can be judged without judging the model, and why a request is priced once rather than reconstructed later.</p>
+<p class="page-intro">MCC is a local proxy, a set of launchers and an optional messaging bridge, built from eight packages with one dependency rule. This page is the map; the six pages after it go into the machinery a request actually touches. Read together, they are the LLM gateway architecture: the doors, the routing ladder, the credential layer, the request log and the cost model.</p>        <p>The repository documents its own architecture in a long, maintained file. This page condenses the parts that explain the behaviour you can see: why one address can serve four protocols, why a credential can be judged without judging the model, and why a request is priced once rather than reconstructed later.</p>
 
         <h2 id="three-runtime-surfaces">Three runtime surfaces</h2>
 
@@ -349,6 +351,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

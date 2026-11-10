@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Security model | My Claude Code</title>
-<meta name="description" content="The principles the security boundary is built on: local by default, a token once the proxy leaves loopback, owner-only stores, redacted logs and narrow egress.">
+<title>Security model: keys, boundaries and local-first</title>
+<meta name="description" content="The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.">
+<meta name="keywords" content="llm gateway security, local first llm, api key security, proxy security model, self hosted llm security, loopback only admin, credential redaction, proxy bearer token">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/security-model/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Security model | My Claude Code">
-<meta property="og:description" content="The principles the security boundary is built on: local by default, a token once the proxy leaves loopback, owner-only stores, redacted logs and narrow egress.">
+<meta property="og:title" content="Security model: keys, boundaries and local-first">
+<meta property="og:description" content="The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/security-model/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Security model | My Claude Code">
-<meta name="twitter:description" content="The principles the security boundary is built on: local by default, a token once the proxy leaves loopback, owner-only stores, redacted logs and narrow egress.">
+<meta name="twitter:title" content="Security model: keys, boundaries and local-first">
+<meta name="twitter:description" content="The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Security model | My Claude Code", "url": "https://myclaudecode.danubelabs.net/architecture/security-model/", "description": "The principles the security boundary is built on: local by default, a token once the proxy leaves loopback, owner-only stores, redacted logs and narrow egress."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Security model: keys, boundaries and local-first", "url": "https://myclaudecode.danubelabs.net/architecture/security-model/", "description": "The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Security model"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Security model: keys, boundaries and local-first", "description": "The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.", "url": "https://myclaudecode.danubelabs.net/architecture/security-model/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>The principles the boundary is built on</h1>
-<p class="page-intro">This page states what MCC does to keep a local proxy local, and what it refuses to do. It is a description of the design, not a security audit, and it makes no claim that a deployment is safe without the operator's own choices.</p>        <p>The threat model starts from one fact: the proxy holds the keys to providers that bill. A local service with those keys has to be reachable by the tools that need it and by nothing else. The principles below are how the code enforces that, and each one has a visible consequence.</p>
+<p class="page-intro">This page states what MCC does to keep a local proxy local, and what it refuses to do. It is a description of the design, not a security audit, and it makes no claim that a deployment is safe without the operator's own choices. It is the LLM gateway security model: local by default, a token once it leaves the machine, owner-only stores, redacted logs and narrow egress.</p>        <p>The threat model starts from one fact: the proxy holds the keys to providers that bill. A local service with those keys has to be reachable by the tools that need it and by nothing else. The principles below are how the code enforces that, and each one has a visible consequence.</p>
 
         <figure class="figure figure--diagram" id="fig-security-principles">
 <div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t15 d15" font-family="ui-monospace, Consolas, monospace">
@@ -232,6 +234,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

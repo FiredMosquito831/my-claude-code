@@ -3,25 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The command line | My Claude Code</title>
-<meta name="description" content="The mcc-* launchers, headless mcc-apps controls, the installer&#39;s own flags, OAuth sign-in commands and the migration and removal tools.">
+<title>The MCC command line</title>
+<meta name="description" content="The command line that starts the gateway, manages providers and keys, checks credential health and prints the state of every configured agent.">
+<meta name="keywords" content="llm gateway cli, claude code cli proxy, mcc command line, llm proxy command, gateway cli commands, mcc-server, agent launcher command, headless llm gateway">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/features/cli/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="The command line | My Claude Code">
-<meta property="og:description" content="The mcc-* launchers, headless mcc-apps controls, the installer&#39;s own flags, OAuth sign-in commands and the migration and removal tools.">
+<meta property="og:title" content="The MCC command line">
+<meta property="og:description" content="The command line that starts the gateway, manages providers and keys, checks credential health and prints the state of every configured agent.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/features/cli/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="The command line | My Claude Code">
-<meta name="twitter:description" content="The mcc-* launchers, headless mcc-apps controls, the installer&#39;s own flags, OAuth sign-in commands and the migration and removal tools.">
+<meta name="twitter:title" content="The MCC command line">
+<meta name="twitter:description" content="The command line that starts the gateway, manages providers and keys, checks credential health and prints the state of every configured agent.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "The command line | My Claude Code", "url": "https://myclaudecode.danubelabs.net/features/cli/", "description": "The mcc-* launchers, headless mcc-apps controls, the installer's own flags, OAuth sign-in commands and the migration and removal tools."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "The MCC command line", "url": "https://myclaudecode.danubelabs.net/features/cli/", "description": "The command line that starts the gateway, manages providers and keys, checks credential health and prints the state of every configured agent."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "CLI"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "The MCC command line", "description": "The command line that starts the gateway, manages providers and keys, checks credential health and prints the state of every configured agent.", "url": "https://myclaudecode.danubelabs.net/features/cli/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -63,7 +65,7 @@
     <div class="page-grid">
       <div>
         <h1>The commands MCC puts on your PATH</h1>
-<p class="page-intro">The dashboard is optional. Everything the page can do has a command, and the launchers are how most people start an agent. This page is the reference for the commands, with the flags that exist and the ones that do not.</p>        <p>An install puts <code>mcc-server</code> and the <code>mcc-*</code> launchers on your PATH, and adds the headless tools beside them. A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself.</p>
+<p class="page-intro">The dashboard is optional. Everything the page can do has a command, and the launchers are how most people start an agent. This page is the reference for the commands, with the flags that exist and the ones that do not. It is the reference for the LLM gateway CLI: mcc-server, the launchers and the headless tools beside them.</p>        <p>An install puts <code>mcc-server</code> and the <code>mcc-*</code> launchers on your PATH, and adds the headless tools beside them. A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself.</p>
 
         <p>The launcher set is generated from one registry, so a new agent is a registry entry rather than a new script. A launcher whose agent is missing prints that agent's own install command and exits, which is why the CLI never installs an agent on its own.</p>
 
@@ -172,6 +174,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

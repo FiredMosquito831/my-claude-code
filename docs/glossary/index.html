@@ -3,24 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Glossary | My Claude Code</title>
-<meta name="description" content="The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product&#39;s documentation.">
+<title>Glossary of gateway and routing terms</title>
+<meta name="description" content="Door, tier, rung, ladder, credential health, cost provenance: every term MCC uses, defined once, with the behaviour it names.">
+<meta name="keywords" content="llm gateway glossary, routing terms, proxy terminology, llm terms, gateway glossary, bench definition, fallback chain definition, reasoning budget definition">
 <link rel="canonical" href="https://myclaudecode.danubelabs.net/glossary/"><meta property="og:type" content="website">
 <meta property="og:site_name" content="My Claude Code">
-<meta property="og:title" content="Glossary | My Claude Code">
-<meta property="og:description" content="The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product&#39;s documentation.">
+<meta property="og:title" content="Glossary of gateway and routing terms">
+<meta property="og:description" content="Door, tier, rung, ladder, credential health, cost provenance: every term MCC uses, defined once, with the behaviour it names.">
 <meta property="og:url" content="https://myclaudecode.danubelabs.net/glossary/">
 <meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
 <meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Glossary | My Claude Code">
-<meta name="twitter:description" content="The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product&#39;s documentation.">
+<meta name="twitter:title" content="Glossary of gateway and routing terms">
+<meta name="twitter:description" content="Door, tier, rung, ladder, credential health, cost provenance: every term MCC uses, defined once, with the behaviour it names.">
 <meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
 <meta name="theme-color" content="#0B0F14">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/assets/style.css">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Glossary | My Claude Code", "url": "https://myclaudecode.danubelabs.net/glossary/", "description": "The terms My Claude Code uses in its own way: tier, door, chain, bench, rung, provenance, carrier and the rest, each defined from the product's documentation."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Glossary of gateway and routing terms", "url": "https://myclaudecode.danubelabs.net/glossary/", "description": "Door, tier, rung, ladder, credential health, cost provenance: every term MCC uses, defined once, with the behaviour it names."}</script>
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Glossary"}]}</script>
 </head>
 <body>
@@ -62,7 +63,7 @@
     <div class="page-grid">
       <div>
         <h1>The words this product uses</h1>
-<p class="page-intro">MCC uses some ordinary words in a specific way. This page defines them once, from the product's own documentation, so a page elsewhere can use them without repeating the definition.</p>        <h2 id="a-c">A — C</h2>
+<p class="page-intro">MCC uses some ordinary words in a specific way. This page defines them once, from the product's own documentation, so a page elsewhere can use them without repeating the definition. It is the LLM gateway glossary: bench, chain, tier, rung, credential health and cost provenance, each defined once.</p>        <h2 id="a-c">A — C</h2>
 
         <dl class="terms">
 <div class="term" id="adaptive-reasoning"><dt>Adaptive reasoning</dt><dd>A request, spelled <code>ADAPTIVE</code>, that asks the host to think as much as it decides it needs. It is not an effort level and not a budget; each door says it in the host's own words, and a host with no reasoning field is sent nothing.</dd></div><div class="term" id="bench"><dt>Bench</dt><dd>A time-bounded refusal to use a credential or a chain entry. A bench is scoped: a 429 benches a key and model pair, while an exhausted balance benches the whole key.</dd></div><div class="term" id="budget"><dt>Budget</dt><dd>An exact output allowance, or the reasoning budget a client supplied. MCC keeps the two separate, and never uses an output limit as a reasoning budget.</dd></div><div class="term" id="carrier"><dt>Carrier</dt><dd>MCC's envelope for a Responses host's opaque encrypted reasoning item, carried through the client's own transcript. A carrier is host-bound: it is replayed only to the provider, endpoint, account and model that minted it.</dd></div><div class="term" id="chain"><dt>Chain</dt><dd>An ordered list of stand-ins behind a route. A model listed twice is tried twice, and each listing is judged when it is reached.</dd></div><div class="term" id="commit-boundary"><dt>Commit boundary</dt><dd>The moment the first protocol chunk is sent and the HTTP status can no longer change. A failure before it is an HTTP error; a failure after it is an in-band event.</dd></div><div class="term" id="config-home"><dt>Config home</dt><dd>The one directory that holds the .env, the request log and the documents beside them. It is <code>~/.mcc</code> by default and is pinned by <code>MCC_CONFIG_DIR</code>.</dd></div><div class="term" id="country-refusal"><dt>Country refusal</dt><dd>A 403 that refuses the address rather than the credential. It never locks a key out, and the request still tries the next key, then the next model.</dd></div><div class="term" id="credential-pool"><dt>Credential pool</dt><dd>The comma-separated keys behind one provider, each with its own upstream client and rate-limit window, read in the order they are listed.</dd></div></dl>
@@ -145,6 +146,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>
