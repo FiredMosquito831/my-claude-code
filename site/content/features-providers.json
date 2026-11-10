@@ -5,7 +5,7 @@
   "nav": "Providers",
   "eyebrow": "Feature · Providers",
   "h1": "Providers, keys and credential health",
-  "intro": "Every provider MCC can route to is a card on one page. A card holds a key or a pool of keys, its rotation policy, its model list and its health. The rest of this page is what happens when a provider answers, refuses, or says nothing at all.",
+  "intro": "Every provider MCC can route to is a card on one page. A card holds a key or a pool of keys, its rotation policy, its model list and its health. The rest of this page is what happens when a provider answers, refuses, or says nothing at all. Sixty LLM providers sit behind that one page, each with its own keys and its own health.",
   "page_grid": true,
   "breadcrumbs": [
     {

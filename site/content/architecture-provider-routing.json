@@ -5,7 +5,7 @@
   "nav": "Provider routing",
   "eyebrow": "Architecture · Routing",
   "h1": "From a tier name to one real model",
-  "intro": "The router answers one question: which concrete provider model serves this request, with which reasoning preference, and what happens if it cannot. It is deliberately small, and the rules it follows are the product's contract.",
+  "intro": "The router answers one question: which concrete provider model serves this request, with which reasoning preference, and what happens if it cannot. It is deliberately small, and the rules it follows are the product's contract. This page is the provider routing internals: the three ways to name a model, the tier map, and the order the fallback ladder is walked in.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Provider routing"}],
   "blocks": [

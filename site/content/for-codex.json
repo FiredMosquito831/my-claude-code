@@ -1,0 +1,140 @@
+{
+  "path": "/for/codex/",
+  "title": "Codex CLI through a local LLM proxy",
+  "description": "Point Codex CLI at My Claude Code with mcc-codex over the OpenAI Responses API, with one provider set, fallback chains and a priced request log behind it.",
+  "nav": "Codex",
+  "eyebrow": "For your agent · Codex CLI",
+  "h1": "Codex CLI through one local address",
+  "intro": "Codex CLI is OpenAI's terminal agent, and it speaks the OpenAI Responses API. <code>mcc-codex</code> points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the Codex CLI proxy setup in one command.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "For your agent",
+      "href": "/features/agents/"
+    },
+    {
+      "label": "Codex"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "The command"
+    },
+    {
+      "type": "p",
+      "text": "Install Codex CLI yourself, because MCC never installs an agent, then launch it through the proxy with one command:"
+    },
+    {
+      "type": "code",
+      "label": "Launch Codex CLI against the local proxy",
+      "text": "mcc-codex"
+    },
+    {
+      "type": "p",
+      "text": "The launcher passes the proxy as an ephemeral <code>-c</code> assignment on the command line, so your own <code>config.toml</code> is never rewritten. The provider it declares is named for the proxy, points at the proxy's <code>/v1</code> root, uses the Responses wire API and reads its key from an environment variable the launcher sets for that one process."
+    },
+    {
+      "type": "p",
+      "text": "A single prompt runs the same way, using Codex's own subcommand: <code>mcc-codex exec \"summarise this diff\"</code>. <code>mcc-codex resume --last</code> continues the most recent session, and neither form needs a different launcher."
+    },
+    {
+      "type": "p",
+      "text": "MCC also generates a model catalogue for Codex and points the launch at it, so the models Codex offers are the ones your routes actually resolve to, with the limits and prices the metadata ladder found."
+    },
+    {
+      "type": "p",
+      "text": "The catalog is written under the MCC configuration home and named on the command line for that one launch, in the same way as the provider assignment. Nothing under your Codex home is rewritten, and a Codex session you start without <code>mcc-codex</code> sees exactly the configuration it saw before."
+    },
+    {
+      "type": "h2",
+      "text": "What Codex gets"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "One address for every provider, over the OpenAI Responses API that Codex already speaks.",
+        "Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.",
+        "A generated model catalogue, so the models Codex lists are the ones your routes resolve to.",
+        "Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.",
+        "A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.",
+        "Per-agent attribution. The launcher marks the request as Codex's, so the log can name the agent behind it."
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "What the launcher does not change"
+    },
+    {
+      "type": "p",
+      "text": "Your Codex installation and its <code>config.toml</code> are untouched, because every assignment the launcher adds exists for one launch only. If Codex is not installed, the launcher prints OpenAI's own install line and exits rather than installing anything on your behalf."
+    },
+    {
+      "type": "h2",
+      "text": "Where to go next"
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/agents/",
+          "label": "Every agent MCC can launch or configure"
+        },
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: install, run, and the first five minutes"
+        },
+        {
+          "href": "/features/routing/",
+          "label": "Routing: tiers and fallback chains"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers and credentials: what the request is routed to"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "mcc-codex launches Codex CLI through the local proxy",
+      "evidence": "pyproject.toml [project.scripts] mcc-codex; src/my_claude_code/cli/launchers/codex.py launch()"
+    },
+    {
+      "claim": "The launcher uses ephemeral -c assignments so the user's config.toml is never rewritten",
+      "evidence": "src/my_claude_code/config/harnesses.py HarnessSpec codex summary; src/my_claude_code/cli/launchers/codex.py codex_config_args()"
+    },
+    {
+      "claim": "The declared provider points at the proxy /v1 root over the Responses wire API",
+      "evidence": "src/my_claude_code/cli/launchers/codex.py codex_config_args(): base_url _ensure_v1_url, wire_api responses"
+    },
+    {
+      "claim": "The provider key is read from an environment variable set for that one process",
+      "evidence": "src/my_claude_code/cli/launchers/codex.py _CODEX_AUTH_ENV_KEY = MCC_CODEX_API_KEY; env_key assignment"
+    },
+    {
+      "claim": "mcc-codex exec runs one prompt and mcc-codex resume --last continues the most recent session",
+      "evidence": "src/my_claude_code/config/harnesses.py HarnessSpec codex HarnessInvocation exec / resume --last"
+    },
+    {
+      "claim": "MCC generates a model catalogue for Codex and points the launch at it",
+      "evidence": "src/my_claude_code/cli/launchers/codex.py build_model_catalog_config_args(); src/my_claude_code/config/harnesses.py HarnessCatalogue format_id codex"
+    },
+    {
+      "claim": "A launcher whose agent is missing prints that agent's install line and exits",
+      "evidence": "src/my_claude_code/cli/launchers/common.py run_client_process; README.md §What the installer does"
+    },
+    {
+      "claim": "The launcher marks the request with the Codex harness id for per-agent attribution",
+      "evidence": "src/my_claude_code/cli/launchers/codex.py HARNESS_HEADER http_headers {HARNESS_HEADER: HARNESS_ID}"
+    },
+    {
+      "claim": "Codex CLI speaks the OpenAI Responses API to the proxy",
+      "evidence": "README.md §Coding agents table; src/my_claude_code/config/harnesses.py HarnessProtocol.OPENAI_RESPONSES"
+    }
+  ]
+}

@@ -33,6 +33,49 @@ DOCS = REPO / "docs"
 BASE_URL = "https://myclaudecode.danubelabs.net"
 MANIFEST_NAME = ".site-manifest.json"
 
+# The machine-readable surfaces, and the deep-page families that carry a
+# TechArticle. Both are named once here so the gates and the emitters agree.
+LLMS_TXT = "llms.txt"
+LLMS_FULL_TXT = "llms-full.txt"
+SECURITY_TXT = "security.txt"
+WELL_KNOWN_SECURITY_TXT = ".well-known/security.txt"
+NOJEKYLL = ".nojekyll"
+SECURITY_CONTACT = (
+    "https://github.com/FiredMosquito831/my-claude-code/security/advisories/new"
+)
+# RFC 9116 asks for an Expires within a year of publication. The site's lastmod
+# is the deliberate date the owner sets in site.json, so the expiry is derived
+# from it rather than from the wall clock: the build stays deterministic.
+SECURITY_EXPIRES = "2027-11-10"
+TECH_ARTICLE_PREFIXES = ("/features/", "/architecture/", "/configuration/")
+TECH_ARTICLE_PATHS = frozenset(
+    {
+        "/features/",
+        "/architecture/",
+        "/configuration/",
+    }
+)
+HARNESS_PAGES = (
+    "/for/claude-code/",
+    "/for/codex/",
+    "/for/opencode/",
+    "/for/gemini-cli/",
+)
+# The harness each landing page names in its title, and the command it gives.
+HARNESS_TITLES = {
+    "/for/claude-code/": ("Claude Code", "mcc-claude"),
+    "/for/codex/": ("Codex", "mcc-codex"),
+    "/for/opencode/": ("OpenCode", "mcc-opencode"),
+    "/for/gemini-cli/": ("Gemini CLI", "mcc-gemini"),
+}
+# The keyword cap and floor, and the reuse ceiling, from the SEO reference.
+KEYWORDS_MIN = 8
+KEYWORDS_MAX = 14
+KEYWORD_PAGE_LIMIT = 3
+# llms-full.txt is one fetch for a model, not an archive: cap it at a size a
+# context window can take. The whole site's prose is well under this.
+LLMS_FULL_MAX_BYTES = 400_000
+
 # ---------------------------------------------------------------- page specs
 # path -> (kind, min_words, max_words, min_images, min_diagrams)
 PAGE_SPECS = {
@@ -65,6 +108,10 @@ PAGE_SPECS = {
     "/troubleshooting/": ("page", 800, 1200, 0, 0),
     "/about/": ("page", 500, 800, 0, 0),
     "/license/": ("page", 400, 600, 0, 0),
+    "/for/claude-code/": ("harness", 400, 700, 0, 0),
+    "/for/codex/": ("harness", 400, 700, 0, 0),
+    "/for/opencode/": ("harness", 400, 700, 0, 0),
+    "/for/gemini-cli/": ("harness", 400, 700, 0, 0),
     "/404.html": ("404", 60, 100, 0, 0),
 }
 
@@ -235,6 +282,9 @@ class Build:
         self.site = json.loads(
             (SITE / "content" / "site.json").read_text(encoding="utf-8")
         )
+        self.seo = json.loads(
+            (SITE / "content" / "seo.json").read_text(encoding="utf-8")
+        )
         self.manifest = json.loads(
             (SITE / "shots" / "manifest.json").read_text(encoding="utf-8")
         )
@@ -255,7 +305,7 @@ class Build:
     def _load_pages(self) -> list[dict]:
         pages = []
         for path in sorted((SITE / "content").glob("*.json")):
-            if path.name == "site.json":
+            if path.name in ("site.json", "seo.json"):
                 continue
             page = json.loads(path.read_text(encoding="utf-8"))
             page["_source"] = path.name
@@ -344,6 +394,44 @@ class Build:
                         block_slugs.extend(s["slug"] for s in b["shots"])
                 page["_gallery_covered"] = sorted(block_slugs)
                 page["_gallery_expected"] = sorted(covered)
+            # SEO: the curated title, description and keyword set come from
+            # site/content/seo.json, keyed by the page path. A page with no
+            # block keeps the title and description it already had and fails
+            # the keyword gate, so a new page cannot ship unoptimised.
+            block = self.seo_block(page["path"])
+            page["_seo"] = block
+            if block is not None:
+                page["title"] = block["title"]
+                page["description"] = block["description"]
+                page["keywords"] = block["keywords"]
+            else:
+                page["keywords"] = []
+
+    def seo_block(self, path: str) -> dict | None:
+        """The curated SEO block for a page path, or None when it has none."""
+        if path == "/":
+            return self.seo.get("site")
+        return self.seo.get("pages", {}).get(path.strip("/"))
+
+    @staticmethod
+    def is_deep_page(path: str) -> bool:
+        """A deep page is a features, architecture or configuration page.
+
+        The hub pages (``/features/``, ``/architecture/``, ``/configuration/``)
+        are deep pages too: each is the index of its own family and states the
+        behaviour of the whole area.
+        """
+        if path in TECH_ARTICLE_PATHS:
+            return True
+        return path.startswith(TECH_ARTICLE_PREFIXES) and path.endswith("/")
+
+    def tech_article_about(self, path: str) -> dict:
+        """The ``about`` of a TechArticle, as the family the page belongs to."""
+        if path.startswith("/architecture"):
+            return {"@type": "Thing", "name": "My Claude Code architecture"}
+        if path.startswith("/configuration"):
+            return {"@type": "Thing", "name": "My Claude Code configuration"}
+        return {"@type": "Thing", "name": "My Claude Code features"}
 
     # ------------------------------------------------------------ render
     def render_all(self) -> None:
@@ -401,6 +489,8 @@ class Build:
                         "alternateName": "my-claude-code",
                         "description": self.site["software_description"],
                         "applicationCategory": "DeveloperApplication",
+                        # Only the platforms the repository verifies: the
+                        # README's install table and the release workflows.
                         "operatingSystem": "Windows, macOS, Linux",
                         "softwareVersion": self.site["version"],
                         "offers": {
@@ -412,6 +502,33 @@ class Build:
                         "isAccessibleForFree": True,
                         "featureList": self.site["feature_list"],
                         "codeRepository": self.site["repo"],
+                        "author": {
+                            "@type": "Person",
+                            "name": "FiredMosquito831",
+                            "url": "https://github.com/FiredMosquito831",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        if self.is_deep_page(page["path"]):
+            # A deep page is a documentation page, so it carries the type a
+            # documentation page carries. proficiencyLevel is "Expert" only
+            # where the page is the reference for its subject: the architecture
+            # and configuration pages describe the implementation, the feature
+            # pages describe behaviour. Every one of them is written from the
+            # source, so "Expert" is true of all of them and is not a boast.
+            blocks.append(
+                json.dumps(
+                    {
+                        "@context": "https://schema.org",
+                        "@type": "TechArticle",
+                        "headline": page["title"],
+                        "description": page["description"],
+                        "url": canonical,
+                        "about": self.tech_article_about(page["path"]),
+                        "proficiencyLevel": "Expert",
+                        "inLanguage": "en",
                         "author": {
                             "@type": "Person",
                             "name": "FiredMosquito831",
@@ -484,6 +601,7 @@ class Build:
             "title": page["title"],
             "og_title": page.get("og_title", page["title"]),
             "description": page["description"],
+            "keywords": page["keywords"],
             "canonical": canonical,
             "noindex": is_404,
             "theme_color": self.tokens["color"]["bg"],
@@ -575,6 +693,225 @@ class Build:
             titles[title] = path
             descriptions[desc] = path
 
+    def gate_keywords(self) -> None:
+        """Every page has a truthful keyword set of 8-14 terms.
+
+        A page with no block in seo.json fails here, which is what stops a new
+        page shipping unoptimised. A keyword on more than three pages is a
+        site-level term, not a page term, and fails too.
+        """
+        seen: dict[str, list[str]] = {}
+        for page in self.pages:
+            path = page["path"]
+            keywords = page["keywords"]
+            if not keywords:
+                self.problems.append(f"keywords: {path}: no keyword set")
+                continue
+            if not (KEYWORDS_MIN <= len(keywords) <= KEYWORDS_MAX):
+                self.problems.append(
+                    f"keywords: {path}: {len(keywords)} terms "
+                    f"(need {KEYWORDS_MIN}-{KEYWORDS_MAX})"
+                )
+            lowered = [k.lower() for k in keywords]
+            if len(set(lowered)) != len(lowered):
+                self.problems.append(f"keywords: {path}: a term appears twice")
+            for term in lowered:
+                seen.setdefault(term, []).append(path)
+        for term, paths in sorted(seen.items()):
+            if len(paths) > KEYWORD_PAGE_LIMIT:
+                self.problems.append(
+                    f"keywords: {term!r} is on {len(paths)} pages "
+                    f"(max {KEYWORD_PAGE_LIMIT}): {', '.join(sorted(paths))}"
+                )
+
+    def gate_structured_data(self) -> None:
+        """The home page carries SoftwareApplication, every deep page TechArticle."""
+        for page in self.pages:
+            path = page["path"]
+            collector = LinkCollector()
+            collector.feed(self.rendered[path])
+            types = []
+            for block in collector.ldjson:
+                try:
+                    data = json.loads(block)
+                except json.JSONDecodeError:
+                    continue  # gate_links already reports the parse failure
+                types.append(data.get("@type", ""))
+            if path == "/":
+                if "SoftwareApplication" not in types:
+                    self.problems.append(
+                        "structured data: /: no SoftwareApplication block"
+                    )
+                else:
+                    app = next(
+                        json.loads(b)
+                        for b in collector.ldjson
+                        if json.loads(b).get("@type") == "SoftwareApplication"
+                    )
+                    for field in (
+                        "name",
+                        "alternateName",
+                        "applicationCategory",
+                        "operatingSystem",
+                        "softwareVersion",
+                        "offers",
+                        "license",
+                        "isAccessibleForFree",
+                        "featureList",
+                        "author",
+                    ):
+                        if field not in app:
+                            self.problems.append(
+                                f"structured data: /: SoftwareApplication has no {field}"
+                            )
+                    if app.get("applicationCategory") != "DeveloperApplication":
+                        self.problems.append(
+                            "structured data: /: applicationCategory is not "
+                            "DeveloperApplication"
+                        )
+                    offers = app.get("offers") or {}
+                    if offers.get("price") != "0":
+                        self.problems.append(
+                            "structured data: /: offers.price is not 0"
+                        )
+                    if app.get("softwareVersion") != self.site["version"]:
+                        self.problems.append(
+                            "structured data: /: softwareVersion does not match "
+                            "site.json"
+                        )
+            if self.is_deep_page(path):
+                if "TechArticle" not in types:
+                    self.problems.append(
+                        f"structured data: {path}: no TechArticle block"
+                    )
+                    continue
+                article = next(
+                    json.loads(b)
+                    for b in collector.ldjson
+                    if json.loads(b).get("@type") == "TechArticle"
+                )
+                for field in (
+                    "headline",
+                    "about",
+                    "proficiencyLevel",
+                    "inLanguage",
+                    "description",
+                ):
+                    if not article.get(field):
+                        self.problems.append(
+                            f"structured data: {path}: TechArticle has no {field}"
+                        )
+                if article.get("description") != page["description"]:
+                    self.problems.append(
+                        f"structured data: {path}: TechArticle description is "
+                        "not the page's own"
+                    )
+
+    def gate_machine_files(self) -> None:
+        """llms.txt, llms-full.txt, both security.txt files and .nojekyll exist
+        and name the real host."""
+        for name in (LLMS_TXT, LLMS_FULL_TXT, SECURITY_TXT, WELL_KNOWN_SECURITY_TXT):
+            if name not in self.output_files:
+                self.problems.append(f"machine files: docs/{name} is missing")
+                continue
+            text = self.output_files[name].decode("utf-8", errors="replace")
+            if self.site["host"] not in text:
+                self.problems.append(
+                    f"machine files: docs/{name} does not name {self.site['host']}"
+                )
+        if NOJEKYLL not in self.output_files:
+            self.problems.append(f"machine files: docs/{NOJEKYLL} is missing")
+        # RFC 9116: a Contact and an Expires are required.
+        if SECURITY_TXT in self.output_files:
+            text = self.output_files[SECURITY_TXT].decode("utf-8")
+            for field in ("Contact:", "Expires:", "Preferred-Languages:", "Canonical:"):
+                if field not in text:
+                    self.problems.append(
+                        f"machine files: security.txt has no {field} line"
+                    )
+            if SECURITY_CONTACT not in text:
+                self.problems.append(
+                    "machine files: security.txt Contact is not the advisories URL"
+                )
+            if f"Canonical: {BASE_URL}/.well-known/{SECURITY_TXT}" not in text:
+                self.problems.append(
+                    "machine files: security.txt Canonical is not the well-known URL"
+                )
+        # llms.txt is a Markdown index: a title, a summary and absolute links.
+        if LLMS_TXT in self.output_files:
+            text = self.output_files[LLMS_TXT].decode("utf-8")
+            if not text.startswith("# "):
+                self.problems.append("machine files: llms.txt has no title")
+            if not re.search(r"^> ", text, re.MULTILINE):
+                self.problems.append("machine files: llms.txt has no summary line")
+            links = re.findall(r"^- \[[^\]]+\]\(([^)]+)\)", text, re.MULTILINE)
+            if not links:
+                self.problems.append("machine files: llms.txt has no links")
+            for link in links:
+                if not link.startswith(BASE_URL):
+                    self.problems.append(
+                        f"machine files: llms.txt link is not absolute: {link}"
+                    )
+        # llms-full.txt carries every page's prose and stays a sensible size.
+        if LLMS_FULL_TXT in self.output_files:
+            text = self.output_files[LLMS_FULL_TXT].decode("utf-8")
+            for page in self.pages:
+                if page["path"] == "/404.html":
+                    continue
+                if f"## {page['title']}" not in text:
+                    self.problems.append(
+                        f"machine files: llms-full.txt is missing {page['path']}"
+                    )
+            if len(text.encode("utf-8")) > LLMS_FULL_MAX_BYTES:
+                self.problems.append(
+                    f"machine files: llms-full.txt is {len(text.encode('utf-8'))} "
+                    f"bytes (max {LLMS_FULL_MAX_BYTES})"
+                )
+
+    def gate_harness_pages(self) -> None:
+        """The four harness pages exist, each names its harness, and each gives
+        that harness's own command."""
+        for path in HARNESS_PAGES:
+            if path not in self.rendered:
+                self.problems.append(f"harness: {path} does not exist")
+                continue
+            page = next(p for p in self.pages if p["path"] == path)
+            harness, command = HARNESS_TITLES[path]
+            if harness.lower() not in page["title"].lower():
+                self.problems.append(
+                    f"harness: {path}: title does not name {harness}: {page['title']}"
+                )
+            if command not in self.rendered[path]:
+                self.problems.append(
+                    f"harness: {path}: the page does not give the {command} command"
+                )
+            if BASE_URL + "/features/agents/" not in self.rendered[path]:
+                self.problems.append(
+                    f"harness: {path}: no link back to /features/agents/"
+                )
+            if BASE_URL + "/quick-start/" not in self.rendered[path] and (
+                'href="/quick-start/"' not in self.rendered[path]
+            ):
+                self.problems.append(f"harness: {path}: no link back to /quick-start/")
+
+    def gate_sitemap_priority(self) -> None:
+        """The four harness pages are in the sitemap at priority 0.6."""
+        text = self.output_files["sitemap.xml"].decode("utf-8")
+        for path in HARNESS_PAGES:
+            url = BASE_URL + path
+            if f"<loc>{url}</loc>" not in text:
+                self.problems.append(f"sitemap: {url} is missing")
+                continue
+            entry = text.split(f"<loc>{url}</loc>", 1)[1].split("</url>", 1)[0]
+            if "<priority>0.6</priority>" not in entry:
+                self.problems.append(
+                    f"sitemap: {url} is not at priority 0.6"
+                )
+        # llms.txt and security.txt are not pages and must not be in the sitemap.
+        for name in (LLMS_TXT, LLMS_FULL_TXT, SECURITY_TXT):
+            if f"/{name}</loc>" in text:
+                self.problems.append(f"sitemap: {name} is not a page and is listed")
+
     def gate_links(self) -> None:
         produced = set()
         for page in self.pages:
@@ -588,6 +925,11 @@ class Build:
                 "sitemap.xml",
                 "robots.txt",
                 "CNAME",
+                LLMS_TXT,
+                LLMS_FULL_TXT,
+                SECURITY_TXT,
+                WELL_KNOWN_SECURITY_TXT,
+                NOJEKYLL,
             }
         )
         for name in self.diagrams:
@@ -783,6 +1125,153 @@ class Build:
         if path == "/license/":
             return "0.4"
         return "0.6"
+    # ------------------------------------------------- machine-readable files
+    def page_prose(self, path: str) -> str:
+        """A page's main prose as plain text, without navigation or chrome.
+
+        Built from the same blocks the HTML is built from, so the two cannot
+        drift: a sentence added to a page appears in both surfaces or neither.
+        """
+        page = next(p for p in self.pages if p["path"] == path)
+        parts = [plain_text(page.get("h1", "")), plain_text(page.get("intro", ""))]
+        for block in page["blocks"]:
+            kind = block["type"]
+            if kind in ("h2", "h3", "p"):
+                parts.append(plain_text(block.get("text", "")))
+            elif kind in ("ul", "ol"):
+                parts.extend(plain_text(x) for x in block.get("items", []))
+            elif kind == "table":
+                parts.append(plain_text(block.get("caption", "")))
+                parts.extend(plain_text(h) for h in block.get("head", []))
+                for row in block.get("rows", []):
+                    parts.extend(plain_text(c) for c in row)
+            elif kind == "figure":
+                parts.append(plain_text(block.get("caption", "")))
+            elif kind == "diagram":
+                parts.append(plain_text(block.get("caption", "")))
+                parts.append(plain_text(block.get("alt", "")))
+            elif kind == "code":
+                parts.append(plain_text(block.get("label", "")))
+                parts.append(block.get("text", ""))
+            elif kind == "callout":
+                parts.append(plain_text(block.get("text", "")))
+            elif kind == "cards":
+                for card in block.get("cards", []):
+                    parts.append(plain_text(card.get("title", "")))
+                    parts.append(plain_text(card.get("text", "")))
+            elif kind == "facts":
+                for fact in block.get("items", []):
+                    parts.append(plain_text(fact.get("value", "")))
+                    parts.append(plain_text(fact.get("label", "")))
+            elif kind == "related":
+                parts.extend(plain_text(l.get("label", "")) for l in block.get("links", []))
+            elif kind == "faq":
+                for item in block.get("items", []):
+                    parts.append(plain_text(item.get("q", "")))
+                    parts.append(plain_text(item.get("a", "")))
+            elif kind == "terms":
+                for term in block.get("items", []):
+                    parts.append(plain_text(term.get("term", "")))
+                    parts.append(plain_text(term.get("def", "")))
+            elif kind == "gallery_area":
+                parts.append(plain_text(block.get("title", "")))
+                parts.append(plain_text(block.get("intro", "")))
+        return "\n\n".join(p for p in parts if p.strip())
+
+    def llms_txt(self) -> str:
+        """The llms.txt index: a map of the site, not a pitch."""
+        summary = (
+            "A local multi-provider LLM proxy, model router and control plane "
+            "for AI coding agents."
+        )
+        lines = [
+            "# My Claude Code",
+            "",
+            f"> {summary}",
+            "",
+            (
+                "My Claude Code (MCC) is a local LLM gateway: a proxy, a model "
+                "router and a control plane that sits in front of the coding "
+                "agents you already use. It is licensed AGPL-3.0-or-later, or "
+                "under a commercial licence by negotiation, and this site "
+                f"documents release {self.site['version']}. It runs entirely on "
+                "your machine, with your keys: there is no telemetry, no "
+                "account and no hosted dashboard."
+            ),
+            "",
+            "## Docs",
+            "",
+        ]
+        index = [
+            ("/features/", "Every capability area, with a deep page for each."),
+            (
+                "/architecture/",
+                "How the proxy, the router and the credential layer are built.",
+            ),
+            (
+                "/quick-start/",
+                "Install, run, and the first five minutes with a coding agent.",
+            ),
+            (
+                "/configuration/",
+                "Where the settings live and how a change takes effect.",
+            ),
+            ("/gallery/", "The product's own screens, reviewed and captioned."),
+            ("/faq/", "The questions this site is asked most, answered."),
+            ("/glossary/", "Every term the product uses, defined once."),
+            ("/license/", "The AGPL terms, the commercial option and trademarks."),
+        ]
+        for path, description in index:
+            lines.append(f"- [{path}]({BASE_URL}{path}): {description}")
+        lines.extend(["", "## For your agent", ""])
+        for path in HARNESS_PAGES:
+            block = self.seo["pages"][path.strip("/")]
+            lines.append(f"- [{path}]({BASE_URL}{path}): {block['description']}")
+        lines.extend(
+            [
+                "",
+                "## Optional",
+                "",
+                (
+                    f"- [{LLMS_FULL_TXT}]({BASE_URL}/{LLMS_FULL_TXT}): "
+                    "the prose of every page in one plain-text file."
+                ),
+                (
+                    f"- [{SECURITY_TXT}]({BASE_URL}/.well-known/{SECURITY_TXT}): "
+                    "how to report a vulnerability, per RFC 9116."
+                ),
+            ]
+        )
+        return "\n".join(lines) + "\n"
+
+    def llms_full_txt(self) -> str:
+        """Every page's prose, concatenated, generated from the same content."""
+        lines = [
+            "# My Claude Code",
+            "",
+            f"Release {self.site['version']}. {self.site['software_description']}",
+            "",
+            self.site["licence_line"],
+            "",
+        ]
+        for page in self.pages:
+            if page["path"] == "/404.html":
+                continue
+            lines.append(f"## {page['title']}")
+            lines.append(f"{BASE_URL}{page['path']}")
+            lines.append("")
+            lines.append(self.page_prose(page["path"]))
+            lines.append("")
+        return "\n".join(lines).rstrip("\n") + "\n"
+
+    def security_txt(self) -> str:
+        """RFC 9116, at both the root and the well-known path."""
+        return (
+            f"Contact: {SECURITY_CONTACT}\n"
+            f"Expires: {SECURITY_EXPIRES}\n"
+            "Preferred-Languages: en\n"
+            f"Canonical: {BASE_URL}/.well-known/{SECURITY_TXT}\n"
+        )
 
     def build_files(self) -> dict[str, bytes]:
         files: dict[str, bytes] = {}
@@ -812,6 +1301,15 @@ class Build:
         files["robots.txt"] = (
             f"User-agent: *\nAllow: /\n\nSitemap: {BASE_URL}/sitemap.xml\n"
         ).encode()
+        files[LLMS_TXT] = self.llms_txt().encode("utf-8")
+        files[LLMS_FULL_TXT] = self.llms_full_txt().encode("utf-8")
+        security = self.security_txt()
+        files[SECURITY_TXT] = security.encode("utf-8")
+        files[WELL_KNOWN_SECURITY_TXT] = security.encode("utf-8")
+        # GitHub Pages runs Jekyll, which drops dot-directories: without this
+        # file /.well-known/security.txt is never served. The content is empty
+        # by design; the file's existence is the whole signal.
+        files[NOJEKYLL] = b""
         # sitemap
         lines = [
             '<?xml version="1.0" encoding="UTF-8"?>',
@@ -848,12 +1346,17 @@ class Build:
         self.gate_secrets()
         self.gate_forbidden()
         self.gate_metadata()
+        self.gate_keywords()
         self.gate_links()
+        self.gate_structured_data()
+        self.gate_machine_files()
+        self.gate_harness_pages()
         self.gate_tokens()
         self.gate_minimums()
         self.gate_claims()
         self.gate_og_bytes()
         self.gate_sitemap()
+        self.gate_sitemap_priority()
         if self.problems:
             print(f"build failed: {len(self.problems)} problem(s)", file=sys.stderr)
             for problem in self.problems:

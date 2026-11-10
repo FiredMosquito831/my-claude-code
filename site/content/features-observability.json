@@ -5,7 +5,7 @@
   "nav": "Observability",
   "eyebrow": "Feature · Observability",
   "h1": "The request log, analytics and cost with provenance",
-  "intro": "Every request through the proxy is logged, priced and searchable afterwards. That is what turns a router from a guess into a measurement: which model answered, which fallback spent the time, which key it cost, and where each price came from.",
+  "intro": "Every request through the proxy is logged, priced and searchable afterwards. That is what turns a router from a guess into a measurement: which model answered, which fallback spent the time, which key it cost, and where each price came from. This page is LLM observability and cost tracking in one place: the request log, the analytics and the source of every number.",
   "page_grid": true,
   "breadcrumbs": [
     {

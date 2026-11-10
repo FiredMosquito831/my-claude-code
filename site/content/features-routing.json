@@ -5,7 +5,7 @@
   "nav": "Routing",
   "eyebrow": "Feature · Routing",
   "h1": "Model tiers and fallback chains",
-  "intro": "A coding agent asks for a model by a name it knows. MCC turns that name into a real provider model, applies your reasoning and budget settings, and walks an ordered chain of stand-ins when the first model cannot serve the request. The chain is yours, and every step it took is in the log.",
+  "intro": "A coding agent asks for a model by a name it knows. This page is LLM model routing: MCC turns that name into a real provider model, applies your reasoning and budget settings, and walks an ordered chain of stand-ins when the first cannot serve the request. The chain is yours, and every step is in the log.",
   "page_grid": true,
   "breadcrumbs": [
     {

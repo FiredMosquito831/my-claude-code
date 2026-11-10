@@ -5,7 +5,7 @@
   "nav": "Environment",
   "eyebrow": "Configuration · Environment",
   "h1": "Environment reference",
-  "intro": "This page names the settings, grouped by what they decide. It gives no values. For a secret-like variable it never shows an example, because a documentation page is not a place to invent one. The annotated .env.example in the repository carries the same names with inline comments.",
+  "intro": "This page is the LLM gateway environment variables reference. It names the settings, grouped by what they decide, and gives no values. For a secret-like variable it never shows an example: a documentation page is not a place to invent one. The annotated .env.example carries the same names, with comments.",
   "page_grid": true,
   "breadcrumbs": [
     {

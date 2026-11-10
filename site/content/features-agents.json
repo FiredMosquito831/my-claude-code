@@ -5,7 +5,7 @@
   "nav": "Agents",
   "eyebrow": "Feature · Agents",
   "h1": "A first-class client for every agent",
-  "intro": "Claude Code is one client here, not the frame around everything else. MCC can launch the CLI agents, configure the desktop apps it cannot launch, generate a real model catalogue for each one, and name the agent behind every request in the log.",
+  "intro": "Claude Code is one client here, not the frame around everything else. MCC can launch the CLI agents, configure the desktop apps it cannot launch, generate a real model catalogue for each one, and name the agent behind every request in the log. The launchers are how a Claude Code agent, a Codex agent, an OpenCode agent and the rest are pointed at one address.",
   "page_grid": true,
   "breadcrumbs": [
     {
@@ -155,6 +155,22 @@
         {
           "href": "/features/cli/",
           "label": "The CLI: the launchers and headless controls"
+        },
+        {
+          "href": "/for/claude-code/",
+          "label": "Claude Code through the proxy: the mcc-claude command"
+        },
+        {
+          "href": "/for/codex/",
+          "label": "Codex CLI through the proxy: the mcc-codex command"
+        },
+        {
+          "href": "/for/opencode/",
+          "label": "OpenCode through the proxy: the mcc-opencode command"
+        },
+        {
+          "href": "/for/gemini-cli/",
+          "label": "Gemini CLI through the proxy: the mcc-gemini command"
         }
       ]
     }

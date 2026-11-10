@@ -5,7 +5,7 @@
   "nav": "Troubleshooting",
   "eyebrow": "Troubleshooting",
   "h1": "When a step does not work",
-  "intro": "Each entry below is a symptom the product's own documentation names, its verified cause, and the fix it gives. If your case is not here, the repository's issue tracker is the right channel.",
+  "intro": "Each entry below is a symptom the product's own documentation names, its verified cause, and the fix it gives. If your case is not here, the repository's issue tracker is the right channel. It is the LLM gateway troubleshooting page: the failures this site can verify, with the fix for each.",
   "page_grid": true,
   "breadcrumbs": [
     {

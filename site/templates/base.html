@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }}</title>
 <meta name="description" content="{{ description }}">
+<meta name="keywords" content="{{ keywords | join(', ') }}">
 {% if canonical %}<link rel="canonical" href="{{ canonical }}">{% endif %}
 {% if noindex %}<meta name="robots" content="noindex, follow">{% endif %}
 <meta property="og:type" content="website">
@@ -66,6 +67,16 @@
           <li><a href="/gallery/">Gallery</a></li>
           <li><a href="/faq/">FAQ</a></li>
           <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
         </ul>
       </div>
       <div>

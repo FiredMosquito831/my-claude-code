@@ -5,7 +5,7 @@
   "nav": "Platform",
   "eyebrow": "Feature · Platform",
   "h1": "Platform, desktop app and updates",
-  "intro": "MCC runs on Windows, macOS and Linux, as a server, as a native desktop app, or both. There is one update path, one configuration directory and one set of commands, whichever route you took in.",
+  "intro": "MCC runs on Windows, macOS and Linux, as a server, as a native desktop app, or both. There is one update path, one configuration directory and one set of commands, whichever route you took in. This page is the LLM gateway update path, and the platform support behind it: what the installer does on each system, and what it deliberately does not touch.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Features", "href": "/features/"}, {"label": "Platform"}],
   "blocks": [

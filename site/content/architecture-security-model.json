@@ -5,7 +5,7 @@
   "nav": "Security model",
   "eyebrow": "Architecture · Security",
   "h1": "The principles the boundary is built on",
-  "intro": "This page states what MCC does to keep a local proxy local, and what it refuses to do. It is a description of the design, not a security audit, and it makes no claim that a deployment is safe without the operator's own choices.",
+  "intro": "This page states what MCC does to keep a local proxy local, and what it refuses to do. It is a description of the design, not a security audit, and it makes no claim that a deployment is safe without the operator's own choices. It is the LLM gateway security model: local by default, a token once it leaves the machine, owner-only stores, redacted logs and narrow egress.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Security model"}],
   "blocks": [

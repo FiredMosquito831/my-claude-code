@@ -6,7 +6,7 @@
   "nav": "Home",
   "eyebrow": "Local LLM gateway · control plane",
   "h1": "One address in front of every model and every coding agent",
-  "intro": "My Claude Code is a local multi-provider proxy, model router and control plane for AI coding agents. Point Claude Code, Codex, OpenCode, Gemini CLI and the rest at one address on your machine, and manage providers, keys, fallback chains, reasoning, budgets, web search and cost in one place. Your models, your keys, your machine.",
+  "intro": "My Claude Code is a local multi-provider proxy, model router and control plane for AI coding agents. Point Claude Code, Codex, OpenCode, Gemini CLI and the rest at one address on your machine, and manage providers, keys, fallback chains, reasoning, budgets, web search and cost in one place. Your models, your keys, your machine. It is a Claude Code proxy first, and a proxy for every other coding agent beside it.",
   "readouts": [
     {
       "label": "Release",

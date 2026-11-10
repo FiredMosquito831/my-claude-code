@@ -5,7 +5,7 @@
   "nav": "Quick start",
   "eyebrow": "Quick start",
   "h1": "Install, run, and the first five minutes",
-  "intro": "Every route ends at the same server, the same dashboard and the same configuration directory. Pick the one that fits your machine, then follow four steps.",
+  "intro": "Every route ends at the same server, the same dashboard and the same configuration directory. Pick the one that fits your machine, then follow four steps. This is the LLM proxy quick start: install, start, add a key, launch an agent.",
   "page_grid": true,
   "breadcrumbs": [
     {

@@ -5,7 +5,7 @@
   "nav": "Features",
   "eyebrow": "Capabilities",
   "h1": "Every capability, with a deep page for each",
-  "intro": "MCC is deep because a proxy that sits in front of every coding agent has to be. Each area below has its own page, written from the source and the product's own documentation, with real screenshots of the dashboard where the feature lives.",
+  "intro": "MCC is deep because a proxy that sits in front of every coding agent has to be. Each area below has its own page, written from the source and the product's own documentation, with real screenshots of the dashboard where the feature lives. This page is the index of LLM gateway features: every capability area, with a deep page for each.",
   "page_grid": false,
   "breadcrumbs": [
     {

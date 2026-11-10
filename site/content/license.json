@@ -5,7 +5,7 @@
   "nav": "Licence",
   "eyebrow": "Licence",
   "h1": "The exact terms",
-  "intro": "My Claude Code is dual-licensed. The free option is the GNU Affero General Public License, version 3 or later. The other option is a commercial licence, negotiated case by case. This page states what each one means; it is not legal advice.",
+  "intro": "My Claude Code is dual-licensed. The free option is the GNU Affero General Public License, version 3 or later. The other option is a commercial licence, negotiated case by case. This page states what each one means; it is not legal advice. The free option is AGPL-3.0-or-later; the other is a commercial licence agreed in writing.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Licence"}],
   "blocks": [

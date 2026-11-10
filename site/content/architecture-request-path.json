@@ -5,7 +5,7 @@
   "nav": "Request path",
   "eyebrow": "Architecture · Request path",
   "h1": "From a door to a committed reply",
-  "intro": "A request is authenticated once, correlated once, routed once and executed against one provider at a time. The hard part is not the happy path; it is deciding when a failure is still an HTTP error and when it is already part of a stream.",
+  "intro": "A request is authenticated once, correlated once, routed once and executed against one provider at a time. The hard part is not the happy path; it is deciding when a failure is still an HTTP error and when it is already part of a stream. This page is the LLM request path, from the door the client entered by to the point the reply is committed.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Request path"}],
   "blocks": [

@@ -5,7 +5,7 @@
   "nav": "Gallery",
   "eyebrow": "Gallery",
   "h1": "Every reviewed screen, grouped",
-  "intro": "These are the product's own captures, reviewed one by one before publication. Each was checked for keys, tokens, account names, file paths and real prompt text; where a capture carried something that did not belong on a public page, it was redacted on a copy and the original was left untouched. Every image below has a caption, and every caption describes the state the screen is actually in.",
+  "intro": "These are the product's own captures, reviewed one by one before publication. Each was checked for keys, tokens, account names, file paths and real prompt text; where a capture carried something that did not belong on a public page, it was redacted on a copy and the original was left untouched. Every image below has a caption, and every caption describes the state the screen is actually in. Together they are the LLM dashboard screenshots: the control plane, the request log and the agent pages, as they actually look.",
   "page_grid": false,
   "breadcrumbs": [
     {

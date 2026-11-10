@@ -1,0 +1,137 @@
+{
+  "path": "/for/claude-code/",
+  "title": "Claude Code through a local LLM proxy",
+  "description": "Point Claude Code at My Claude Code with mcc-claude: one address, your own providers and keys, fallback chains, reasoning control and a priced request log.",
+  "nav": "Claude Code",
+  "eyebrow": "For your agent · Claude Code",
+  "h1": "Claude Code through one local address",
+  "intro": "Claude Code is Anthropic's terminal agent, and it is one client here, not the frame around everything else. <code>mcc-claude</code> points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the Claude Code proxy setup in one command.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "For your agent",
+      "href": "/features/agents/"
+    },
+    {
+      "label": "Claude Code"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "The command"
+    },
+    {
+      "type": "p",
+      "text": "Install Claude Code yourself, because MCC never installs an agent, then launch it through the proxy with one command:"
+    },
+    {
+      "type": "code",
+      "label": "Launch Claude Code against the local proxy",
+      "text": "mcc-claude"
+    },
+    {
+      "type": "p",
+      "text": "The launcher sets the proxy address and the proxy token in the child process only, so nothing is written into your shell profile, your Claude Code settings or your own authentication. Every argument you pass is handed to Claude Code unchanged, which means the launcher is a drop-in replacement for the command you already type."
+    },
+    {
+      "type": "p",
+      "text": "Add <code>--discover-models</code> to wire Claude Code's native <code>/model</code> picker to MCC's catalogue, which is built from the models your routes actually resolve to:"
+    },
+    {
+      "type": "code",
+      "label": "Launch with the native model picker wired to MCC's catalogue",
+      "text": "mcc-claude --discover-models"
+    },
+    {
+      "type": "p",
+      "text": "A single prompt runs the same way, because <code>-p</code> is Claude Code's own flag: <code>mcc-claude -p \"summarise this diff\"</code>. <code>mcc-claude-old</code> keeps the earlier launch shape, which sets the full proxy environment and leaves auto-compact on."
+    },
+    {
+      "type": "h2",
+      "text": "What Claude Code gets"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "One address for every provider. Anthropic Messages traffic reaches whichever model your tiers resolve to, including a local server, without a second client configuration.",
+        "Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.",
+        "Reasoning control and output budgets, translated once into each provider's own dialect rather than set per client.",
+        "Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.",
+        "A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.",
+        "The web tools, when the proxy's web-search setting is on. Claude Code's <code>web_search</code> and <code>web_fetch</code> are fulfilled at the proxy instead of by Anthropic."
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "What the launcher does not change"
+    },
+    {
+      "type": "p",
+      "text": "Your Claude Code installation, its settings files and its own authentication are untouched. The launcher sets environment variables for one process and exits with it, so a terminal that never ran <code>mcc-claude</code> is exactly the terminal it was before. If Claude Code is not installed, the launcher prints Anthropic's own install line and exits rather than installing anything on your behalf."
+    },
+    {
+      "type": "h2",
+      "text": "Where to go next"
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/agents/",
+          "label": "Every agent MCC can launch or configure"
+        },
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: install, run, and the first five minutes"
+        },
+        {
+          "href": "/features/routing/",
+          "label": "Routing: tiers and fallback chains"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers and credentials: what the request is routed to"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "mcc-claude launches Claude Code through the local proxy",
+      "evidence": "pyproject.toml [project.scripts] mcc-claude; src/my_claude_code/cli/launchers/claude.py launch()"
+    },
+    {
+      "claim": "--discover-models wires Claude Code's native /model picker to MCC's catalogue",
+      "evidence": "README.md §Coding agents; src/my_claude_code/cli/launchers/claude.py _split_discover_models_flag()"
+    },
+    {
+      "claim": "The launcher sets the proxy address and token in the child process only",
+      "evidence": "src/my_claude_code/cli/launchers/claude.py build_minimal_claude_proxy_env; docs/USAGE.md §Tutorial: connect another CLI"
+    },
+    {
+      "claim": "Every argument is passed to Claude Code unchanged",
+      "evidence": "src/my_claude_code/config/harnesses.py HarnessSpec claude, HarnessInvocation -p"
+    },
+    {
+      "claim": "mcc-claude-old keeps the earlier launch shape with the full proxy environment and auto-compact",
+      "evidence": "src/my_claude_code/cli/launchers/claude.py launch_legacy(); src/my_claude_code/config/harnesses.py HarnessCommand claude-old"
+    },
+    {
+      "claim": "A launcher whose agent is missing prints that agent's install line and exits",
+      "evidence": "src/my_claude_code/cli/launchers/common.py run_client_process; README.md §What the installer does"
+    },
+    {
+      "claim": "Claude Code's web_search and web_fetch are fulfilled at the proxy when the web-search setting is on",
+      "evidence": "src/my_claude_code/cli/launchers/claude.py launch() docstring; docs/WEB-SEARCH.md"
+    },
+    {
+      "claim": "Claude Code speaks Anthropic Messages to the proxy",
+      "evidence": "README.md §Coding agents table; src/my_claude_code/config/harnesses.py HarnessProtocol.ANTHROPIC_MESSAGES"
+    }
+  ]
+}

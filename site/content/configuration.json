@@ -5,7 +5,7 @@
   "nav": "Configuration",
   "eyebrow": "Configuration",
   "h1": "How settings are provided",
-  "intro": "MCC has one configuration home, one .env and one set of documents beside it. The dashboard writes the file, the server reads it, and the launchers resolve the same directory. There is no second configuration system to reconcile.",
+  "intro": "MCC has one configuration home, one .env and one set of documents beside it. The dashboard writes the file, the server reads it, and the launchers resolve the same directory. There is no second configuration system to reconcile. This page is the LLM gateway configuration map: the home, the file, the documents beside it and the variables that are read before the file is.",
   "page_grid": true,
   "breadcrumbs": [
     {

@@ -5,7 +5,7 @@
   "nav": "Glossary",
   "eyebrow": "Glossary",
   "h1": "The words this product uses",
-  "intro": "MCC uses some ordinary words in a specific way. This page defines them once, from the product's own documentation, so a page elsewhere can use them without repeating the definition.",
+  "intro": "MCC uses some ordinary words in a specific way. This page defines them once, from the product's own documentation, so a page elsewhere can use them without repeating the definition. It is the LLM gateway glossary: bench, chain, tier, rung, credential health and cost provenance, each defined once.",
   "page_grid": true,
   "breadcrumbs": [
     {

@@ -5,7 +5,7 @@
   "nav": "Messaging",
   "eyebrow": "Feature · Messaging",
   "h1": "Coding-agent sessions over Discord and Telegram",
-  "intro": "Messaging is optional. When it is on, a chat message becomes an inbound turn to a managed coding-agent session, and the reply comes back to the chat. It is the same proxy underneath, with the same routing, keys and log. It is optional and off by default.",
+  "intro": "Messaging is optional. When it is on, a chat message becomes an inbound turn to a managed coding-agent session, and the reply comes back to the chat. It is the same proxy underneath, with the same routing, keys and log. It is optional and off by default. It is LLM messaging in its narrowest sense: a chat surface for a coding-agent session, over Discord or Telegram.",
   "page_grid": true,
   "breadcrumbs": [
     {

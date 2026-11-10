@@ -5,7 +5,7 @@
   "nav": "Web search",
   "eyebrow": "Feature · Web search",
   "h1": "The native web-search and web-fetch proxy",
-  "intro": "Claude Code's web_search and web_fetch are Anthropic server tools: normally Anthropic runs the search and bills you for it. MCC fulfils them at the proxy instead, against a provider you choose or a keyless fallback, and streams the result back as ordinary text. No Anthropic search credits are used, and it works with any model provider.",
+  "intro": "Claude Code's web_search and web_fetch are Anthropic server tools: normally Anthropic runs the search and bills you for it. MCC fulfils them at the proxy instead, against a provider you choose or a keyless fallback, and streams the result back as ordinary text. No Anthropic search credits are used, and it works with any model provider. It is a web search proxy and a web fetch proxy, in front of fifteen search backends.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Features", "href": "/features/"}, {"label": "Web search"}],
   "blocks": [

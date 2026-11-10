@@ -5,7 +5,7 @@
   "nav": "Architecture",
   "eyebrow": "Architecture",
   "h1": "How the system is put together",
-  "intro": "MCC is a local proxy, a set of launchers and an optional messaging bridge, built from eight packages with one dependency rule. This page is the map; the six pages after it go into the machinery a request actually touches.",
+  "intro": "MCC is a local proxy, a set of launchers and an optional messaging bridge, built from eight packages with one dependency rule. This page is the map; the six pages after it go into the machinery a request actually touches. Read together, they are the LLM gateway architecture: the doors, the routing ladder, the credential layer, the request log and the cost model.",
   "page_grid": true,
   "breadcrumbs": [
     {

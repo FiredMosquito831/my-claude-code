@@ -5,7 +5,7 @@
   "nav": "About",
   "eyebrow": "About",
   "h1": "The project and its history",
-  "intro": "My Claude Code is an independent open-source project maintained by FiredMosquito831. It is a local routing layer for AI coding agents, and it says what it does without claiming more.",
+  "intro": "My Claude Code is an independent open-source project maintained by FiredMosquito831. It is a local routing layer for AI coding agents, and it says what it does without claiming more. This page is About My Claude Code: who maintains the project, what state it is in, and what it does not claim.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "About"}],
   "blocks": [

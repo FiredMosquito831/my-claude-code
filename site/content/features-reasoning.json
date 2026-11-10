@@ -5,7 +5,7 @@
   "nav": "Reasoning",
   "eyebrow": "Feature · Reasoning",
   "h1": "Reasoning control and output budgets",
-  "intro": "Every provider spells reasoning differently. MCC keeps one neutral policy, then lets each provider adapter translate only the subset its wire API can express. The same page also decides how long a model may think, how many tokens it may spend, and how long the router waits before it calls a silent model a failure.",
+  "intro": "Every provider spells reasoning differently. MCC keeps one neutral policy, then lets each provider adapter translate only the subset its wire API can express. The same page also decides how long a model may think, how many tokens it may spend, and how long the router waits before it calls a silent model a failure. This page is LLM reasoning control and the output token budget that goes with it.",
   "page_grid": true,
   "breadcrumbs": [
     {

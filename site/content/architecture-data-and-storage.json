@@ -5,7 +5,7 @@
   "nav": "Data and storage",
   "eyebrow": "Architecture · Data",
   "h1": "What is stored, and where",
-  "intro": "Everything MCC keeps is under one configurable directory on your machine. There is no remote database, no account and no second copy. What is stored is deliberately split between a settings file, a request log and a set of documents that a settings save must never rewrite.",
+  "intro": "Everything MCC keeps is under one configurable directory on your machine. There is no remote database, no account and no second copy. What is stored is deliberately split between a settings file, a request log and a set of documents that a settings save must never rewrite. This page is the LLM gateway storage layout: what is written, where it lives, and what is never stored at all.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Data and storage"}],
   "blocks": [

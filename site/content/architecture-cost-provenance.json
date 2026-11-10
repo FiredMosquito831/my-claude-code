@@ -5,7 +5,7 @@
   "nav": "Cost provenance",
   "eyebrow": "Architecture · Cost",
   "h1": "Where a price came from",
-  "intro": "A cost is only useful if you can tell how it was produced. MCC prices a request once, as it is logged, and stores the rung of the pricing ladder that answered each field beside the number. A figure no source states is shown as not priced, with the reason.",
+  "intro": "A cost is only useful if you can tell how it was produced. MCC prices a request once, as it is logged, and stores the rung of the pricing ladder that answered each field beside the number. A figure no source states is shown as not priced, with the reason. That is what cost provenance means here: every number carries the source that stated it.",
   "page_grid": true,
   "breadcrumbs": [
     {

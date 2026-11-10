@@ -5,7 +5,7 @@
   "nav": "Media",
   "eyebrow": "Feature · Media",
   "h1": "Image, speech and video over the same engine",
-  "intro": "Media is not bolted on. The image, speech, transcription and video endpoints run over their own rails, but they share the chat engine's retry, key rotation, 429 handling and proxy rules, with health records of their own so a media failure never benches a model for chat.",
+  "intro": "Media is not bolted on. The image, speech, transcription and video endpoints run over their own rails, but they share the chat engine's retry, key rotation, 429 handling and proxy rules, with health records of their own so a media failure never benches a model for chat. This page is the LLM media path: four rails, one engine, and the same logging and cost accounting as text.",
   "page_grid": true,
   "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Features", "href": "/features/"}, {"label": "Media"}],
   "blocks": [

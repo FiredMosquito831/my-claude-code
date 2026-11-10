@@ -5,7 +5,7 @@
   "nav": "CLI",
   "eyebrow": "Feature · CLI",
   "h1": "The commands MCC puts on your PATH",
-  "intro": "The dashboard is optional. Everything the page can do has a command, and the launchers are how most people start an agent. This page is the reference for the commands, with the flags that exist and the ones that do not.",
+  "intro": "The dashboard is optional. Everything the page can do has a command, and the launchers are how most people start an agent. This page is the reference for the commands, with the flags that exist and the ones that do not. It is the reference for the LLM gateway CLI: mcc-server, the launchers and the headless tools beside them.",
   "page_grid": true,
   "breadcrumbs": [
     {

@@ -5,7 +5,7 @@
   "nav": "FAQ",
   "eyebrow": "FAQ",
   "h1": "Questions this site is asked most",
-  "intro": "Each answer below is written from the product's own documentation and, where it matters, from the source. The same questions and answers are published as structured data for search engines, generated from this one list so the two cannot drift.",
+  "intro": "Each answer below is written from the product's own documentation and, where it matters, from the source. The same questions and answers are published as structured data for search engines, generated from this one list so the two cannot drift. It is the LLM gateway FAQ: the questions this site is asked most, answered once.",
   "page_grid": true,
   "breadcrumbs": [
     {

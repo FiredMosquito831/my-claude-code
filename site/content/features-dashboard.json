@@ -5,7 +5,7 @@
   "nav": "Dashboard",
   "eyebrow": "Feature · Dashboard",
   "h1": "The local control panel",
-  "intro": "The Admin UI is local-only and is where everything is configured. It opens on a Get Started checklist and gets out of the way once dismissed. It reads and writes the same .env the server reads, so the page and the file never disagree.",
+  "intro": "The Admin UI is local-only and is where everything is configured. It opens on a Get Started checklist and gets out of the way once dismissed. It reads and writes the same .env the server reads, so the page and the file never disagree. It is the LLM dashboard: the local control panel, and the one place every setting can be changed.",
   "page_grid": true,
   "breadcrumbs": [
     {
