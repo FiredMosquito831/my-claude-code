@@ -16,10 +16,9 @@ from typing import Any
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.core.anthropic import ReasoningReplayMode
-from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.openai_responses import is_carrier
-from my_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from my_claude_code.core.reasoning import ReasoningEffort
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.model_listing import (
     extract_openrouter_tool_model_ids,
@@ -44,9 +43,16 @@ def openrouter_gateway_profile(provider_name: str) -> OpenAIChatProfile:
             include_extra_body=True,
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
             default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+            # This profile's extractor, and the declaration that makes its
+            # request body carry a ``reasoning_details`` field at all: a policy
+            # with no extractor attaches nothing, which is what keeps every
+            # other Chat provider byte-identical. It is this file's own copy
+            # rather than the ``openai_chat`` one on purpose -- the two files
+            # keep two copies (Q6: both, or neither), so a fix to one cannot
+            # pass unnoticed.
+            reasoning_details_source=assistant_reasoning_details,
         ),
         ReasoningObject(tuple((effort, effort.value) for effort in ReasoningEffort)),
-        postprocessors=(apply_reasoning_details_replay,),
     )
 
 
@@ -91,42 +97,27 @@ class OpenRouterGatewayProvider(OpenAIChatProvider):
         return _iter_reasoning_detail_events(delta, ledger)
 
 
-def apply_reasoning_details_replay(
-    body: dict[str, Any], request: MessagesRequest, _policy: ReasoningPolicy
-) -> None:
-    """Replay encrypted reasoning back onto the assistant turns that produced it."""
-    assistant_details = _assistant_reasoning_details(request.messages)
-    if not assistant_details:
-        return
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        return
+def assistant_reasoning_details(messages: Any) -> dict[int, list[dict[str, Any]]]:
+    """Every assistant turn's replayed details, keyed by its source index.
 
-    cursor = 0
-    for details in assistant_details:
-        for index in range(cursor, len(messages)):
-            message = messages[index]
-            if not isinstance(message, dict) or message.get("role") != "assistant":
-                continue
-            existing = message.get("reasoning_details")
-            if isinstance(existing, list):
-                existing.extend(details)
-            else:
-                message["reasoning_details"] = list(details)
-            cursor = index + 1
-            break
+    The byte-identical twin of ``providers/openai_chat/reasoning_details.py``'s
+    function of the same name (Q6: both, or neither). The two files keep two
+    copies on purpose -- a unification is its own concern (IV.18) -- and the
+    contract test parametrises over both so a fix to one cannot pass.
 
+    A turn that yields no detail is simply **absent**, which is what stops an
+    empty turn shifting every later turn's details up by one.
+    """
 
-def _assistant_reasoning_details(messages: Any) -> list[list[dict[str, Any]]]:
     if not _is_sequence(messages):
-        return []
-    result: list[list[dict[str, Any]]] = []
-    for message in messages:
+        return {}
+    result: dict[int, list[dict[str, Any]]] = {}
+    for index, message in enumerate(messages):
         if _field(message, "role") != "assistant":
             continue
         details = _redacted_reasoning_details(_field(message, "content"))
         if details:
-            result.append(details)
+            result[index] = details
     return result
 
 

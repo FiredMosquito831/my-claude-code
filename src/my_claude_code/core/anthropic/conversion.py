@@ -455,6 +455,39 @@ def hoist_tool_result_images(
     return result
 
 
+def _resolve_after_hoist(
+    reasoning_by_message: dict[int, list[dict[str, Any]]],
+    converted: list[dict[str, Any]],
+    hoisted: list[dict[str, Any]],
+) -> None:
+    """Re-key an index mapping after :func:`hoist_tool_result_images` moved it.
+
+    The hoist is not a constant shift: it **inserts** one user message per tool
+    run that carried an image, so everything after an insertion moves by one and
+    a single ``+1`` would attach a later turn's details to the wrong message --
+    the exact defect this mapping exists to prevent.
+
+    Object identity is what survives. The hoist copies a ``role: tool`` message
+    (which never carries a mapping entry) and appends every other message
+    unchanged, so an assistant message the ledger resolved is still the same
+    object in ``hoisted``. An entry whose message did not survive is dropped
+    rather than guessed at.
+    """
+
+    if not reasoning_by_message:
+        return
+    index_of = {id(message): index for index, message in enumerate(hoisted)}
+    resolved: dict[int, list[dict[str, Any]]] = {}
+    for index, items in reasoning_by_message.items():
+        if not 0 <= index < len(converted):
+            continue
+        moved = index_of.get(id(converted[index]))
+        if moved is not None:
+            resolved[moved] = items
+    reasoning_by_message.clear()
+    reasoning_by_message.update(resolved)
+
+
 def _openai_user_content_parts(content: Any) -> list[dict[str, Any]]:
     """Return an owned content-part list for one converted user message."""
     if isinstance(content, str):
@@ -1091,6 +1124,7 @@ def build_base_request_body(
     default_max_tokens: int | None = None,
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
     image_detail: str | None = None,
+    reasoning_by_message: dict[int, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body.
 
@@ -1098,21 +1132,54 @@ def build_base_request_body(
     provider layer -- which may read settings -- rather than read here, because
     ``core`` may not import ``config``. ``None`` and ``"auto"`` both emit no
     ``detail`` key, which is the behaviour of every release before 6.53.0.
+
+    ``reasoning_by_message`` is the same in/out out-parameter
+    :meth:`AnthropicToOpenAIConverter.convert_messages` already takes, threaded
+    through here so a caller can learn **which converted message** each source
+    turn's reasoning items belong to. It is keyed by source message index on
+    entry and by index into ``body["messages"]`` on return.
+
+    Two things move those indexes after ``convert_messages`` returns, and both
+    are handled here rather than guessed at:
+
+    * :func:`hoist_tool_result_images` **inserts** a user message when a tool
+      result carried an image, so every message after it moves -- not by a
+      constant. The mapping is therefore re-resolved by object identity against
+      the hoisted list, which is the only thing that survives an insertion.
+    * a leading system message is a genuine constant shift of one, applied only
+      when one was actually inserted.
+
+    The values are positions, never a dialect: this module resolves *where* the
+    items go and the provider layer writes whatever field its host spells them
+    with. ``None`` -- every caller but ``build_openai_chat_request_body`` --
+    skips all of it, so every other caller's bytes are untouched.
     """
     _openai_reject_native_only_top_level_fields(request_data)
-    messages = hoist_tool_result_images(
-        AnthropicToOpenAIConverter.convert_messages(
-            request_data.messages,
-            reasoning_replay=reasoning_replay,
-            image_detail=image_detail,
-        )
+    converted = AnthropicToOpenAIConverter.convert_messages(
+        request_data.messages,
+        reasoning_replay=reasoning_replay,
+        image_detail=image_detail,
+        reasoning_by_message=reasoning_by_message,
     )
+    messages = hoist_tool_result_images(converted)
+    if reasoning_by_message is not None and messages is not converted:
+        _resolve_after_hoist(reasoning_by_message, converted, messages)
 
     system = request_data.system
     if system:
         system_msg = AnthropicToOpenAIConverter.convert_system_prompt(system)
         if system_msg:
             messages.insert(0, system_msg)
+            if reasoning_by_message:
+                # A leading system message shifts every index by exactly one.
+                # Rebuild rather than ``update`` in place: ``update`` merges,
+                # which would leave every old key beside its shifted twin and
+                # attach each turn's details twice.
+                shifted = {
+                    index + 1: items for index, items in reasoning_by_message.items()
+                }
+                reasoning_by_message.clear()
+                reasoning_by_message.update(shifted)
 
     body: dict[str, Any] = {"model": request_data.model, "messages": messages}
 

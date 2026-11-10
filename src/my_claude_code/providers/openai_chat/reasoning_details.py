@@ -4,44 +4,37 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, Literal
 
-from my_claude_code.core.anthropic import (
-    is_synthetic_openai_tool_turn_boundary,
-)
-from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.openai_responses import is_carrier
-from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.openai_responses import carrier_foreign_note
 
 
-def apply_reasoning_details_replay(
-    body: dict[str, Any], request: MessagesRequest, _policy: ReasoningPolicy
-) -> None:
-    """Replay opaque reasoning details on their converted assistant messages."""
-    assistant_details = _assistant_reasoning_details(request.messages)
-    if not assistant_details:
-        return
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        return
+def assistant_reasoning_details(messages: Any) -> dict[int, list[dict[str, Any]]]:
+    """Every assistant turn's replayed details, keyed by its source index.
 
-    cursor = 0
-    for details in assistant_details:
-        for index in range(cursor, len(messages)):
-            message = messages[index]
-            if (
-                not isinstance(message, dict)
-                or message.get("role") != "assistant"
-                or is_synthetic_openai_tool_turn_boundary(message)
-            ):
-                continue
-            existing = message.get("reasoning_details")
-            if isinstance(existing, list):
-                existing.extend(details)
-            else:
-                message["reasoning_details"] = list(details)
-            cursor = index + 1
-            break
+    The key is the index into ``messages`` -- the **source** history the client
+    sent -- because that is the only index a caller can hand to
+    :func:`~my_claude_code.core.anthropic.conversion.build_base_request_body`
+    and have resolved onto the converted message the turn actually became.
+
+    A turn that yields no detail is simply **absent**. That is correct now, and
+    it was the defect before: the old walk appended only non-empty lists and
+    then attached them to the next assistant message *in order*, so an absent
+    turn shifted every later turn's details up by one. With the index in the
+    key there is nothing to shift -- an absent turn has no entry, and every
+    other turn keeps its own.
+    """
+
+    if not _is_sequence(messages):
+        return {}
+    result: dict[int, list[dict[str, Any]]] = {}
+    for index, message in enumerate(messages):
+        if _field(message, "role") != "assistant":
+            continue
+        details = _redacted_reasoning_details(_field(message, "content"))
+        if details:
+            result[index] = details
+    return result
 
 
 class StructuredReasoningStream:
