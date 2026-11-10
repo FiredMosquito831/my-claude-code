@@ -21,7 +21,6 @@ import html
 import json
 import pathlib
 import re
-import shutil
 import sys
 import tempfile
 from html.parser import HTMLParser
@@ -75,13 +74,34 @@ SECRET_PATTERNS = [
     ("service-role", re.compile(r"service_role\s*[:=]\s*[A-Za-z0-9._-]{20,}")),
     ("postgres-url", re.compile(r"postgres(ql)?://[^\s\"'<]+")),
     ("mysql-url", re.compile(r"mysql://[^\s\"'<]+")),
-    ("named-secret", re.compile(r"(?i)(password|passwd|pwd|secret|api[_-]?key|token)\s*[:=]\s*[^\s<]{6,}")),
+    (
+        "named-secret",
+        re.compile(
+            r"(?i)(password|passwd|pwd|secret|api[_-]?key|token)\s*[:=]\s*[^\s<]{6,}"
+        ),
+    ),
     ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
-    ("private-ip", re.compile(r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b")),
+    (
+        "private-ip",
+        re.compile(
+            r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"
+        ),
+    ),
     ("supabase-host", re.compile(r"\b[a-z]{20}\.supabase\.co\b")),
     ("owner-path", re.compile(r"C:\\Users\\|/home/|/Users/")),
 ]
-FORBIDDEN = ["TODO", "TBD", "lorem", "YOUR_", "placeholder", "XXX", "example.com", "coming soon", "[insert", "FIXME"]
+FORBIDDEN = [
+    "TODO",
+    "TBD",
+    "lorem",
+    "YOUR_",
+    "placeholder",
+    "XXX",
+    "example.com",
+    "coming soon",
+    "[insert",
+    "FIXME",
+]
 FORBIDDEN_CI = {"todo", "tbd", "lorem", "placeholder", "coming soon", "fixme"}
 
 NAV = [
@@ -156,14 +176,16 @@ def token_css(tokens: dict) -> str:
 
 
 def plain_text(fragment: str) -> str:
-    fragment = re.sub(r"(?is)<(script|style|pre|aside|nav)[^>]*>.*?</\1>", " ", fragment)
+    fragment = re.sub(
+        r"(?is)<(script|style|pre|aside|nav)[^>]*>.*?</\1>", " ", fragment
+    )
     fragment = re.sub(r"<[^>]+>", " ", fragment)
     fragment = html.unescape(fragment)
     return re.sub(r"\s+", " ", fragment).strip()
 
 
 def word_count(fragment: str) -> int:
-    return len(re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", plain_text(fragment)))
+    return len(re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]*", plain_text(fragment)))
 
 
 class LinkCollector(HTMLParser):
@@ -207,9 +229,15 @@ class LinkCollector(HTMLParser):
 class Build:
     def __init__(self, out: pathlib.Path) -> None:
         self.out = out
-        self.tokens = json.loads((SITE / "design-tokens.json").read_text(encoding="utf-8"))
-        self.site = json.loads((SITE / "content" / "site.json").read_text(encoding="utf-8"))
-        self.manifest = json.loads((SITE / "shots" / "manifest.json").read_text(encoding="utf-8"))
+        self.tokens = json.loads(
+            (SITE / "design-tokens.json").read_text(encoding="utf-8")
+        )
+        self.site = json.loads(
+            (SITE / "content" / "site.json").read_text(encoding="utf-8")
+        )
+        self.manifest = json.loads(
+            (SITE / "shots" / "manifest.json").read_text(encoding="utf-8")
+        )
         self.shots = {m["slug"]: m for m in self.manifest}
         self.pages = self._load_pages()
         self.rendered: dict[str, str] = {}
@@ -277,7 +305,13 @@ class Build:
                     used.add(candidate)
                     block["id"] = candidate
                     if block["type"] == "h2":
-                        toc.append({"id": candidate, "text": plain_text(block["text"]), "level": 2})
+                        toc.append(
+                            {
+                                "id": candidate,
+                                "text": plain_text(block["text"]),
+                                "level": 2,
+                            }
+                        )
                 elif block["type"] == "diagram":
                     name = block["name"]
                     if name not in self.diagrams:
@@ -285,16 +319,22 @@ class Build:
                     block["svg"] = self.diagrams[name]
                 elif block["type"] == "gallery_area":
                     area = block["area"]
-                    shots = [self.shot_thumb(m["slug"]) for m in self.manifest if m["area"] == area]
+                    shots = [
+                        self.shot_thumb(m["slug"])
+                        for m in self.manifest
+                        if m["area"] == area
+                    ]
                     shots.sort(key=lambda s: s["slug"])
                     block["shots"] = shots
                 elif block["type"] == "faq":
                     page["_faq"] = block["items"]
             page["_toc"] = toc
-            page["_images"] = sorted({
-                b["shot"] for b in page["blocks"] if b["type"] == "figure"
-            })
-            page["_diagram_count"] = sum(1 for b in page["blocks"] if b["type"] == "diagram")
+            page["_images"] = sorted(
+                {b["shot"] for b in page["blocks"] if b["type"] == "figure"}
+            )
+            page["_diagram_count"] = sum(
+                1 for b in page["blocks"] if b["type"] == "diagram"
+            )
             # gallery: every approved shot must appear exactly once across areas.
             if page["path"] == "/gallery/":
                 covered = [m["slug"] for m in self.manifest]
@@ -311,70 +351,134 @@ class Build:
             self.rendered[page["path"]] = self.render_page(page)
 
     def jsonld_for(self, page: dict, canonical: str) -> list[str]:
-        blocks = [json.dumps({
-            "@context": "https://schema.org",
-            "@type": "WebPage",
-            "name": page["title"],
-            "url": canonical,
-            "description": page["description"],
-        }, ensure_ascii=False)]
+        blocks = [
+            json.dumps(
+                {
+                    "@context": "https://schema.org",
+                    "@type": "WebPage",
+                    "name": page["title"],
+                    "url": canonical,
+                    "description": page["description"],
+                },
+                ensure_ascii=False,
+            )
+        ]
         if page["path"] != "/" and page["path"] != "/404.html":
-            crumbs = [{"@type": "ListItem", "position": 1, "name": "Home", "item": BASE_URL + "/"}]
+            crumbs = [
+                {
+                    "@type": "ListItem",
+                    "position": 1,
+                    "name": "Home",
+                    "item": BASE_URL + "/",
+                }
+            ]
             for i, crumb in enumerate(page.get("breadcrumbs", []), start=2):
-                item = {"@type": "ListItem", "position": i, "name": plain_text(crumb["label"])}
+                item = {
+                    "@type": "ListItem",
+                    "position": i,
+                    "name": plain_text(crumb["label"]),
+                }
                 if crumb.get("href"):
                     item["item"] = BASE_URL + crumb["href"]
                 crumbs.append(item)
-            blocks.append(json.dumps({
-                "@context": "https://schema.org",
-                "@type": "BreadcrumbList",
-                "itemListElement": crumbs,
-            }, ensure_ascii=False))
+            blocks.append(
+                json.dumps(
+                    {
+                        "@context": "https://schema.org",
+                        "@type": "BreadcrumbList",
+                        "itemListElement": crumbs,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         if page["path"] == "/":
-            blocks.append(json.dumps({
-                "@context": "https://schema.org",
-                "@type": "SoftwareApplication",
-                "name": "My Claude Code",
-                "alternateName": "my-claude-code",
-                "description": self.site["software_description"],
-                "applicationCategory": "DeveloperApplication",
-                "operatingSystem": "Windows, macOS, Linux",
-                "softwareVersion": self.site["version"],
-                "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
-                "license": "https://www.gnu.org/licenses/agpl-3.0.html",
-                "isAccessibleForFree": True,
-                "featureList": self.site["feature_list"],
-                "codeRepository": self.site["repo"],
-                "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"},
-            }, ensure_ascii=False))
+            blocks.append(
+                json.dumps(
+                    {
+                        "@context": "https://schema.org",
+                        "@type": "SoftwareApplication",
+                        "name": "My Claude Code",
+                        "alternateName": "my-claude-code",
+                        "description": self.site["software_description"],
+                        "applicationCategory": "DeveloperApplication",
+                        "operatingSystem": "Windows, macOS, Linux",
+                        "softwareVersion": self.site["version"],
+                        "offers": {
+                            "@type": "Offer",
+                            "price": "0",
+                            "priceCurrency": "USD",
+                        },
+                        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+                        "isAccessibleForFree": True,
+                        "featureList": self.site["feature_list"],
+                        "codeRepository": self.site["repo"],
+                        "author": {
+                            "@type": "Person",
+                            "name": "FiredMosquito831",
+                            "url": "https://github.com/FiredMosquito831",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
         if page["path"] == "/faq/":
             items = page.get("_faq", [])
-            blocks.append(json.dumps({
-                "@context": "https://schema.org",
-                "@type": "FAQPage",
-                "mainEntity": [
-                    {"@type": "Question", "name": plain_text(q["q"]),
-                     "acceptedAnswer": {"@type": "Answer", "text": plain_text(q["a"])}}
-                    for q in items
-                ],
-            }, ensure_ascii=False))
+            blocks.append(
+                json.dumps(
+                    {
+                        "@context": "https://schema.org",
+                        "@type": "FAQPage",
+                        "mainEntity": [
+                            {
+                                "@type": "Question",
+                                "name": plain_text(q["q"]),
+                                "acceptedAnswer": {
+                                    "@type": "Answer",
+                                    "text": plain_text(q["a"]),
+                                },
+                            }
+                            for q in items
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            )
         if page["path"] == "/gallery/":
-            images = [{"@type": "ImageObject", "contentUrl": f"{BASE_URL}/assets/shots/{m['slug']}.webp",
-                       "description": m["alt"]} for m in self.manifest]
+            images = [
+                {
+                    "@type": "ImageObject",
+                    "contentUrl": f"{BASE_URL}/assets/shots/{m['slug']}.webp",
+                    "description": m["alt"],
+                }
+                for m in self.manifest
+            ]
             images.sort(key=lambda x: x["contentUrl"])
-            blocks.append(json.dumps({
-                "@context": "https://schema.org",
-                "@type": "ImageGallery",
-                "image": images,
-            }, ensure_ascii=False))
+            blocks.append(
+                json.dumps(
+                    {
+                        "@context": "https://schema.org",
+                        "@type": "ImageGallery",
+                        "image": images,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         return blocks
 
     def render_page(self, page: dict) -> str:
         path = page["path"]
         is_404 = path == "/404.html"
         canonical = "" if is_404 else BASE_URL + path
-        nav = [dict(item, current=(path == item["href"] or (item["prefix"] != "/" and path.startswith(item["prefix"]))))
-               for item in NAV]
+        nav = [
+            dict(
+                item,
+                current=(
+                    path == item["href"]
+                    or (item["prefix"] != "/" and path.startswith(item["prefix"]))
+                ),
+            )
+            for item in NAV
+        ]
         ctx = {
             "site": self.site,
             "title": page["title"],
@@ -408,10 +512,16 @@ class Build:
         """Every text file the site publishes: the source under site/ and the
         rendered output the builder emits. The repository's existing docs/
         Markdown is a read-only source, not part of this output."""
-        targets = []
-        for path in sorted(SITE.rglob("*")):
-            if path.is_file() and path.suffix.lower() in {".json", ".html", ".css", ".js", ".svg", ".md", ".txt"}:
-                targets.append((path.relative_to(REPO).as_posix(), path.read_text(encoding="utf-8", errors="replace")))
+        targets = [
+            (
+                path.relative_to(REPO).as_posix(),
+                path.read_text(encoding="utf-8", errors="replace"),
+            )
+            for path in sorted(SITE.rglob("*"))
+            if path.is_file()
+            and path.suffix.lower()
+            in {".json", ".html", ".css", ".js", ".svg", ".md", ".txt"}
+        ]
         text_suffixes = {".html", ".css", ".js", ".xml", ".txt", ".svg", ".json"}
         for rel, data in sorted(self.output_files.items()):
             if pathlib.PurePosixPath(rel).suffix.lower() in text_suffixes:
@@ -423,7 +533,9 @@ class Build:
             for lineno, line in enumerate(text.splitlines(), start=1):
                 for name, rx in SECRET_PATTERNS:
                     if rx.search(line):
-                        self.problems.append(f"secret scan: {rel}:{lineno}: pattern {name}")
+                        self.problems.append(
+                            f"secret scan: {rel}:{lineno}: pattern {name}"
+                        )
 
     def gate_forbidden(self) -> None:
         for rel, text in self._scan_targets():
@@ -434,7 +546,9 @@ class Build:
                     else:
                         hit = token in line
                     if hit:
-                        self.problems.append(f"forbidden string: {rel}:{lineno}: {token}")
+                        self.problems.append(
+                            f"forbidden string: {rel}:{lineno}: {token}"
+                        )
 
     def gate_metadata(self) -> None:
         titles, descriptions = {}, {}
@@ -443,13 +557,21 @@ class Build:
             title = page["title"]
             desc = page["description"]
             if len(title) > 60:
-                self.problems.append(f"metadata: {path}: title is {len(title)} chars (max 60): {title}")
+                self.problems.append(
+                    f"metadata: {path}: title is {len(title)} chars (max 60): {title}"
+                )
             if not (120 <= len(desc) <= 160):
-                self.problems.append(f"metadata: {path}: description is {len(desc)} chars (need 120-160)")
+                self.problems.append(
+                    f"metadata: {path}: description is {len(desc)} chars (need 120-160)"
+                )
             if title in titles:
-                self.problems.append(f"metadata: {path}: duplicate title also on {titles[title]}")
+                self.problems.append(
+                    f"metadata: {path}: duplicate title also on {titles[title]}"
+                )
             if desc in descriptions:
-                self.problems.append(f"metadata: {path}: duplicate description also on {descriptions[desc]}")
+                self.problems.append(
+                    f"metadata: {path}: duplicate description also on {descriptions[desc]}"
+                )
             titles[title] = path
             descriptions[desc] = path
 
@@ -457,8 +579,17 @@ class Build:
         produced = set()
         for page in self.pages:
             produced.add(self.path_to_file(page["path"]))
-        produced.update({"assets/style.css", "assets/site.js", "favicon.svg", "og.png",
-                         "sitemap.xml", "robots.txt", "CNAME"})
+        produced.update(
+            {
+                "assets/style.css",
+                "assets/site.js",
+                "favicon.svg",
+                "og.png",
+                "sitemap.xml",
+                "robots.txt",
+                "CNAME",
+            }
+        )
         for name in self.diagrams:
             produced.add(f"assets/diagrams/{name}.svg")
         for slug in self.shots:
@@ -472,35 +603,49 @@ class Build:
             parsed[page["path"]] = collector
             page_ids[self.path_to_file(page["path"])] = collector.ids
             if collector.h1 != 1:
-                self.problems.append(f"metadata: {page['path']}: {collector.h1} <h1> elements (need exactly 1)")
+                self.problems.append(
+                    f"metadata: {page['path']}: {collector.h1} <h1> elements (need exactly 1)"
+                )
             for alt in collector.imgs:
                 if not alt.strip():
-                    self.problems.append(f"alt text: {page['path']}: an <img> has empty alt")
+                    self.problems.append(
+                        f"alt text: {page['path']}: an <img> has empty alt"
+                    )
             for block in collector.ldjson:
                 try:
                     json.loads(block)
                 except json.JSONDecodeError as exc:
-                    self.problems.append(f"json-ld: {page['path']}: does not parse: {exc}")
+                    self.problems.append(
+                        f"json-ld: {page['path']}: does not parse: {exc}"
+                    )
         for page in self.pages:
             collector = parsed[page["path"]]
-            for kind, target in collector.links:
-                if not target or target.startswith(("http://", "https://", "mailto:", "tel:", "data:")):
+            for _kind, target in collector.links:
+                if not target or target.startswith(
+                    ("http://", "https://", "mailto:", "tel:", "data:")
+                ):
                     continue
                 if target.startswith("#"):
                     if target[1:] not in collector.ids:
-                        self.problems.append(f"link: {page['path']}: fragment {target} not found")
+                        self.problems.append(
+                            f"link: {page['path']}: fragment {target} not found"
+                        )
                     continue
                 clean = target.split("#", 1)[0].split("?", 1)[0]
                 if not clean:
                     continue
                 resolved = self.resolve_link(page["path"], clean)
                 if resolved not in produced:
-                    self.problems.append(f"link: {page['path']}: {target} does not resolve to a produced file")
+                    self.problems.append(
+                        f"link: {page['path']}: {target} does not resolve to a produced file"
+                    )
                     continue
                 if "#" in target:
                     frag = target.split("#", 1)[1]
                     if resolved in page_ids and frag not in page_ids[resolved]:
-                        self.problems.append(f"link: {page['path']}: fragment #{frag} not found in {resolved}")
+                        self.problems.append(
+                            f"link: {page['path']}: fragment #{frag} not found in {resolved}"
+                        )
 
     @staticmethod
     def path_to_file(path: str) -> str:
@@ -539,7 +684,9 @@ class Build:
                 continue
             target = self.path_to_file(page["path"])
             if target not in self.output_files:
-                self.problems.append(f"sitemap: {BASE_URL + page['path']} has no file at {target}")
+                self.problems.append(
+                    f"sitemap: {BASE_URL + page['path']} has no file at {target}"
+                )
 
     def gate_tokens(self) -> None:
         css = (SITE / "static" / "style.css").read_text(encoding="utf-8")
@@ -547,7 +694,9 @@ class Build:
             if re.search(r"#[0-9a-fA-F]{3,8}\b", line):
                 self.problems.append(f"tokens: style.css:{lineno}: literal hex colour")
             if re.search(r"\b(rgb|rgba|hsl|hsla)\(", line):
-                self.problems.append(f"tokens: style.css:{lineno}: literal colour function")
+                self.problems.append(
+                    f"tokens: style.css:{lineno}: literal colour function"
+                )
 
     def gate_minimums(self) -> None:
         for page in self.pages:
@@ -561,22 +710,36 @@ class Build:
             if maxw and words > maxw:
                 self.problems.append(f"minimum: {path}: {words} words (max {maxw})")
             if len(page["_images"]) < minimg:
-                self.problems.append(f"minimum: {path}: {len(page['_images'])} images (need {minimg})")
+                self.problems.append(
+                    f"minimum: {path}: {len(page['_images'])} images (need {minimg})"
+                )
             if page["_diagram_count"] < mindia:
-                self.problems.append(f"minimum: {path}: {page['_diagram_count']} diagrams (need {mindia})")
+                self.problems.append(
+                    f"minimum: {path}: {page['_diagram_count']} diagrams (need {mindia})"
+                )
             if kind == "architecture":
                 for b in page["blocks"]:
-                    if b["type"] == "diagram":
-                        if "<title" not in b["svg"] or "<desc" not in b["svg"] or 'role="img"' not in b["svg"]:
-                            self.problems.append(f"diagram: {path}: {b['name']} lacks role/title/desc")
-            if path == "/gallery/":
-                if page["_gallery_covered"] != page["_gallery_expected"]:
-                    self.problems.append("minimum: /gallery/: approved shots missing or duplicated")
+                    if b["type"] == "diagram" and (
+                        "<title" not in b["svg"]
+                        or "<desc" not in b["svg"]
+                        or 'role="img"' not in b["svg"]
+                    ):
+                        self.problems.append(
+                            f"diagram: {path}: {b['name']} lacks role/title/desc"
+                        )
+            if path == "/gallery/" and (
+                page["_gallery_covered"] != page["_gallery_expected"]
+            ):
+                self.problems.append(
+                    "minimum: /gallery/: approved shots missing or duplicated"
+                )
         # every feature page image must exist in the manifest
         for page in self.pages:
             for slug in page["_images"]:
                 if slug not in self.shots:
-                    self.problems.append(f"minimum: {page['path']}: unknown shot {slug}")
+                    self.problems.append(
+                        f"minimum: {page['path']}: unknown shot {slug}"
+                    )
         # no image slot on a page that has none: nothing to check here.
 
     def gate_claims(self) -> None:
@@ -588,8 +751,13 @@ class Build:
                 self.problems.append(f"claims: {page['path']}: no claims list")
                 continue
             for i, row in enumerate(claims, start=1):
-                if not row.get("claim", "").strip() or not row.get("evidence", "").strip():
-                    self.problems.append(f"claims: {page['path']}: claim {i} has no evidence")
+                if (
+                    not row.get("claim", "").strip()
+                    or not row.get("evidence", "").strip()
+                ):
+                    self.problems.append(
+                        f"claims: {page['path']}: claim {i} has no evidence"
+                    )
 
     # ------------------------------------------------------------ output
     def sitemap_urls(self) -> list[str]:
@@ -622,23 +790,35 @@ class Build:
             rel = self.path_to_file(page["path"])
             files[rel] = self.rendered[page["path"]].encode("utf-8")
         # CSS: generated token block + static body
-        css = token_css(self.tokens) + "\n" + (SITE / "static" / "style.css").read_text(encoding="utf-8")
+        css = (
+            token_css(self.tokens)
+            + "\n"
+            + (SITE / "static" / "style.css").read_text(encoding="utf-8")
+        )
         files["assets/style.css"] = css.encode("utf-8")
         files["assets/site.js"] = (SITE / "static" / "site.js").read_bytes()
         files["favicon.svg"] = (SITE / "static" / "favicon.svg").read_bytes()
         for name, svg in self.diagrams.items():
             files[f"assets/diagrams/{name}.svg"] = svg.encode("utf-8")
         for slug in sorted(self.shots):
-            files[f"assets/shots/{slug}.webp"] = (SITE / "shots" / f"{slug}.webp").read_bytes()
-            files[f"assets/shots/{slug}-thumb.webp"] = (SITE / "shots" / f"{slug}-thumb.webp").read_bytes()
+            files[f"assets/shots/{slug}.webp"] = (
+                SITE / "shots" / f"{slug}.webp"
+            ).read_bytes()
+            files[f"assets/shots/{slug}-thumb.webp"] = (
+                SITE / "shots" / f"{slug}-thumb.webp"
+            ).read_bytes()
         files["og.png"] = (SITE / "static" / "og.png").read_bytes()
         files["CNAME"] = (self.site["host"] + "\n").encode("utf-8")
-        files["robots.txt"] = (f"User-agent: *\nAllow: /\n\nSitemap: {BASE_URL}/sitemap.xml\n").encode("utf-8")
+        files["robots.txt"] = (
+            f"User-agent: *\nAllow: /\n\nSitemap: {BASE_URL}/sitemap.xml\n"
+        ).encode()
         # sitemap
-        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-                 '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+        lines = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+        ]
         for url in self.sitemap_urls():
-            path = url[len(BASE_URL):] or "/"
+            path = url[len(BASE_URL) :] or "/"
             lines.append("  <url>")
             lines.append(f"    <loc>{url}</loc>")
             lines.append(f"    <lastmod>{self.site['lastmod']}</lastmod>")
@@ -646,7 +826,9 @@ class Build:
             lines.append("  </url>")
         lines.append("</urlset>")
         files["sitemap.xml"] = ("\n".join(lines) + "\n").encode("utf-8")
-        files[MANIFEST_NAME] = (json.dumps(sorted(files), indent=2) + "\n").encode("utf-8")
+        files[MANIFEST_NAME] = (json.dumps(sorted(files), indent=2) + "\n").encode(
+            "utf-8"
+        )
         return files
 
     def write(self) -> None:
