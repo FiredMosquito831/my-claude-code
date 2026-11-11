@@ -2952,6 +2952,10 @@ async def test_a_stall_inside_a_tool_call_still_errors_and_says_so() -> None:
         "reason": "incomplete_tool_use",
         "stop_reason_sent": None,
         "ended_cleanly": False,
+        # 8.20.1: the record names the tool the turn died in and how many
+        # characters of its arguments had arrived. Written only in this state,
+        # so every other truncation payload is unchanged.
+        "incomplete_tool_call": {"name": "Bash", "chars": 17},
     }
 
 
