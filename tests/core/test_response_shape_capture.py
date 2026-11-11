@@ -250,7 +250,9 @@ def test_the_tool_call_tally_stores_no_text_at_all() -> None:
     assert arguments not in rendered
     for start in range(len(arguments) - 7):
         fragment = arguments[start : start + 8]
-        assert fragment not in rendered, fragment
+        # The offset, never the fragment: a failure message is still a place
+        # a tool argument must not be printed.
+        assert fragment not in rendered, f"argument fragment at offset {start} leaked"
     # And the argument string is not held on the shape either.
     assert arguments not in repr(shape)
 
