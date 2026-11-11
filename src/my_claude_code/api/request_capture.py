@@ -36,6 +36,12 @@ from my_claude_code.core.anthropic import (
 )
 from my_claude_code.core.anthropic.image_tokens import ImageTokenFamily, image_tokens
 from my_claude_code.core.async_iterators import try_close_async_iterator
+from my_claude_code.core.carrier_surface import (
+    CHAT_REDACTED_THINKING,
+    GEMINI_THOUGHT_UNSIGNED,
+    merge_carrier_surface_note,
+)
+from my_claude_code.core.carrier_surface import note as note_carrier_surface_cell
 from my_claude_code.core.client_fingerprint import (
     harness_from_headers,
     install_fingerprint,
@@ -162,6 +168,17 @@ def _estimated_image_tokens(image: ImageInput, family: str) -> int:
 #: exported as-is, so a value added here becomes a user-visible vocabulary word.
 WireProtocol = Literal["anthropic", "openai_responses", "openai_chat", "gemini"]
 
+#: The egress half of the carrier-surface count (8.20.0): an Anthropic
+#: ``content_block_start`` whose block type is one a door cannot hand its
+#: client, by the cell it counts. A handler declares which of these its door
+#: can drop (``carrier_surface_egress``) -- the Chat door always, the Gemini
+#: door only when the client asked for thoughts -- so a Messages or Responses
+#: request that legitimately carries the same block records nothing.
+_EGRESS_BLOCK_CELLS: dict[str, str] = {
+    "redacted_thinking": CHAT_REDACTED_THINKING,
+    "thinking": GEMINI_THOUGHT_UNSIGNED,
+}
+
 
 class RequestCapture:
     """Accumulate one request's analytics and emit exactly one log record."""
@@ -192,6 +209,8 @@ class RequestCapture:
         capture_session: bool = True,
         capture_folder: bool = True,
         cost_openrouter_live_enabled: bool = False,
+        carrier_surface: Mapping[str, int] | None = None,
+        carrier_surface_egress: frozenset[str] = frozenset(),
     ) -> None:
         self._store = store
         # What the request offered about where it came from, and whether the
@@ -209,6 +228,14 @@ class RequestCapture:
         # rate (``MODEL_METADATA_OPENROUTER_LIVE``). Read only for a request
         # whose host reported 1-hour cache writes.
         self._cost_openrouter_live_enabled = cost_openrouter_live_enabled
+        # 8.20.0: what this request's door drops a carrier on, by cell. The
+        # ingress half is counted by the door's own conversion and handed in
+        # here; the egress half is counted below, as the Anthropic SSE the
+        # client's door consumes passes through. One mapping, one note, absent
+        # when nothing was dropped -- so a request that drops nothing records
+        # exactly the ``params`` it always did.
+        self._carrier_surface: dict[str, int] = dict(carrier_surface or {})
+        self._carrier_surface_egress = carrier_surface_egress
         # Held undecoded until the request is over. Thumbnailing is real CPU
         # work and there is no reason for it to sit between the client and its
         # first token, so it happens at finalize time instead.
@@ -1189,7 +1216,14 @@ class RequestCapture:
     def _start_content_block(self, payload: dict[str, Any]) -> None:
         """Note a tool_use block so its streamed arguments can be attributed."""
         block = payload.get("content_block")
-        if not isinstance(block, dict) or block.get("type") != "tool_use":
+        if not isinstance(block, dict):
+            return
+        block_type = block.get("type")
+        if self._carrier_surface_egress and isinstance(block_type, str):
+            cell = _EGRESS_BLOCK_CELLS.get(block_type)
+            if cell is not None and cell in self._carrier_surface_egress:
+                note_carrier_surface_cell(self._carrier_surface, cell)
+        if block_type != "tool_use":
             return
         index = _int_or_none(payload.get("index"))
         if index is None:
@@ -1581,6 +1615,15 @@ class RequestCapture:
         self._finalized = True
         record = self._record
         self._merge_provider_reasoning_adaptations()
+        # 8.20.0: what this request's door dropped a carrier on, by cell. Written
+        # once, here, because two of the six cells are only knowable after the
+        # attempt record has been committed -- the Chat and Gemini assemblers run
+        # downstream of the executor. Absent when nothing was dropped, so every
+        # other row keeps exactly the ``params`` it always had.
+        if self._carrier_surface:
+            params = dict(record.params or {})
+            merge_carrier_surface_note(params, self._carrier_surface)
+            record.params = params
         # Before the price: a row the web tool answered has no provider and no
         # model, so the pricing ladder finds no card and stores NULL.
         self._apply_local_web_tool(record)
@@ -1792,6 +1835,8 @@ def build_capture(
     protocol: WireProtocol,
     headers: Mapping[str, str] | None = None,
     stream: bool | None = None,
+    carrier_surface: Mapping[str, int] | None = None,
+    carrier_surface_egress: frozenset[str] = frozenset(),
 ) -> RequestCapture:
     """Create the capture for one request; inert when logging is disabled.
 
@@ -1856,6 +1901,8 @@ def build_capture(
         origin=origin_inputs(headers, harness=harness, metadata=request.metadata),
         capture_session=bool(getattr(settings, "request_log_capture_session", True)),
         capture_folder=bool(getattr(settings, "request_log_capture_folder", True)),
+        carrier_surface=carrier_surface,
+        carrier_surface_egress=carrier_surface_egress,
     )
 
 

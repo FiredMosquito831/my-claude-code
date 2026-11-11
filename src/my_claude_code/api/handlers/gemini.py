@@ -32,6 +32,7 @@ from my_claude_code.core.anthropic import (
     MessagesRequest,
     aggregate_anthropic_sse_to_message,
 )
+from my_claude_code.core.carrier_surface import GEMINI_THOUGHT_UNSIGNED
 from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
@@ -126,6 +127,20 @@ class GeminiHandler:
                 protocol="gemini",
                 headers=headers,
                 stream=stream,
+                # 8.20.0: the two ingress cells this door drops (a replayed
+                # ``thought: true`` part and every ``thoughtSignature``), counted
+                # by the conversion that drops them.
+                carrier_surface=conversion.carrier_surface,
+                # The egress cell: a thought this door emits carries no
+                # ``thoughtSignature``, so the client has nothing to echo back.
+                # Only when the client asked for thoughts -- a request that did
+                # not ask emits no thought part at all, and counting one would
+                # claim a drop that never happened.
+                carrier_surface_egress=(
+                    frozenset({GEMINI_THOUGHT_UNSIGNED})
+                    if conversion.include_thoughts
+                    else frozenset()
+                ),
             )
             require_non_empty_messages(gemini_request.messages)
             plan = self._model_router.resolve_messages_plan(

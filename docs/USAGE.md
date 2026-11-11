@@ -5057,6 +5057,56 @@ A request that writes the sentinel now gains one line in its request detail — 
 
 Every existing Gemini body is byte-identical when the cache is empty, which is every request until a loop captures a signature.
 
+#### The wider reasoning-detail rules on the Chat door
+
+**New in 8.20.0.** A Chat Completions host can return reasoning **twice** in one delta: once as `reasoning_content` (or `reasoning`) text, and once as a `reasoning_details` array whose entries are structured. MCC had **two** implementations of the rules that surface those entries — and the one that ran was the **narrower** of the two:
+
+| A detail that… | Before 8.20.0 | From 8.20.0, with the setting on |
+| --- | --- | --- |
+| carries a `signature` | its text was emitted and **the entry was thrown away**, so the opaque continuation could never be replayed | the text is emitted **and** the whole entry is preserved as a `redacted_thinking` block |
+| has no text and no marker (an `id` and nothing else) | **nothing at all** | preserved as a `redacted_thinking` block |
+| is `summary`-typed and also carries text | the block only; the text was dropped | the text **and** the block |
+| is `encrypted` / `redacted` / `summary` | preserved | preserved, unchanged |
+
+The second implementation — `StructuredReasoningStream` — was written for exactly these rules and **never wired**: one definition, no callers. It is gone. Its rules are now the implementation, and there is one of them.
+
+| Setting | Default | Values |
+| --- | --- | --- |
+| `CHAT_STRUCTURED_REASONING` | `false` | `true` — the wider rules above; `false` — every byte 8.19.0 sent |
+
+**Two different things, two different homes.** `structured_reasoning_details` is a **per-host declaration**: "this host returns structured details and they must be surfaced". It was set on `cline` and `zenmux` and read by nothing; it is read now, and the shared OpenRouter-dialect profile declares it too, which reaches `open_router`, `nous_portal` and `kilo` in one line. `CHAT_STRUCTURED_REASONING` is the operator's switch, and it decides **which** rule set runs, not whether the hook runs at all. That distinction is what makes the off state safe: off is the gateways' existing narrow behaviour, byte for byte, never a loss of something they send today.
+
+**A host that declares nothing is untouched.** Every other Chat profile produces exactly the empty output it produced before, with the setting on or off.
+
+**The text is never emitted twice.** The rule is per delta, not per stream: a delta that carries native text suppresses the detail text for **that delta**, and the caller has already emitted the native text. `cline` and `zenmux` declare `reasoning` as their delta field rather than `reasoning_content`, and the de-duplication reads the field the profile actually uses — otherwise those two hosts would send the same sentence twice.
+
+**What you see.** A `redacted_thinking` block in the client's stream, for an entry that used to vanish or be flattened to text. Nothing in the request log changes; this is the response direction only, so no request body moves and the prompt cache is untouched by construction.
+
+#### The carrier-surface drop is now counted
+
+**New in 8.20.0, and it has no setting.** The Chat and Gemini doors have **no opaque field in either direction**: a Chat client is handed readable reasoning text and nothing it could echo back, and a Gemini client is handed a thought part with no `thoughtSignature`. So MCC does not invent a carrier for them — the measured population is **17 Chat requests and 2 Gemini requests out of 757,322**, and a protocol nobody reads is not a feature.
+
+What it does instead is **count** the drop, and the count names **every cell**, per door, per direction, per mode:
+
+| Door | Direction | What was dropped | Key |
+| --- | --- | --- | --- |
+| Chat | in | a client's `reasoning_details` entry carrying an `mcc:reasoning:v1:` envelope | `chat_in_details_carrier` |
+| Chat | in | a client's `reasoning_details` entry that is another dialect's text | `chat_in_details_other` |
+| Chat | out | a `redacted_thinking` block the assembler has no frame for, so the client is never handed the blob it would echo | `chat_out_redacted_thinking` |
+| Gemini | in | a replayed `thought: true` part | `gemini_in_thought_part` |
+| Gemini | in | a `thoughtSignature` on a replayed part | `gemini_in_thought_signature` |
+| Gemini | out | a thought emitted with no `thoughtSignature` | `gemini_out_thought_unsigned` |
+
+They land in one place, on the request row's `params`, under `carrier_surface_dropped`:
+
+```json
+"params": {"carrier_surface_dropped": {"chat_in_details_carrier": 1, "chat_out_redacted_thinking": 2}}
+```
+
+**Every key names its door, its direction and its cell**, so the raw `params` JSON needs no table. **Mode is not repeated in the key names** — it is the row's own `stream` column, so `WHERE protocol = 'openai_chat' AND stream = 1` is the stream half of cell 9, and repeating the mode in every sub-key would let the two disagree.
+
+**Absent, not zero.** A request that dropped nothing carries no key at all, so every existing row's `params` is exactly what it was. The note holds **counts only** — no substring of an envelope, no reasoning text, no id — and its name deliberately avoids the `reasoning_*`/`thinking_*` prefixes MCC reads as a reasoning *instruction*, so a note about a drop can never count as reasoning sent.
+
 ---
 
 ## 10. Web search

@@ -1598,6 +1598,31 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "CHAT_STRUCTURED_REASONING",
+        "Preserve Structured Reasoning Details",
+        "reasoning",
+        "boolean",
+        settings_attr="chat_structured_reasoning",
+        default="false",
+        affects_providers=False,
+        description=(
+            "Whether a Chat Completions host that declares structured reasoning details "
+            "gets the wider preservation rules on the response side. Some hosts return "
+            "reasoning twice: as reasoning_content text, and as a reasoning_details "
+            "array whose entries can carry a signature, a summary, or nothing but an "
+            "id. MCC surfaced those entries with a narrow rule that lost a "
+            "signature-bearing entry's opaque continuation and dropped an entry with no "
+            "text at all. On, every such entry is preserved as a redacted_thinking "
+            "block the client can replay next turn, and the readable text still reaches "
+            "the client exactly once. It reaches open_router, nous_portal and kilo "
+            "through their shared profile, and cline and zenmux through their own "
+            "declarations. Only a host that declares structured_reasoning_details is "
+            "affected; every other Chat host is byte-identical either way. Off restores "
+            "every byte 8.19.0 sent. A save applies to the next request, with no "
+            "restart."
+        ),
+    ),
+    ConfigFieldSpec(
         "ANTHROPIC_AUTH_TOKEN",
         "API/CLI Auth Token",
         "runtime",

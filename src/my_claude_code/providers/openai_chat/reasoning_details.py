@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Any, Literal
+from typing import Any
 
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.openai_responses import is_carrier
@@ -37,48 +37,82 @@ def assistant_reasoning_details(messages: Any) -> dict[int, list[dict[str, Any]]
     return result
 
 
-class StructuredReasoningStream:
-    """Reconcile alternate plaintext reasoning representations for one stream."""
+def iter_reasoning_detail_events(
+    delta: Any,
+    ledger: AnthropicStreamLedger,
+    *,
+    native_reasoning: str | None,
+    structured: bool,
+) -> Iterator[str]:
+    """Emit a delta's plaintext reasoning once while preserving every opaque detail.
 
-    def __init__(self) -> None:
-        self._text_source: Literal["native", "details"] | None = None
+    **The one response-direction implementation** (8.20.0). Before it, two
+    implementations carried two different rule sets: the wired
+    ``_iter_reasoning_detail_events`` in ``providers/openrouter_gateway.py``
+    and the never-instantiated ``StructuredReasoningStream`` here. The wider
+    rules were the dead class's; they are the ones kept, because the live hook
+    was narrower in three measured places:
 
-    def events(
-        self,
-        delta: Any,
-        ledger: AnthropicStreamLedger,
-        *,
-        native_reasoning: str | None,
-    ) -> Iterator[str]:
-        """Emit plaintext once while preserving every opaque reasoning detail."""
-        details = _reasoning_details(delta)
-        if self._text_source is None:
-            if native_reasoning:
-                self._text_source = "native"
-            elif any(_reasoning_detail_text(detail) for detail in details):
-                self._text_source = "details"
+    1. **a detail carrying a ``signature``** -- the live hook emitted its text
+       and threw the entry away, so the opaque continuation could never be
+       replayed on the next turn;
+    2. **a detail with no text and no marker** -- the live hook produced
+       nothing at all;
+    3. **a ``summary``-typed detail that also carries a text key** -- the live
+       hook emitted the block and skipped the text.
 
-        if self._text_source == "native" and native_reasoning:
-            yield from ledger.ensure_thinking_block()
-            yield ledger.emit_thinking_delta(native_reasoning)
+    Two things did **not** come across from the class, and both are deliberate:
 
-        for detail in details:
-            if self._text_source == "details":
-                text = _reasoning_detail_text(detail)
-                if text:
-                    yield from ledger.ensure_thinking_block()
-                    yield ledger.emit_thinking_delta(text)
+    * its ``native_reasoning`` emission. The caller owns that
+      (``_OpenAIChatStreamRunner.run`` emits ``reasoning_content`` before this
+      runs), so emitting it here would send the same sentence twice.
+    * its per-stream ``_text_source`` latch. The latch chose one source for the
+      whole stream; this recomputes per delta. The latch would DROP detail text
+      that arrives after a native delta -- output the live hook emits today --
+      and, driven with the native text suppressed, it cannot express the
+      double-emission guard at all. Per-delta suppresses only within a delta
+      that itself carries native text, which is a strict superset of emission
+      and therefore loses nothing.
 
-            preserved = _preserved_reasoning_detail(detail)
-            if preserved:
-                yield from ledger.close_content_blocks()
-                index = ledger.blocks.allocate_index()
-                yield ledger.content_block_start(
-                    index,
-                    "redacted_thinking",
-                    data=preserved,
-                )
-                yield ledger.content_block_stop(index)
+    ``native_reasoning`` is the caller's own ``reasoning_delta(delta)``, not a
+    re-read of ``reasoning_content``: a profile may declare ``reasoning`` as its
+    delta field (``cline``, ``zenmux``), and re-reading the wrong field would
+    emit the same text twice on those hosts.
+
+    ``structured`` selects the rule set. ``False`` is v8.19.0's live hook, byte
+    for byte -- the operator gate ``CHAT_STRUCTURED_REASONING`` ships off, and
+    off must restore every byte it sent. ``True`` is the wider set above.
+    """
+
+    details = _reasoning_details(delta)
+    if not details:
+        return
+    has_native_reasoning = isinstance(native_reasoning, str) and bool(native_reasoning)
+    narrow = not structured
+    for detail in details:
+        preserved = (
+            _reasoning_detail_encrypted(detail)
+            if narrow
+            else _preserved_reasoning_detail(detail)
+        )
+        # The narrow rule treats a preserved detail as an ALTERNATIVE to its
+        # text -- v8.19.0's ``continue`` -- so a summary detail carrying a text
+        # key emits only its block. The wide rule emits both: nothing a host
+        # sent is dropped where the client can take it.
+        if not has_native_reasoning and not (narrow and preserved):
+            text = _reasoning_detail_text(detail)
+            if text:
+                yield from ledger.ensure_thinking_block()
+                yield ledger.emit_thinking_delta(text)
+        if preserved:
+            yield from ledger.close_content_blocks()
+            index = ledger.blocks.allocate_index()
+            yield ledger.content_block_start(
+                index,
+                "redacted_thinking",
+                data=preserved,
+            )
+            yield ledger.content_block_stop(index)
 
 
 def _reasoning_details(delta: Any) -> Sequence[Any]:
@@ -182,6 +216,23 @@ def _reasoning_detail_text(detail: Any) -> str | None:
         value = _field(detail, key)
         if isinstance(value, str) and value:
             return value
+    return None
+
+
+def _reasoning_detail_encrypted(detail: Any) -> str | None:
+    """v8.19.0's preservation predicate, kept as the narrow rule set.
+
+    A detail whose kind names an opaque form, dumped whole. It is a strict
+    subset of :func:`_preserved_reasoning_detail` -- which also keeps a
+    signature-bearing detail and one with no text at all -- and it is the rule
+    every release before 8.20.0 applied on the OpenRouter-dialect gateways.
+    """
+
+    kind = str(_field(detail, "type") or "").lower()
+    if "encrypted" not in kind and "redacted" not in kind and "summary" not in kind:
+        return None
+    if isinstance(detail, Mapping):
+        return json.dumps(dict(detail), separators=(",", ":"))
     return None
 
 

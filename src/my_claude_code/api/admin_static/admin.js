@@ -14894,6 +14894,12 @@ function renderMessagingAuthNotice(openPlatforms) {
    saved like every other. */
 const PROMPT_CACHE_TTL_FIELD_PREFIX = "PROMPT_CACHE_TTL";
 const RESPONSES_PROTOCOL_FIELD_PREFIX = "RESPONSES_";
+/* 8.20.0: the Chat Completions door's own reasoning-detail switch. Its own
+   subheading rather than a seventh field in the thinking-level grid, because
+   it is not a thinking level: it decides what MCC does with the structured
+   `reasoning_details` a Chat host returns, and the first grid is the six
+   levels and nothing else. */
+const CHAT_REASONING_FIELD_PREFIX = "CHAT_";
 
 function renderReasoningSection(fields) {
   const wrap = document.createElement("div");
@@ -14903,13 +14909,17 @@ function renderReasoningSection(fields) {
   const protocol = fields.filter((field) =>
     field.key.startsWith(RESPONSES_PROTOCOL_FIELD_PREFIX),
   );
+  const chatReasoning = fields.filter((field) =>
+    field.key.startsWith(CHAT_REASONING_FIELD_PREFIX),
+  );
   const grid = document.createElement("div");
   grid.className = "field-grid";
   fields
     .filter(
       (field) =>
         !field.key.startsWith(PROMPT_CACHE_TTL_FIELD_PREFIX) &&
-        !field.key.startsWith(RESPONSES_PROTOCOL_FIELD_PREFIX),
+        !field.key.startsWith(RESPONSES_PROTOCOL_FIELD_PREFIX) &&
+        !field.key.startsWith(CHAT_REASONING_FIELD_PREFIX),
     )
     .forEach((field) => grid.appendChild(renderField(field)));
   wrap.appendChild(grid);
@@ -14951,6 +14961,25 @@ function renderReasoningSection(fields) {
     protocolGrid.className = "field-grid";
     protocol.forEach((field) => protocolGrid.appendChild(renderField(field)));
     group.append(heading, lead, protocolGrid);
+    wrap.appendChild(group);
+  }
+  if (chatReasoning.length > 0) {
+    const group = document.createElement("div");
+    group.className = "settings-subsection";
+    group.id = "subsection-chat-reasoning";
+    const heading = document.createElement("h4");
+    heading.className = "settings-subheading";
+    heading.textContent = "Chat Completions reasoning details";
+    const lead = document.createElement("p");
+    lead.className = "settings-subheading-lead";
+    lead.textContent =
+      "What MCC does with the structured reasoning details a Chat Completions " +
+      "host returns. Only a host that declares them is affected; every other " +
+      "Chat host is byte-identical either way.";
+    const chatGrid = document.createElement("div");
+    chatGrid.className = "field-grid";
+    chatReasoning.forEach((field) => chatGrid.appendChild(renderField(field)));
+    group.append(heading, lead, chatGrid);
     wrap.appendChild(group);
   }
   return wrap;

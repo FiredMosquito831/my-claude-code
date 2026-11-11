@@ -27,6 +27,7 @@ from .constants import (
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CATALOGUE_FETCH_TIMEOUT_SECONDS,
+    CHAT_STRUCTURED_REASONING_DEFAULT,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     COST_ESTIMATION_MODE_DEFAULT,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
@@ -1872,6 +1873,22 @@ class Settings(BaseSettings):
         default=RESPONSES_PLAINTEXT_REPLAY_DEFAULT,
         validation_alias="RESPONSES_PLAINTEXT_REPLAY",
     )
+    # Whether the response direction applies the *wider* reasoning-detail rules
+    # on a Chat host that declares ``structured_reasoning_details`` (8.20.0).
+    # The declaration is per-host data and lives on the profile; this is the
+    # operator's switch, and it is the one IV.7's opt-in rule applies to.
+    # Read where the delta is handled, so a save applies to the next request
+    # with no restart and no provider rebuild.
+    #
+    # False ships by the user's Q7 decision (2026-11-11, "both new settings
+    # OFF"). Off is v8.19.0 byte for byte: the OpenRouter-dialect gateways keep
+    # the narrow rules they have always run, and every profile that declares
+    # nothing keeps producing no events at all. That is why this gate selects
+    # wide-versus-narrow rather than run-versus-not.
+    chat_structured_reasoning: bool = Field(
+        default=CHAT_STRUCTURED_REASONING_DEFAULT,
+        validation_alias="CHAT_STRUCTURED_REASONING",
+    )
 
     # ==================== HTTP Client Timeouts ====================
     http_read_timeout: float = Field(
@@ -3605,6 +3622,42 @@ def configured_responses_plaintext_replay() -> bool:
             settings,
             "responses_plaintext_replay",
             RESPONSES_PLAINTEXT_REPLAY_DEFAULT,
+        )
+    )
+
+
+def configured_chat_structured_reasoning() -> bool:
+    """Whether the wider reasoning-detail rules run on a Chat host (8.20.0).
+
+    Read per delta, for the reason :func:`configured_responses_carrier_replay`
+    is read per request: a value captured when a provider was constructed could
+    not follow a dashboard save, and this setting needs no restart.
+
+    The *declaration* this gate governs is per-host data and lives on the
+    profile (``OpenAIChatProfile.structured_reasoning_details``); this is the
+    operator's switch, and the two are deliberately separate homes (IV.6).
+
+    Off -- the shipped default, by the user's Q7 decision -- is v8.19.0 byte for
+    byte: the OpenRouter-dialect gateways keep the narrow rules they have always
+    run, and every profile that declares nothing keeps producing no events at
+    all. On adds the three wider rules: a detail carrying a ``signature`` is
+    preserved as a ``redacted_thinking`` block, a detail with no text and no
+    marker is preserved, and a ``summary`` detail that also carries text emits
+    both.
+
+    ``getattr`` with the shipped default rather than a bare attribute read:
+    the settings object is rebuilt from the environment on every admin save
+    (``get_settings.cache_clear``), and a field this module no longer declared
+    would otherwise turn every Chat delta into an ``AttributeError`` on the
+    request path.
+    """
+
+    settings = get_settings()
+    return bool(
+        getattr(
+            settings,
+            "chat_structured_reasoning",
+            CHAT_STRUCTURED_REASONING_DEFAULT,
         )
     )
 

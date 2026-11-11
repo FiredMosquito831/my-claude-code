@@ -33,6 +33,7 @@ from my_claude_code.application.model_metadata import (
     ResponseSurface,
     ResponseSurfaceSource,
 )
+from my_claude_code.config.settings import configured_chat_structured_reasoning
 from my_claude_code.core.anthropic import (
     ContentChunk,
     ContentType,
@@ -150,7 +151,10 @@ from .prompt_cache import (
     chat_prompt_cache_choice,
     note_chat_prompt_cache_refusal,
 )
-from .reasoning_details import carrier_foreign_note_for_history
+from .reasoning_details import (
+    carrier_foreign_note_for_history,
+    iter_reasoning_detail_events,
+)
 from .request_policy import build_openai_chat_request_body, chat_tool_schema_note
 from .response_surface import (
     ResolvedSurfaceLadder,
@@ -826,10 +830,41 @@ class OpenAIChatProvider(BaseProvider):
         )
 
     def _handle_extra_reasoning(
-        self, delta: Any, ledger: AnthropicStreamLedger, *, output_reasoning: bool
+        self,
+        delta: Any,
+        ledger: AnthropicStreamLedger,
+        *,
+        output_reasoning: bool,
+        native_reasoning: str | None = None,
     ) -> Iterator[str]:
-        """Hook for provider-specific reasoning."""
-        return iter(())
+        """Hook for provider-specific reasoning.
+
+        The declared case (8.20.0). A profile that sets
+        ``structured_reasoning_details`` says its host returns structured
+        ``reasoning_details`` on the reply and that they must be surfaced; this
+        is the one implementation that does it, for every such profile. A
+        profile that declares nothing -- which is every other Chat host --
+        returns exactly the empty iterator it has always returned, so its bytes
+        are untouched.
+
+        ``native_reasoning`` is the caller's own ``reasoning_delta(delta)``, not
+        a re-read of ``reasoning_content``: a profile may declare ``reasoning``
+        as its delta field, and re-reading the wrong one would emit the same
+        sentence twice on those hosts.
+
+        ``CHAT_STRUCTURED_REASONING`` selects the rule set, not whether this
+        runs: off is v8.19.0's narrow rules byte for byte (which is what the
+        OpenRouter-dialect gateways run today), on adds the three wider ones.
+        """
+
+        if not output_reasoning or not self._profile.structured_reasoning_details:
+            return iter(())
+        return iter_reasoning_detail_events(
+            delta,
+            ledger,
+            native_reasoning=native_reasoning,
+            structured=configured_chat_structured_reasoning(),
+        )
 
     def _get_retry_request_body(self, error: Exception, body: dict) -> dict | None:
         """Return a modified request body for one retry, or None."""
@@ -2066,6 +2101,11 @@ class _OpenAIChatStreamRunner:
                             delta,
                             ledger,
                             output_reasoning=output_reasoning,
+                            # The caller's own answer to "did this delta carry
+                            # native reasoning text", so the hook de-duplicates
+                            # against the text that was just emitted above --
+                            # whichever field this profile declares.
+                            native_reasoning=reasoning,
                         ):
                             for out_event in hold_event(event):
                                 yield out_event

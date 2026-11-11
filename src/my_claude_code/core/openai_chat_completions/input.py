@@ -3,9 +3,15 @@
 import base64
 import binascii
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
+from my_claude_code.core.carrier_surface import (
+    CHAT_DETAILS_CARRIER,
+    CHAT_DETAILS_OTHER,
+    note,
+)
+from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.trace import trace_event
 
 from .errors import ChatCompletionsConversionError
@@ -40,12 +46,21 @@ _DATA_URL_PREFIX = "data:"
 
 def convert_request_to_anthropic_payload(
     request: OpenAIChatCompletionRequest,
+    *,
+    carrier_surface: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Convert a Chat Completions request into an Anthropic Messages payload.
 
     The result is always ``stream: True``: MCC's internal pipeline is SSE end
     to end, and a non-streaming client is served by assembling that stream at
     the API boundary, exactly as ``/v1/messages`` already does.
+
+    ``carrier_surface`` is a caller's mapping to receive what this door drops
+    (8.20.0): every ``reasoning_details`` entry a client sent, split into the
+    ones carrying an ``mcc:reasoning:v1:`` envelope and the ones that are
+    another dialect's text. Counts only, never content -- the rule
+    ``carrier_foreign_note`` keeps. ``None``, which is every caller but the
+    Chat handler, records nothing and changes nothing.
     """
     if request.n is not None and request.n != 1:
         raise ChatCompletionsConversionError(
@@ -58,6 +73,8 @@ def convert_request_to_anthropic_payload(
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
     for message in request.messages:
+        if carrier_surface is not None:
+            _note_reasoning_details(message, carrier_surface)
         _append_message(message, messages=messages, system_parts=system_parts)
 
     if instruction := _response_format_instruction(request.response_format):
@@ -102,6 +119,44 @@ def convert_request_to_anthropic_payload(
             payload["tool_choice"] = tool_choice
 
     return payload
+
+
+def _note_reasoning_details(
+    message: ChatCompletionMessage, counts: dict[str, int]
+) -> None:
+    """Count the ``reasoning_details`` this door cannot forward (8.20.0).
+
+    The field is declared nowhere on :class:`ChatCompletionMessage`, so
+    ``extra="allow"`` swallows it into ``model_extra`` and nothing reads it --
+    the drop this count exists to make visible. Read here rather than in a
+    second pass so the count and the conversion cannot disagree about what the
+    client sent: this is the same message object the conversion walks.
+
+    Two cells, not one, because they are two different facts. A ``data`` that
+    passes :func:`~my_claude_code.core.openai_responses.is_carrier` is the
+    opaque envelope a carrier-replay build would have replayed; anything else
+    is another dialect's text detail, which this door has never forwarded
+    either. Neither is counted for a message that carries no such field.
+    """
+
+    extra = getattr(message, "model_extra", None)
+    if not isinstance(extra, Mapping):
+        return
+    details = extra.get("reasoning_details")
+    if not _is_sequence(details):
+        return
+    for detail in details:
+        data = detail.get("data") if isinstance(detail, Mapping) else None
+        note(
+            counts,
+            CHAT_DETAILS_CARRIER if is_carrier(data) else CHAT_DETAILS_OTHER,
+        )
+
+
+def _is_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(
+        value, str | bytes | bytearray
+    )
 
 
 def _required_model(value: str) -> str:
