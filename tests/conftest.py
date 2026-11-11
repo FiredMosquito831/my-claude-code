@@ -83,6 +83,27 @@ def _reset_stop_deadline():
 
 
 @pytest.fixture(autouse=True)
+def _reset_google_thought_signatures():
+    """8.19.0: the Google signature cache is process-wide, on purpose.
+
+    One store serves every provider instance, the way ``learned_facts.json``
+    does, so a signature captured by one test would otherwise be replayed by
+    the next one -- which is exactly what happened in CI: a later Gemini test
+    expecting the skip-validator sentinel received the signature an earlier
+    test had cached. The store is memory-only between tests (``reset`` also
+    drops the path, so nothing writes to the developer's home), and a test that
+    wants persistence calls ``enable_persistence`` itself.
+    """
+    from my_claude_code.providers.google_openai.signature_cache import (
+        GOOGLE_THOUGHT_SIGNATURES,
+    )
+
+    GOOGLE_THOUGHT_SIGNATURES.reset()
+    yield
+    GOOGLE_THOUGHT_SIGNATURES.reset()
+
+
+@pytest.fixture(autouse=True)
 def _reset_seen_settings_files():
     """7.69.7: the settings-save reader remembers which files held settings.
 
