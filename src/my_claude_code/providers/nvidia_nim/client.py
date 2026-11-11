@@ -102,8 +102,15 @@ class NvidiaNimProvider(OpenAIChatProvider):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        wire_notes: dict[str, Any] | None = None,
     ) -> dict:
-        """Internal helper for tests and shared building."""
+        """Internal helper for tests and shared building.
+
+        ``wire_notes`` is accepted and ignored: NIM's build records nothing
+        about its body. The keyword is here so the runner can hand every
+        provider the same mapping without a special case.
+        """
+        del wire_notes
         return build_nim_request_body(
             request,
             self._nim_settings,

@@ -1,5 +1,6 @@
 """Tests for Google AI Studio Gemini (OpenAI-compatible) provider."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +10,7 @@ from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.gemini import GeminiProvider
 from my_claude_code.providers.gemini.quirks import (
     GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
+    GEMINI_THOUGHT_SIGNATURE_SKIPPED,
 )
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import passthrough_rate_limiter, reasoning_for
@@ -294,6 +296,191 @@ def test_build_request_body_adds_current_turn_fallback_signature(
         "google": {"thought_signature": GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR}
     }
     assert "extra_content" not in tool_calls[1]
+
+
+class TestTheSkipValidatorIsCountable:
+    """8.19.0: writing the sentinel records a wire note, counts only.
+
+    The sentinel is an escape hatch, not an implementation: Google validates a
+    ``thoughtSignature`` on the current turn's first tool call, and MCC writes
+    the sentinel whenever it has none to replay. Until this note existed an
+    operator could not tell a working Gemini tool loop from one that was
+    silently bypassing validation.
+
+    The note is on the **wire record**, never in the body, and the sentinel's
+    value is untouched -- ``test_build_request_body_adds_current_turn_fallback_
+    signature`` above still pins the literal.
+    """
+
+    @staticmethod
+    def _no_signature_request():
+        return make_request(
+            system=None,
+            messages=[
+                {"role": "user", "content": "Find files"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "function-call-1",
+                            "name": "Glob",
+                            "input": {"pattern": "*.py"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "function-call-1",
+                            "content": "[]",
+                        }
+                    ],
+                },
+            ],
+        )
+
+    @staticmethod
+    def _signed_request():
+        return make_request(
+            system=None,
+            messages=[
+                {"role": "user", "content": "Find files"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "function-call-1",
+                            "name": "Glob",
+                            "input": {"pattern": "*.py"},
+                            "extra_content": {
+                                "google": {"thought_signature": "sig-from-client"}
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "function-call-1",
+                            "content": "[]",
+                        }
+                    ],
+                },
+            ],
+        )
+
+    def test_a_missing_signature_writes_the_sentinel_and_counts_one(
+        self, gemini_provider
+    ) -> None:
+        req = self._no_signature_request()
+        notes: dict = {}
+        body = gemini_provider._build_request_body(
+            req, reasoning=reasoning_for(req), wire_notes=notes
+        )
+        assert body["messages"][1]["tool_calls"][0]["extra_content"] == {
+            "google": {"thought_signature": GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR}
+        }
+        note = notes[GEMINI_THOUGHT_SIGNATURE_SKIPPED]
+        assert "1 tool call" in note
+        assert GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR not in note
+
+    def test_a_captured_signature_writes_neither(self, gemini_provider) -> None:
+        req = self._signed_request()
+        notes: dict = {}
+        body = gemini_provider._build_request_body(
+            req, reasoning=reasoning_for(req), wire_notes=notes
+        )
+        assert body["messages"][1]["tool_calls"][0]["extra_content"] == {
+            "google": {"thought_signature": "sig-from-client"}
+        }
+        assert GEMINI_THOUGHT_SIGNATURE_SKIPPED not in notes
+
+    def test_a_cached_signature_writes_neither(self, gemini_provider) -> None:
+        """The other way a signature can be present: captured off a previous
+        turn and restored from the cache. It is not a skip."""
+
+        gemini_provider._record_tool_call_extra_content(
+            "function-call-1", {"google": {"thought_signature": "sig-from-cache"}}
+        )
+        # The same history as ``_signed_request`` with the client's own copy of
+        # the signature left off, so only the cache can supply one. Built here
+        # rather than stripped from the signed request: the block is a typed
+        # model and a field it does not declare is not assignable.
+        req = make_request(
+            system=None,
+            messages=[
+                {"role": "user", "content": "Find files"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "function-call-1",
+                            "name": "Glob",
+                            "input": {"pattern": "*.py"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "function-call-1",
+                            "content": "[]",
+                        }
+                    ],
+                },
+            ],
+        )
+        notes: dict = {}
+        body = gemini_provider._build_request_body(
+            req, reasoning=reasoning_for(req), wire_notes=notes
+        )
+        assert body["messages"][1]["tool_calls"][0]["extra_content"] == {
+            "google": {"thought_signature": "sig-from-cache"}
+        }
+        assert GEMINI_THOUGHT_SIGNATURE_SKIPPED not in notes
+
+    def test_the_note_is_never_in_the_body(self, gemini_provider) -> None:
+        req = self._no_signature_request()
+        notes: dict = {}
+        body = gemini_provider._build_request_body(
+            req, reasoning=reasoning_for(req), wire_notes=notes
+        )
+        assert GEMINI_THOUGHT_SIGNATURE_SKIPPED not in json.dumps(body)
+
+    def test_the_note_is_not_a_reasoning_key(self) -> None:
+        """The wire recorder reads any key beginning ``reasoning``/``thinking``
+        as a reasoning *instruction*. A note about a signature must not count
+        as reasoning sent -- the rule ``history_carrier_*`` keeps."""
+
+        from my_claude_code.core.wire_capture import is_reasoning_key
+
+        assert is_reasoning_key(GEMINI_THOUGHT_SIGNATURE_SKIPPED) is False
+
+    def test_the_body_is_unchanged_by_the_note(self, gemini_provider) -> None:
+        """The equality claim: recording the note moves no body byte.
+
+        The same request built twice -- once with nowhere to record, once with
+        a mapping -- and the bodies must be byte-identical. The note is on the
+        record, never on the wire.
+        """
+
+        req = self._no_signature_request()
+        with_notes: dict = {}
+        left = gemini_provider._build_request_body(req, reasoning=reasoning_for(req))
+        right = gemini_provider._build_request_body(
+            req, reasoning=reasoning_for(req), wire_notes=with_notes
+        )
+        assert json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+        assert GEMINI_THOUGHT_SIGNATURE_SKIPPED in with_notes
 
 
 @pytest.mark.asyncio

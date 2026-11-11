@@ -330,6 +330,128 @@ def test_strip_redacted_thinking_when_thinking_on(deepseek_provider):
     assert body["messages"][0] == {"role": "assistant", "content": "out"}
 
 
+class TestRedactedThinkingIsDroppedOnceNotTwice:
+    """8.19.0: one decision, at the module that owns it.
+
+    DeepSeek's own filter used to drop every ``redacted_thinking`` block before
+    the shared converter ran -- and the shared converter
+    (``core/anthropic/conversion.py``'s ``_convert_assistant_message``) already
+    drops it for every Chat host. Two sites, one decision. The arm is gone; the
+    block is still absent from the body, now because the shared converter puts
+    it there.
+
+    The ``thinking`` arm beside it is untouched, and the test below pins that:
+    a fix that removed both would change a body, and this class would fail.
+    """
+
+    @staticmethod
+    def _history(extra_block: dict | None = None) -> list[dict]:
+        content: list[dict] = [{"type": "redacted_thinking", "data": "opaque"}]
+        if extra_block is not None:
+            content.append(extra_block)
+        content.append({"type": "text", "text": "out"})
+        return [{"role": "assistant", "content": content}]
+
+    def test_the_block_is_absent_from_the_body(self, deepseek_provider) -> None:
+        request = MessagesRequest.model_validate(
+            {"model": "m", "messages": self._history()}
+        )
+        body = deepseek_provider._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
+        assert body["messages"][0] == {"role": "assistant", "content": "out"}
+        assert "redacted_thinking" not in json.dumps(body)
+
+    def test_the_body_is_byte_identical_to_the_double_drop(
+        self, deepseek_provider
+    ) -> None:
+        """The equality proof, in one assertion: a history with a carrier
+        produces the body it produced before the arm was removed.
+
+        The expectation is written out rather than captured from a previous
+        run, so it is a statement about the shape and not a snapshot.
+        """
+
+        request = MessagesRequest.model_validate(
+            {"model": "m", "messages": self._history()}
+        )
+        body = deepseek_provider._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
+        assert body["messages"] == [{"role": "assistant", "content": "out"}]
+
+    def test_the_thinking_arm_is_untouched(self, deepseek_provider) -> None:
+        """A ``thinking`` block on a turn with no tool call is still dropped by
+        DeepSeek's own filter, exactly as before. Removing that arm too would
+        let the shared converter replay it as ``reasoning_content``."""
+
+        request = MessagesRequest.model_validate(
+            {
+                "model": "m",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "hidden",
+                                "signature": "s",
+                            },
+                            {"type": "text", "text": "out"},
+                        ],
+                    }
+                ],
+            }
+        )
+        body = deepseek_provider._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
+        assert body["messages"][0] == {"role": "assistant", "content": "out"}
+        assert "hidden" not in json.dumps(body)
+
+    def test_a_carrier_only_turn_matches_every_other_chat_host(
+        self, deepseek_provider
+    ) -> None:
+        """The one shape the corpus does not contain, pinned deliberately.
+
+        An assistant turn whose only block is the carrier used to become
+        ``content: ""`` because DeepSeek's filter emptied the list. With the
+        arm gone the shared converter handles the turn and gives ``" "`` --
+        which is what every other Chat provider already sends for the same
+        shape. The movement is toward the module-level consistency this item
+        exists to create; this test says so, so a future reader does not
+        "fix" it back to a DeepSeek-only rule.
+        """
+
+        from my_claude_code.core.anthropic import ReasoningReplayMode
+        from my_claude_code.providers.openai_chat import (
+            OpenAIChatRequestPolicy,
+            build_openai_chat_request_body,
+        )
+
+        messages = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": [{"type": "redacted_thinking", "data": "opaque"}],
+            },
+            {"role": "user", "content": "next"},
+        ]
+        request = MessagesRequest.model_validate({"model": "m", "messages": messages})
+        body = deepseek_provider._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
+        peer = build_openai_chat_request_body(
+            request,
+            reasoning=reasoning_for(request),
+            policy=OpenAIChatRequestPolicy(
+                provider_name="PEER",
+                reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
+            ),
+        )
+        assert body["messages"][1] == peer["messages"][1]
+
+
 def test_tool_history_with_replayable_thinking_preserves_thinking(deepseek_provider):
     request = MessagesRequest.model_validate(
         {

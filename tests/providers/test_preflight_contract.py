@@ -1,6 +1,7 @@
 """The shared OpenAI-chat provider owns explicit request preflight."""
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,11 @@ class RecordingOpenAIProvider(OpenAIChatProvider):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        wire_notes: dict[str, Any] | None = None,
     ) -> dict:
+        # ``wire_notes`` is part of the hook's contract since 8.19.0; this
+        # double records nothing and only counts the calls.
+        del wire_notes
         self.build_calls.append((request, reasoning))
         return {}
 

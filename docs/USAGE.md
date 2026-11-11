@@ -5009,6 +5009,54 @@ The item is `{"type": "reasoning", "summary": [{"type": "summary_text", "text": 
 
 A save applies to the next request, with no restart.
 
+#### The inbound Responses door reads the blob back
+
+**New in 8.19.0, and it has no setting.** Everything above is about the **outbound** half: MCC asks a Responses host for `encrypted_content`, wraps it in its own envelope, and replays it to the host that minted it. The **inbound** half was missing, and it was the exact mirror of the bug 8.14.3 fixed on the way out: `POST /v1/responses` read a `reasoning` input item's readable text and **threw the blob away**. So a Codex CLI → MCC conversation lost its reasoning at the first turn boundary, and every turn after it started from nothing.
+
+The blob now rides on the converted message as a side channel — `Message.encrypted_reasoning`, one list per assistant turn, each entry the whole `reasoning` item the client sent, `id` and `status` and `summary` included, never a projection. A replay has to hand the host back exactly what it minted, or it is refused.
+
+**Why a side channel and not a `redacted_thinking` block.** The inbound door converts to an **Anthropic** payload. Putting an OpenAI ciphertext into a `redacted_thinking` block's `data` would send it to an Anthropic host, which is a guaranteed 400. A side channel keeps the blob out of every non-Responses wire by construction.
+
+**The field cannot leak, and that is structural rather than a rule someone remembers.** `encrypted_reasoning` is declared `exclude=True` on the model, so **every** `model_dump()` of a message — the serialiser DeepSeek re-validates, the Messages door's own dump, the request snapshot, every dialect's body — cannot carry it. The alternative, stripping it in one function, relies on that function remembering; the field is excluded at the source instead.
+
+**What you see.** Nothing new in the request log. A conversation that never sent an `encrypted_content` item is byte-identical to 8.18.2 on every door, which is every conversation in the log today.
+
+#### DeepSeek no longer drops the carrier twice
+
+**New in 8.19.0, and it has no setting.** DeepSeek's own request filter dropped every `redacted_thinking` block before the shared converter ran — and the shared converter already drops that block for **every** Chat host. Two sites, one decision. Only DeepSeek's arm is gone; the shared converter still drops the block, so **no DeepSeek body moves by a byte**, and the `thinking` arm beside it (and its `replay_tool_reasoning` condition) is untouched.
+
+It matters for what comes next, not for today: the moment the shared converter learns to replay a carrier, a DeepSeek-specific arm would silently keep dropping it and leave one provider worse than every other. One decision, in the module that owns it.
+
+**The one shape that does move, and why it is the right answer.** An assistant turn whose *only* block is a carrier used to become `content: ""`, because DeepSeek's filter emptied the list. With the arm gone the shared converter handles the turn and gives `content: " "` — which is what **every other Chat provider already sends** for the same shape. The change is toward the consistency this release exists to create, not away from it.
+
+#### `count_tokens` counts a carrier as its blob
+
+**New in 8.19.0, and it has no setting.** A `redacted_thinking` block has no text field, so the estimator fell to its `else` branch: it counted `json.dumps(block)` — the blob **plus** a ~10-token JSON wrapper — and logged `Unexpected block type` at DEBUG on **every** call. Measured on a 32,768-character carrier: **23,273** counted against **23,259** for the blob alone.
+
+It now has its own branch beside the `thinking` one, counting the blob's own characters through the same estimator. The wrapper is gone and so is the DEBUG complaint.
+
+**The honest limit: it is still an estimate.** Anthropic bills a `redacted_thinking` block as an opaque blob and publishes no formula. The number feeds the dashboard, the context-headroom arithmetic and the cancelled-request record — never an outbound body — and the LM Studio preflight that reads it is unchanged for every other block type.
+
+#### The Gemini skip-validator is now countable
+
+**New in 8.19.0, and it has no setting.** Google validates a `thoughtSignature` on the current turn's first tool call. MCC captures one off the stream whenever the host sends it, and writes the sentinel `skip_thought_signature_validator` whenever it has none to replay — which is every tool loop that spans a restart. The loop keeps working; until now the operator had no way to see that it had stopped being validated.
+
+A request that writes the sentinel now gains one line in its request detail — `gemini_thought_signature_skipped`, a count, never any content — on **both** Google doors (AI Studio's `gemini` and Vertex's `google_openai`). A turn whose signature was captured records nothing. **No body byte changes.**
+
+#### The Gemini signature cache survives a restart
+
+**New in 8.19.0, and it has no setting.** The captured signatures lived in a 4096-entry in-memory map that died with the process, so a tool loop spanning a restart lost every one of them and fell back to the sentinel. They are now kept in `~/.mcc/google_thought_signatures.json`.
+
+| What | How |
+| --- | --- |
+| **Scope** | per provider **and** per credential. A signature minted under one key is never replayed under another. The credential half is a **hash of the identity, never the token** — a Vertex access token refreshes hourly, and hashing it would refuse every signature captured before a refresh, silently, every hour. |
+| **Ceiling** | 4096 rows across the whole store — the in-memory map's own number — plus 64 credential buckets, so a rotation storm cannot grow the file without bound. |
+| **Eviction** | FIFO on insertion order, exactly what the in-memory map does, so a restart restores the population the process would have held. |
+| **A bad file** | read as "nothing cached yet". A missing, truncated, foreign or unparseable file never raises on a request path; the provider carries on in memory. |
+| **It is a cache** | losing it costs one turn of continuity per in-flight loop and nothing else. |
+
+Every existing Gemini body is byte-identical when the cache is empty, which is every request until a loop captures a signature.
+
 ---
 
 ## 10. Web search

@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -31,6 +32,25 @@ from .tools import (
 _DATA_URL_PREFIX = "data:"
 
 
+@dataclass(slots=True)
+class _PendingReasoning:
+    """What the reasoning items seen so far have left for the next turn.
+
+    Two halves that travel together and are written in different places: the
+    readable ``text`` (``reasoning_content``, since 7.x) and the opaque
+    ``items`` (``encrypted_reasoning``, 8.19.0). One object rather than two
+    parameters because every branch below either consumes both or neither, and
+    two parallel ``str | None`` / ``list | None`` parameters is how one of them
+    gets forgotten at a call site.
+
+    Empty is the default and is what every branch returns after it has
+    consumed the pending state, so "nothing pending" has one spelling.
+    """
+
+    text: str | None = None
+    items: list[dict[str, Any]] = field(default_factory=list)
+
+
 def convert_request_to_anthropic_payload(
     request: OpenAIResponsesRequest,
 ) -> dict[str, Any]:
@@ -41,17 +61,17 @@ def convert_request_to_anthropic_payload(
         system_parts.append(instructions)
 
     messages: list[dict[str, Any]] = []
-    pending_reasoning: str | None = None
+    pending = _PendingReasoning()
     quarantined_function_call_ids: set[str] = set()
     for item in _iter_input_items(request.input):
-        pending_reasoning = _append_input_item(
+        pending = _append_input_item(
             item,
             messages=messages,
             system_parts=system_parts,
-            pending_reasoning=pending_reasoning,
+            pending=pending,
             quarantined_function_call_ids=quarantined_function_call_ids,
         )
-    _append_pending_reasoning(messages, pending_reasoning)
+    _append_pending_reasoning(messages, pending)
 
     if not messages:
         raise ResponsesConversionError("Responses request input must contain a message")
@@ -91,13 +111,13 @@ def _append_input_item(
     *,
     messages: list[dict[str, Any]],
     system_parts: list[str],
-    pending_reasoning: str | None,
+    pending: _PendingReasoning,
     quarantined_function_call_ids: set[str],
-) -> str | None:
+) -> _PendingReasoning:
     if isinstance(item, str):
-        _append_pending_reasoning(messages, pending_reasoning)
+        _append_pending_reasoning(messages, pending)
         messages.append({"role": "user", "content": item})
-        return None
+        return _PendingReasoning()
     if not isinstance(item, dict):
         raise ResponsesConversionError(
             f"Unsupported Responses input item: {type(item).__name__}"
@@ -112,12 +132,13 @@ def _append_input_item(
                 item.get("content", ""),
                 messages,
                 system_parts,
-                reasoning_content=pending_reasoning,
+                reasoning_content=pending.text,
+                encrypted_reasoning=pending.items,
             )
-            return None
-        _append_pending_reasoning(messages, pending_reasoning)
+            return _PendingReasoning()
+        _append_pending_reasoning(messages, pending)
         _append_message_item(role, item.get("content", ""), messages, system_parts)
-        return None
+        return _PendingReasoning()
     if item_type in {"function_call", "custom_tool_call"}:
         namespace = optional_str(item.get("namespace"))
         field_name = f"{item_type}.name"
@@ -131,7 +152,7 @@ def _append_input_item(
             except ResponsesConversionError as exc:
                 quarantined_function_call_ids.add(call_id)
                 _trace_quarantined_function_call(call_id, exc)
-                return pending_reasoning
+                return pending
         tool_use = {
             "type": "tool_use",
             "id": call_id,
@@ -141,17 +162,18 @@ def _append_input_item(
         _append_tool_use_message(
             messages,
             tool_use,
-            reasoning_content=pending_reasoning,
+            reasoning_content=pending.text,
+            encrypted_reasoning=pending.items,
         )
-        return None
+        return _PendingReasoning()
     if item_type in {"function_call_output", "custom_tool_call_output"}:
         call_id = call_id_from_item(item)
         if (
             item_type == "function_call_output"
             and call_id in quarantined_function_call_ids
         ):
-            return pending_reasoning
-        _append_pending_reasoning_before_tool_output(messages, pending_reasoning)
+            return pending
+        _append_pending_reasoning_before_tool_output(messages, pending)
         _append_tool_result_message(
             messages,
             {
@@ -160,17 +182,33 @@ def _append_input_item(
                 "content": _function_call_output_text(item.get("output", "")),
             },
         )
-        return None
+        return _PendingReasoning()
     if item_type == "reasoning":
-        return combine_reasoning(pending_reasoning, reasoning_text_from_item(item))
+        # The text half is what it has always been. The blob half is new
+        # (8.19.0): the whole item, verbatim, when the client echoed an
+        # ``encrypted_content`` back. Keeping the item rather than a
+        # projection is deliberate -- a replay has to hand the host back
+        # exactly what it minted, ``id`` and all, or it is refused.
+        combined = combine_reasoning(pending.text, reasoning_text_from_item(item))
+        items = pending.items
+        if _encrypted_content_of(item) is not None:
+            items = [*items, dict(item)]
+        return _PendingReasoning(text=combined, items=items)
     if item_type in {"input_text", "output_text", "text"}:
-        _append_pending_reasoning(messages, pending_reasoning)
+        _append_pending_reasoning(messages, pending)
         messages.append({"role": "user", "content": _text_from_part(item)})
-        return None
+        return _PendingReasoning()
 
     raise ResponsesConversionError(
         f"Unsupported Responses input item type: {item_type!r}"
     )
+
+
+def _encrypted_content_of(item: Mapping[str, Any]) -> str | None:
+    """The item's ``encrypted_content`` when it is a non-empty string."""
+
+    value = item.get("encrypted_content")
+    return value if isinstance(value, str) and value else None
 
 
 def _trace_quarantined_function_call(
@@ -192,6 +230,7 @@ def _append_message_item(
     system_parts: list[str],
     *,
     reasoning_content: str | None = None,
+    encrypted_reasoning: list[dict[str, Any]] | None = None,
 ) -> None:
     normalized_role = "system" if role == "developer" else role
     if normalized_role == "system":
@@ -209,32 +248,37 @@ def _append_message_item(
     }
     if normalized_role == "assistant" and reasoning_content is not None:
         message["reasoning_content"] = reasoning_content
+    if normalized_role == "assistant" and encrypted_reasoning:
+        message["encrypted_reasoning"] = list(encrypted_reasoning)
     messages.append(message)
 
 
 def _append_pending_reasoning(
-    messages: list[dict[str, Any]], pending_reasoning: str | None
+    messages: list[dict[str, Any]], pending: _PendingReasoning
 ) -> None:
-    if pending_reasoning is not None:
-        messages.append(
-            {
-                "role": "assistant",
-                "content": "",
-                "reasoning_content": pending_reasoning,
-            }
-        )
+    if pending.text is None and not pending.items:
+        return
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": "",
+    }
+    if pending.text is not None:
+        message["reasoning_content"] = pending.text
+    if pending.items:
+        message["encrypted_reasoning"] = list(pending.items)
+    messages.append(message)
 
 
 def _append_pending_reasoning_before_tool_output(
-    messages: list[dict[str, Any]], pending_reasoning: str | None
+    messages: list[dict[str, Any]], pending: _PendingReasoning
 ) -> None:
-    if pending_reasoning is None:
+    if pending.text is None and not pending.items:
         return
     message = _last_assistant_tool_use_message(messages)
     if message is None:
-        _append_pending_reasoning(messages, pending_reasoning)
+        _append_pending_reasoning(messages, pending)
         return
-    _merge_message_reasoning(message, pending_reasoning)
+    _merge_message_reasoning(message, pending)
 
 
 def _append_tool_use_message(
@@ -242,13 +286,16 @@ def _append_tool_use_message(
     tool_use: dict[str, Any],
     *,
     reasoning_content: str | None,
+    encrypted_reasoning: list[dict[str, Any]] | None = None,
 ) -> None:
     message = _last_assistant_tool_use_message(messages)
     if message is None:
         message = {"role": "assistant", "content": []}
         messages.append(message)
     if reasoning_content is not None:
-        _merge_message_reasoning(message, reasoning_content)
+        _merge_message_reasoning(message, _PendingReasoning(text=reasoning_content))
+    if encrypted_reasoning:
+        _merge_message_encrypted_reasoning(message, encrypted_reasoning)
     content = message["content"]
     if isinstance(content, list):
         content.append(tool_use)
@@ -334,10 +381,41 @@ def _last_user_tool_result_message(
     return None
 
 
-def _merge_message_reasoning(message: dict[str, Any], reasoning: str) -> None:
-    existing = message.get("reasoning_content")
-    existing_reasoning = existing if isinstance(existing, str) else None
-    message["reasoning_content"] = combine_reasoning(existing_reasoning, reasoning)
+def _merge_message_reasoning(
+    message: dict[str, Any], pending: _PendingReasoning
+) -> None:
+    """Fold the pending halves onto a message that already exists.
+
+    Both halves are merged, not replaced: a tool turn can receive reasoning
+    from more than one item, and the text half has combined that way since
+    the door existed.
+    """
+
+    if pending.text is not None:
+        existing = message.get("reasoning_content")
+        existing_reasoning = existing if isinstance(existing, str) else None
+        message["reasoning_content"] = combine_reasoning(
+            existing_reasoning, pending.text
+        )
+    if pending.items:
+        _merge_message_encrypted_reasoning(message, pending.items)
+
+
+def _merge_message_encrypted_reasoning(
+    message: dict[str, Any], items: list[dict[str, Any]]
+) -> None:
+    """Append ``items`` to the message's own list, keeping the order they came in.
+
+    Appended rather than replaced: two ``reasoning`` items can precede one
+    assistant turn (a parallel-tool turn emits one per unit of work), and a
+    replacement would silently keep only the last. The list is copied so the
+    caller's pending state cannot be mutated through the message.
+    """
+
+    existing = message.get("encrypted_reasoning")
+    merged = list(existing) if isinstance(existing, list) else []
+    merged.extend(items)
+    message["encrypted_reasoning"] = merged
 
 
 def _iter_input_items(value: Any) -> list[Any]:
