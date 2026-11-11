@@ -40649,9 +40649,46 @@ function buildResponseShape(attempt) {
       Number(reasoning[name] || 0).toLocaleString(),
     );
   });
+  // 8.20.1: what the reply's tool calls looked like -- four facts per call,
+  // present only when the reply carried one. The arguments are never recorded,
+  // so there is nothing here to redact.
+  const toolCalls = shape.tool_calls || {};
+  Object.keys(SHAPE_TOOL_CALL_LABELS).forEach((name) => {
+    if (typeof toolCalls[name] !== "number") return;
+    appendShapeRow(
+      grid,
+      SHAPE_TOOL_CALL_LABELS[name],
+      Number(toolCalls[name]).toLocaleString(),
+    );
+  });
+  const largestCalls = Array.isArray(toolCalls.largest) ? toolCalls.largest : [];
+  largestCalls.forEach((call) => {
+    const entry = call && typeof call === "object" ? call : {};
+    const chars = Number(entry.chars || 0).toLocaleString();
+    const kind = SHAPE_TOOL_CALL_CLASSES[entry.class] || "parsed";
+    appendShapeRow(grid, String(entry.name || "unnamed"), `${chars} chars, ${kind}`);
+  });
   wrap.appendChild(grid);
   return wrap;
 }
+
+const SHAPE_TOOL_CALL_LABELS = {
+  calls: "tool calls",
+  parsed: "tool calls parsed",
+  max_chars: "largest tool call (chars)",
+  over_bound: "tool calls over the bound",
+  unparseable: "tool calls unparseable",
+  not_an_object: "tool calls not an object",
+};
+
+/* The three protocol words a recorded tool call can carry, in the operator's
+ * language. ``null`` is not in here on purpose: a call that parsed is the
+ * ordinary case and reads "parsed". */
+const SHAPE_TOOL_CALL_CLASSES = {
+  over_bound: "over the bound, not parsed",
+  unparseable: "unparseable",
+  not_an_object: "not a JSON object",
+};
 
 const SHAPE_REASONING_LABELS = {
   thinking_blocks: "thinking blocks",

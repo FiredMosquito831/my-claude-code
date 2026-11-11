@@ -6100,6 +6100,23 @@ An attempt with a single try shows no ladder: nothing was hidden, so nothing is 
 
 > **One gotcha worth knowing.** `output_widened_from` is deliberately a plain per-attempt parameter and *not* a reasoning adaptation kind, so widening never badges and never appears in the adaptation severity table. Relatedly, the request-level adaptation line can still name one model while a fallback actually answered — read the per-attempt panes when the chain has more than one entry.
 
+**10. Read the tool calls the reply carried (8.20.1).** A tool call whose arguments do not parse, or run away to hundreds of kilobytes, used to leave no trace at all: MCC forwarded the bytes, your client threw its own validation error, and the row said only how many calls there were. The shape pane now carries **four facts per call** — the tool's name, how many characters of arguments it carried, whether those arguments parsed, and a three-word class — plus the tallies:
+
+```
+tool calls                 2
+tool calls parsed          1
+largest tool call (chars)  483,120
+tool calls over the bound  1
+tool calls unparseable     0
+tool calls not an object   0
+ToolSearch                 483,120 chars, over the bound, not parsed
+Read                       228 chars, parsed
+```
+
+The class is `unparseable` (the arguments are not JSON), `not an object` (they are JSON but not an object, which your client's `input` must be), `over_bound` (larger than `REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS`, so they were never parsed), or nothing at all (they parsed). **The arguments themselves are never stored, never sliced and never hashed** — the record holds a length, a yes/no, and a class, which is what makes a client-side error explainable without copying the model's output into your log. Over the bound the row says *not measured* rather than *failed*, because nobody looked: NULL is not zero.
+
+It records; it never alters. A call of any size still reaches your client byte for byte, and no retry, fallback or body changes. The bound ships at **131,072 characters** — above the largest of 400,000 real tool calls measured on this machine (116,451) and below the smallest degenerate one (332,121) — it is on the **Request log storage** card as `REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS`, and `0` turns it off. A stream that dies *inside* a tool call names the tool and how far its arguments got, under `truncated_after_commit.incomplete_tool_call`.
+
 ### Requests in flight
 
 A request reaches the Requests table only when it **finishes**: its row is written once, at the end, so

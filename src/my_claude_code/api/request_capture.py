@@ -95,6 +95,7 @@ from my_claude_code.core.upstream_ladder import (
 )
 from my_claude_code.core.waiting_clock import install_waiting_clock
 from my_claude_code.core.wire_capture import (
+    DEFAULT_TOOL_ARGUMENT_MAX_CHARS,
     DEFAULT_WIRE_BODY_MAX_CHARS,
     WireRequest,
     install_wire_trace,
@@ -198,6 +199,7 @@ class RequestCapture:
         images: tuple[ImageInput, ...] = (),
         capture_images_pixels: int = 0,
         wire_body_max_chars: int = DEFAULT_WIRE_BODY_MAX_CHARS,
+        tool_argument_max_chars: int = DEFAULT_TOOL_ARGUMENT_MAX_CHARS,
         ladder_body_max_chars: int = DEFAULT_LADDER_BODY_MAX_CHARS,
         headers: dict[str, str] | None = None,
         harness: str | None = None,
@@ -365,7 +367,13 @@ class RequestCapture:
         # and the tool count off the *inbound* request here -- which is what
         # ``params`` below still does, deliberately, as the client's ask --
         # reported the client's numbers as if they were the wire's.
-        self._wire = install_wire_trace(wire_body_max_chars) if self.enabled else None
+        # The tool-call bound rides on the same trace (8.20.1): the reply tally
+        # is started from it, and ``core`` may not import ``config``.
+        self._wire = (
+            install_wire_trace(wire_body_max_chars, tool_argument_max_chars)
+            if self.enabled
+            else None
+        )
         # Every upstream try behind each attempt arrives the same way, from the
         # one retry frame every provider commits through. Without it an attempt
         # row carried one status however many the provider had actually seen.
@@ -1871,6 +1879,13 @@ def build_capture(
                 settings,
                 "request_log_wire_body_max_chars",
                 DEFAULT_WIRE_BODY_MAX_CHARS,
+            )
+        ),
+        tool_argument_max_chars=int(
+            getattr(
+                settings,
+                "request_log_tool_argument_max_chars",
+                DEFAULT_TOOL_ARGUMENT_MAX_CHARS,
             )
         ),
         ladder_body_max_chars=int(

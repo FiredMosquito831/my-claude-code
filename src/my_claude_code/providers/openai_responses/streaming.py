@@ -855,6 +855,13 @@ def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:
     (encrypted content, no summary or reasoning text), ``summary_parts`` and
     ``summary_parts_with_text``, and the ``reasoning_tokens`` the final usage
     reports. Counts only.
+
+    Since 8.20.1 a finished ``function_call`` item is measured too -- its
+    name, how many characters of arguments it carried, whether they parsed and
+    a three-word class -- because a call whose arguments fail to parse or run
+    away left no trace anywhere. Both Responses callers (the ChatGPT OAuth
+    door and the shared transport) feed this one function, so one edit covers
+    both. The arguments themselves are never kept.
     """
     if shape is None or not isinstance(event, Mapping):
         return
@@ -874,6 +881,8 @@ def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:
         item = event.get("item")
         if isinstance(item, Mapping) and item.get("type") == "reasoning":
             _note_reasoning_item(shape, item)
+        elif isinstance(item, Mapping) and item.get("type") == "function_call":
+            _note_function_call(shape, item)
         return
     if kind in ("response.completed", "response.incomplete", "response.failed"):
         response = event.get("response")
@@ -904,6 +913,22 @@ def _part_texts(parts: Any) -> list[str]:
         for part in parts
         if isinstance(part, Mapping)
     ]
+
+
+def _note_function_call(shape: ResponseShape, item: Mapping[str, Any]) -> None:
+    """Measure one finished ``function_call`` item, storing none of it.
+
+    ``response.output_item.done`` is the frame that carries the call's complete
+    ``arguments`` string -- the same value the converter assembles for the
+    client -- so the measurement is taken here rather than from the deltas.
+    A call whose item carries no argument string at all is not measured: there
+    is nothing to count, and "not measured" is not "zero characters".
+    """
+    name = item.get("name")
+    arguments = item.get("arguments")
+    if not isinstance(arguments, str):
+        return
+    shape.note_tool_call(name if isinstance(name, str) else "", arguments)
 
 
 def _note_reasoning_item(shape: ResponseShape, item: Mapping[str, Any]) -> None:

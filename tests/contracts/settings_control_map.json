@@ -1744,6 +1744,10 @@
       "control": "field-REQUEST_LOG_TEXT_MAX_CHARS",
       "page": "requests"
     },
+    "REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS": {
+      "control": "field-REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS",
+      "page": "requests"
+    },
     "REQUEST_LOG_WIRE_BODY_MAX_CHARS": {
       "control": "field-REQUEST_LOG_WIRE_BODY_MAX_CHARS",
       "page": "requests"

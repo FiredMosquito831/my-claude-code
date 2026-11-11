@@ -117,6 +117,13 @@ def _note_frame_shape(
     provider kept the text), ``redacted_thinking`` blocks, and the
     ``output_tokens_details.thinking_tokens`` the final usage reports, which
     is also handed to the request's reported-usage collector.
+
+    Since 8.20.1 a ``tool_use`` block's argument fragments are accumulated as
+    they arrive and measured once at ``content_block_stop``: the tool's name,
+    how many characters its arguments carried, whether they parsed and a
+    three-word class. The fragments are held only for the life of the block and
+    are never stored. This is the tally only -- the frames relayed to the
+    client are untouched.
     """
     if (
         event_name == "message_delta"
@@ -161,6 +168,13 @@ def _note_frame_shape(
         block = shape.open_thinking.get(_block_index(payload))
         if block is not None:
             block[0 if name == "thinking" else 1] += size
+    elif name == "tool_calls" and isinstance(text, str):
+        # 8.20.1: the fragments of one tool call's arguments, held only until
+        # its ``content_block_stop`` so the tally can say whether they parsed.
+        # Never stored; the block's name is element zero.
+        carried = shape.open_tool_calls.get(_block_index(payload))
+        if carried is not None:
+            carried.append(text)
 
 
 def _block_index(payload: Mapping[Any, Any]) -> int:
@@ -183,10 +197,26 @@ def _note_block_start(shape: ResponseShape, payload: Mapping[Any, Any]) -> None:
         ]
     elif kind == "redacted_thinking":
         shape.count_reasoning("redacted_thinking_blocks")
+    elif kind == "tool_use":
+        # The protocol opens a tool call with ``input: {}`` and streams the
+        # arguments as ``input_json_delta`` fragments. A start frame that
+        # already carries a populated ``input`` therefore handed the arguments
+        # over in a form this tally never sees, so the call is left unmeasured
+        # rather than recorded as an empty string that "failed to parse".
+        eager = block.get("input")
+        if not (isinstance(eager, Mapping) and eager):
+            name = block.get("name")
+            shape.open_tool_calls[_block_index(payload)] = [
+                name if isinstance(name, str) else ""
+            ]
 
 
 def _note_block_stop(shape: ResponseShape, payload: Mapping[Any, Any]) -> None:
-    block = shape.open_thinking.pop(_block_index(payload), None)
+    index = _block_index(payload)
+    carried = shape.open_tool_calls.pop(index, None)
+    if carried is not None:
+        shape.note_tool_call(carried[0], "".join(carried[1:]))
+    block = shape.open_thinking.pop(index, None)
     if block is None:
         return
     thinking_chars, signature_chars = block

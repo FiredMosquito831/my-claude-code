@@ -1468,3 +1468,49 @@ def test_the_structured_reasoning_setting_reaches_the_chat_hook(
     assert ("redacted_thinking" in "".join(events)) is expected
     # The readable text reaches the client exactly once either way.
     assert "plan" in "".join(events)
+
+
+def test_the_tool_argument_bound_reaches_the_reply_tally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """8.20.1's REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS, from ``Settings`` to the tally.
+
+    The bound is read once per request and rides the wire trace into every
+    reply tally started under it -- so a dashboard save reaches the next
+    request with no restart, and ``core`` still imports no ``config``. The
+    observable is the class a call of a fixed size is given: over the bound
+    with a small one, ordinary with a large one.
+    """
+
+    from my_claude_code.api import request_capture as request_capture_module
+    from my_claude_code.core.anthropic.models import Message, MessagesRequest
+    from my_claude_code.core.wire_capture import start_response_shape
+
+    # The store is the only thing standing between this test and a database;
+    # ``enabled`` is "a store was resolved", so a stand-in is enough.
+    monkeypatch.setattr(
+        request_capture_module, "store_from_settings", lambda settings: object()
+    )
+    # ``Settings(field=…)`` kwargs are silently dropped behind the alias, so
+    # the env name is what this builds from (III.3).
+    settings = Settings.model_validate({"REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS": "32"})
+    capture = request_capture_module.build_capture(
+        settings,
+        MessagesRequest(
+            model="m",
+            max_tokens=16,
+            messages=[Message(role="user", content="hi")],
+        ),
+        request_id="req-bound",
+        endpoint="/v1/messages",
+        protocol="anthropic",
+    )
+    assert capture.enabled
+
+    shape = start_response_shape()
+    assert shape is not None
+    shape.note_tool_call("Bash", "x" * 33)
+
+    entry = shape.payload()["tool_calls"]["largest"][0]
+    assert entry["class"] == "over_bound"
+    assert entry["parsed"] is None

@@ -45,16 +45,24 @@ class StreamTruncation:
     reason: str
     stop_reason_sent: str | None
     ended_cleanly: bool
+    #: Which tool call the stream died inside, and how far its arguments got
+    #: (8.20.1): ``{"name": "Bash", "chars": 1841}``. Written only when a tool
+    #: call was actually left incomplete, so every existing payload -- a clean
+    #: ending, or a stream that died between blocks -- is byte-identical.
+    incomplete_tool_call: dict[str, object] | None = None
 
     def as_params(self) -> dict[str, object]:
         """The request-log payload for ``params.truncated_after_commit``."""
-        return {
+        params: dict[str, object] = {
             "chars": self.chars,
             "blocks": self.blocks,
             "reason": self.reason,
             "stop_reason_sent": self.stop_reason_sent,
             "ended_cleanly": self.ended_cleanly,
         }
+        if self.incomplete_tool_call is not None:
+            params["incomplete_tool_call"] = self.incomplete_tool_call
+        return params
 
 
 @dataclass(slots=True)
@@ -75,6 +83,10 @@ class CommittedStreamTracker:
     _buffer: str = ""
     _open_blocks: dict[int, str] = field(default_factory=dict)
     _tool_json: dict[int, list[str]] = field(default_factory=dict)
+    #: The name each open tool block announced, so a stream that dies inside
+    #: one can say *which* tool it died in (8.20.1). One extra entry per open
+    #: block; nothing reads it back while the block is healthy.
+    _tool_names: dict[int, str] = field(default_factory=dict)
     _output_parts: list[str] = field(default_factory=list)
     #: Kept apart from ``_output_parts`` because a continuation may only be
     #: prefilled with what the reader can actually read back to a model: text.
@@ -112,6 +124,7 @@ class CommittedStreamTracker:
             if isinstance(index, int):
                 self._open_blocks.pop(index, None)
                 self._tool_json.pop(index, None)
+                self._tool_names.pop(index, None)
         elif name == "message_delta":
             self._observe_message_delta(event.data)
 
@@ -127,6 +140,12 @@ class CommittedStreamTracker:
         if not isinstance(index, int) or not isinstance(block, dict):
             return
         self._open_blocks[index] = str(block.get("type", ""))
+        # The name rides beside the type so a stream that dies inside this
+        # block can name the tool it died in (8.20.1). No behaviour depends on
+        # it while the block is healthy.
+        name = block.get("name")
+        if isinstance(name, str) and name:
+            self._tool_names[index] = name
         self._max_index = max(self._max_index, index)
         self.blocks += 1
         # A ``text`` block may carry its whole body on the start frame; that
@@ -196,17 +215,26 @@ class CommittedStreamTracker:
         died. Arguments that *did* finish arriving are closable -- the block is
         complete, only the message around it is not.
         """
+        return self._first_incomplete_tool_index() is not None
+
+    def _first_incomplete_tool_index(self) -> int | None:
+        """The first open ``tool_use`` block whose arguments never parsed.
+
+        One predicate, two readers: :attr:`incomplete_tool_use` decides whether
+        the stream can be closed at all, and :meth:`abandoned` names the tool
+        the record is about. Sharing it is what keeps the two from drifting.
+        """
         for index, block_type in self._open_blocks.items():
             if block_type != "tool_use":
                 continue
             emitted = "".join(self._tool_json.get(index, []))
             if not emitted.strip():
-                return True
+                return index
             try:
                 json.loads(emitted)
             except json.JSONDecodeError:
-                return True
-        return False
+                return index
+        return None
 
     @property
     def closable(self) -> bool:
@@ -272,7 +300,20 @@ class CommittedStreamTracker:
         counters still go to the request log, because "the turn died 900
         characters in, inside a tool call" is the sentence the reader needs and
         the exception alone cannot say it.
+
+        Since 8.20.1 the record also names the tool the turn died in and how
+        many characters of its arguments had arrived -- the two facts that turn
+        that sentence into one an operator can act on. Written only when a tool
+        call really was left incomplete, so every other truncation payload is
+        byte-identical.
         """
+        index = self._first_incomplete_tool_index()
+        incomplete: dict[str, object] | None = None
+        if index is not None:
+            incomplete = {
+                "name": self._tool_names.get(index, ""),
+                "chars": len("".join(self._tool_json.get(index, []))),
+            }
         return StreamTruncation(
             frames=(),
             chars=self.chars,
@@ -280,6 +321,7 @@ class CommittedStreamTracker:
             reason=reason,
             stop_reason_sent=None,
             ended_cleanly=False,
+            incomplete_tool_call=incomplete,
         )
 
     @property

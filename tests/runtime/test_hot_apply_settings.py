@@ -188,6 +188,11 @@ CAPTURE_FIELDS: dict[str, tuple[str, str, object]] = {
     "REQUEST_LOG_CAPTURE_IMAGES": ("false", "capture_images_pixels", 0),
     "REQUEST_LOG_IMAGE_MAX_PIXELS": ("256", "capture_images_pixels", 256),
     "REQUEST_LOG_WIRE_BODY_MAX_CHARS": ("4000", "wire_body_max_chars", 4000),
+    "REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS": (
+        "65536",
+        "tool_argument_max_chars",
+        65536,
+    ),
     "REQUEST_LOG_LADDER_BODY_MAX_CHARS": ("400", "ladder_body_max_chars", 400),
 }
 
@@ -405,11 +410,12 @@ def test_the_restart_list_is_exactly_the_fields_that_physically_need_one() -> No
 
 
 def test_every_hot_field_has_a_proof_here() -> None:
-    """119 fields proved hot; each is in exactly one proof table above.
+    """120 fields proved hot; each is in exactly one proof table above.
 
     116 made hot in 7.48.0, plus 7.94.0's PROXY_KEEPALIVE_SECONDS, plus
     7.109.0's generated INFERHUB_API_KEY_ROTATION, plus 8.12.0's generated
-    MISTRAL_VIBE_KEY_ROTATION.
+    MISTRAL_VIBE_KEY_ROTATION, plus 8.20.1's
+    REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS.
 
     ``ROTATION_KEYS`` is derived from ``PROVIDER_CATALOG``, so a new provider
     moves both counts by one. That is the additive registration, not a
@@ -421,7 +427,7 @@ def test_every_hot_field_has_a_proof_here() -> None:
     for key in HOT_KEYS:
         assert key in FIELD_BY_KEY, key
         assert FIELD_BY_KEY[key].restart_required is False, key
-    assert len(HOT_KEYS) == 119
+    assert len(HOT_KEYS) == 120
     assert len(ROTATION_KEYS) == 54
     for key in HOT_KEYS:
         assert "Requires restart" not in FIELD_BY_KEY[key].description, key

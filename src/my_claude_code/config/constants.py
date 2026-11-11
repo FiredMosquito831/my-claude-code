@@ -957,6 +957,15 @@ REQUEST_LOG_TEXT_MAX_CHARS_DEFAULT = 10_000_000
 # list is not. Mirrors ``core.wire_capture.DEFAULT_WIRE_BODY_MAX_CHARS``,
 # which cannot be imported here because ``core`` may not import ``config``.
 REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT = 8_000
+# The largest tool call's arguments, in characters, that the reply tally treats
+# as ordinary. Measured over 400,000 real ``tool_use`` blocks from 2,233
+# transcripts: p99.99 = 46,162, max = 116,451, none above 131,072 -- and the
+# smallest degenerate call measured on this machine carried 332,121. It bounds
+# nothing the client sees: no call is truncated, refused or re-sent, and above
+# the bound the arguments are not even parsed. 0 disables the bound. Mirrors
+# ``core.wire_capture.DEFAULT_TOOL_ARGUMENT_MAX_CHARS``, which cannot be
+# imported here because ``core`` may not import ``config``.
+REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS_DEFAULT = 131_072
 # How much of each upstream error body the retry ladder keeps, per try. Small
 # on purpose: a ladder is bounded evidence, not a log. Mirrors
 # ``core.upstream_ladder.DEFAULT_LADDER_BODY_MAX_CHARS``, which cannot be

@@ -7911,6 +7911,46 @@ const requestDetail = {
       detailAttempt({ wire_body: { model: "m" }, reasoning_emitted: 0 }),
     ],
   }),
+  // 8.20.1: a reply that carried two tool calls, one of them the degenerate
+  // shape this release exists for -- 483,120 characters of arguments, never
+  // parsed. The pane names the tool; it never shows an argument.
+  responseShapeToolCalls: driveDetail({
+    reasoning_adaptation: null,
+    reasoning_adaptation_kind: null,
+    route_attempts: [
+      detailAttempt({
+        wire_body: { model: "glm-5.3-flash" },
+        reasoning_emitted: 0,
+        params: {
+          wire: { model: "glm-5.3-flash" },
+          response_shape: {
+            fields: { content: { deltas: 2, chars: 40 } },
+            chunks: 6,
+            finish_reason: "tool_use",
+            usage: true,
+            usage_keys: ["input_tokens", "output_tokens"],
+            tool_calls: {
+              calls: 2,
+              parsed: 1,
+              max_chars: 483120,
+              over_bound: 1,
+              unparseable: 0,
+              not_an_object: 0,
+              largest: [
+                {
+                  name: "ToolSearch",
+                  chars: 483120,
+                  parsed: null,
+                  class: "over_bound",
+                },
+                { name: "Read", chars: 228, parsed: true, class: null },
+              ],
+            },
+          },
+        },
+      }),
+    ],
+  }),
   degraded: driveDetail({
     reasoning_adaptation: null,
     reasoning_adaptation_kind: null,
