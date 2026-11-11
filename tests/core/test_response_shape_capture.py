@@ -255,6 +255,29 @@ def test_the_tool_call_tally_stores_no_text_at_all() -> None:
     assert arguments not in repr(shape)
 
 
+def test_the_tool_call_tally_participates_in_the_existing_cap() -> None:
+    """Rule 5, second half: no second degradation mechanism was added.
+
+    Forty calls with maximal names, on top of a payload that already overruns
+    the cap, still lands under ``RESPONSE_SHAPE_MAX_CHARS`` through the
+    existing ``_degraded`` path -- and the tally keeps its own bound of four.
+    """
+    shape = _shape_with_tool_calls(
+        *((f"tool_{index}_" + "n" * 200, "x" * 200_000) for index in range(40))
+    )
+    shape.note_usage({f"key_{index}" * 8: 1 for index in range(24)})
+    for index in range(40):
+        shape.note_field(f"field_{index}", index)
+
+    payload = shape.payload()
+
+    assert len(json.dumps(payload)) <= RESPONSE_SHAPE_MAX_CHARS
+    assert payload["_degraded"] is True
+    assert payload["tool_calls"]["calls"] == 40
+    assert len(payload["tool_calls"]["largest"]) == 4
+    assert all(len(call["name"]) <= 128 for call in payload["tool_calls"]["largest"])
+
+
 def test_a_reply_with_no_tool_call_carries_no_tool_calls_key() -> None:
     """Absent when not measured -- the rule ``shape.reasoning`` already keeps."""
     install_wire_trace()
