@@ -6,6 +6,12 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from my_claude_code.core.carrier_surface import (
+    GEMINI_THOUGHT_PART,
+    GEMINI_THOUGHT_SIGNATURE,
+    note,
+)
+
 from .errors import GeminiConversionError
 from .models import (
     GeminiContent,
@@ -41,9 +47,15 @@ class GeminiConversion:
     ``googleSearch`` and gets no search has to be able to find out why, and the
     only place that can say so is the request that dropped it -- so the handler
     traces this list and the request log carries the trace.
+
+    ``carrier_surface`` is the sibling count (8.20.0): every replayed thought
+    part and every ``thoughtSignature`` this door cannot carry forward, by
+    cell. Counts only, never content, and empty for a request that carried
+    neither -- so a row that dropped nothing records exactly the ``params`` it
+    always did.
     """
 
-    __slots__ = ("dropped", "include_thoughts", "payload")
+    __slots__ = ("carrier_surface", "dropped", "include_thoughts", "payload")
 
     def __init__(
         self,
@@ -51,6 +63,7 @@ class GeminiConversion:
         *,
         dropped: list[str],
         include_thoughts: bool,
+        carrier_surface: dict[str, int] | None = None,
     ) -> None:
         self.payload = payload
         self.dropped = dropped
@@ -59,6 +72,8 @@ class GeminiConversion:
         #: and a client that did not ask must not be sent thoughts it will
         #: render as ordinary answer text.
         self.include_thoughts = include_thoughts
+        #: The carrier-surface cells this request dropped, or ``{}``.
+        self.carrier_surface = carrier_surface if carrier_surface is not None else {}
 
 
 def convert_request_to_anthropic_payload(
@@ -77,11 +92,12 @@ def convert_request_to_anthropic_payload(
         for field in IGNORED_REQUEST_FIELDS
         if getattr(request, field, None) is not None
     ]
+    carrier_surface: dict[str, int] = {}
 
     generation = request.generation_config
     _reject_multiple_candidates(generation)
 
-    messages = _convert_contents(request.content_list)
+    messages = _convert_contents(request.content_list, carrier_surface)
     if not messages:
         raise GeminiConversionError(
             "contents must contain at least one user or model turn",
@@ -116,7 +132,12 @@ def convert_request_to_anthropic_payload(
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
 
-    return GeminiConversion(payload, dropped=dropped, include_thoughts=include_thoughts)
+    return GeminiConversion(
+        payload,
+        dropped=dropped,
+        include_thoughts=include_thoughts,
+        carrier_surface=carrier_surface,
+    )
 
 
 def _required_model(value: str) -> str:
@@ -138,7 +159,9 @@ def _reject_multiple_candidates(generation: GeminiGenerationConfig | None) -> No
         )
 
 
-def _convert_contents(contents: list[GeminiContent]) -> list[dict[str, Any]]:
+def _convert_contents(
+    contents: list[GeminiContent], carrier_surface: dict[str, int]
+) -> list[dict[str, Any]]:
     """Convert ``contents`` into Anthropic messages.
 
     The ``functionCall`` id map exists because Gemini's function-call parts
@@ -148,6 +171,9 @@ def _convert_contents(contents: list[GeminiContent]) -> list[dict[str, Any]]:
     ``functionResponse`` for ``read_file`` is answered against the most recent
     unanswered ``read_file`` call, which is exactly the pairing Gemini's own
     ordering implies.
+
+    ``carrier_surface`` receives the two ingress cells (8.20.0), counted at the
+    very place that drops them so the count and the conversion cannot disagree.
     """
 
     messages: list[dict[str, Any]] = []
@@ -170,6 +196,7 @@ def _convert_contents(contents: list[GeminiContent]) -> list[dict[str, Any]]:
                 position=position,
                 call_ids=call_ids,
                 counter=counter,
+                carrier_surface=carrier_surface,
             )
             if block is None:
                 continue
@@ -216,15 +243,25 @@ def _convert_part(
     position: int,
     call_ids: dict[str, str],
     counter: int,
+    carrier_surface: dict[str, int],
 ) -> tuple[dict[str, Any] | None, bool]:
     """Return ``(block, is_tool_result)`` for one Gemini part."""
+
+    # 8.20.0: a ``thoughtSignature`` is read nowhere on this door -- not on a
+    # thought part, not on a tool call. Counted on every part, before any
+    # branch, because the drop is the same drop wherever the client put it.
+    if _has_thought_signature(part):
+        note(carrier_surface, GEMINI_THOUGHT_SIGNATURE)
 
     if "text" in part:
         if part.get("thought") is True:
             # A thought echoed back from a previous turn. Anthropic requires a
             # signature on a ``thinking`` block and rejects one without it, so
             # replaying it would fail the whole request; dropping it loses
-            # nothing the model cannot re-derive.
+            # nothing the model cannot re-derive. Counted (8.20.0) because the
+            # drop is otherwise invisible, and it is exactly the cell a Gemini
+            # carrier would have to close.
+            note(carrier_surface, GEMINI_THOUGHT_PART)
             return None, False
         text = part.get("text")
         if not isinstance(text, str):
@@ -259,6 +296,23 @@ def _convert_part(
         "fileData, functionCall or functionResponse key.",
         field="contents",
     )
+
+
+def _has_thought_signature(part: Mapping[str, Any]) -> bool:
+    """Whether a replayed part carries Gemini's own opaque signature field.
+
+    Both spellings are accepted, for the reason every other part key here is
+    read through :func:`_mapping` with two names: the wire is ``thoughtSignature``
+    and the Python SDK's model spells it ``thought_signature``. A non-string or
+    empty value is not a signature and is not counted -- an operator reading the
+    note must not be told a carrier was dropped when the client sent ``null``.
+    """
+
+    for key in ("thoughtSignature", "thought_signature"):
+        value = part.get(key)
+        if isinstance(value, str) and value:
+            return True
+    return False
 
 
 def _mapping(part: Mapping[str, Any], *keys: str) -> Mapping[str, Any] | None:

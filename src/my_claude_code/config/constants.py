@@ -1252,6 +1252,35 @@ RESPONSES_CARRIER_REPLAY_DEFAULT = True
 # request per (provider, model).
 RESPONSES_PLAINTEXT_REPLAY_DEFAULT = True
 
+# Whether the response direction applies the *wider* reasoning-detail rules on
+# a Chat host that declares `structured_reasoning_details` (8.20.0).
+# `CHAT_STRUCTURED_REASONING`.
+#
+# Two different things, two different homes (IV.6 -- scope is declared data):
+#
+# * `OpenAIChatProfile.structured_reasoning_details` is per-host data. It says
+#   "this host returns structured `reasoning_details` and they must be
+#   surfaced". It was set on `cline` and `zenmux` and read by nothing until
+#   8.20.0; it is now read, and `openrouter_gateway_profile` declares it too,
+#   which reaches `open_router`, `nous_portal` and `kilo` in one line.
+# * This setting is the operator's. It says "run the wider rules", and it is
+#   the one IV.7's opt-in rule applies to.
+#
+# The wider rules are the three the dead `StructuredReasoningStream` carried and
+# the live hook did not: a detail carrying a `signature` is preserved as a
+# `redacted_thinking` block instead of being flattened to text; a detail with
+# no text and no marker is preserved instead of vanishing; a `summary` detail
+# that also carries text emits both.
+#
+# **Off by default**, by the user's Q7 decision ("both new settings OFF"). Off
+# is v8.19.0 byte for byte: the OpenRouter-dialect gateways keep the narrow
+# rules they have always run, and every profile that declares nothing keeps
+# producing no events at all. Turning it off is therefore never a regression,
+# which is why this gate selects wide-versus-narrow rather than
+# run-versus-not -- a gate that switched the gateways' existing behaviour off
+# would remove output the client receives today.
+CHAT_STRUCTURED_REASONING_DEFAULT = False
+
 # The longest edge, in pixels, an outbound image may have. The default is the
 # number Anthropic itself resizes to and the number Claude Code ships
 # (`maxTargetPx: 1568`, `maxTargetTokens: 1568`); combined with the destination

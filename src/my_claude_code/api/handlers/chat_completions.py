@@ -33,6 +33,7 @@ from my_claude_code.core.anthropic import (
     MessagesRequest,
     aggregate_anthropic_sse_to_message,
 )
+from my_claude_code.core.carrier_surface import CHAT_REDACTED_THINKING
 from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
@@ -110,7 +111,15 @@ class ChatCompletionsHandler:
 
         capture: RequestCapture | None = None
         try:
-            anthropic_payload = self._chat_adapter.to_anthropic_payload(request_data)
+            # 8.20.0: what this door's ingress drops, by cell. The opaque
+            # ``reasoning_details`` a client sends has no field to reach an
+            # upstream in, and until now it vanished without a count -- Q1's
+            # answer was "count instead of build", and a count that cannot say
+            # which cell is not an addition.
+            carrier_surface: dict[str, int] = {}
+            anthropic_payload = self._chat_adapter.to_anthropic_payload(
+                request_data, carrier_surface=carrier_surface
+            )
             chat_request = MessagesRequest(**anthropic_payload)
             stamp_prompt_cache_ask(self._settings, chat_request)
             capture = build_capture(
@@ -121,6 +130,12 @@ class ChatCompletionsHandler:
                 protocol="openai_chat",
                 headers=headers,
                 stream=wants_stream,
+                carrier_surface=carrier_surface,
+                # The egress half of cell 9: this door's assembler has no frame
+                # for a ``redacted_thinking`` block, so every one the upstream
+                # produced is a block the client was never handed -- and the
+                # opaque blob it would have echoed back never existed.
+                carrier_surface_egress=frozenset({CHAT_REDACTED_THINKING}),
             )
             require_non_empty_messages(chat_request.messages)
             plan = self._model_router.resolve_messages_plan(

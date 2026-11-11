@@ -29,9 +29,14 @@ class OpenAIChatCompletionsAdapter:
         return new_chat_completion_id()
 
     def to_anthropic_payload(
-        self, request: OpenAIChatCompletionRequest
+        self,
+        request: OpenAIChatCompletionRequest,
+        *,
+        carrier_surface: dict[str, int] | None = None,
     ) -> dict[str, Any]:
-        return convert_request_to_anthropic_payload(request)
+        return convert_request_to_anthropic_payload(
+            request, carrier_surface=carrier_surface
+        )
 
     def iter_sse_from_anthropic(
         self,

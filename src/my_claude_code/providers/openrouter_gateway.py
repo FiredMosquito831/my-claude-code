@@ -10,13 +10,12 @@ gateway's package (see the architecture contract tests).
 """
 
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.core.anthropic import ReasoningReplayMode
-from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.reasoning import ReasoningEffort
 from my_claude_code.providers.base import ProviderConfig
@@ -53,6 +52,14 @@ def openrouter_gateway_profile(provider_name: str) -> OpenAIChatProfile:
             reasoning_details_source=assistant_reasoning_details,
         ),
         ReasoningObject(tuple((effort, effort.value) for effort in ReasoningEffort)),
+        # 8.20.0: the declaration stops being write-only. Every host on this
+        # profile returns structured ``reasoning_details`` and replays them, so
+        # the response direction must surface them -- one line, and it reaches
+        # ``open_router``, ``nous_portal`` (a subclass) and ``kilo`` together.
+        # The *wider* rules are the operator gate's call
+        # (``CHAT_STRUCTURED_REASONING``); this declaration decides only
+        # whether this host has anything to surface at all.
+        structured_reasoning_details=True,
     )
 
 
@@ -87,14 +94,6 @@ class OpenRouterGatewayProvider(OpenAIChatProvider):
         return extract_openrouter_tool_model_infos(
             payload, provider_name=self._provider_name
         )
-
-    def _handle_extra_reasoning(
-        self, delta: Any, ledger: AnthropicStreamLedger, *, output_reasoning: bool
-    ) -> Iterator[str]:
-        """Map gateway reasoning details onto Anthropic thinking blocks."""
-        if not output_reasoning:
-            return iter(())
-        return _iter_reasoning_detail_events(delta, ledger)
 
 
 def assistant_reasoning_details(messages: Any) -> dict[int, list[dict[str, Any]]]:
@@ -153,56 +152,6 @@ def _redacted_reasoning_details(content: Any) -> list[dict[str, Any]]:
         else:
             details.append({"type": "reasoning.encrypted", "data": data})
     return details
-
-
-def _iter_reasoning_detail_events(
-    delta: Any, ledger: AnthropicStreamLedger
-) -> Iterator[str]:
-    details = _field(delta, "reasoning_details")
-    if details is None:
-        extra = _field(delta, "model_extra")
-        if isinstance(extra, Mapping):
-            details = extra.get("reasoning_details")
-    if not _is_sequence(details):
-        return
-
-    native_reasoning = _field(delta, "reasoning_content")
-    has_native_reasoning = isinstance(native_reasoning, str) and bool(native_reasoning)
-    for detail in details:
-        encrypted = _reasoning_detail_encrypted(detail)
-        if encrypted:
-            yield from ledger.close_content_blocks()
-            index = ledger.blocks.allocate_index()
-            yield ledger.content_block_start(index, "redacted_thinking", data=encrypted)
-            yield ledger.content_block_stop(index)
-            continue
-        if has_native_reasoning:
-            continue
-        text = _reasoning_detail_text(detail)
-        if not text:
-            continue
-        yield from ledger.ensure_thinking_block()
-        yield ledger.emit_thinking_delta(text)
-
-
-def _reasoning_detail_text(detail: Any) -> str | None:
-    kind = str(_field(detail, "type") or "").lower()
-    if "encrypted" in kind or "redacted" in kind:
-        return None
-    for key in ("text", "content", "reasoning"):
-        value = _field(detail, key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _reasoning_detail_encrypted(detail: Any) -> str | None:
-    kind = str(_field(detail, "type") or "").lower()
-    if "encrypted" not in kind and "redacted" not in kind and "summary" not in kind:
-        return None
-    if isinstance(detail, Mapping):
-        return json.dumps(dict(detail), separators=(",", ":"))
-    return None
 
 
 def _json_payload(value: str) -> Any:

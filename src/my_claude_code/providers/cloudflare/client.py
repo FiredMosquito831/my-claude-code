@@ -129,9 +129,21 @@ class CloudflareProvider(OpenAIChatProvider):
             await maybe_await_aclose(response)
 
     def _handle_extra_reasoning(
-        self, delta: Any, ledger: Any, *, output_reasoning: bool
+        self,
+        delta: Any,
+        ledger: Any,
+        *,
+        output_reasoning: bool,
+        native_reasoning: str | None = None,
     ) -> Iterator[str]:
-        """Map Cloudflare's ``reasoning`` delta field to Anthropic thinking."""
+        """Map Cloudflare's ``reasoning`` delta field to Anthropic thinking.
+
+        ``native_reasoning`` is accepted and ignored: this hook reads the delta
+        itself, and the base class's ``reasoning_details`` path is not this
+        host's mechanism. It is in the signature because the runner passes it to
+        every provider, and an override that refused it would turn every
+        Cloudflare delta into a ``TypeError``.
+        """
         reasoning = _cloudflare_reasoning(delta)
         if not output_reasoning or not reasoning:
             return

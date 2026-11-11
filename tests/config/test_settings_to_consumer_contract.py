@@ -1420,3 +1420,51 @@ def test_the_plaintext_replay_setting_reaches_both_responses_senders(
         import json
 
         assert "a readable plan" not in json.dumps(shared)
+
+
+@pytest.mark.parametrize("value", [None, "true", "false"])
+def test_the_structured_reasoning_setting_reaches_the_chat_hook(
+    value: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """8.20.0's CHAT_STRUCTURED_REASONING, from ``Settings`` to the stream.
+
+    The setting is read by the *provider hook*, per delta, so a dashboard save
+    reaches the next request with no restart and no provider rebuild. The
+    observable is the ``redacted_thinking`` block a signature-bearing detail
+    produces: present with the setting on, absent with it off. The profile
+    declaration that decides whether the hook runs at all is a separate fact,
+    pinned in ``tests/contracts/test_structured_reasoning_stream.py``.
+
+    The three cases are the carrier's: unset (the shipped default, which is
+    off), explicit true, explicit false.
+    """
+
+    from my_claude_code.config import settings as config_settings
+    from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+    from my_claude_code.providers.openai_chat.reasoning_details import (
+        iter_reasoning_detail_events,
+    )
+
+    expected = value == "true"
+    if value is None:
+        monkeypatch.delenv("CHAT_STRUCTURED_REASONING", raising=False)
+    else:
+        monkeypatch.setenv("CHAT_STRUCTURED_REASONING", value)
+    config_settings.get_settings.cache_clear()
+    try:
+        detail = {"type": "reasoning.text", "text": "plan", "signature": "SIG"}
+        ledger = AnthropicStreamLedger("msg_contract", "m")
+        events = list(
+            iter_reasoning_detail_events(
+                {"reasoning_details": [detail]},
+                ledger,
+                native_reasoning=None,
+                structured=config_settings.configured_chat_structured_reasoning(),
+            )
+        )
+    finally:
+        config_settings.get_settings.cache_clear()
+
+    assert ("redacted_thinking" in "".join(events)) is expected
+    # The readable text reaches the client exactly once either way.
+    assert "plan" in "".join(events)
