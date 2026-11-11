@@ -329,3 +329,91 @@ def test_the_closing_frames_are_serialised_as_anthropic_sse() -> None:
         assert frame.endswith("\n\n")
         payload = frame.split("data: ", 1)[1].strip()
         assert isinstance(json.loads(payload), dict)
+
+
+# ------------------------------------------------------------------ 8.20.1
+# A stream that died inside a tool call already reached the request log -- the
+# counters said "the turn died 900 characters in, inside a tool call". It could
+# not say *which* tool, or how far its arguments got. These are the two facts
+# that make the sentence actionable, and the two cases where the key must be
+# absent so every existing payload stays byte-identical.
+
+
+def test_a_stream_that_died_inside_a_tool_call_names_the_tool() -> None:
+    """Case 3: the record names the tool and how far its arguments got."""
+    tracker = _tracker(
+        _MESSAGE_START,
+        _block_start(0, {"type": "text", "text": ""}),
+        _text(0, "Let me check that file."),
+        _block_stop(0),
+        _block_start(1, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}),
+        _tool_json(1, '{"command": "ls -'),
+    )
+
+    params = tracker.abandoned(reason="incomplete_tool_use").as_params()
+
+    assert params["incomplete_tool_call"] == {
+        "name": "Bash",
+        "chars": len('{"command": "ls -'),
+    }
+
+
+def test_a_tool_call_that_never_sent_an_argument_fragment_is_named_too() -> None:
+    """Zero characters is a measurement here, not "not measured"."""
+    tracker = _tracker(
+        _MESSAGE_START,
+        _block_start(0, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}),
+    )
+
+    params = tracker.abandoned(reason="incomplete_tool_use").as_params()
+
+    assert params["incomplete_tool_call"] == {"name": "Bash", "chars": 0}
+
+
+def test_a_clean_ending_carries_no_incomplete_tool_call() -> None:
+    """Every existing ``truncated_after_commit`` payload stays byte-identical."""
+    tracker = _tracker(
+        _MESSAGE_START,
+        _block_start(0, {"type": "text", "text": ""}),
+        _text(0, "Done."),
+    )
+
+    params = tracker.close(reason="timeout").as_params()
+
+    assert "incomplete_tool_call" not in params
+    assert params == {
+        "chars": 5,
+        "blocks": 1,
+        "reason": "timeout",
+        "stop_reason_sent": "max_tokens",
+        "ended_cleanly": True,
+    }
+
+
+def test_an_abandoned_stream_that_died_between_blocks_carries_no_key() -> None:
+    """``abandoned`` is not a synonym for "died in a tool call"."""
+    tracker = _tracker(
+        _MESSAGE_START,
+        _block_start(0, {"type": "text", "text": ""}),
+        _text(0, "Half an answer."),
+        _block_stop(0),
+    )
+
+    params = tracker.abandoned(reason="upstream").as_params()
+
+    assert "incomplete_tool_call" not in params
+
+
+def test_a_tool_call_that_finished_its_arguments_is_never_named() -> None:
+    """A complete block is closable; nothing was left incomplete to name."""
+    tracker = _tracker(
+        _MESSAGE_START,
+        _block_start(0, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}),
+        _tool_json(0, '{"command": "ls"}'),
+        _block_stop(0),
+    )
+
+    assert (
+        tracker.abandoned(reason="upstream").as_params().get("incomplete_tool_call")
+        is None
+    )

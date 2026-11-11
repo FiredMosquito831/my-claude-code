@@ -4288,6 +4288,23 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS",
+        "Tool-call arguments before over-bound",
+        "request_log",
+        "number",
+        settings_attr="request_log_tool_argument_max_chars",
+        minimum=0,
+        maximum=10000000,
+        default="131072",
+        description=(
+            "The largest tool call's arguments, in characters, that the "
+            "request log records as ordinary. A bigger call is recorded as "
+            "over the bound and its arguments are never parsed. Nothing is "
+            "truncated, refused or re-sent -- your client still receives "
+            "every byte of every call. 0 disables the bound."
+        ),
+    ),
+    ConfigFieldSpec(
         "REQUEST_LOG_LADDER_BODY_MAX_CHARS",
         "Upstream error detail per try",
         "request_log",

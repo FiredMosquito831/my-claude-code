@@ -10,11 +10,15 @@ import json
 
 import pytest
 
-from my_claude_code.config.constants import REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT
+from my_claude_code.config.constants import (
+    REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS_DEFAULT,
+    REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT,
+)
 from my_claude_code.core import wire_capture
 from my_claude_code.core.wire_capture import (
     _CONTENT_FIELDS,
     _SAMPLING_FIELDS,
+    DEFAULT_TOOL_ARGUMENT_MAX_CHARS,
     DEFAULT_WIRE_BODY_MAX_CHARS,
     REDACTED,
     install_wire_trace,
@@ -271,6 +275,13 @@ def test_a_degraded_body_never_returns_a_cut_json_string():
 def test_the_settings_default_matches_the_writer_default():
     """``core`` may not import ``config``, so the two constants are pinned."""
     assert REQUEST_LOG_WIRE_BODY_MAX_CHARS_DEFAULT == DEFAULT_WIRE_BODY_MAX_CHARS
+
+
+def test_the_tool_argument_bound_matches_the_settings_default():
+    """The same pin for 8.20.1's bound, for the same reason."""
+    assert (
+        REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS_DEFAULT == DEFAULT_TOOL_ARGUMENT_MAX_CHARS
+    )
 
 
 # --------------------------------------------------------------------------- #

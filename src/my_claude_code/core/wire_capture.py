@@ -58,6 +58,28 @@ from my_claude_code.core.reasoning import ReasoningAdaptation, ReasoningAdaptati
 # ``tests/core/test_wire_capture.py`` pins the two together.
 DEFAULT_WIRE_BODY_MAX_CHARS = 8_000
 
+# How many characters of one tool call's arguments the reply tally treats as
+# ordinary. Measured over 400,000 real ``tool_use`` blocks from 2,233
+# transcripts -- p99.99 = 46,162, max = 116,451, none above 131,072 -- while
+# the smallest degenerate call measured on this machine carried 332,121. So it
+# sits above every legitimate call and below every anomaly.
+#
+# It bounds nothing the client sees: a tool call of any size is still forwarded
+# byte for byte, and nothing is truncated, refused, re-sent or repaired. The
+# number decides one word in a log row -- and above it the arguments are not
+# even parsed, so a broken model cannot make MCC spend the time the bound
+# exists to save. ``0`` disables the bound.
+# ``config.constants.REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS_DEFAULT`` mirrors this
+# number for the settings layer -- ``core`` may not import ``config`` -- and
+# ``tests/core/test_wire_capture.py`` pins the two together.
+DEFAULT_TOOL_ARGUMENT_MAX_CHARS = 131_072
+
+#: Longest tool name kept on one recorded call. The Anthropic protocol caps a
+#: tool name at 128 characters, so this drops nothing a host may legally send;
+#: it exists because the shape payload is capped at ``RESPONSE_SHAPE_MAX_CHARS``
+#: and a name is structure, not an unbounded string.
+MAX_TOOL_NAME_CHARS = 128
+
 REDACTED = "<redacted>"
 
 # A key whose *name* means its value is a credential, whatever the value looks
@@ -677,6 +699,10 @@ class WireTrace:
     """Mutable per-request collector of outbound bodies, keyed by attempt."""
 
     body_limit: int = DEFAULT_WIRE_BODY_MAX_CHARS
+    #: Handed to every reply tally started under this request (8.20.1), so the
+    #: bound is read once per request from the settings layer and ``core``
+    #: still imports no config.
+    tool_argument_limit: int = DEFAULT_TOOL_ARGUMENT_MAX_CHARS
     current_attempt: int = 0
     requests: dict[int, WireRequest] = field(default_factory=dict)
     # What the provider layer changed about this request's reasoning after it
@@ -711,9 +737,10 @@ _WIRE_TRACE: ContextVar[WireTrace | None] = ContextVar("fcc_wire_trace", default
 
 def install_wire_trace(
     body_limit: int = DEFAULT_WIRE_BODY_MAX_CHARS,
+    tool_argument_limit: int = DEFAULT_TOOL_ARGUMENT_MAX_CHARS,
 ) -> WireTrace:
     """Start recording outbound bodies for the current request."""
-    slot = WireTrace(body_limit=body_limit)
+    slot = WireTrace(body_limit=body_limit, tool_argument_limit=tool_argument_limit)
     _WIRE_TRACE.set(slot)
     return slot
 
@@ -851,6 +878,19 @@ class ResponseShape:
     #: Per open thinking block: ``[thinking chars, signature chars]``, keyed by
     #: the block's index, until its ``content_block_stop``. Never stored.
     open_thinking: dict[int, list[int]] = field(default_factory=dict)
+    #: Per open tool call: ``[name, *argument fragments]``, keyed by the block's
+    #: index, until its ``content_block_stop`` (8.20.1). The fragments are the
+    #: reply's own argument text, held only long enough to measure it and never
+    #: stored, sliced into the payload or returned.
+    open_tool_calls: dict[int, list[str]] = field(default_factory=dict)
+    #: Every finished tool call this reply carried, each already reduced to
+    #: four facts -- ``name``, ``chars``, ``parsed``, ``class`` (8.20.1). The
+    #: arguments themselves are never in here.
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    #: Above this many characters a call is ``over_bound`` and its arguments
+    #: are not parsed. ``0`` disables the bound. Carried on the shape rather
+    #: than read from settings, because ``core`` imports no config.
+    tool_argument_limit: int = DEFAULT_TOOL_ARGUMENT_MAX_CHARS
     #: The first and last delta of *any* kind the upstream stream carried, in
     #: milliseconds from ``started_at`` -- the window a generation rate may be
     #: divided by (7.122.2). Taken where the provider parses its own frames,
@@ -919,6 +959,53 @@ class ResponseShape:
         if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
             self.reasoning["reported_tokens"] = tokens
 
+    def note_tool_call(self, name: str, arguments: str) -> None:
+        """Record one finished tool call: four facts, and never its arguments.
+
+        ``name`` is structure -- the wire recorder already keeps it and the
+        request pane already shows it. ``arguments`` is the complete argument
+        string the reply carried, and it is the only thing here that is
+        content: nothing derived from it crosses this boundary except its
+        length, whether ``json.loads`` accepted it, and whether the result was
+        a JSON object. It is not stored, sliced, hashed, logged or returned,
+        and the caller keeps no copy either.
+
+        Over the bound the parse is skipped and ``parsed`` is ``None`` -- "not
+        measured", which is not the same fact as ``False`` (a call that was
+        measured and failed). A 332 KB argument string is not parsed just to
+        call it large.
+        """
+        size = len(arguments)
+        parsed: bool | None
+        kind: str | None
+        if self.tool_argument_limit > 0 and size > self.tool_argument_limit:
+            parsed = None
+            kind = "over_bound"
+        else:
+            try:
+                value = json.loads(arguments)
+            except json.JSONDecodeError, RecursionError:
+                # ``RecursionError`` is not hypothetical: ``json.loads``
+                # recurses once per nesting level, so 128 KiB of nothing but
+                # open brackets overflows the stack. A tally that can raise
+                # would turn a reply MCC can still forward into an internal
+                # error, which is the one thing this record may never do.
+                parsed = False
+                kind = "unparseable"
+            else:
+                # The parsed value is read for its type and dropped here: it
+                # is never returned, logged or stored.
+                parsed = isinstance(value, dict)
+                kind = None if parsed else "not_an_object"
+        self.tool_calls.append(
+            {
+                "name": name[:MAX_TOOL_NAME_CHARS],
+                "chars": size,
+                "parsed": parsed,
+                "class": kind,
+            }
+        )
+
     def note_usage(self, usage: object) -> None:
         """Record which usage keys arrived, never their values."""
         if usage is None:
@@ -956,6 +1043,11 @@ class ResponseShape:
             out["reasoning"] = {
                 name: self.reasoning[name] for name in sorted(self.reasoning)
             }
+        # Written only when the reply carried at least one tool call, so every
+        # reply without one -- and every row written before this release --
+        # keeps exactly the payload it always had.
+        if self.tool_calls:
+            out["tool_calls"] = self._tool_call_payload()
         # Written only when the provider took the clock, so every reply that
         # predates it -- and every non-streamed one, which has nothing to
         # measure -- keeps exactly the payload it always had.
@@ -968,6 +1060,28 @@ class ResponseShape:
             out["usage_keys"] = []
             out["_degraded"] = True
         return out
+
+    def _tool_call_payload(self) -> dict[str, Any]:
+        """The tool-call tally: counts, and the four largest calls.
+
+        Bounded by construction -- at most four entries, each name capped at
+        ``MAX_TOOL_NAME_CHARS`` -- so it participates in the existing
+        ``RESPONSE_SHAPE_MAX_CHARS`` cap without adding a second degradation
+        mechanism.
+        """
+        calls = self.tool_calls
+        largest = sorted(calls, key=lambda call: call["chars"], reverse=True)[:4]
+        return {
+            "calls": len(calls),
+            "parsed": sum(1 for call in calls if call["parsed"] is True),
+            "max_chars": max(call["chars"] for call in calls),
+            "over_bound": sum(1 for call in calls if call["class"] == "over_bound"),
+            "unparseable": sum(1 for call in calls if call["class"] == "unparseable"),
+            "not_an_object": sum(
+                1 for call in calls if call["class"] == "not_an_object"
+            ),
+            "largest": [dict(call) for call in largest],
+        }
 
 
 def _public_attrs(usage: object) -> list[str]:
@@ -984,9 +1098,13 @@ def start_response_shape() -> ResponseShape | None:
     for the paths that are not being captured: token counting, model discovery
     and every direct provider use do no work at all.
     """
-    if _WIRE_TRACE.get() is None:
+    slot = _WIRE_TRACE.get()
+    if slot is None:
         return None
-    return ResponseShape(started_at=time.monotonic())
+    return ResponseShape(
+        started_at=time.monotonic(),
+        tool_argument_limit=slot.tool_argument_limit,
+    )
 
 
 def record_response_shape(shape: ResponseShape | None) -> None:

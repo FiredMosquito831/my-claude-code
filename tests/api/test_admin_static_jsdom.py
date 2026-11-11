@@ -3014,6 +3014,38 @@ def test_an_unmeasured_attempt_renders_no_shape_pane_rather_than_an_empty_one(
     assert rendered["requestDetail"]["responseShapeAbsent"]["shapePanes"] == 0
 
 
+def test_the_wire_pane_names_the_tool_calls_a_reply_carried(rendered) -> None:
+    """8.20.1: four facts per call, and never an argument.
+
+    The degenerate shape this release exists for -- 483,120 characters of
+    arguments, never parsed -- reads as a sentence an operator can act on, and
+    the tool it happened to is named. Nothing in the pane is text from the
+    reply, because nothing of the arguments was ever recorded.
+    """
+    detail = rendered["requestDetail"]["responseShapeToolCalls"]
+
+    assert detail["shapePanes"] == 1
+    assert detail["shapeTerms"] == [
+        "content",
+        "finish_reason",
+        "usage",
+        "chunks",
+        "tool calls",
+        "tool calls parsed",
+        "largest tool call (chars)",
+        "tool calls over the bound",
+        "tool calls unparseable",
+        "tool calls not an object",
+        "ToolSearch",
+        "Read",
+    ]
+    assert detail["shapeValues"][4:6] == ["2", "1"]
+    assert detail["shapeValues"][6] == "483,120"
+    assert detail["shapeValues"][7:10] == ["1", "0", "0"]
+    assert detail["shapeValues"][10] == "483,120 chars, over the bound, not parsed"
+    assert detail["shapeValues"][11] == "228 chars, parsed"
+
+
 # --------------------------------------------------------------- coding agents
 
 

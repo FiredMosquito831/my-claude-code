@@ -277,25 +277,33 @@ async def test_the_client_receives_the_same_frames() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "blocks",
+    ("blocks", "expected_keys"),
     [
-        TEXT,
+        (TEXT, OLD_SHAPE_KEYS),
         (
-            _start(
-                0, {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}}
+            (
+                _start(
+                    0,
+                    {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {}},
+                ),
+                _delta(0, {"type": "input_json_delta", "partial_json": '{"p": 1}'}),
+                _stop(0),
             ),
-            _delta(0, {"type": "input_json_delta", "partial_json": '{"p": 1}'}),
-            _stop(0),
+            # 8.20.1 adds exactly one key to a reply that carried a tool call,
+            # and every other key is unchanged -- which is the equality
+            # contract, not a relaxation of this one. A reply without a call
+            # keeps the six keys it always had.
+            [*OLD_SHAPE_KEYS, "tool_calls"],
         ),
     ],
     ids=["text", "tool"],
 )
 async def test_a_reply_without_reasoning_is_shaped_exactly_as_before(
-    blocks: tuple[dict[str, Any], ...],
+    blocks: tuple[dict[str, Any], ...], expected_keys: list[str]
 ) -> None:
     payload, _frames = await _tally(_message(*blocks))
 
-    assert list(payload) == OLD_SHAPE_KEYS
+    assert list(payload) == expected_keys
 
 
 # --------------------------------------------------------------------------

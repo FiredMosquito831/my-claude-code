@@ -2201,6 +2201,13 @@ class _OpenAIChatStreamRunner:
                                 recovery.generation.first_at,
                                 recovery.generation.last_at,
                             )
+                        # 8.20.1: every tool call this reply carried, reduced
+                        # to four facts. The ledger already assembles each
+                        # call's argument string for the client, so this reads
+                        # what was sent rather than a second parse of the
+                        # stream -- and keeps none of it.
+                        for block in ledger.tool_blocks():
+                            shape.note_tool_call(block.name, block.content)
                     record_response_shape(shape)
                     break
 
