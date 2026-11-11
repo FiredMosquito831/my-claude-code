@@ -408,9 +408,37 @@ class TestTheSkipValidatorIsCountable:
         gemini_provider._record_tool_call_extra_content(
             "function-call-1", {"google": {"thought_signature": "sig-from-cache"}}
         )
-        req = self._signed_request()
-        # Strip the client's own copy so only the cache can supply one.
-        req.messages[1].content[0].extra_content = None  # type: ignore[union-attr]
+        # The same history as ``_signed_request`` with the client's own copy of
+        # the signature left off, so only the cache can supply one. Built here
+        # rather than stripped from the signed request: the block is a typed
+        # model and a field it does not declare is not assignable.
+        req = make_request(
+            system=None,
+            messages=[
+                {"role": "user", "content": "Find files"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "function-call-1",
+                            "name": "Glob",
+                            "input": {"pattern": "*.py"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "function-call-1",
+                            "content": "[]",
+                        }
+                    ],
+                },
+            ],
+        )
         notes: dict = {}
         body = gemini_provider._build_request_body(
             req, reasoning=reasoning_for(req), wire_notes=notes
