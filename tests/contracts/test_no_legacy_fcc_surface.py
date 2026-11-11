@@ -191,10 +191,10 @@ ALLOWED_FILES: dict[str, str] = {
         "detector must keep seeing it, and forgetting it would let a live "
         "server be reported as dead"
     ),
-    "src/my_claude_code/providers/chatgpt_oauth/oauth_login.py": (
-        "the OAuth device-flow User-Agent, an outbound header rather than a "
-        "user-visible surface; renaming it changes the sign-in handshake"
-    ),
+    # 8.20.2 (UA-NAME): ``providers/chatgpt_oauth/oauth_login.py`` is NOT here
+    # any more. Its one retired string was the device-flow User-Agent, which
+    # 8.20.2 replaced with the Codex client identity the inference path already
+    # sent; the module must carry no retired string and needs no entry.
     # --- 5. the record of what was retired, and the inherited MIT notice ----
     "README.md": (
         "the Project history / credits section links the upstream repository "
