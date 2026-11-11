@@ -55,7 +55,12 @@ class _ReasoningProvider(OpenAIChatProvider):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        wire_notes: dict[str, Any] | None = None,
     ) -> dict:
+        # ``wire_notes`` is part of the hook's contract since 8.19.0 (the
+        # Google doors record a signature note through it). This double builds
+        # a stub body and records nothing, so it accepts and ignores it.
+        del wire_notes
         return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
 
 

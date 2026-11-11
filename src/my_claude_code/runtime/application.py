@@ -86,6 +86,9 @@ from my_claude_code.providers.chatgpt_oauth.provider import (
     CHATGPT_OAUTH_PROVIDER_ID,
     WITHHELD_MODEL_IDS,
 )
+from my_claude_code.providers.google_openai.signature_cache import (
+    GOOGLE_THOUGHT_SIGNATURES,
+)
 from my_claude_code.providers.media.registry import MEDIA_REGISTRY
 from my_claude_code.providers.recovery import (
     FACT_MODEL_WITHHELD,
@@ -451,6 +454,14 @@ class ApplicationRuntime:
             await asyncio.to_thread(prewarm_heavy_imports)
             state.mark("learned-facts")
             self._load_learned_facts()
+            # 8.19.0: the Google thought-signature cache, read here for the
+            # same reason the learned facts are -- a provider built during the
+            # sweep below restores its signatures on construction, and one
+            # built before this line would start empty and fall back to the
+            # skip-validator sentinel for every tool loop that spans the
+            # restart. A cache, so every failure inside it is a decline.
+            state.mark("google-signatures")
+            GOOGLE_THOUGHT_SIGNATURES.enable_persistence()
             # Before the first provider is built (the catalogue refresh below
             # builds them), and on a worker thread: one read of the proxy
             # chain file, given a few hundred milliseconds if it will not
@@ -1617,6 +1628,15 @@ class ApplicationRuntime:
         await best_effort(
             "learned_facts.flush",
             self._learned_facts.close(),
+            log_verbose_errors=self.settings.log_api_error_tracebacks,
+        )
+        # 8.19.0: the Google thought-signature cache's own final write, beside
+        # the learned facts' and for the same reason -- a signature captured
+        # in the last few seconds before shutdown must not be lost to a
+        # debounce that never fired. Never raises into the shutdown path.
+        await best_effort(
+            "google_signatures.flush",
+            GOOGLE_THOUGHT_SIGNATURES.close(),
             log_verbose_errors=self.settings.log_api_error_tracebacks,
         )
         # Before the flush, so a row whose finalize was still running reaches

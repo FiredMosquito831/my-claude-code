@@ -102,6 +102,25 @@ def get_token_count(
                 elif b_type == "thinking":
                     thinking = get_block_attr(block, "thinking", "")
                     total_tokens += count_text_tokens(str(thinking))
+                elif b_type == "redacted_thinking":
+                    # 8.19.0. A ``redacted_thinking`` block is an opaque blob
+                    # the host minted; there is no text field to count, so
+                    # until now it fell to the ``else`` below, which counted
+                    # ``json.dumps(block)`` -- the blob PLUS a ~10-token JSON
+                    # wrapper -- and logged ``Unexpected block type`` at DEBUG
+                    # on every call. Measured on a 32,768-character carrier:
+                    # 23,273 counted against 23,259 for the blob alone.
+                    #
+                    # The blob's own cost is the honest answer and the same
+                    # rule the ``thinking`` branch beside it uses: one
+                    # estimator, applied to the characters that are actually
+                    # there. It is still an ESTIMATE -- Anthropic bills this
+                    # block as an opaque blob and publishes no formula -- and
+                    # the number feeds the dashboard, the context-headroom
+                    # arithmetic and the cancelled-request record, never a
+                    # request body.
+                    data = get_block_attr(block, "data", "")
+                    total_tokens += count_text_tokens(str(data))
                 elif b_type == "tool_use":
                     name = get_block_attr(block, "name", "")
                     inp = get_block_attr(block, "input", {})

@@ -776,8 +776,16 @@ class OpenAIChatProvider(BaseProvider):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        wire_notes: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Build a provider request from the immutable profile."""
+        """Build a provider request from the immutable profile.
+
+        ``wire_notes`` is a caller's mapping to receive what the build
+        recorded about the body it made -- today only the Google doors'
+        ``gemini_thought_signature_skipped`` (8.19.0). ``None`` -- every
+        caller that does not record, and every host with no such note --
+        builds exactly the body it always did.
+        """
         return build_openai_chat_request_body(
             request,
             reasoning=reasoning,
@@ -1925,6 +1933,11 @@ class _OpenAIChatStreamRunner:
         body = self._provider._build_request_body(
             self._request,
             reasoning=self._reasoning,
+            # The same mapping every send of this body records beside it
+            # (8.19.0). A build that has nothing to say -- every host but the
+            # two Google doors, and every Google request whose signatures were
+            # all captured -- leaves it exactly as it was.
+            wire_notes=self._wire_notes,
         )
         # The same body back -- not a copy -- when no lifetime was chosen.
         body = apply_chat_prompt_cache_lifetime(

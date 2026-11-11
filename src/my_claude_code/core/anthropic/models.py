@@ -134,6 +134,27 @@ class Message(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str | list[ContentBlock]
     reasoning_content: str | None = None
+    #: The Responses ``reasoning`` items this turn carried, verbatim (8.19.0).
+    #:
+    #: One list per assistant turn, each entry the whole item the client sent
+    #: -- ``id``, ``type``, ``status``, ``summary``, ``content``,
+    #: ``encrypted_content``, and anything else it carried -- never a
+    #: projection. The inbound Responses door fills it; nothing else writes it
+    #: and nothing reads it yet, which is the point: the blob has to survive
+    #: the conversion so a later turn can replay it to the host that minted it
+    #: (``core/openai_responses/carrier.py``), and the inbound door is the only
+    #: place that can still see it.
+    #:
+    #: **``exclude=True`` is load-bearing, not decoration.** It is the whole
+    #: leak rule: every ``model_dump()`` of a ``Message`` -- ``dump_messages_request``
+    #: (which DeepSeek then re-validates), the Messages door's own
+    #: ``request.model_dump``, the request snapshot, every dialect's body --
+    #: cannot carry the field, by construction rather than by one function
+    #: remembering to strip it. An OpenAI ciphertext reaching an Anthropic host
+    #: is a guaranteed 400, and reaching any other host is a wasted request
+    #: body; excluding it here makes both impossible. It is still readable on
+    #: the object, which is what a replay will need.
+    encrypted_reasoning: list[dict[str, Any]] | None = Field(default=None, exclude=True)
 
 
 class Tool(_AnthropicBlockBase):

@@ -8,6 +8,23 @@ from my_claude_code.core.reasoning import ReasoningPolicy
 
 GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"
 
+#: The ``params.wire`` key recording that the skip-validator sentinel was
+#: written into a tool call (8.19.0). Counts only -- the rule
+#: ``foreign_thinking_dropped`` and ``history_thinking_omitted`` keep -- and
+#: deliberately not spelled ``thinking_*`` or ``reasoning_*``: the wire
+#: recorder reads any key with those prefixes as a reasoning *instruction*
+#: (``is_reasoning_key``), and a note about a signature would then count as
+#: reasoning sent.
+#:
+#: Why it exists: the sentinel is an escape hatch, not an implementation.
+#: Google validates a ``thoughtSignature`` on the current turn's first tool
+#: call, and MCC writes the sentinel whenever it has none to replay -- which
+#: is every tool loop that spans a restart, and every loop whose signature was
+#: never captured. Until this note existed an operator could not tell a
+#: working Gemini tool loop from one that was silently bypassing validation.
+#: The note changes no body byte; it only makes the degradation countable.
+GEMINI_THOUGHT_SIGNATURE_SKIPPED = "gemini_thought_signature_skipped"
+
 
 def apply_gemini_request_quirks(
     body: dict[str, Any],
@@ -15,8 +32,15 @@ def apply_gemini_request_quirks(
     reasoning: ReasoningPolicy,
     *,
     tool_call_extra_content_by_id: dict[str, dict[str, Any]] | None = None,
+    wire_notes: dict[str, Any] | None = None,
 ) -> None:
-    """Apply Google-specific request extensions after common OpenAI conversion."""
+    """Apply Google-specific request extensions after common OpenAI conversion.
+
+    ``wire_notes`` is a caller's mapping to receive what this build recorded
+    about the body it just built -- ``gemini_thought_signature_skipped``,
+    counts only. Left untouched when nothing was skipped, so every other
+    request's recorded params are exactly what they were.
+    """
     extra_body: dict[str, Any] = {}
     request_extra = request_data.extra_body
     if isinstance(request_extra, dict):
@@ -31,6 +55,7 @@ def apply_gemini_request_quirks(
     _apply_gemini_tool_call_signatures(
         body,
         tool_call_extra_content_by_id=tool_call_extra_content_by_id,
+        wire_notes=wire_notes,
     )
 
 
@@ -131,7 +156,16 @@ def _apply_cached_tool_call_signatures(
                 tool_call["extra_content"] = deepcopy(cached_extra_content)
 
 
-def _apply_missing_current_turn_signatures(messages: list[Any]) -> None:
+def _apply_missing_current_turn_signatures(messages: list[Any]) -> int:
+    """Write the sentinel where a signature is missing; return how many.
+
+    The count is the note's whole content: one sentinel per assistant turn
+    with tool calls and no captured signature, so a loop that bypasses
+    validation on every turn reads as a number that climbs, and a loop that
+    replays real signatures reads as nothing at all.
+    """
+
+    written = 0
     start_index = _current_turn_start_index(messages)
     for message in messages[start_index + 1 :]:
         if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -147,15 +181,39 @@ def _apply_missing_current_turn_signatures(messages: list[Any]) -> None:
         _set_tool_call_thought_signature(
             first_tool_call, GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR
         )
+        written += 1
+    return written
+
+
+def thought_signature_skipped_note(count: int) -> dict[str, str]:
+    """The ``gemini_thought_signature_skipped`` record for ``count`` writes.
+
+    ``{}`` for a count of zero, which keeps every other request's recorded
+    params exactly as they were -- the rule ``empty_system_messages_note``
+    states. Counts only: no signature, no tool name, no tool-call id.
+    """
+
+    if count <= 0:
+        return {}
+    noun = "tool call" if count == 1 else "tool calls"
+    return {
+        GEMINI_THOUGHT_SIGNATURE_SKIPPED: (
+            f"wrote the skip-validator sentinel into {count} {noun} with no "
+            "captured thoughtSignature; Google will not validate them"
+        )
+    }
 
 
 def _apply_gemini_tool_call_signatures(
     body: dict[str, Any],
     *,
     tool_call_extra_content_by_id: dict[str, dict[str, Any]] | None,
+    wire_notes: dict[str, Any] | None = None,
 ) -> None:
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
     _apply_cached_tool_call_signatures(messages, tool_call_extra_content_by_id or {})
-    _apply_missing_current_turn_signatures(messages)
+    skipped = _apply_missing_current_turn_signatures(messages)
+    if wire_notes is not None:
+        wire_notes.update(thought_signature_skipped_note(skipped))

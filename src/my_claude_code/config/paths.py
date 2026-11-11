@@ -64,6 +64,10 @@ MARKETPLACE_PROFILES_FILENAME = "marketplace_profiles.json"
 CREDENTIAL_NAMES_FILENAME = "credential_names.json"
 PROXY_FETCH_STATUS_FILENAME = "proxy_fetch_status.json"
 PROXY_SPEED_FILENAME = "proxy_speed.json"
+# 8.19.0: the Google thought-signature cache, so a Gemini tool loop that spans
+# a restart still replays the signatures it captured. A cache, not state:
+# losing it costs one turn of continuity and nothing else.
+GOOGLE_THOUGHT_SIGNATURES_FILENAME = "google_thought_signatures.json"
 # 7.99.0: MCC's media MCP server (``mcc-mcp``). The Claude Code registration
 # ``mcc-claude`` hands to ``--mcp-config=``, the folder Claude Desktop's
 # results are saved in (it has no working folder of its own), and the last
@@ -645,6 +649,20 @@ def proxy_speed_path() -> Path:
     """
 
     return config_dir_path() / PROXY_SPEED_FILENAME
+
+
+def google_thought_signatures_path() -> Path:
+    """Return the persisted Google thought-signature cache (8.19.0).
+
+    Its own document, beside the other stores, for the reason
+    :func:`proxy_speed_path` gives: it is written by the product on a request
+    path and it must never race an edit the operator is making to a config
+    file. It is a **cache**, not configuration -- a missing, corrupt or
+    foreign file is read as nothing, and the provider falls back to its
+    in-memory behaviour.
+    """
+
+    return config_dir_path() / GOOGLE_THOUGHT_SIGNATURES_FILENAME
 
 
 def legacy_env_paths() -> tuple[Path, ...]:

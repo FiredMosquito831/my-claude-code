@@ -33,6 +33,16 @@ change they record: ``native_anthropic`` and ``opencode_messages`` of
 ``"enabled": true`` that MCC's own ``ThinkingConfig`` default leaked into the
 client's passed-through ``thinking`` object (15 bytes); putting that one key
 back reproduces the old digest exactly. No other entry moved.
+
+**One entry was re-baselined in 8.19.0**: ``every_block.tokens``. That case is
+the only one of the fifteen that carries a ``redacted_thinking`` block, and
+8.19.0 gave that block its own branch in ``get_token_count`` -- it is now
+counted as its blob rather than as ``json.dumps(block)``, and it no longer logs
+``Unexpected block type``. The entry's length (``bytes:3``) is unchanged
+because the count is a three-digit number either way; only the value moved.
+Measured on the base checkout with the same pins applied: **0 of 15 cases move
+there**, and on the branch exactly this one surface moves. Every other surface
+of every case, and every other case, is byte-identical.
 """
 
 import hashlib

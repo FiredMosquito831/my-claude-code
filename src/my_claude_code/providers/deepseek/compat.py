@@ -143,15 +143,24 @@ def sanitize_deepseek_messages_for_openai(messages: Any) -> Any:
             sanitized.append(new_msg)
             continue
 
+        # Only the ``thinking`` arm is DeepSeek's own decision. The
+        # ``redacted_thinking`` arm that used to sit beside it was removed in
+        # 8.19.0: the shared converter
+        # (``core/anthropic/conversion.py``'s ``_convert_assistant_message``)
+        # already drops that block for every Chat host, so the second filter
+        # was the same decision made twice. Today both agree and no body moves
+        # -- but the moment the shared converter learns to replay a carrier,
+        # a DeepSeek-specific arm would keep silently dropping it and leave
+        # one provider worse than every other, which is exactly what the
+        # "module level, not per provider" rule forbids. One decision, one
+        # place.
         filtered = [
             block
             for block in content
             if not (
                 isinstance(block, dict)
-                and (
-                    block.get("type") == "redacted_thinking"
-                    or (block.get("type") == "thinking" and not replay_tool_reasoning)
-                )
+                and block.get("type") == "thinking"
+                and not replay_tool_reasoning
             )
         ]
         new_msg["content"] = filtered or ""

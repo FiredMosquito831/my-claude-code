@@ -102,7 +102,12 @@ class MistralProvider(OpenAIChatProvider):
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        wire_notes: dict[str, Any] | None = None,
     ) -> dict:
+        # ``wire_notes`` is accepted and ignored: Mistral's build records
+        # nothing about its body. The keyword is here so the runner can hand
+        # every provider the same mapping without a special case.
+        del wire_notes
         body = build_openai_chat_request_body(
             request,
             reasoning=reasoning,
