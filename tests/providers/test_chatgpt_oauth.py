@@ -1,6 +1,7 @@
 """Tests for the direct ChatGPT OAuth Responses API provider."""
 
 import json
+import platform
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,7 @@ from my_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from my_claude_code.core.version import package_version
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.chatgpt_oauth import ChatGPTOAuthProvider
 from my_claude_code.providers.chatgpt_oauth.conversion import (
@@ -28,6 +30,8 @@ from my_claude_code.providers.chatgpt_oauth.conversion import (
     chatgpt_tool_call_to_anthropic,
 )
 from my_claude_code.providers.chatgpt_oauth.credentials import (
+    CODEX_OAUTH_CLIENT_ID,
+    CODEX_OAUTH_ORIGINATOR,
     load_chatgpt_oauth_credentials,
 )
 from my_claude_code.providers.chatgpt_oauth.streaming import (
@@ -926,6 +930,74 @@ def test_perform_chatgpt_oauth_login_writes_managed_auth_file(tmp_path, monkeypa
     assert saved["tokens"]["access_token"] == access_token
     assert saved["tokens"]["refresh_token"] == "refresh_1"
     assert "expires_at" in saved["tokens"]
+
+
+def test_the_device_flow_sends_the_codex_client_identity_on_the_wire():
+    """Both device endpoints carry the identity the inference path carries.
+
+    The device flow used to send the retired tool's name and a version -- a
+    second identity on the same provider, and one the vendor's own client never
+    spells. This pins the header on the wire with a fake transport: no live
+    call reaches the device or token endpoint.
+    """
+    from my_claude_code.providers.chatgpt_oauth import oauth_login
+
+    requests: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if str(request.url) == oauth_login.CHATGPT_OAUTH_DEVICE_URL:
+            return httpx.Response(
+                200,
+                json={
+                    "device_auth_id": "device_1",
+                    "user_code": "ABCD-EFGH",
+                    "interval": "1",
+                },
+            )
+        assert str(request.url) == oauth_login.CHATGPT_OAUTH_DEVICE_TOKEN_URL
+        return httpx.Response(
+            200,
+            json={"authorization_code": "auth_code_1", "code_verifier": "verifier_1"},
+        )
+
+    fake_client = httpx.Client(transport=httpx.MockTransport(_handler))
+    device_auth_id, user_code, _ = oauth_login._initiate_device_auth(fake_client)
+    oauth_login._poll_device_auth(
+        device_auth_id,
+        user_code,
+        deadline=float("inf"),
+        interval_ms=1,
+        http_client=fake_client,
+    )
+
+    expected = (
+        f"{CODEX_OAUTH_ORIGINATOR}/{package_version()} "
+        f"({platform.system()} {platform.release()}; {platform.machine()})"
+    )
+    assert len(requests) == 2
+    for request in requests:
+        assert "free-claude-code" not in request.headers["User-Agent"]
+        assert request.headers["User-Agent"] == expected
+        assert request.headers["originator"] == CODEX_OAUTH_ORIGINATOR
+    assert requests[0].headers["User-Agent"] == requests[1].headers["User-Agent"]
+    assert json.loads(requests[0].content) == {"client_id": CODEX_OAUTH_CLIENT_ID}
+    assert json.loads(requests[1].content) == {
+        "device_auth_id": device_auth_id,
+        "user_code": user_code,
+    }
+
+
+def test_the_device_flow_and_the_inference_path_agree_on_the_client_identity():
+    """One provider, one identity -- the invariant this change creates.
+
+    ``oauth_login._user_agent`` returned a second, unrelated string, so an edit
+    to either builder could silently split the two again.
+    """
+    from my_claude_code.providers.chatgpt_oauth import oauth_login
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    assert oauth_login._user_agent() == provider_module._user_agent()
 
 
 @pytest.mark.asyncio

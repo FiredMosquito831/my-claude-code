@@ -4,11 +4,14 @@ This mirrors the device-auth path used by OpenCode so Free Claude Code can
 obtain ChatGPT/Codex OAuth tokens without requiring the official ``codex`` CLI.
 """
 
+import platform
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from my_claude_code.core.version import package_version
 
 from .credentials import (
     CODEX_OAUTH_CLIENT_ID,
@@ -40,10 +43,22 @@ class ChatGPTOAuthLoginTimeoutError(ChatGPTOAuthLoginError):
 
 
 def _user_agent() -> str:
-    """Return a User-Agent for OAuth endpoints."""
-    from my_claude_code.core.version import package_version
+    """Return the Codex OAuth client identity every endpoint of this provider uses.
 
-    return f"free-claude-code/{package_version()}"
+    The inference path has sent this shape since it was written
+    (``provider.py``'s own ``_user_agent``); the device flow sent the retired
+    tool's name and a version instead -- not a spelling the vendor's own client
+    uses. One provider, one identity.
+
+    UNVERIFIED, and stated rather than assumed: that the device endpoints do not
+    allow-list the old string. They accept an arbitrary UA today -- the old value
+    was never the vendor's -- so this moves *toward* the vendor's own format, and
+    a refusal would surface on the first sign-in attempt rather than silently.
+    """
+    return (
+        f"{CODEX_OAUTH_ORIGINATOR}/{package_version()} "
+        f"({platform.system()} {platform.release()}; {platform.machine()})"
+    )
 
 
 def _parse_device_response(response: httpx.Response) -> dict[str, Any]:
