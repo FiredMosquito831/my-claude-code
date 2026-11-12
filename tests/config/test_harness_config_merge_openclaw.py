@@ -4,8 +4,13 @@
 owns, and the first one that is meant to be hand-edited: OpenClaw reads JSON5,
 so it can carry comments, its author's indentation and a trailing comma. The
 promise is ``config/document_codecs``': every byte MCC does not own comes back
-byte for byte, Configure touches one block and one recorded value, and Undo --
-either mode -- returns the document to exactly what it was.
+byte for byte, Configure touches one block and the additive keys beside it, and
+Undo -- either mode -- returns the document to exactly what it was.
+
+Since 8.20.3 the change is additive and these tests say so: the default model
+is written only when the file has none, one ``mcc/*`` wildcard goes into
+whichever container governs the picker, and the proxy token is written
+literally into ``apiKey`` (the user's Q1/Q2/Q3 decisions).
 
 The seeds below are the shapes a hand-written document actually takes:
 canonical two-space, four-space with comments, CRLF, a trailing comma, no
@@ -29,11 +34,18 @@ from my_claude_code.config.harness_config_merge import (
     read_text_document,
     unconfigure_owned_block,
 )
-from my_claude_code.config.harnesses import HarnessConfigMerge, harness_spec
+from my_claude_code.config.harnesses import (
+    OPENCLAW_API_KEY_FALLBACK,
+    HarnessConfigMerge,
+    harness_spec,
+)
 from my_claude_code.config.restore_record import UndoMode, read_entry
 
 SUBJECT = "openclaw"
 ROOT = "http://127.0.0.1:8082"
+
+#: Fake, always. A real token must never reach a test's file or its output.
+FAKE_TOKEN = "mcc-fake-token-0123456789abcdef"
 
 
 def _merge() -> HarnessConfigMerge:
@@ -98,6 +110,20 @@ SEEDS: dict[str, str] = {
         ' "fallbacks": ["openai/gpt-5-mini"]}}},\n'
         '  "logging": {"level": "info"}\n}\n'
     ),
+    #: The user's own shape: an allowlist of their models already in place.
+    "user-models-map": (
+        "// my openclaw config\n"
+        "{\n"
+        '  "agents": {\n'
+        '    "defaults": {\n'
+        '      "models": {\n'
+        '        "openai/gpt-6-astra": {},   // the one I use\n'
+        '        "openrouter/auto": {}\n'
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    ),
 }
 
 
@@ -109,7 +135,9 @@ def _parsed(text: str) -> dict[str, Any]:
     return {str(key): value for key, value in parsed.items()}
 
 
-def _configured(seed: str, tmp_path: Path) -> tuple[Path, Path]:
+def _configured(
+    seed: str, tmp_path: Path, *, token: str = FAKE_TOKEN, claim: bool = True
+) -> tuple[Path, Path]:
     path = tmp_path / "openclaw.json"
     path.write_text(seed, encoding="utf-8", newline="")
     record = tmp_path / "restore-record.json"
@@ -119,7 +147,9 @@ def _configured(seed: str, tmp_path: Path) -> tuple[Path, Path]:
         document=_document(),
         proxy_root_url=ROOT,
         subject=SUBJECT,
+        claim=claim,
         record_path=record,
+        proxy_token=token,
     )
     return path, record
 
@@ -168,7 +198,7 @@ def test_restore_mode_returns_the_same_bytes_and_consumes_the_record(
     assert read_entry(SUBJECT, path=record) is None
 
 
-def test_only_mccs_block_and_the_default_model_change(tmp_path) -> None:
+def test_only_mccs_block_and_the_additive_keys_change(tmp_path) -> None:
     """Everything else -- comments, spacing, key order -- is the user's."""
 
     seed = SEEDS["comments"]
@@ -180,21 +210,25 @@ def test_only_mccs_block_and_the_default_model_change(tmp_path) -> None:
     document = _parsed(text)
     assert document["logging"]["level"] == "info"
     assert document["models"]["providers"]["mcc"]["baseUrl"] == f"{ROOT}/v1"
-    assert document["models"]["providers"]["mcc"]["apiKey"] == ("$MCC_OPENCLAW_API_KEY")
+    # The token is written, not referenced: OpenClaw decides availability from
+    # credentials it can resolve in its own process (the user's Q2).
+    assert document["models"]["providers"]["mcc"]["apiKey"] == FAKE_TOKEN
     assert document["agents"]["defaults"]["model"]["primary"] == (
         "openrouter/configured"
     )
+    # The one ref that keeps every mcc/… row in OpenClaw's picker. This seed
+    # has no ``agents.defaults.models``, so the map is created holding it.
+    assert document["agents"]["defaults"]["models"] == {"mcc/*": {}}
 
 
-def test_the_users_default_model_is_replaced_and_put_back(tmp_path) -> None:
-    """A string becomes ``{"primary": …}``; Undo writes the string's own bytes.
+def test_a_default_model_is_written_only_when_the_file_has_none(tmp_path) -> None:
+    """Q1: a value that is there is the user's, and is never replaced.
 
-    The recorded key is the *value that went* -- ``agents.defaults.model`` --
-    not ``… .primary``, which never existed. Recording the leaf would leave an
-    empty object behind on Undo and lose the model the user had chosen.
+    The absent case is the fresh-install one, and it is written and recorded
+    with ``prior_present=False`` so Undo deletes it again.
     """
 
-    seed = SEEDS["existing-string-default"]
+    seed = SEEDS["canonical"]
     path, record = _configured(seed, tmp_path)
 
     assert json.loads(path.read_text(encoding="utf-8"))["agents"]["defaults"][
@@ -203,13 +237,61 @@ def test_the_users_default_model_is_replaced_and_put_back(tmp_path) -> None:
     entry = read_entry(SUBJECT, path=record)
     assert entry is not None
     assert [value.key_path for value in entry.overwritten] == [
-        ("agents", "defaults", "model")
+        ("agents", "defaults", "model", "primary")
     ]
-    # Recorded twice over: the value, and the exact bytes it occupied, so
-    # Undo does not re-render a string the user may have spelled differently.
-    assert entry.overwritten[0].prior_present is True
-    assert entry.overwritten[0].prior_value == "openai/gpt-5"
-    assert entry.overwritten[0].prior_line == '"openai/gpt-5"'
+    assert entry.overwritten[0].prior_present is False
+
+    unconfigure_owned_block(
+        merge=_merge(),
+        path=path,
+        subject=SUBJECT,
+        record_path=record,
+        proxy_root_url=ROOT,
+    )
+    assert path.read_bytes().decode("utf-8") == seed
+
+
+def test_an_existing_default_model_is_left_alone_and_said_so(tmp_path, capsys) -> None:
+    """A ``primary`` already there is the user's: kept, and nothing recorded."""
+
+    seed = SEEDS["existing-object-default"]
+    path, record = _configured(seed, tmp_path)
+
+    model = json.loads(path.read_text(encoding="utf-8"))["agents"]["defaults"]["model"]
+    assert model["primary"] == "openai/gpt-5"
+    entry = read_entry(SUBJECT, path=record)
+    assert entry is not None
+    assert entry.overwritten == ()
+    assert "agents.defaults.model.primary is already set" in capsys.readouterr().err
+
+    unconfigure_owned_block(
+        merge=_merge(),
+        path=path,
+        subject=SUBJECT,
+        record_path=record,
+        proxy_root_url=ROOT,
+    )
+    assert path.read_bytes().decode("utf-8") == seed
+
+
+def test_a_non_object_default_model_is_left_alone_and_said_so(tmp_path, capsys) -> None:
+    """A string ``agents.defaults.model`` is never replaced by an object.
+
+    Writing ``primary`` there would mean replacing the whole value, which is
+    the opposite of "pure addition" (the brief's F6).
+    """
+
+    seed = SEEDS["existing-string-default"]
+    path, record = _configured(seed, tmp_path)
+
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["agents"]["defaults"]["model"]
+        == "openai/gpt-5"
+    )
+    entry = read_entry(SUBJECT, path=record)
+    assert entry is not None
+    assert entry.overwritten == ()
+    assert "agents.defaults.model is not an object" in capsys.readouterr().err
 
     unconfigure_owned_block(
         merge=_merge(),
@@ -227,9 +309,13 @@ def test_an_existing_primary_keeps_the_rest_of_the_object(tmp_path) -> None:
 
     model = json.loads(path.read_text(encoding="utf-8"))["agents"]["defaults"]["model"]
     assert model == {
-        "primary": "openrouter/configured",
+        "primary": "openai/gpt-5",
         "fallbacks": ["openai/gpt-5-mini"],
     }
+    # The wildcard still went in: the picker is a different question from the
+    # default model, and the user's own entries are untouched.
+    defaults = json.loads(path.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["models"] == {"mcc/*": {}}
 
     unconfigure_owned_block(
         merge=_merge(),
@@ -336,10 +422,16 @@ def test_the_backup_is_the_users_file_not_yesterdays_output(tmp_path) -> None:
     assert backup.read_bytes().decode("utf-8") == seed
 
 
-def test_a_second_configure_keeps_the_first_users_value(tmp_path) -> None:
-    """The record answers "what did the user have *before MCC*", once."""
+def test_a_second_configure_keeps_the_first_configures_record(tmp_path) -> None:
+    """The record answers "what did the user have *before MCC*", once.
 
-    seed = SEEDS["existing-object-default"]
+    The second run adds nothing -- every key is there, and the default model
+    it wrote itself now reads as "already set" -- so it must not drop the
+    record the first run wrote: Undo needs it to take the default model back
+    out again.
+    """
+
+    seed = SEEDS["canonical"]
     path, record = _configured(seed, tmp_path)
 
     configure_owned_block(
@@ -349,11 +441,21 @@ def test_a_second_configure_keeps_the_first_users_value(tmp_path) -> None:
         proxy_root_url=ROOT,
         subject=SUBJECT,
         record_path=record,
+        proxy_token=FAKE_TOKEN,
     )
 
     entry = read_entry(SUBJECT, path=record)
     assert entry is not None
-    assert entry.overwritten[0].prior_value == "openai/gpt-5"
+    assert [value.key_path for value in entry.overwritten] == [
+        ("agents", "defaults", "model", "primary")
+    ]
+    assert entry.overwritten[0].prior_present is False
+    assert entry.created_keys[0].key_path == (
+        "agents",
+        "defaults",
+        "models",
+        "mcc/*",
+    )
 
     unconfigure_owned_block(
         merge=_merge(),
@@ -463,6 +565,7 @@ def test_a_refresh_keeps_a_later_restore_possible(tmp_path) -> None:
         subject=SUBJECT,
         claim=False,
         record_path=record,
+        proxy_token=FAKE_TOKEN,
     )
 
     unconfigure_owned_block(
@@ -474,6 +577,193 @@ def test_a_refresh_keeps_a_later_restore_possible(tmp_path) -> None:
         proxy_root_url=ROOT,
     )
     assert path.read_bytes().decode("utf-8") == seed
+
+
+# ------------------------------------------------- the model allowlist (8.20.3)
+
+
+def test_an_explicit_model_policy_gets_the_wildcard_appended_once(tmp_path) -> None:
+    """Q3's governing container, and the vendor's precedence, case one."""
+
+    seed = (
+        "// my openclaw config\n"
+        "{\n"
+        '  "agents": {\n'
+        '    "defaults": {\n'
+        '      "modelPolicy": {\n'
+        '        "allow": ["openai/gpt-6-astra", "openrouter/auto"]\n'
+        "      }\n"
+        "    }\n"
+        "  },\n"
+        '  "logging": {"level": "info"}\n'
+        "}\n"
+    )
+    path, record = _configured(seed, tmp_path)
+
+    document = _parsed(path.read_text(encoding="utf-8"))
+    defaults = document["agents"]["defaults"]
+    assert defaults["modelPolicy"]["allow"] == [
+        "openai/gpt-6-astra",
+        "openrouter/auto",
+        "mcc/*",
+    ]
+    # No legacy map was created beside it: the policy governs.
+    assert "models" not in defaults
+
+    unconfigure_owned_block(
+        merge=_merge(),
+        path=path,
+        subject=SUBJECT,
+        record_path=record,
+        proxy_root_url=ROOT,
+    )
+    assert path.read_bytes().decode("utf-8") == seed
+
+
+def test_a_model_policy_without_allow_gets_no_visibility_write(
+    tmp_path, capsys
+) -> None:
+    """The vendor ignores the legacy map once ``modelPolicy`` is a record.
+
+    ``collectLegacyDefaultModelAllowRefs`` returns null for
+    ``isRecord(defaults.modelPolicy)``, so nothing restricts the picker and
+    MCC adds nothing -- and says why.
+    """
+
+    seed = (
+        "{\n"
+        '  "agents": {\n'
+        '    "defaults": {\n'
+        '      "modelPolicy": {"repair": true},\n'
+        '      "models": {"openai/gpt-6-astra": {}}\n'
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    path, record = _configured(seed, tmp_path)
+
+    defaults = _parsed(path.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["models"] == {"openai/gpt-6-astra": {}}
+    assert "modelPolicy" in defaults
+    assert "reads as no restriction" in capsys.readouterr().err
+
+    unconfigure_owned_block(
+        merge=_merge(),
+        path=path,
+        subject=SUBJECT,
+        record_path=record,
+        proxy_root_url=ROOT,
+    )
+    assert path.read_bytes().decode("utf-8") == seed
+
+
+def test_a_wildcard_already_there_is_not_added_twice(tmp_path) -> None:
+    seed = (
+        "{\n"
+        '  "agents": {"defaults": {"models": {"mcc/*": {}, "openai/x": {}}}},\n'
+        '  "logging": {"level": "info"}\n'
+        "}\n"
+    )
+    path, _record = _configured(seed, tmp_path)
+
+    text = path.read_text(encoding="utf-8")
+    assert text.count('"mcc/*"') == 1
+
+
+# ------------------------------------------------------ the token (8.20.3 Q2)
+
+
+def test_no_token_configured_writes_the_variable_reference(tmp_path) -> None:
+    """Never an empty ``apiKey``: the launcher can satisfy a reference."""
+
+    path, _record = _configured(SEEDS["canonical"], tmp_path, token="")
+
+    block = json.loads(path.read_text(encoding="utf-8"))["models"]["providers"]["mcc"]
+    assert block["apiKey"] == OPENCLAW_API_KEY_FALLBACK == "$MCC_OPENCLAW_API_KEY"
+
+
+def test_a_token_is_upgraded_from_the_reference_on_the_next_run(tmp_path) -> None:
+    """An install configured before the token existed converges on a re-run."""
+
+    path, _record = _configured(SEEDS["canonical"], tmp_path, token="")
+    assert "$MCC_OPENCLAW_API_KEY" in path.read_text(encoding="utf-8")
+
+    configure_owned_block(
+        merge=_merge(),
+        path=path,
+        document=_document(),
+        proxy_root_url=ROOT,
+        subject=SUBJECT,
+        record_path=tmp_path / "restore-record.json",
+        proxy_token=FAKE_TOKEN,
+    )
+
+    block = json.loads(path.read_text(encoding="utf-8"))["models"]["providers"]["mcc"]
+    assert block["apiKey"] == FAKE_TOKEN
+
+
+def test_the_token_is_never_in_the_record_nor_anywhere_else_in_the_file(
+    tmp_path,
+) -> None:
+    """The secret is written once, in ``apiKey``, and nowhere else (IV.5)."""
+
+    path, record = _configured(SEEDS["canonical"], tmp_path)
+
+    raw = path.read_bytes().decode("utf-8")
+    assert raw.count(FAKE_TOKEN) == 1
+    assert FAKE_TOKEN not in record.read_text(encoding="utf-8")
+    assert FAKE_TOKEN not in path.with_name("openclaw.json.mcc-backup").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_the_record_names_what_was_created_so_undo_can_take_it_back(tmp_path) -> None:
+    _path, record = _configured(SEEDS["canonical"], tmp_path)
+
+    entry = read_entry(SUBJECT, path=record)
+    assert entry is not None
+    assert [
+        (key.key_path, key.value, key.in_sequence) for key in entry.created_keys
+    ] == [(("agents", "defaults", "models", "mcc/*"), {}, False)]
+
+
+def test_a_second_configure_of_the_same_document_writes_nothing(tmp_path) -> None:
+    path, record = _configured(SEEDS["canonical"], tmp_path)
+    before = path.read_bytes()
+
+    result = configure_owned_block(
+        merge=_merge(),
+        path=path,
+        document=_document(),
+        proxy_root_url=ROOT,
+        subject=SUBJECT,
+        record_path=record,
+        proxy_token=FAKE_TOKEN,
+    )
+
+    assert result.changed is False
+    assert path.read_bytes() == before
+
+
+def test_a_refresh_adds_a_missing_wildcard_and_never_the_default_model(
+    tmp_path,
+) -> None:
+    """``claim=False`` may add MCC's own keys; the user's model is theirs."""
+
+    seed = (
+        "{\n"
+        '  "agents": {"defaults": {"model": {"primary": "openai/gpt-5"}}},\n'
+        '  "models": {"providers": {"mcc": {"baseUrl": "http://127.0.0.1:8082/v1"}}}\n'
+        "}\n"
+    )
+    path, record = _configured(seed, tmp_path, claim=False)
+
+    document = _parsed(path.read_text(encoding="utf-8"))
+    defaults = document["agents"]["defaults"]
+    assert defaults["model"] == {"primary": "openai/gpt-5"}
+    assert defaults["models"]["mcc/*"] == {}
+    # Nothing replaced, and no record of a claim that never happened.
+    assert read_entry(SUBJECT, path=record) is None
 
 
 def test_a_commented_document_is_read_the_way_openclaw_reads_it(tmp_path) -> None:

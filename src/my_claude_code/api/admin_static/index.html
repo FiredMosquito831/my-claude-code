@@ -930,7 +930,8 @@
                       variable, so this proxy merges a single
                       <code>models.providers.mcc</code> block into it &mdash;
                       comments, layout and every other key left byte for byte,
-                      your default model recorded so Undo can put it back, and
+                      one <code>mcc/*</code> allowance so its picker offers every
+                      model, your default model set only when you have none, and
                       your file backed up first.
                     </p>
                   </div>
@@ -4856,14 +4857,20 @@ mcc-gemini</code></pre>
                   order come back byte for byte; the document is copied to
                   <code>openclaw.json.mcc-backup</code> before the first edit; a
                   refresh that resolves the same models writes nothing and only ever
-                  touches a block that already names this server. One value outside
-                  the block is written &mdash; OpenClaw's default model,
-                  <code>agents.defaults.model.primary</code> &mdash; and what it held
-                  is recorded, so <code>mcc-openclaw --disconnect</code> puts it back.
-                  <code>mcc-openclaw --restore</code> does the same but refuses if the
-                  file changed since. Models carry the limits and prices the ladder
-                  actually resolved; a value nobody published is left out rather than
-                  written as a zero.
+                  touches a block that already names this server. Two additions sit
+                  outside the block and nothing else is written: one
+                  <code>mcc/*</code> entry in whichever container governs OpenClaw's
+                  model allowlist &mdash; without it a non-empty
+                  <code>agents.defaults.models</code> filters every mcc model out of
+                  the picker &mdash; and <code>agents.defaults.model.primary</code>
+                  only when your file has no default model at all. Both are recorded,
+                  so <code>mcc-openclaw --disconnect</code> takes them back out. The
+                  provider's <code>apiKey</code> carries this proxy's token in
+                  plaintext, because OpenClaw only counts a credential it can read
+                  itself. <code>mcc-openclaw --restore</code> does the same but
+                  refuses if the file changed since. Models carry the limits and
+                  prices the ladder actually resolved; a value nobody published is
+                  left out rather than written as a zero.
                 </p>
                 <p>
                   <strong>Hermes Agent's file is YAML, and its home is not your

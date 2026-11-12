@@ -57,9 +57,13 @@ from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
 )
 from my_claude_code.config.document_codecs import (
+    AddKeyIfAbsent,
+    AppendToSequenceIfAbsent,
     DeleteKey,
     DocumentFormat,
     DocumentFormatError,
+    Edit,
+    RemoveFromSequence,
     SetScalar,
     SetTable,
     apply_edits,
@@ -73,6 +77,7 @@ from my_claude_code.config.harnesses import (
     HarnessConfigMerge,
 )
 from my_claude_code.config.restore_record import (
+    CreatedKey,
     RestoreEntry,
     UndoMode,
     capture_overwritten,
@@ -84,6 +89,7 @@ from my_claude_code.config.restore_record import (
     value_at,
     write_entry,
 )
+from my_claude_code.config.settings import get_settings
 
 #: Keys the serialiser puts at the top of its own document that belong inside
 #: the owned subtree once merged, so removing MCC's key removes every trace of
@@ -218,6 +224,70 @@ def with_base_url(
         stripped = proxy_root_url.rstrip("/")
         resolved[key] = stripped if stripped.endswith("/v1") else f"{stripped}/v1"
     return resolved
+
+
+def with_proxy_token(
+    block: Mapping[str, object],
+    *,
+    key: str | None,
+    sentinel: str | None,
+    fallback: str | None,
+    token: str,
+) -> dict[str, object]:
+    """Return the owned block with its token placeholder replaced by a value.
+
+    OpenClaw 2026.11.3 decides whether a provider is *available* from
+    credentials it can resolve in its own process
+    (``dist/model-auth-availability-CHDFhgHQ.mjs:405-435``), and a bare
+    ``$VAR`` reference is only usable when the CLI was started by MCC's
+    launcher. So the token is written literally -- the user's decision of
+    2026-11-13, and what OpenClaw's own ``applyCustomApiConfig`` does -- while
+    the serialiser keeps writing its reference, which is both the placeholder
+    this replaces and the value an install with no token keeps. A serialised
+    document is therefore byte-identical to what every earlier release
+    published, and no secret travels through ``GET /admin/api/catalogue-models``.
+
+    Three cases, and the third is the one that matters:
+
+    * a configured token replaces the sentinel (and an older install's
+      fallback reference, so upgrading needs no hand edit);
+    * an empty token writes ``fallback`` -- never ``""``, which OpenClaw reads
+      as "no credential" and which would be a worse answer than a reference
+      the launcher can satisfy;
+    * any other value is somebody's own and is left alone, which is what makes
+      the second run of a Configure a no-op.
+
+    A spec that declares no token (every merge target but OpenClaw) is
+    unchanged, key for key.
+    """
+
+    resolved = dict(block)
+    if not key or not sentinel or resolved.get(key) not in {sentinel, fallback}:
+        return resolved
+    resolved[key] = token or (fallback or sentinel)
+    return resolved
+
+
+def _resolve_proxy_token(merge: HarnessConfigMerge, token: str | None) -> str:
+    """Return the token to write: the caller's, or this install's own.
+
+    The launchers are frozen and pass nothing, so the engine resolves the
+    configured ``ANTHROPIC_AUTH_TOKEN`` itself rather than making the secret
+    travel through a call site. A caller that already holds the settings (the
+    background refresh) passes its own, so the two can never disagree.
+
+    A settings load that fails is not a reason to refuse the merge: the CLI
+    gets the fallback reference, which is what it had before this existed.
+    """
+
+    if token is not None:
+        return token.strip()
+    if not merge.proxy_token_key:
+        return ""
+    try:
+        return get_settings().anthropic_auth_token.strip()
+    except Exception:
+        return ""
 
 
 def read_document(
@@ -511,17 +581,32 @@ def configure_owned_block(
     subject: str,
     claim: bool = True,
     record_path: Path | None = None,
+    proxy_token: str | None = None,
 ) -> MergeResult:
-    """Write MCC's block -- and any value it replaces -- into the user's file.
+    """Write MCC's block -- and every additive key beside it -- into the file.
 
     ``claim`` separates the two callers. ``True`` is the explicit
-    ``mcc-<harness>`` run: it writes the block, writes the replaced values and
-    records what they were. ``False`` is the background refresh: it brings
-    MCC's own block up to date and touches nothing else, because
-    ``agents.defaults.model.primary`` is the user's choice of model and a
-    provider refresh must not move it back under them. A refresh also keeps the
-    stored document hash current (``refresh_document_sha256``), so a later
-    ``RESTORE`` does not refuse over bytes MCC itself wrote.
+    ``mcc-<harness>`` run: it writes the block, writes the keys the file is
+    missing, and records what it created and what it replaced. ``False`` is the
+    background refresh: it brings MCC's own block and any missing MCC key up to
+    date and touches nothing else, because ``agents.defaults.model.primary`` is
+    the user's choice of model and a provider refresh must not move it back
+    under them. A refresh also keeps the stored document hash current
+    (``refresh_document_sha256``), so a later ``RESTORE`` does not refuse over
+    bytes MCC itself wrote.
+
+    Since 8.20.3 the whole change is additive, and three declarations say so:
+
+    * ``create_only_key_paths`` -- keys written only when absent. Present, the
+      writer leaves them and says so in one line (the user's Q1); nothing is
+      recorded, because nothing was written.
+    * ``model_policy_allow_path``/``models_allowlist_path``/``visibility_ref``
+      -- the CLI's model allowlist, which MCC adds one ref to so its own models
+      are not filtered out of the picker (the user's Q1/Q3: the global
+      container only, never a per-agent policy).
+    * ``proxy_token_key``/``proxy_token_sentinel``/``proxy_token_fallback`` --
+      the credential placeholder, substituted here rather than by a caller, so
+      the token never travels through a serialised document or an HTTP route.
 
     Raises :class:`MergeDocumentError` rather than touching a document that
     does not parse: the user's file is not MCC's to replace.
@@ -530,16 +615,46 @@ def configure_owned_block(
     before_text, existed, crlf = _read_text_or_empty(path)
     document_format = merge_document_format(merge)
     parsed = _parsed_or_raise(before_text, path, document_format)
-    block = with_base_url(
-        owned_block(document, merge.owned_key_path),
-        proxy_root_url,
-        key=merge.base_url_key,
-        sentinel=merge.base_url_sentinel,
+    block = with_proxy_token(
+        with_base_url(
+            owned_block(document, merge.owned_key_path),
+            proxy_root_url,
+            key=merge.base_url_key,
+            sentinel=merge.base_url_sentinel,
+        ),
+        key=merge.proxy_token_key,
+        sentinel=merge.proxy_token_sentinel,
+        fallback=merge.proxy_token_fallback,
+        token=_resolve_proxy_token(merge, proxy_token),
     )
 
-    edits: list[SetTable | SetScalar] = [SetTable(merge.owned_key_path, block)]
+    edits: list[Edit] = [SetTable(merge.owned_key_path, block)]
+    notices: list[str] = []
     recorded: list[tuple[str, ...]] = []
+    created: list[CreatedKey] = []
     if claim:
+        for key_path in merge.create_only_key_paths:
+            value, written = value_at(document, key_path)
+            if not written:
+                continue
+            _existing, present = value_at(parsed, key_path)
+            if present:
+                notices.append(
+                    f"{'.'.join(key_path)} is already set; MCC left your "
+                    "default model alone."
+                )
+                continue
+            interrupted = _interrupted_ancestor(parsed, key_path)
+            if interrupted is not None:
+                # ``_json_set`` would replace the whole value here, and a
+                # merge that promised to add must not.
+                notices.append(
+                    f"{'.'.join(interrupted)} is not an object, so MCC left "
+                    f"{'.'.join(key_path)} alone."
+                )
+                continue
+            edits.append(SetScalar(tuple(key_path), value))
+            recorded.append(tuple(key_path))
         for key_path in merge.overwritten_key_paths:
             value, present = value_at(document, key_path)
             if not present:
@@ -550,6 +665,20 @@ def configure_owned_block(
             # replacing that whole value. Record the value that goes, not the
             # key MCC could not have written into.
             recorded.append(_interrupted_ancestor(parsed, key_path) or tuple(key_path))
+
+    visibility_edit, visibility_note = _visibility_addition(parsed, merge)
+    if visibility_edit is not None:
+        edits.append(visibility_edit)
+        created.append(
+            CreatedKey(
+                key_path=visibility_edit.key_path,
+                value=visibility_edit.value,
+                in_sequence=isinstance(visibility_edit, AppendToSequenceIfAbsent),
+            )
+        )
+    if visibility_note:
+        notices.append(visibility_note)
+    _say(notices)
 
     created_parents = _created_parents(parsed, [edit.key_path for edit in edits])
     overwritten = (
@@ -575,6 +704,11 @@ def configure_owned_block(
     backup_path = _backup_if_needed(path, merge.backup_suffix) if existed else None
     _write_document_text(path, after_text, crlf)
     if claim:
+        # ``keep_when_empty`` is also set when a record already exists: a
+        # Configure that adds nothing this time -- every additive key is
+        # already there and the default model is the user's -- must not drop
+        # what the first one wrote. Those created keys and parents are the
+        # first Configure's answer, and Undo needs them (8.20.3).
         write_entry(
             RestoreEntry(
                 subject=subject,
@@ -583,9 +717,13 @@ def configure_owned_block(
                 overwritten=overwritten,
                 created_file=not existed,
                 created_parents=created_parents,
+                created_keys=tuple(created),
             ),
             path=record_path,
-            keep_when_empty=merge.records_document_hash,
+            keep_when_empty=(
+                merge.records_document_hash
+                or read_entry(subject, path=record_path) is not None
+            ),
         )
     elif existed:
         refresh_document_sha256(
@@ -597,6 +735,99 @@ def configure_owned_block(
     return MergeResult(
         path=path, changed=True, created=not existed, backup_path=backup_path
     )
+
+
+def _visibility_addition(
+    document: Mapping[str, object], merge: HarnessConfigMerge
+) -> tuple[AddKeyIfAbsent | AppendToSequenceIfAbsent | None, str]:
+    """Return the one edit that puts MCC's models back in the CLI's picker.
+
+    OpenClaw reads a non-empty ``agents.defaults.modelPolicy.allow`` -- or,
+    when ``modelPolicy`` is not a record at all, the keys of
+    ``agents.defaults.models`` -- as an allowlist, materialises it into
+    ``modelPolicy.allow`` at load and then offers only the models it names
+    (``resolveConfiguredModelPolicyAllow``,
+    ``dist/model-selection-shared-BwqT1-JC.mjs:878-908``;
+    ``collectLegacyDefaultModelAllowRefs``,
+    ``dist/model-policy-allowlist-migration-BErDvsnV.mjs:58-68``). A user who
+    already restricts their own models would therefore never see an ``mcc/…``
+    row. One segment wildcard, ``mcc/*``, admits every one of them and any the
+    catalogue gains later (``isModelKeyAllowedBySet``:934-942), and the vendor
+    skips wildcard keys when it builds model rows
+    (``configured-model-entries-*.mjs``), so it adds no bogus model.
+
+    The precedence below is the vendor's own, in its own order:
+
+    1. ``modelPolicy`` is a record with an ``allow`` array -- the explicit
+       policy governs: append ``mcc/*`` when it is not there. ``modelPolicy``
+       as a record with anything else in ``allow`` is a document OpenClaw's
+       schema rejects, so nothing is written into it.
+    2. ``modelPolicy`` is a record *without* an ``allow`` array -- the legacy
+       map is ignored outright (``isRecord(defaults.modelPolicy)`` returns
+       null), so no allowlist governs and there is nothing to add.
+    3. the CLI has already migrated a legacy map
+       (``meta.migrations.modelPolicyAllowlist``) -- the legacy map is ignored
+       for the same reason.
+    4. otherwise ``agents.defaults.models`` is the legacy map: add the key, or
+       create the map holding only that key when the document has none.
+
+    The second return value is a sentence for the user when there is nothing
+    MCC can safely add, and "" when it added its ref or found it already
+    there. Per-agent policies (``agents.entries.*.modelPolicy.allow``) are
+    never touched: they are the user's own restriction on their own agents
+    (the user's Q3).
+    """
+
+    allow_path = tuple(merge.model_policy_allow_path)
+    models_path = tuple(merge.models_allowlist_path)
+    ref = merge.visibility_ref
+    if not allow_path or not models_path or not ref:
+        return None, ""
+
+    policy_path = allow_path[:-1]
+    policy, policy_present = value_at(document, policy_path)
+    if policy_present and isinstance(policy, Mapping):
+        allow, _present = value_at(document, allow_path)
+        if not isinstance(allow, list):
+            return None, (
+                f"{'.'.join(policy_path)} is a model policy without an allow "
+                "list, which this CLI reads as no restriction; MCC added "
+                "nothing to it."
+            )
+        if ref in allow:
+            return None, ""
+        return AppendToSequenceIfAbsent(allow_path, ref), ""
+
+    marker, _present = value_at(
+        document, ("meta", "migrations", "modelPolicyAllowlist")
+    )
+    if marker is True:
+        return None, (
+            f"{'.'.join(models_path)} was already migrated by this CLI, so "
+            "nothing restricts its model picker; MCC added nothing."
+        )
+
+    models, models_present = value_at(document, models_path)
+    if models_present and not isinstance(models, Mapping):
+        return None, (
+            f"{'.'.join(models_path)} is not a map, and MCC adds keys rather "
+            "than replacing a value; MCC added nothing to it."
+        )
+    if isinstance(models, Mapping) and ref in models:
+        return None, ""
+    return AddKeyIfAbsent((*models_path, ref), {}), ""
+
+
+def _say(notices: Sequence[str]) -> None:
+    """Print what the writer deliberately did not do, on the launcher's stream.
+
+    Only a claiming Configure produces these -- the background refresh writes
+    silently -- and the caller (``mcc-<harness>``) has already printed nothing
+    about them, so they belong here rather than in a frozen launcher.
+    """
+
+    for notice in notices:
+        print(f"My Claude Code: {notice}", file=sys.stderr)
 
 
 def unconfigure_owned_block(
@@ -611,10 +842,11 @@ def unconfigure_owned_block(
     """Take MCC's block back out, putting back whatever it replaced.
 
     The two modes are the desktop engine's, unchanged: ``KEYS_ONLY`` removes
-    exactly what MCC created, restores what the record says it replaced, and
-    never refuses; ``RESTORE`` does the same but requires the record and
-    refuses when the document has moved since MCC wrote it. A file MCC created
-    is removed once nothing is left in it.
+    exactly what MCC created -- its block, plus every key and array element the
+    record says it created beside it -- restores what the record says it
+    replaced, and never refuses; ``RESTORE`` does the same but requires the
+    record and refuses when the document has moved since MCC wrote it. A file
+    MCC created is removed once nothing is left in it.
     """
 
     before_text, existed, crlf = _read_text_or_empty(path)
@@ -660,13 +892,17 @@ def unconfigure_owned_block(
 
     # What Undo puts back comes from the record, not from the merge spec: the
     # record is what MCC actually wrote, and it is the only thing that knows a
-    # plain-string ``agents.defaults.model`` was replaced whole.
-    replaced_paths = (
-        tuple(tuple(value.key_path) for value in entry.overwritten)
-        if entry is not None and entry.overwritten
-        else merge.overwritten_key_paths
-    )
-    edits: list[DeleteKey | SetScalar] = [
+    # plain-string ``agents.defaults.model`` was replaced whole. Without one
+    # there is no such knowledge, and the spec's declared paths are the best
+    # statement of what might be MCC's -- which is why the fallback is "no
+    # record at all" rather than "a record that replaced nothing": an additive
+    # Configure records no overwritten value, and reading that as "no record"
+    # would delete the user's own default model.
+    if entry is not None:
+        replaced_paths = tuple(tuple(value.key_path) for value in entry.overwritten)
+    else:
+        replaced_paths = (*merge.overwritten_key_paths, *merge.create_only_key_paths)
+    edits: list[Edit] = [
         # With a record, the containers MCC created are named and removed
         # below, one at a time -- so the leaf is removed on its own and a
         # container the user already had is kept, even an empty one. Without a
@@ -677,6 +913,16 @@ def unconfigure_owned_block(
             prune_empty_ancestors=entry is None,
         )
     ]
+    # Every key MCC created outside its block, and every array element it
+    # appended: without these, Undo leaves the wildcard that made MCC's models
+    # visible behind, and "reversible" would be false for the half of the
+    # change that is not the block (8.20.3).
+    for created in entry.created_keys if entry is not None else ():
+        key_path = tuple(created.key_path)
+        if created.in_sequence:
+            edits.append(RemoveFromSequence(key_path, created.value))
+        else:
+            edits.append(DeleteKey(key_path, prune_empty_ancestors=False))
     for key_path in replaced_paths:
         found = restore.get(tuple(key_path))
         if found is None:

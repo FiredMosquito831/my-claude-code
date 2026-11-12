@@ -465,13 +465,19 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         # MCC writes into a file it does not own.
         "merged_key": merge.owned_key_label if merge is not None else None,
         # Values outside that key which MCC replaces, with the user's prior
-        # value recorded so Undo can put it back (7.116.0, OpenClaw's default
-        # model). Empty for every merge target that only creates keys.
+        # value recorded so Undo can put it back (7.116.0). Empty for every
+        # merge target that only creates keys, which since 8.20.3 is every one
+        # of them: OpenClaw's default model moved to ``added_keys``.
         "replaced_keys": (
             [".".join(key_path) for key_path in merge.overwritten_key_paths]
             if merge is not None
             else []
         ),
+        # Keys MCC adds outside its block when the file does not have them,
+        # and the one model-visibility ref it appends to the CLI's allowlist
+        # (8.20.3). The card says so rather than claiming MCC writes one key
+        # and nothing else, because the user audits that sentence.
+        "added_keys": _added_keys(merge) if merge is not None else [],
         "delivery": catalogue.delivery,
         "path": str(path),
         "exists": False,
@@ -514,6 +520,17 @@ def _catalogue_entry(spec: HarnessSpec) -> dict[str, Any] | None:
         len(defaulted) if isinstance(defaulted, dict) else 0
     )
     return entry
+
+
+def _added_keys(merge: HarnessConfigMerge) -> list[str]:
+    """Return the keys MCC adds outside its block, as the card spells them."""
+
+    added = [".".join(key_path) for key_path in merge.create_only_key_paths]
+    if merge.visibility_ref and merge.models_allowlist_path:
+        added.append(
+            f"{'.'.join(merge.models_allowlist_path)}[{merge.visibility_ref!r}]"
+        )
+    return added
 
 
 def _merged_block(

@@ -129,7 +129,59 @@ class DeleteKey:
     prune_empty_ancestors: bool = True
 
 
-Edit = SetTable | SetScalar | DeleteKey
+@dataclass(frozen=True, slots=True)
+class AddKeyIfAbsent:
+    """Create one key, and only when nothing is there already.
+
+    The additive half of a merge (8.20.3, OpenClaw's model exposure): a
+    document that already says something about this key keeps saying it, so a
+    value the user wrote -- or one an earlier MCC wrote -- is never rewritten
+    by a Configure that only meant to add its own. A missing parent chain is
+    created for it, because a key nothing can hold is not a key anybody could
+    have written; an existing parent that is not an object raises instead of
+    being replaced, which is the one thing "add" cannot mean.
+
+    JSON only. TOML and YAML raise rather than guess -- no caller in the tree
+    asks them for it, and the module's rule is that a format is not given an
+    edit it cannot perform safely.
+    """
+
+    key_path: tuple[str, ...]
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class AppendToSequenceIfAbsent:
+    """Append one element to an array, and only when it is not already there.
+
+    The array is the user's: its order, its spacing, its comments and any
+    trailing comma it keeps are theirs, so the element goes in after the last
+    one and nothing else is rewritten. A path that does not name an array
+    raises rather than quietly doing nothing -- the caller decided an array was
+    there, and a merge that silently did not happen is worse than one that
+    says why it could not.
+    """
+
+    key_path: tuple[str, ...]
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class RemoveFromSequence:
+    """Remove one value from an array, when it is there: the Undo of the above."""
+
+    key_path: tuple[str, ...]
+    value: object
+
+
+Edit = (
+    SetTable
+    | SetScalar
+    | DeleteKey
+    | AddKeyIfAbsent
+    | AppendToSequenceIfAbsent
+    | RemoveFromSequence
+)
 
 
 def parse_document(text: str, document_format: DocumentFormat) -> object:
@@ -204,6 +256,12 @@ def _apply_toml_edits(text: str, edits: Sequence[Edit]) -> str:
                 )
                 if len(key_path) >= 1:
                     text = _toml_delete_table(text, key_path)
+            case AddKeyIfAbsent() | AppendToSequenceIfAbsent() | RemoveFromSequence():
+                raise DocumentFormatError(
+                    "additive edits are JSON only: a TOML table MCC owns whole "
+                    "is written with SetTable, and no caller asks for one of "
+                    "these here"
+                )
     return text
 
 
@@ -572,6 +630,12 @@ def _apply_yaml_edits(text: str, edits: Sequence[Edit]) -> str:
                 text = _yaml_delete(text, key_path, prune=prune)
             case SetTable(key_path=key_path, value=value):
                 text = _yaml_set_table(text, key_path, value)
+            case AddKeyIfAbsent() | AppendToSequenceIfAbsent() | RemoveFromSequence():
+                raise DocumentFormatError(
+                    "additive edits are JSON only: a YAML table MCC owns whole "
+                    "is written with SetTable, and no caller asks for one of "
+                    "these here"
+                )
     return text
 
 
@@ -1622,6 +1686,12 @@ def _apply_json_edits(text: str, edits: Sequence[Edit]) -> str:
                 text = _json_set(text, key_path, value, prior_text=prior_line)
             case DeleteKey(key_path=key_path, prune_empty_ancestors=prune):
                 text = _json_delete(text, key_path, prune=prune)
+            case AddKeyIfAbsent(key_path=key_path, value=value):
+                text = _json_add_if_absent(text, key_path, value)
+            case AppendToSequenceIfAbsent(key_path=key_path, value=value):
+                text = _json_append_if_absent(text, key_path, value)
+            case RemoveFromSequence(key_path=key_path, value=value):
+                text = _json_remove_from_sequence(text, key_path, value)
     return text
 
 
@@ -1653,6 +1723,128 @@ def _json_set(
             return _json_set_member(text, node, key, nested)
         node = member.value
     return _json_set_member(text, node, key_path[-1], value, prior_text)
+
+
+def _json_add_if_absent(text: str, key_path: Sequence[str], value: object) -> str:
+    """Insert one key with ``value``, unless the document already has that key.
+
+    "Has that key" is the whole test, deliberately: a key that is there with a
+    different value is somebody's answer and stays. The chain above it is
+    created when missing -- one nested render at the last level that exists,
+    exactly as :func:`_json_set` creates a chain -- and a level that exists as
+    anything but an object raises, because adding a key into a scalar means
+    replacing the scalar and this edit must never do that.
+    """
+
+    if not key_path:
+        raise DocumentFormatError("a JSON edit needs a key")
+    indent_unit = _json_indent_unit(text)
+    node = _json_root_object(text)
+    for depth, key in enumerate(key_path[:-1]):
+        member = node.members.get(key)
+        if member is None:
+            nested: object = value
+            for part in reversed(key_path[depth + 1 :]):
+                nested = {part: nested}
+            return _json_insert_member(text, node, key, nested, indent_unit)
+        if member.value.kind != "object":
+            raise DocumentFormatError(
+                f"{'.'.join(key_path[: depth + 1])} is not an object; MCC adds "
+                "keys and never replaces the value they sit in"
+            )
+        node = member.value
+    if key_path[-1] in node.members:
+        return text
+    return _json_insert_member(text, node, key_path[-1], value, indent_unit)
+
+
+def _json_append_if_absent(text: str, key_path: Sequence[str], value: object) -> str:
+    """Append one value to the array at ``key_path``, when it is not there.
+
+    The array is the user's -- order, spacing, comments and any trailing comma
+    it keeps survive because the element is spliced in after the last one and
+    nothing else is rewritten. The array's own layout decides the new
+    element's: an array written on one line gains ``", <value>"`` and a
+    block-laid-out array gains a line indented like its last element.
+    """
+
+    node = _json_node_at(text, key_path)
+    if node is None or node.kind != "array":
+        raise DocumentFormatError(
+            f"{'.'.join(key_path)} is not an array, so MCC cannot append to it"
+        )
+    for element in _json_array_elements(text, node):
+        if _json_value_is(_json_node_value(text, element), value):
+            return text
+    return _json_append_element(text, node, value, _json_indent_unit(text))
+
+
+def _json_remove_from_sequence(
+    text: str, key_path: Sequence[str], value: object
+) -> str:
+    """Remove one value from the array at ``key_path``, when it is there.
+
+    The Undo of :func:`AppendToSequenceIfAbsent`, and deliberately by value
+    rather than by position: a position recorded on Configure can name a
+    different element once the user has edited the array, and MCC's own ref is
+    the only element it may take back out.
+    """
+
+    node = _json_node_at(text, key_path)
+    if node is None or node.kind != "array":
+        return text
+    for element in _json_array_elements(text, node):
+        if not _json_value_is(_json_node_value(text, element), value):
+            continue
+        return _json_cut_span(text, element.start, element.end)
+    return text
+
+
+def _json_node_at(text: str, key_path: Sequence[str]) -> _JsonValue | None:
+    """Return the value at one key path, or None when any part of it is absent."""
+
+    node = _json_root_object(text)
+    for key in key_path:
+        if node.kind != "object":
+            return None
+        member = node.members.get(key)
+        if member is None:
+            return None
+        node = member.value
+    return node
+
+
+def _json_append_element(
+    text: str, node: _JsonValue, value: object, indent_unit: str
+) -> str:
+    """Splice one element in after the array's last, in the array's own layout."""
+
+    elements = _json_array_elements(text, node)
+    if elements:
+        anchor = elements[-1].end
+        indent = _json_line_indent(text, elements[-1].start)
+        if indent:
+            rendered = _json_render(value, indent_unit, indent)
+            return text[:anchor] + f",\n{indent}{rendered}" + text[anchor:]
+        # An array written on one line stays on one line.
+        return text[:anchor] + f", {json.dumps(value)}" + text[anchor:]
+    base_indent = _json_line_indent(text, node.start)
+    element_indent = base_indent + indent_unit
+    rendered = _json_render(value, indent_unit, element_indent)
+    if text[node.start + 1 : node.end - 1].strip():
+        # An "empty" array that is not empty: it carries a comment. The
+        # comment stays and the element goes in after it.
+        return (
+            text[: node.end - 1]
+            + f"\n{element_indent}{rendered}\n{base_indent}"
+            + text[node.end - 1 :]
+        )
+    return (
+        text[: node.start]
+        + "[\n"
+        + f"{element_indent}{rendered}\n{base_indent}]"
+        + text[node.end :]
+    )
 
 
 def _json_set_member(
@@ -1690,7 +1882,13 @@ def _json_text_says(prior_text: str, value: object) -> bool:
         parsed = parse_jsonc(prior_text)
     except DocumentFormatError:
         return False
-    return type(parsed) is type(value) and parsed == value
+    return _json_value_is(parsed, value)
+
+
+def _json_value_is(found: object, value: object) -> bool:
+    """Equal and of the same type, because JSON is: ``true`` is not ``1``."""
+
+    return type(found) is type(value) and found == value
 
 
 def scalar_text(
@@ -1777,6 +1975,10 @@ def _json_delete(text: str, key_path: Sequence[str], *, prune: bool = True) -> s
     leave alone. An ancestor still holding somebody else's keys is theirs.
     ``prune=False`` removes the key alone, for a container the caller knows
     was there before MCC.
+
+    Whichever mode it runs in, a container on this key's own path that the
+    removal leaves holding nothing is rendered back as ``{}`` -- see
+    :func:`_json_collapse_emptied`.
     """
 
     stop = 0 if prune else len(key_path) - 1
@@ -1799,18 +2001,46 @@ def _json_delete(text: str, key_path: Sequence[str], *, prune: bool = True) -> s
         ):
             break
         text = _json_cut_member(text, member)
+    text = _json_collapse_emptied(text, key_path)
     return _json_collapse_empty_root(text)
+
+
+def _json_collapse_emptied(text: str, key_path: Sequence[str]) -> str:
+    """Render a container this removal emptied as the ``{}`` a user wrote.
+
+    Inserting into an empty container gives it MCC's own layout, and taking
+    the member back out leaves that layout behind: ``"providers": {}`` came
+    back as ``"providers": {\\n}`` (or ``{\\n  }``), which is two bytes of MCC
+    in a document that promised to give the user's back -- the same defect
+    :func:`_json_collapse_empty_root` fixed for the document root, one level
+    down (8.20.3).
+
+    Only containers on this key's own path are considered, and only ones with
+    no members left and nothing but whitespace between their braces: an empty
+    object somebody else wrote elsewhere in the document is not MCC's to
+    re-render, and one holding a comment is somebody's writing.
+    """
+
+    for depth in range(len(key_path) - 1, 0, -1):
+        node = _json_node_at(text, key_path[:depth])
+        if node is None or node.kind != "object" or node.members:
+            continue
+        body = text[node.start + 1 : node.end - 1]
+        if body and not body.strip():
+            text = text[: node.start + 1] + text[node.end - 1 :]
+    return text
 
 
 def _json_collapse_empty_root(text: str) -> str:
     """Return ``{}`` where removing MCC's last key left an empty root.
 
     Only the root, and only when what is left between the braces is whitespace:
-    every deeper container MCC emptied is pruned outright by :func:`_json_delete`
-    above, and a body with a comment in it is somebody's writing. Without this,
-    a Configure and an Undo against a file that was ``{}`` gave back ``{\\n}``
-    -- two bytes away from where it started, which is exactly the promise the
-    byte-preserving path exists to keep.
+    every deeper container MCC emptied is collapsed by
+    :func:`_json_collapse_emptied` above, and a body with a comment in it is
+    somebody's writing. Without this, a Configure and an Undo against a file
+    that was ``{}`` gave back ``{\\n}`` -- two bytes away from where it
+    started, which is exactly the promise the byte-preserving path exists to
+    keep.
     """
 
     root = _json_root_object(text)
@@ -1825,7 +2055,17 @@ def _json_collapse_empty_root(text: str) -> str:
 def _json_cut_member(text: str, member: _JsonMember) -> str:
     """Return the text with one member, its separator and its blank line gone."""
 
-    start, end = member.start, member.end
+    return _json_cut_span(text, member.start, member.end)
+
+
+def _json_cut_span(text: str, start: int, end: int) -> str:
+    """Return the text with one value, its separator and its blank line gone.
+
+    The member and the array-element cases are the same surgery -- a value's
+    span, the comma on whichever side of it is there, and the line it sat on
+    -- so they share it.
+    """
+
     following = _json_skip(text, end)
     if following < len(text) and text[following] == ",":
         end = following + 1

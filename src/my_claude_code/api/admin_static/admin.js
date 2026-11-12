@@ -31234,18 +31234,23 @@ function harnessMeta(harness) {
 
   if (catalogue && catalogue.merged_key) {
     // This agent reads only its own config file, so MCC writes one key into
-    // it. Saying which key, and that nothing else is touched, is the whole
-    // difference between an edit a user can audit and one they cannot.
+    // it. Saying which key, and what else MCC may add, is the whole difference
+    // between an edit a user can audit and one they cannot.
     const replaced = catalogue.replaced_keys || [];
+    const added = catalogue.added_keys || [];
+    let mergedDetail = `${catalogue.merged_key} - the only key MCC writes`;
+    if (replaced.length) {
+      mergedDetail +=
+        `; it also sets ${replaced.join(", ")}, recorded so Undo puts your value back`;
+    }
+    if (added.length) {
+      mergedDetail +=
+        `; it adds ${added.join(", ")} only when your file does not have them, and Undo removes them`;
+    }
     rows.push([
       "Merged key",
-      replaced.length
-        ? `${catalogue.merged_key} - the only block MCC writes; it also sets ` +
-          `${replaced.join(", ")}, recorded so Undo puts your value back. ` +
-          `Every other key is left byte-for-byte, comments and all, and your ` +
-          `file is backed up before the first edit`
-        : `${catalogue.merged_key} - the only key MCC writes; every other key is ` +
-          `left byte-for-byte, and your file is backed up before the first edit`,
+      `${mergedDetail}. Every other key is left byte-for-byte, comments and all, ` +
+        `and your file is backed up before the first edit`,
     ]);
   }
 

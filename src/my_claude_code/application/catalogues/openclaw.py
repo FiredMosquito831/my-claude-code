@@ -13,9 +13,6 @@ the wizard and not the document it writes. What that schema accepts, verbatim:
   ``models[]`` among others -- ``api`` is an enum and MCC uses
   ``openai-completions``, the one value that reaches MCC's
   ``POST /v1/chat/completions``;
-* ``apiKey`` accepts a ``$VAR`` / ``${VAR}`` reference, so the proxy token
-  never lands in a file the user owns. The launcher sets the variable in the
-  child process only;
 * a model entry **requires** ``id`` and ``name``; ``contextWindow``,
   ``maxTokens``, ``input``, ``reasoning``, ``cost`` and ``compat`` are all
   optional, and every one of them is omitted here when the ladder does not
@@ -28,11 +25,23 @@ the wizard and not the document it writes. What that schema accepts, verbatim:
   vocabulary, and MCC's ``ReasoningEffort`` values are already the OpenAI
   spellings that ``api: openai-completions`` sends as ``reasoning_effort``.
 
-**The one value outside MCC's block.** OpenClaw's default model is
-``agents.defaults.model.primary``. This serialiser states it at the same
-document root so the caller can write it in the same pass, and the Configure
-engine records what it replaced -- Undo puts the user's value back. The block
-itself stays the only subtree MCC owns.
+**The credential is a reference here, and a value only on disk (8.20.3).**
+``apiKey`` carries ``$MCC_OPENCLAW_API_KEY``, and
+``config/harness_config_merge`` substitutes the configured proxy token for it
+on the way to the file -- OpenClaw 2026.11.3 computes a provider's availability
+from credentials it can resolve in its own process, so the reference alone left
+every model at "Connection not confirmed". The substitution happens at the
+write, so this document as serialised carries no secret, and that is the
+document ``GET /admin/api/catalogue-models`` returns to the dashboard and to
+every launcher. With no token configured the reference is written unchanged,
+and ``mcc-openclaw`` still exports it into the child it launches.
+
+**The two additive keys outside MCC's block are not this module's.** The
+default model (``agents.defaults.model.primary``, written only when absent) and
+the model-visibility wildcard (``agents.defaults.models["mcc/*"]``) are
+declared on the merge spec in ``config/harnesses.py`` and written by the engine,
+because ``mcc-openclaw`` -- a frozen caller -- passes only this document and
+cannot state them.
 
 Read ``application/catalogues/base.py`` before changing anything here.
 """
@@ -67,9 +76,10 @@ PROVIDER_DISPLAY_NAME = "My Claude Code"
 #: chat surface for every other harness and the model ids are the same.
 PROVIDER_API = "openai-completions"
 
-#: Written verbatim into ``apiKey``. OpenClaw expands ``$VAR`` and ``${VAR}``
-#: from the process environment; the launcher sets this variable in the child
-#: process only.
+#: Written verbatim into ``apiKey``. The merge engine replaces it with the
+#: configured proxy token on the way to disk (8.20.3); OpenClaw expands it from
+#: the process environment when there is no token, and the launcher sets it in
+#: the child process only.
 API_KEY_REFERENCE = f"${OPENCLAW_API_KEY_ENV}"
 
 #: ``baseUrl`` gets the real proxy root, written by
