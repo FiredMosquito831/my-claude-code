@@ -274,6 +274,9 @@ def test_with_both_features_off_every_view_is_the_base_tree(
         "providers",
         "proxying",
         "model_config",
+        # 8.20.3: the OpenClaw launcher paragraph on the Claude page names the
+        # additive keys MCC writes beside its block. Prose only.
+        "claude",
     }
     base = baseline["views"]
     mine = design_system_off["views"]

@@ -432,6 +432,11 @@ MOVED_VIEWS = {
     # 2026-11-02's brief asks for exactly this note ("a provider's details open
     # in a panel"), so the page it is written on moves with it.
     "guide": "the Guide's provider walkthrough now describes the panel",
+    # 8.20.3: the OpenClaw launcher paragraph on the Claude page described the
+    # pre-fix write (one key beside the block, the default model replaced and
+    # recorded). It now names the two additive keys and the add-only default
+    # model. Prose only: no control, id or launcher row moved.
+    "claude": "the OpenClaw launcher paragraph names MCC's additive keys",
 }
 
 #: Views that had ALREADY moved at this branch's base, measured -- not assumed.

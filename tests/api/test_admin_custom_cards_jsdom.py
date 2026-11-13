@@ -466,6 +466,10 @@ def test_the_harness_runs_clean(cards) -> None:
 #: The one view whose bytes this PR changes on purpose.
 MOVED_VIEWS = {
     "providers": "the custom provider cards on it are faces now",
+    # 8.20.3: the OpenClaw launcher paragraph on the Claude page described the
+    # pre-fix write; it now names the two additive keys MCC writes beside its
+    # block and the add-only default model. Prose only.
+    "claude": "the OpenClaw launcher paragraph names MCC's additive keys",
 }
 
 #: Views that had ALREADY moved at this branch's base, measured -- not assumed.
@@ -532,8 +536,10 @@ def test_the_pre_existing_exemption_is_still_one_measured_view() -> None:
     moved-set off the diff -- which is what produced the three entries here.
     """
     assert set(PRE_EXISTING_MOVES) == {"requests", "web_search", "guide"}
-    # And exactly ONE view is this PR's own move.
-    assert set(MOVED_VIEWS) == {"providers"}
+    # And exactly the views this release moves: this PR's own face, and
+    # 8.20.3's OpenClaw paragraph on the Claude page (prose only). The
+    # pre-existing set above is untouched by either.
+    assert set(MOVED_VIEWS) == {"providers", "claude"}
 
 
 # --------------------------------------------------------------------------
