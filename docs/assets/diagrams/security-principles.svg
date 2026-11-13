@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t15 d15" font-family="ui-monospace, Consolas, monospace">
+<title id="t15">Security principles: local by default, a token for the proxy, owner-only stores, narrow egress</title>
+<desc id="d15">Five principles. The admin surface is loopback only. The proxy requires a bearer token once it is reachable from another machine, and refuses to start if the host is open and the token is empty. Credentials live in one configuration home with owner-only files. Logs redact key-like values and do not store payloads raw by default. Outbound traffic goes only to configured providers, and web fetch blocks private-network targets.</desc>
+<g font-size="12">
+<g>
+<rect x="20" y="30" width="820" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="56" fill="#3FB950" font-weight="700">1 · Local by default</text>
+<text x="36" y="78" fill="#A9B7C6" font-size="11">the admin UI and admin APIs are loopback-only; the proxy listens where you tell it to</text>
+</g>
+<g>
+<rect x="20" y="104" width="820" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="130" fill="#3FB950" font-weight="700">2 · A token once it leaves this machine</text>
+<text x="36" y="152" fill="#A9B7C6" font-size="11">the bearer token is compared in constant time; with the host open and the token empty, the server refuses to start</text>
+</g>
+<g>
+<rect x="20" y="178" width="820" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="36" y="204" fill="#58A6FF" font-weight="700">3 · Credentials in one owner-only home</text>
+<text x="36" y="226" fill="#A9B7C6" font-size="11">one .env you own; OAuth stores are owner-only and never shown again after they are saved</text>
+</g>
+<g>
+<rect x="20" y="252" width="820" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="36" y="278" fill="#58A6FF" font-weight="700">4 · Redacted by default in logs</text>
+<text x="36" y="300" fill="#A9B7C6" font-size="11">key-like, token-like and secret-like values are redacted; payloads and streamed events are not raw unless enabled</text>
+</g>
+<g>
+<rect x="20" y="326" width="820" height="60" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="36" y="352" fill="#D29922" font-weight="700">5 · Narrow egress</text>
+<text x="36" y="374" fill="#A9B7C6" font-size="11">outbound traffic goes to the providers you configured; web fetch blocks private-network targets unless allowed</text>
+</g>
+</g>
+</svg>

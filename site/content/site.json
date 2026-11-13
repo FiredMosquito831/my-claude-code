@@ -1,0 +1,22 @@
+{
+  "name": "My Claude Code",
+  "host": "myclaudecode.danubelabs.net",
+  "url": "https://myclaudecode.danubelabs.net/",
+  "repo": "https://github.com/FiredMosquito831/my-claude-code",
+  "version": "8.17.0",
+  "lastmod": "2026-11-10",
+  "copyright": "2026",
+  "licence_line": "Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.",
+  "non_affiliation": "My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.",
+  "og_alt": "My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.",
+  "software_description": "A local multi-provider LLM proxy, model router and control plane for AI coding agents.",
+  "feature_list": [
+    "Tier routing with fallback chains",
+    "Multi-key credential rotation and health",
+    "Reasoning control and encrypted reasoning replay",
+    "A native web-search and web-fetch tool proxy",
+    "Request log, analytics and cost with provenance",
+    "Sixteen agent launchers and desktop app configuration",
+    "Media routing over image, speech, transcription and video rails"
+  ]
+}

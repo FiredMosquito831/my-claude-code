@@ -1,0 +1,77 @@
+{% macro render_block(b, shots) -%}
+{% if b.type == "h2" %}
+<h2 id="{{ b.id }}">{{ b.text | safe }}</h2>
+{% elif b.type == "h3" %}
+<h3 id="{{ b.id }}">{{ b.text | safe }}</h3>
+{% elif b.type == "p" %}
+<p>{{ b.text | safe }}</p>
+{% elif b.type == "ul" %}
+<ul>{% for item in b["items"] %}<li>{{ item | safe }}</li>{% endfor %}</ul>
+{% elif b.type == "ol" %}
+<ol>{% for item in b["items"] %}<li>{{ item | safe }}</li>{% endfor %}</ol>
+{% elif b.type == "table" %}
+<div class="table-wrap"><table>
+{% if b.caption %}<caption>{{ b.caption | safe }}</caption>{% endif %}
+<thead><tr>{% for h in b.head %}<th scope="col">{{ h | safe }}</th>{% endfor %}</tr></thead>
+<tbody>{% for row in b.rows %}<tr>{% for cell in row %}<td>{{ cell | safe }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+</table></div>
+{% elif b.type == "figure" %}
+{% set shot = shots[b.shot] %}
+<figure class="figure">
+<img src="/assets/shots/{{ b.shot }}.webp" alt="{{ shot.alt }}" width="{{ shot.width }}" height="{{ shot.height }}" loading="lazy" decoding="async">
+<figcaption>{{ b.caption or shot.caption }}</figcaption>
+</figure>
+{% elif b.type == "diagram" %}
+<figure class="figure figure--diagram" id="fig-{{ b.name }}">
+<div class="diagram-body">{{ b.svg | safe }}</div>
+<figcaption>{{ b.caption }}</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> {{ b.alt }}</p>
+</figure>
+{% elif b.type == "code" %}
+{% if b.label %}<span class="code-label">{{ b.label }}</span>{% endif %}
+<pre><code>{{ b.text }}</code></pre>
+{% elif b.type == "callout" %}
+<div class="callout{% if b.kind == 'warn' %} callout--warn{% elif b.kind == 'accent' %} callout--accent{% endif %}">{{ b.text | safe }}</div>
+{% elif b.type == "cards" %}
+<div class="card-grid">
+{% for c in b.cards %}
+<a class="card" href="{{ c.href }}">
+{% if c.kicker %}<span class="card__kicker">{{ c.kicker }}</span>{% endif %}
+<span class="card__title">{{ c.title }}</span>
+<span class="card__text">{{ c.text | safe }}</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+{% endfor %}
+</div>
+{% elif b.type == "facts" %}
+<div class="facts">
+{% for f in b["items"] %}<div class="fact"><div class="fact__value">{{ f.value }}</div><div class="fact__label">{{ f.label }}</div></div>{% endfor %}
+</div>
+{% elif b.type == "related" %}
+<nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul>{% for l in b.links %}<li><a href="{{ l.href }}">{{ l.label }}</a></li>{% endfor %}</ul>
+</nav>
+{% elif b.type == "faq" %}
+<div class="faq">
+{% for q in b["items"] %}<details class="faq-item"><summary>{{ q.q }}</summary><div class="answer">{{ q.a | safe }}</div></details>{% endfor %}
+</div>
+{% elif b.type == "terms" %}
+<dl class="terms">
+{% for t in b["items"] %}<div class="term" id="{{ t.id }}"><dt>{{ t.term }}{% if t.alias %}<span class="alias">{{ t.alias }}</span>{% endif %}</dt><dd>{{ t.def | safe }}</dd></div>{% endfor %}
+</dl>
+{% elif b.type == "gallery_area" %}
+<section class="gallery-area" id="area-{{ b.area }}">
+<h2>{{ b.title }}</h2>
+{% if b.intro %}<p>{{ b.intro | safe }}</p>{% endif %}
+<div class="gallery-grid">
+{% for shot in b.shots %}
+<figure class="gallery-item" id="shot-{{ shot.slug }}">
+<a href="/assets/shots/{{ shot.slug }}.webp"><img src="/assets/shots/{{ shot.slug }}-thumb.webp" alt="{{ shot.alt }}" width="{{ shot.thumb_w }}" height="{{ shot.thumb_h }}" loading="lazy" decoding="async"></a>
+<figcaption>{{ shot.caption }}</figcaption>
+</figure>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+{%- endmacro %}

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration: how MCC settings are provided</title>
+<meta name="description" content="Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.">
+<meta name="keywords" content="llm gateway configuration, claude code proxy config, mcc settings, proxy configuration, gateway config file, mcc config dir, dotenv configuration, configuration home">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/configuration/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Configuration: how MCC settings are provided">
+<meta property="og:description" content="Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/configuration/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Configuration: how MCC settings are provided">
+<meta name="twitter:description" content="Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Configuration: how MCC settings are provided", "url": "https://myclaudecode.danubelabs.net/configuration/", "description": "Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Configuration"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Configuration: how MCC settings are provided", "description": "Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.", "url": "https://myclaudecode.danubelabs.net/configuration/", "about": {"@type": "Thing", "name": "My Claude Code configuration"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li>Configuration</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>How settings are provided</h1>
+<p class="page-intro">MCC has one configuration home, one .env and one set of documents beside it. The dashboard writes the file, the server reads it, and the launchers resolve the same directory. There is no second configuration system to reconcile. This page is the LLM gateway configuration map: the home, the file, the documents beside it and the variables that are read before the file is.</p>        <h2 id="the-configuration-home">The configuration home</h2>
+
+        <p>A new install keeps everything in <code>~/.mcc</code>. That directory holds the <code>.env</code>, the request log under <code>logs/</code>, the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file: custom provider definitions, per-agent tier overrides, credential names, OAuth stores, model overrides, learned facts, proxy chains and marketplace profiles. An install from before 6.40.0 is migrated from its legacy directory on its first start by one atomic rename, nothing copied or merged, and the startup log always names the directory in use.</p>
+
+        <div class="callout callout--warn"><strong>One variable resolves before the file does.</strong> <code>MCC_CONFIG_DIR</code> pins the configuration home to an absolute path and overrides every default. It must be set in your shell, not written into the .env, because the directory has to be known before there is a file to read. Set it for the <code>mcc-*</code> launchers too, or they will read a different directory than the server.</div>
+
+        <h2 id="the-env">The .env</h2>
+
+        <p>The <code>.env</code> is the settings file. Every setting lives there with the same name it has in the documentation, and the dashboard writes the same file, so a value set on a page and a value set by hand are the same value. On a new install the server writes the file on first start and generates the proxy token for that machine.</p>
+
+        <p>The repository ships an annotated example file, <code>.env.example</code>, with inline comments and cost notes. Its variable <em>names</em> are public; its values are not, and this site never publishes one. For a secret-like setting the configuration page on this site gives the name and the purpose only.</p>
+
+        <h2 id="the-documents-beside-the-env">The documents beside the .env</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Document</th><th scope="col">What it holds</th></tr></thead>
+<tbody><tr><td><code>custom_providers.json</code></td><td>custom provider definitions, including their static credentials</td></tr><tr><td><code>harness_tiers.json</code></td><td>per-agent tier overrides</td></tr><tr><td><code>credential_names.json</code></td><td>display names for keys, keyed by a hash of the key</td></tr><tr><td><code>model_overrides.json</code></td><td>operator overrides for a model's fields</td></tr><tr><td><code>learned_facts.json</code></td><td>what this install learned about a provider, with expiry</td></tr><tr><td><code>proxy_chains.json</code></td><td>named proxy chains and their exits</td></tr><tr><td><code>marketplace_profiles.json</code></td><td>InferHub price-ceiling profiles</td></tr><tr><td><code>anthropic_oauth.json</code></td><td>MCC's own OAuth credential store, owner-only</td></tr><tr><td><code>chatgpt-oauth.json</code></td><td>the ChatGPT OAuth store</td></tr><tr><td><code>logs/requests.db</code></td><td>the request log</td></tr></tbody>
+</table></div>
+
+        <h2 id="environment-variables-that-are-not-settings">Environment variables that are not settings</h2>
+
+        <p>A settings save and a credential refresh write different files. That split is what lets a provider be re-keyed without rewriting the routing map, and a tier change without touching an OAuth store. It is also why the dashboard can show a key round-trip and a tier change as two independent actions rather than one save that rewrites everything.</p>
+
+        <p>A few variables are read before or outside the settings file. <code>MCC_CONFIG_DIR</code> chooses the directory. <code>MCC_ENV_FILE</code> names an explicit dotenv file to load instead of the default one. The install scripts read <code>MCC_INSTALL_NO_START</code> and <code>MCC_INSTALL_NO_DESKTOP</code>, and the npm wrapper reads <code>MCC_NPM_INSTALL</code>. <code>HTTPS_PROXY</code>, <code>HTTP_PROXY</code> and <code>NO_PROXY</code> are honoured by the installers and by outbound requests.</p>
+
+        <h2 id="editing-rules">Editing rules</h2>
+
+        <ul><li>A blank value means unset. Removing a value from the page writes a blank, and the default applies.</li><li>A restart-required setting is labelled on the page; Apply does not pretend it took effect.</li><li>A managed write backs the file up before it changes it.</li><li>A leftover setting from a removed feature is ignored at startup and dropped on the next save.</li><li>The launchers read the same directory as the server; a mismatch is the one configuration mistake the product cannot fix for you.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/configuration/environment/">Environment reference: the variable names, grouped by area</a></li><li><a href="/features/dashboard/">The dashboard: where most settings are edited</a></li><li><a href="/architecture/data-and-storage/">Architecture: what is stored and where</a></li><li><a href="/quick-start/">Quick start: the first settings you will touch</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-configuration-home">The configuration home</a></li>
+          <li><a href="#the-env">The .env</a></li>
+          <li><a href="#the-documents-beside-the-env">The documents beside the .env</a></li>
+          <li><a href="#environment-variables-that-are-not-settings">Environment variables that are not settings</a></li>
+          <li><a href="#editing-rules">Editing rules</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

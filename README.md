@@ -435,6 +435,7 @@ The web search system's research notes are under [research/](research/), and the
 
 ## Project links
 
+- [Product site](https://myclaudecode.danubelabs.net/) — the capability pages, the architecture and the screenshot gallery
 - [Report bugs or request features](https://github.com/FiredMosquito831/my-claude-code/issues) · [Report a vulnerability privately](https://github.com/FiredMosquito831/my-claude-code/security/advisories/new) ([policy](SECURITY.md))
 - [All documentation](docs/README.md) · [Usage Guide](docs/USAGE.md) · [Architecture](ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md)
 - Packages: [PyPI](https://pypi.org/project/my-claude-code/) · [npm](https://www.npmjs.com/package/@firedmosquito831/my-claude-code) · [releases](https://github.com/FiredMosquito831/my-claude-code/releases/latest)

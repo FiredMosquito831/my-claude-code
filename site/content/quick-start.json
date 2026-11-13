@@ -1,0 +1,173 @@
+{
+  "path": "/quick-start/",
+  "title": "Quick start | My Claude Code",
+  "description": "Install My Claude Code on Windows, macOS or Linux, add a provider, set your tiers, launch an agent, and update or uninstall it cleanly.",
+  "nav": "Quick start",
+  "eyebrow": "Quick start",
+  "h1": "Install, run, and the first five minutes",
+  "intro": "Every route ends at the same server, the same dashboard and the same configuration directory. Pick the one that fits your machine, then follow four steps. This is the LLM proxy quick start: install, start, add a key, launch an agent.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Quick start"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "Install"
+    },
+    {
+      "type": "p",
+      "text": "The one-liners install uv if it is missing, install Python 3.14 through uv, verify the release wheel's SHA-256, install MCC into an isolated tool environment and put every <code>mcc-*</code> command on your PATH. The wheel is the same one the PyPI route installs, and the desktop app installs the server on first launch if it is not there yet."
+    },
+    {
+      "type": "code",
+      "label": "Linux, macOS or WSL",
+      "text": "curl -fsSL \"https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh\" | sh"
+    },
+    {
+      "type": "code",
+      "label": "Windows PowerShell",
+      "text": "& ([scriptblock]::Create((irm \"https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1\")))"
+    },
+    {
+      "type": "code",
+      "label": "Windows Command Prompt",
+      "text": "curl -fsSL -o \"%TEMP%\\install-mcc.cmd\" https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.cmd && \"%TEMP%\\install-mcc.cmd\""
+    },
+    {
+      "type": "code",
+      "label": "npm, any platform",
+      "text": "npm install -g @firedmosquito831/my-claude-code"
+    },
+    {
+      "type": "p",
+      "text": "There are also native desktop installers for Windows, Linux and macOS on the latest release page, and a PyPI route for people who already manage Python 3.14. <strong>Close and reopen your terminal after installing:</strong> the installer adds <code>~/.local/bin</code> to your PATH, and a shell that was already open cannot see it."
+    },
+    {
+      "type": "h2",
+      "text": "The first five minutes"
+    },
+    {
+      "type": "ol",
+      "items": [
+        "Start it and open the dashboard: run <code>mcc-server</code>, then open <code>http://127.0.0.1:8082/admin</code>. The desktop app does both for you.",
+        "Add a provider key: on Providers, find your provider, click Configure, paste the key, then Validate and Apply.",
+        "Point the tiers at a model: on Model Config set <code>MODEL</code> and, if you want per-tier routing, the Mythos, Fable, Opus, Sonnet and Haiku models, each with a fallback chain.",
+        "Launch an agent: <code>mcc-claude</code>, <code>mcc-codex</code>, <code>mcc-opencode</code>, <code>mcc-gemini</code>, or Configure on the Coding agents page for a desktop app."
+      ]
+    },
+    {
+      "type": "callout",
+      "kind": "accent",
+      "text": "<strong>A fresh install already routes.</strong> Since 7.78.0, the Mythos, Fable, Opus and Sonnet tiers start on OpenCode Zen's free model with no key at all. <code>MODEL</code> and Haiku still point at NVIDIA NIM, so they need a key or a new model."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-get-started",
+      "caption": "The Get Started checklist tracks the same four steps and gets out of the way once dismissed."
+    },
+    {
+      "type": "h2",
+      "text": "Update"
+    },
+    {
+      "type": "p",
+      "text": "The dashboard shows your version, announces releases and installs them with checksum verification. Re-running the install command does the same thing, because it always fetches the newest release. Since 7.1.0 every install restarts the server by default: it stops the one server bound to that configuration directory's port, by its exact process ids, installs, starts the server again and waits until the health endpoint answers. <code>--no-restart</code> never stops a running server, and <code>--no-start</code> stops and starts nothing. There is no separate updater to install."
+    },
+    {
+      "type": "p",
+      "text": "An update is atomic. The new version is built beside the running one, run once to prove it works, and swapped in by two directory renames. If it never answers the health endpoint, the previous version is put back and started."
+    },
+    {
+      "type": "h2",
+      "text": "Uninstall"
+    },
+    {
+      "type": "p",
+      "text": "Uninstall is one line, and it verifies every MCC command is gone before it reports success. If you installed through npm, <code>mcc uninstall</code> is the other route. The desktop app is removed separately, through Apps and Features, the package manager, the app's own uninstall script or the Trash."
+    },
+    {
+      "type": "code",
+      "label": "Uninstall (Linux, macOS or WSL)",
+      "text": "curl -fsSL \"https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/uninstall.sh\" | sh"
+    },
+    {
+      "type": "h2",
+      "text": "Four things that bite"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "<strong>Windows SmartScreen</strong> flags the unsigned installer: choose More info, then Run anyway. With Smart App Control on, use the PowerShell server one-liner instead.",
+        "<strong>macOS quarantines</strong> the unsigned disk image. After dragging the app across, run one <code>xattr</code> command to clear the quarantine, or take the server one-liner and let the desktop command fetch the same binary.",
+        "<strong>WSL has no tray.</strong> Install the server there and reach the dashboard in a Windows browser.",
+        "<strong>A pre-6.40.0 install</strong> lives in the legacy configuration home. The first start of 6.65.0 or later migrates it by one atomic rename, provided nothing is holding the directory open."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/platform/",
+          "label": "Platform: the desktop app, update path and packaging"
+        },
+        {
+          "href": "/features/cli/",
+          "label": "The CLI: every command and flag"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers: add a key and understand its health"
+        },
+        {
+          "href": "/troubleshooting/",
+          "label": "Troubleshooting: when a step does not work"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "The one-liners install uv, Python 3.14 through uv and verify the wheel SHA-256",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "The npm package is @firedmosquito831/my-claude-code",
+      "evidence": "README.md §Install"
+    },
+    {
+      "claim": "Close and reopen the terminal after installing",
+      "evidence": "README.md §Install"
+    },
+    {
+      "claim": "The first five minutes are start, provider key, tiers, agent",
+      "evidence": "README.md §Your first five minutes"
+    },
+    {
+      "claim": "A fresh install routes four tiers on a free OpenCode Zen model",
+      "evidence": "README.md §Your first five minutes"
+    },
+    {
+      "claim": "Every install restarts the server by default since 7.1.0, bound to that configuration directory's port",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "An update is atomic and restores the previous version if health never answers",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "Uninstall verifies every MCC command is gone",
+      "evidence": "README.md §Update and uninstall"
+    },
+    {
+      "claim": "The legacy home migration is one atomic rename",
+      "evidence": "README.md §Four things that bite"
+    }
+  ]
+}

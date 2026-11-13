@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native web search and fetch proxy for any model</title>
+<meta name="description" content="Fulfil Claude Code&#39;s web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.">
+<meta name="keywords" content="web search proxy, web fetch proxy, claude code web search, llm web search, native web search, search without anthropic credits, keyless web search, agent web search">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/web-search/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Native web search and fetch proxy for any model">
+<meta property="og:description" content="Fulfil Claude Code&#39;s web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/web-search/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Native web search and fetch proxy for any model">
+<meta name="twitter:description" content="Fulfil Claude Code&#39;s web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Native web search and fetch proxy for any model", "url": "https://myclaudecode.danubelabs.net/features/web-search/", "description": "Fulfil Claude Code's web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Web search"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Native web search and fetch proxy for any model", "description": "Fulfil Claude Code's web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.", "url": "https://myclaudecode.danubelabs.net/features/web-search/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Web search</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>The native web-search and web-fetch proxy</h1>
+<p class="page-intro">Claude Code's web_search and web_fetch are Anthropic server tools: normally Anthropic runs the search and bills you for it. MCC fulfils them at the proxy instead, against a provider you choose or a keyless fallback, and streams the result back as ordinary text. No Anthropic search credits are used, and it works with any model provider. It is a web search proxy and a web fetch proxy, in front of fifteen search backends.</p>        <p>A client emits a <code>web_search</code> tool-use block. MCC runs the search against the configured chain and returns the results as a regular text block, so a model that has never heard of the tool still receives useful text. The same shape covers <code>web_fetch</code>, which retrieves a page and returns its main content.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-websearch.webp" alt="The Web Search page: a route policy control, provider cards with key health and a chain editor, plus advanced options." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Web Search page: route policy, provider cards with key health, the chain editor and advanced options.</figcaption>
+</figure>
+
+        <h2 id="fifteen-search-backends">Fifteen search backends</h2>
+
+        <p>The search backends are DuckDuckGo (keyless), Ollama Web Search, Exa, Tavily, Brave Search, SearXNG, Jina Search, Serper, Firecrawl, Linkup, Perplexity Search, Parallel, SearchAPI.io, SerpAPI and Context7 for library documentation. <code>WEB_SEARCH_PROVIDER</code> accepts <code>auto</code>, <code>off</code>, <code>disabled</code> or one of those provider IDs.</p>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Setting</th><th scope="col">Behaviour</th></tr></thead>
+<tbody><tr><td><code>auto</code></td><td>the first configured provider in catalogue order, never Context7; with no keys set it falls back to the keyless hops, so search works zero-config</td></tr><tr><td><code>off</code></td><td>only the keyless DuckDuckGo hop, without the provider registry</td></tr><tr><td><code>disabled</code></td><td>reject web searches without making an outbound search request</td></tr><tr><td>an explicit ID</td><td>pin that provider; missing credentials or an upstream failure are surfaced instead of silently changing providers</td></tr></tbody>
+</table></div>
+
+        <p><code>WEB_SEARCH_FALLBACK_POLICY</code> controls how far the chain may move after the selected provider: <code>auto</code>, <code>none</code>, <code>ddgs</code> or <code>legacy</code>. Configuration failures such as a missing API key always fail visibly, DDGS is never attempted twice, and the rich digest names the provider that ultimately produced the results.</p>
+
+        <figure class="figure figure--diagram" id="fig-websearch-chain">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t14 d14" font-family="ui-monospace, Consolas, monospace">
+<title id="t14">The web-search chain: a selected provider, then the keyless hops, with the provider named in the digest</title>
+<desc id="d14">The search chain starts at the selected provider. Under the auto fallback policy it may move to the keyless ddgs metasearch and then to the keyless DuckDuckGo page hop. A named provider is strict. Every search key uses the same rotation engine as a model key, and the rich digest names the provider that ultimately produced the results.</desc>
+<defs>
+<marker id="a14" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M260 90 H330" marker-end="url(#a14)"/>
+<path d="M510 90 H580" marker-end="url(#a14)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="50" width="240" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="76" fill="#3FB950">selected provider</text>
+<text x="36" y="98" fill="#A9B7C6" font-size="11">15 search backends</text>
+<text x="36" y="118" fill="#A9B7C6" font-size="11">its own keys and rotation</text>
+<rect x="330" y="50" width="180" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="346" y="76" fill="#58A6FF">ddgs metasearch</text>
+<text x="346" y="98" fill="#A9B7C6" font-size="11">keyless</text>
+<text x="346" y="118" fill="#A9B7C6" font-size="11">unofficial, may be rate-limited</text>
+<rect x="580" y="50" width="260" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="596" y="76" fill="#58A6FF">keyless DuckDuckGo hop</text>
+<text x="596" y="98" fill="#A9B7C6" font-size="11">html page first, lite second</text>
+<text x="596" y="118" fill="#A9B7C6" font-size="11">region and time via DDGS_*</text>
+</g>
+<g font-size="12">
+<rect x="20" y="160" width="820" height="90" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="186" fill="#E6EDF3" font-weight="700">The fallback policy decides how far the chain may move</text>
+<text x="36" y="210" fill="#A9B7C6" font-size="11">auto: selected → ddgs → legacy · none: selected only · ddgs: selected → ddgs · legacy: selected → ddgs → legacy</text>
+<text x="36" y="232" fill="#A9B7C6" font-size="11">An explicit provider is strict: missing credentials or an upstream failure are surfaced, not silently swapped.</text>
+</g>
+<g font-size="12">
+<rect x="20" y="270" width="400" height="90" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="296" fill="#3FB950" font-weight="700">Zero-config</text>
+<text x="36" y="320" fill="#A9B7C6" font-size="11">with no keys set, auto falls back to the two</text>
+<text x="36" y="340" fill="#A9B7C6" font-size="11">keyless hops, so search works out of the box</text>
+<rect x="440" y="270" width="400" height="90" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="456" y="296" fill="#D29922" font-weight="700">Recorded, not guessed</text>
+<text x="456" y="320" fill="#A9B7C6" font-size="11">the digest names the provider that answered;</text>
+<text x="456" y="340" fill="#A9B7C6" font-size="11">every key try is a row in web-search analytics</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="398">Context7 is never picked by auto: it answers with library documentation rather than web pages.</text>
+<text x="20" y="420">Web fetch extracts the page's main content as markdown with a 24,000-character cap and names the extracted total.</text>
+</g>
+</svg>
+</div>
+<figcaption>The search chain: a selected provider, then the keyless hops, with the provider named in the digest.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram showing the selected search provider, the keyless ddgs metasearch and the keyless DuckDuckGo page hop, with fallback policies and zero-config behaviour.</p>
+</figure>
+
+        <h2 id="the-keyless-duckduckgo-hop">The keyless DuckDuckGo hop</h2>
+
+        <p>The last hop reads DuckDuckGo's HTML page first and its lite page only as a second try, with declared parser profiles and headers. Snippets are kept, ads are skipped, and your region and time window are respected through the <code>DDGS_REGION</code> and <code>DDGS_TIMELIMIT</code> settings. A bot check is reported as a rate limit rather than as no results, and optional spacing between requests is available, off by default.</p>
+
+        <h2 id="keys-rotate-like-model-keys">Keys rotate like model keys</h2>
+
+        <p>Every search service's keys follow the same rules as a model provider's keys: comma-separated pools, the same rotation policies, and the same health engine. The bench is shown in plain words with a Reset, and every key try is a row in Analytics. The chain itself is an ordered list of services with repeats, pause and drag, edited on the Search chain card.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-websearch-chain.webp" alt="The web-search chain editor: an ordered list of search services with pause and reorder controls." width="986" height="496" loading="lazy" decoding="async">
+<figcaption>The chain editor: an ordered list of search services with pause and reorder controls.</figcaption>
+</figure>
+
+        <h2 id="web-fetch">Web fetch</h2>
+
+        <p>Web fetch returns the page's main content as markdown with links and tables: menus and footers are dropped. The extractor is loaded on the first fetch of a process, the output is capped at 24,000 characters and the marker names the extracted total, markdown is asked for in the Accept header, a Cloudflare challenge gets one honest retry, and a page served without a charset is read rather than refused. <code>WEB_FETCH_EXTRACTOR=basic</code> restores every earlier release's bytes.</p>
+
+        <h2 id="analytics">Analytics</h2>
+
+        <p>Web search has its own route and attempt analytics, with the captured input and output, separate from the chat log. That split matters because a search attempt is a different kind of call: it can fail on a key, on the query or on the search host, and the analytics keeps those apart from the model request that asked for it.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-websearch-analytics.webp" alt="The web-search analytics panel: separate route and attempt analytics with captured input and output." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Web-search analytics: separate route and attempt analytics with the captured input and output.</figcaption>
+</figure>
+
+        <h2 id="configuration">Configuration</h2>
+
+        <p>The route is <code>WEB_SEARCH_PROVIDER</code> and <code>WEB_SEARCH_FALLBACK_POLICY</code>. Each backend has its own key variable, named on its card. The keyless hop uses <code>DDGS_REGION</code> and <code>DDGS_TIMELIMIT</code>, and optional request spacing uses <code>WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS</code>. Web fetch uses <code>WEB_FETCH_EXTRACTOR</code>. Variable names only; no values are published.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>Context7 is never picked by auto: it answers with library documentation rather than web pages.</li><li>An explicit provider is strict by default; a missing key fails visibly instead of silently swapping to another backend.</li><li>The keyless hop is an unofficial metasearch and its engines may rate-limit an address. That is reported as a rate limit, not as an empty result.</li><li>Advanced options allow the model to receive full page text rather than snippets, restrict searches to specific sites, and set safe search, locale and freshness.</li><li>This is a server-tool proxy: a client that does not use the Anthropic server-tool shape is not affected.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/providers-and-credentials/">Providers: the key pools and rotation this shares</a></li><li><a href="/features/observability-and-cost/">Observability: where search requests are logged</a></li><li><a href="/configuration/environment/">Configuration: the search variables, names only</a></li><li><a href="/glossary/">Glossary: server tool, chain, keyless hop</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#fifteen-search-backends">Fifteen search backends</a></li>
+          <li><a href="#the-keyless-duckduckgo-hop">The keyless DuckDuckGo hop</a></li>
+          <li><a href="#keys-rotate-like-model-keys">Keys rotate like model keys</a></li>
+          <li><a href="#web-fetch">Web fetch</a></li>
+          <li><a href="#analytics">Analytics</a></li>
+          <li><a href="#configuration">Configuration</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

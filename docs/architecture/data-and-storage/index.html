@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data and storage: what MCC keeps and where</title>
+<meta name="description" content="What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.">
+<meta name="keywords" content="llm gateway storage, request log storage, local llm data, gateway data layout, where claude code proxy stores data, mcc config directory, request log sqlite, local first storage">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/data-and-storage/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Data and storage: what MCC keeps and where">
+<meta property="og:description" content="What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/data-and-storage/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Data and storage: what MCC keeps and where">
+<meta name="twitter:description" content="What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Data and storage: what MCC keeps and where", "url": "https://myclaudecode.danubelabs.net/architecture/data-and-storage/", "description": "What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Data and storage"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Data and storage: what MCC keeps and where", "description": "What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.", "url": "https://myclaudecode.danubelabs.net/architecture/data-and-storage/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/" aria-current="page">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li>Data and storage</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>What is stored, and where</h1>
+<p class="page-intro">Everything MCC keeps is under one configurable directory on your machine. There is no remote database, no account and no second copy. What is stored is deliberately split between a settings file, a request log and a set of documents that a settings save must never rewrite. This page is the LLM gateway storage layout: what is written, where it lives, and what is never stored at all.</p>        <h2 id="the-configuration-home">The configuration home</h2>
+
+        <p>A new install keeps everything in <code>~/.mcc</code>: the <code>.env</code>, the request log under <code>logs/</code>, the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file because they hold more than a scalar. <code>MCC_CONFIG_DIR</code> pins the directory to an absolute path and must be set in the shell, because the directory has to be known before there is a file to read.</p>
+
+        <figure class="figure figure--diagram" id="fig-data-layout">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t10 d10" font-family="ui-monospace, Consolas, monospace">
+<title id="t10">The configuration home: one directory, one .env, and documents beside it</title>
+<desc id="d10">The configuration home is one directory, relocatable with MCC_CONFIG_DIR. It holds the .env settings file and the request log in logs/requests.db. Beside them live documents for custom providers, per-agent tier overrides, credential names, OAuth stores, model overrides, learned facts, proxy chains and marketplace profiles. The desktop app and token optimizer keep their own documents.</desc>
+<g font-size="12">
+<rect x="20" y="30" width="820" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="36" y="58" fill="#58A6FF">~/.mcc</text>
+<text x="150" y="58" fill="#A9B7C6" font-size="11">one directory · relocatable with MCC_CONFIG_DIR</text>
+</g>
+<g font-size="12">
+<rect x="20" y="92" width="390" height="150" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="118" fill="#E6EDF3" font-weight="700">Settings and the log</text>
+<text x="36" y="144" fill="#A9B7C6">.env</text>
+<text x="320" y="144" fill="#7D8FA3" font-size="11">every setting</text>
+<text x="36" y="168" fill="#A9B7C6">logs/requests.db</text>
+<text x="320" y="168" fill="#7D8FA3" font-size="11">SQLite request log</text>
+<text x="36" y="192" fill="#A9B7C6">updates/</text>
+<text x="320" y="192" fill="#7D8FA3" font-size="11">progress and log</text>
+<text x="36" y="216" fill="#A9B7C6">cache/</text>
+<text x="320" y="216" fill="#7D8FA3" font-size="11">catalogue snapshots</text>
+<rect x="430" y="92" width="410" height="150" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="446" y="118" fill="#E6EDF3" font-weight="700">Documents beside the .env</text>
+<text x="446" y="144" fill="#A9B7C6">custom_providers.json</text>
+<text x="446" y="166" fill="#A9B7C6">harness_tiers.json · model_overrides.json</text>
+<text x="446" y="188" fill="#A9B7C6">credential_names.json · learned_facts.json</text>
+<text x="446" y="210" fill="#A9B7C6">proxy_chains.json · marketplace_profiles.json</text>
+<text x="446" y="232" fill="#A9B7C6">anthropic_oauth.json · chatgpt-oauth.json</text>
+</g>
+<g font-size="12">
+<rect x="20" y="258" width="390" height="100" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="284" fill="#E6EDF3" font-weight="700">Kept out of the .env on purpose</text>
+<text x="36" y="308" fill="#A9B7C6" font-size="11">a custom provider's static credential travels</text>
+<text x="36" y="326" fill="#A9B7C6" font-size="11">on its descriptor, never as a settings field</text>
+<text x="36" y="344" fill="#A9B7C6" font-size="11">learned facts expire on a clock and are forgettable</text>
+<rect x="430" y="258" width="410" height="100" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="446" y="284" fill="#E6EDF3" font-weight="700">One atomic move, once</text>
+<text x="446" y="308" fill="#A9B7C6" font-size="11">a pre-6.40.0 configuration home is migrated by one rename</text>
+<text x="446" y="326" fill="#A9B7C6" font-size="11">nothing copied or merged; a live server refuses</text>
+<text x="446" y="344" fill="#A9B7C6" font-size="11">mcc-migrate runs the same move by hand</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="392">The dashboard writes the same .env the server reads, so the two never disagree.</text>
+<text x="20" y="414">Nothing here leaves the machine unless a provider you configured causes an outbound request.</text>
+</g>
+</svg>
+</div>
+<figcaption>The configuration home and the documents beside the .env.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of the configuration home with the .env, the request log, updates and cache, and the JSON documents beside them.</p>
+</figure>
+
+        <p>The split is deliberate. A custom provider's static credential travels on its descriptor rather than through a settings field, so it lives in <code>custom_providers.json</code> and a settings save cannot rewrite it. Learned facts live in their own document because they expire on a clock and are forgettable per row. Per-agent tier overrides live in their own document because a dashboard write must land without a restart, which it does by caching on the file's own timestamp.</p>
+
+        <h2 id="the-request-log">The request log</h2>
+
+        <p>The request log is a local SQLite database, <code>logs/requests.db</code>. A completed request is written once with its endpoint, harness, provider, key, model, status, turn, tokens, cost, time to first token and duration, plus the attempts it walked and the rung that priced it. A request answered by a local optimization records no provider, because none served it, and carries the rule and the tokens it saved for exactly those rows.</p>
+
+        <p>Columns cannot be added to an existing database by an open; the code that opens the log knows which columns its version requires and mirrors them in one place. That is why an older log keeps working rather than being silently migrated into an unusable shape.</p>
+
+        <figure class="figure figure--diagram" id="fig-data-request-log">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t11 d11" font-family="ui-monospace, Consolas, monospace">
+<title id="t11">The request log, its search index, its chunk store and the analytics built over them</title>
+<desc id="d11">A completed request is written once to logs/requests.db, with its attempts, tokens, cost and provenance. A search index stores each distinct piece of text in its own file beside the log. A prompt chunk store keeps each repeated prompt part once. Analytics reads rollups over the log, and the all-time strip keeps counting after stored rows roll over at the retention cap.</desc>
+<defs>
+<marker id="a11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M230 90 H300" marker-end="url(#a11)"/>
+<path d="M520 90 H590" marker-end="url(#a11)"/>
+<path d="M390 130 V200" marker-end="url(#a11)"/>
+<path d="M390 250 V300" marker-end="url(#a11)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="50" width="210" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="76" fill="#3FB950">request completes</text>
+<text x="36" y="98" fill="#A9B7C6" font-size="11">priced once, as it is logged</text>
+<text x="36" y="118" fill="#A9B7C6" font-size="11">one row, its attempts, its rung</text>
+<rect x="300" y="50" width="220" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="316" y="76" fill="#58A6FF">logs/requests.db</text>
+<text x="316" y="98" fill="#A9B7C6" font-size="11">prompt, reply, reasoning, tools</text>
+<text x="316" y="118" fill="#A9B7C6" font-size="11">retention cap prunes oldest rows</text>
+<rect x="590" y="50" width="250" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="606" y="76" fill="#3FB950">Analytics</text>
+<text x="606" y="98" fill="#A9B7C6" font-size="11">rollups, p50/p95, breakdowns</text>
+<text x="606" y="118" fill="#A9B7C6" font-size="11">all-time strip keeps counting</text>
+<rect x="300" y="200" width="220" height="50" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="316" y="222" fill="#58A6FF">search index</text>
+<text x="316" y="240" fill="#A9B7C6" font-size="11">one file per distinct text</text>
+<rect x="300" y="300" width="220" height="50" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="316" y="322" fill="#58A6FF">prompt chunk store</text>
+<text x="316" y="340" fill="#A9B7C6" font-size="11">each repeated part once</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="372">A hidden tab reads nothing. A read can never charge a key or bench a provider.</text>
+<text x="20" y="394">The search index returns the same results as a full scan; older rows are indexed on demand.</text>
+<text x="20" y="416">Raw diagnostics are off by default and bounded when enabled.</text>
+</g>
+</svg>
+</div>
+<figcaption>The log, its search index, its chunk store and the analytics built over them.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of a completed request written to requests.db, with a search index, a prompt chunk store and analytics over the log.</p>
+</figure>
+
+        <h2 id="the-search-index-and-the-chunk-store">The search index and the chunk store</h2>
+
+        <p>Searching the log does not unpack every stored request. The search index stores each distinct piece of text in its own file beside the log. New requests are indexed as they are written; older ones are indexed when you press Build search index. The prompt chunk store keeps each repeated prompt part once, so turn N+1 of a conversation no longer stores turn N again. History is converted in the background, each prompt is read back byte for byte before it is replaced, and Pause and Continue sit beside the log's size.</p>
+
+        <p>Retention is a cap. <code>REQUEST_LOG_MAX_ROWS</code> prunes the oldest rows periodically, so the database does not grow without bound; once the cap is reached the log is a rolling window. The all-time strip on Analytics is kept separately and is never pruned, which is why a count can keep rising after the stored rows have rolled over.</p>
+
+        <h2 id="credentials-and-oauth-stores">Credentials and OAuth stores</h2>
+
+        <p>OAuth credentials live in owner-only stores in the configuration home. MCC's own store is separate from Claude Code's, and MCC never refreshes Claude Code's file in place: rotating it would log out the real client, so a shared credential is renewed under Claude Code's own lock and written back by compare-and-swap. A credential read from another application's file is read-only to MCC unless it is explicitly MCC's own.</p>
+
+        <h2 id="logs-and-diagnostics">Logs and diagnostics</h2>
+
+        <p>The server log rotates at 50 MB and retains five rotated files, bounding normal on-disk usage. API payloads and streamed events are not logged raw unless explicitly enabled. Values under keys that look like an API key, an authorization, a token or a secret are redacted where structured traces are emitted. Messaging text, transcription previews, CLI diagnostics and detailed messaging exception strings each have their own diagnostic flag, so a normal install does not record a conversation by accident.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-analytics-storage.webp" alt="The request-log storage panel: current database size and a pruning note, with a Build search index button." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The storage panel: the request log&#39;s size, its retention, and the controls that keep it bounded.</figcaption>
+</figure>
+
+        <h2 id="what-is-never-stored-remotely">What is never stored remotely</h2>
+
+        <ul><li>There is no telemetry and no call home.</li><li>There is no remote request log and no account to reconcile against.</li><li>The only outbound traffic is a request to a provider you configured, a search service you enabled, or a web page a client asked to fetch.</li><li>A generated media file is stored only when storage is switched on, and with its own size cap.</li></ul>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-request-detail.webp" alt="A single request&#39;s detail view: its route attempts and the reasoning fields the router sent." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>One logged request: the attempts, tokens, timing and reasoning fields stored with it.</figcaption>
+</figure>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>A configuration save and a credential refresh write different files, so one cannot corrupt the other.</li><li>The log is local SQLite; a second MCC server with a different configuration home has its own log.</li><li>Retention prunes the oldest rows; the all-time figure survives it.</li><li>The search index returns the same results as a full scan.</li><li>A legacy configuration home is moved by one atomic rename, nothing copied or merged.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/configuration/">Configuration: the configuration home and the .env</a></li><li><a href="/architecture/cost-provenance/">Cost: what the stored price means</a></li><li><a href="/features/observability-and-cost/">Feature: the request log and analytics</a></li><li><a href="/features/platform/">Platform: the legacy-home migration</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-configuration-home">The configuration home</a></li>
+          <li><a href="#the-request-log">The request log</a></li>
+          <li><a href="#the-search-index-and-the-chunk-store">The search index and the chunk store</a></li>
+          <li><a href="#credentials-and-oauth-stores">Credentials and OAuth stores</a></li>
+          <li><a href="#logs-and-diagnostics">Logs and diagnostics</a></li>
+          <li><a href="#what-is-never-stored-remotely">What is never stored remotely</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

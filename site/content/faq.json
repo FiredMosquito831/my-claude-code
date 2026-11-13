@@ -1,0 +1,249 @@
+{
+  "path": "/faq/",
+  "title": "FAQ | My Claude Code",
+  "description": "Straight answers about My Claude Code: what it is, what it sends, which agents and providers it supports, how keys, routing, cost and logs behave.",
+  "nav": "FAQ",
+  "eyebrow": "FAQ",
+  "h1": "Questions this site is asked most",
+  "intro": "Each answer below is written from the product's own documentation and, where it matters, from the source. The same questions and answers are published as structured data for search engines, generated from this one list so the two cannot drift. It is the LLM gateway FAQ: the questions this site is asked most, answered once.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "FAQ"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "faq",
+      "items": [
+        {
+          "q": "What is My Claude Code?",
+          "a": "A local multi-provider LLM proxy, model router and control plane for AI coding agents. You point the agents at one address on your machine and manage providers, keys, routing, reasoning, budgets, web search and cost in one place."
+        },
+        {
+          "q": "Does it send anything to a remote server?",
+          "a": "No. It has no telemetry and phones home to nothing. Its only outbound traffic goes to the providers you configure, a search service you enable, or a web page a client asked to fetch. The dashboard and admin APIs are loopback-only."
+        },
+        {
+          "q": "Which coding agents can use it?",
+          "a": "Claude Code, Codex, OpenCode and OpenCode 2, Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, OpenClaw, Hermes Agent, Droid, Pi and Kilo have launchers. Desktop apps and other clients are configured from the dashboard or pointed at the proxy directly."
+        },
+        {
+          "q": "Which providers are supported?",
+          "a": "Sixty provider cards across cloud APIs, subscription and OAuth sign-ins, gateways, local servers and marketplaces, from Anthropic and OpenAI to OpenRouter, Mistral, Gemini, Vertex, DeepSeek, Ollama, LM Studio and llama.cpp. Local models connect through a base URL rather than a key, and any other OpenAI-compatible endpoint can be added as a custom provider."
+        },
+        {
+          "q": "Is it free?",
+          "a": "MCC itself is free under AGPL-3.0-or-later, or a commercial licence by negotiation. The models behind it may be free, paid, subscription-based or local; that is your choice and your account."
+        },
+        {
+          "q": "Does it work without an API key?",
+          "a": "Yes, for the free path. A fresh install routes the Mythos, Fable, Opus and Sonnet tiers to OpenCode Zen's free model with no key at all. The default model and the Haiku tier still point at NVIDIA NIM, so they need a key or a new model."
+        },
+        {
+          "q": "Where do my keys live?",
+          "a": "In one configuration home on your machine, by default <code>~/.mcc</code>. The <code>.env</code> holds the settings, and the documents beside it hold custom providers, OAuth stores and credential names. MCC never sends a key anywhere except the provider it belongs to."
+        },
+        {
+          "q": "What happens when a provider is down?",
+          "a": "The fallback chain walks to the next model. A model that errors, rate-limits or refuses moves the request down its chain, and the first attempt that succeeds ends the walk. Every step is recorded in the request log with its reason."
+        },
+        {
+          "q": "Does it retry the same model forever?",
+          "a": "No. A 429 benches the key and model pair for the wait the provider published, and the chain moves on. A timeout, a 5xx, a 410 or a plain 400 is treated as the model's answer, so the chain tries a different model instead of spending the rest of the key pool."
+        },
+        {
+          "q": "Can I use a Claude subscription?",
+          "a": "MCC can route an Anthropic subscription credential, but Anthropic's published terms do not permit routing Free, Pro or Max plan credentials on behalf of third-party users, and the risk is to your account. MCC documents the position in full rather than hiding it; read the Anthropic subscription page before enabling it."
+        },
+        {
+          "q": "What is a tier?",
+          "a": "A coding-agent route such as Fable, Opus, Sonnet, Haiku or Mythos, mapped to a real model and an ordered chain. Tier aliases such as <code>mcc/cyber</code> and <code>mcc/best</code> are protocol names for those routes, not models."
+        },
+        {
+          "q": "What is a fallback chain?",
+          "a": "An ordered list of stand-ins behind a route. If the model a request routes to cannot serve it, the next entry is tried, then the next. A model listed twice is tried twice. A paused entry keeps its place and is never tried."
+        },
+        {
+          "q": "What does a 429 do to my key?",
+          "a": "It benches that key for that one model, for exactly the wait the provider published or a configured cooldown when it published none. The key stays healthy for its other models. The key itself is benched only once several models hold a live bench at once."
+        },
+        {
+          "q": "Can I use several keys per provider?",
+          "a": "Yes. Put them in one comma-separated variable and choose a policy: single, round robin, least used or failover. Each key gets its own upstream client and rate-limit window, and the order in the pool is the order the policy reads."
+        },
+        {
+          "q": "How is cost calculated?",
+          "a": "Each request is priced once, as it is logged. The price comes from a ladder: the provider's own model list first, then models.dev, then LiteLLM when it is switched on, then a cross-provider vote. The source that answered is stored beside the number."
+        },
+        {
+          "q": "Why are reported and estimated cost separate?",
+          "a": "Because they are different claims. A reported figure is one a source stated; an estimated figure is one the install computed. MCC never sums them, and every total carries a priced-of-total denominator so a partial figure cannot read as a complete one."
+        },
+        {
+          "q": "Does it log my prompts?",
+          "a": "The request log stores completed requests locally and is searchable across prompt, reply, reasoning and tool calls. It is on by default and controlled by <code>REQUEST_LOG_ENABLED</code>, with a row cap that prunes the oldest rows. Raw provider bytes and payloads are separate opt-in flags. The log is local SQLite, and a hidden dashboard tab reads nothing."
+        },
+        {
+          "q": "Can I search my request log?",
+          "a": "Yes. The search index stores each distinct piece of text in its own file beside the log, so a search does not unpack every stored request. New requests are indexed as they are written, and older ones when you press Build search index."
+        },
+        {
+          "q": "How do I connect Claude Code?",
+          "a": "Run <code>mcc-claude</code>. For the native model picker, run <code>mcc-claude --discover-models</code>. The dashboard's Configure Claude Code page can also write MCC's proxy settings into Claude Code's own settings file."
+        },
+        {
+          "q": "How do I connect Codex?",
+          "a": "Run <code>mcc-codex</code>. It speaks the OpenAI Responses surface and keeps its own generated catalogue, because the Codex App reads that catalogue at startup and must restart to see a later one."
+        },
+        {
+          "q": "Can I use a local model?",
+          "a": "Yes. LM Studio, llama.cpp and Ollama are provider cards that need a base URL rather than a key, and they sit behind the same address and the same routing as a cloud provider."
+        },
+        {
+          "q": "Does it support images?",
+          "a": "Yes. A vision adapter can divert an image request to a model that can see, and describe mode has a sighted model describe each image for a blind tier. Outbound pictures are resized to a 1568-pixel long edge on the router's own copy."
+        },
+        {
+          "q": "Does it do web search?",
+          "a": "Yes. Claude Code's <code>web_search</code> and <code>web_fetch</code> tools are fulfilled at the proxy instead of by Anthropic, over fifteen search backends or a keyless fallback. No Anthropic search credits are used."
+        },
+        {
+          "q": "Can I run it from Discord or Telegram?",
+          "a": "Yes, optionally. A messaging bridge turns chat messages into managed coding-agent sessions, with voice-note transcription and stop and clear commands. It is off by default and skipped cleanly when it is not configured."
+        },
+        {
+          "q": "What platforms does it run on?",
+          "a": "Windows, macOS and Linux, as a server or as a native desktop app with a tray. The one-liners install a managed Python 3.14 through uv, so no system Python is needed. The desktop app is a window onto the same server."
+        },
+        {
+          "q": "How do I update it?",
+          "a": "The dashboard announces releases and installs them with checksum verification, or re-run the install command, which always fetches the newest release. An update is atomic: the new version is built beside the running one and swapped in only after it answers the health check. The desktop window shows each stage while it runs."
+        },
+        {
+          "q": "How do I uninstall it?",
+          "a": "Run the uninstall one-liner, or <code>mcc uninstall</code> if you installed through npm. It verifies every MCC command is gone before it reports success. The desktop app is removed separately, through the platform's own mechanism."
+        },
+        {
+          "q": "Is it affiliated with Anthropic, OpenAI or Google?",
+          "a": "No. My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude, Codex, ChatGPT and Gemini are trademarks of their owners. Provider names are used to describe what the software connects to, not to claim a relationship."
+        },
+        {
+          "q": "Where is the full documentation?",
+          "a": "The repository's <code>docs/</code> directory holds the complete usage guide, the routing reference, the architecture file and the per-surface guides. The dashboard's Docs page renders the same documents offline for the version you installed."
+        },
+        {
+          "q": "Why does the dashboard not open?",
+          "a": "The usual reasons are a server that is not running, a different port, or a configuration directory the launcher and the server do not share. Check <code>mcc-server --version</code>, then the health endpoint, then <code>MCC_CONFIG_DIR</code> if you set it."
+        }
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Still stuck?"
+    },
+    {
+      "type": "p",
+      "text": "The troubleshooting page covers the failures this site can verify, with the symptom, the cause and the fix. For anything else, the repository's issue tracker is the channel, and a security report has its own private route."
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/troubleshooting/",
+          "label": "Troubleshooting: verified symptoms and fixes"
+        },
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: install and the first five minutes"
+        },
+        {
+          "href": "/features/",
+          "label": "Features: every capability in depth"
+        },
+        {
+          "href": "/license/",
+          "label": "Licence: the exact terms"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "There is no telemetry",
+      "evidence": "README.md §What is My Claude Code?"
+    },
+    {
+      "claim": "Sixteen agent routes plus Configure for desktop apps",
+      "evidence": "README.md §Coding agents table"
+    },
+    {
+      "claim": "60 provider cards",
+      "evidence": "README.md provider table, lines 294-355"
+    },
+    {
+      "claim": "A fresh install routes four tiers on a free OpenCode Zen model",
+      "evidence": "README.md §Your first five minutes"
+    },
+    {
+      "claim": "Keys live in one configuration home",
+      "evidence": "README.md §Configuration reference; .env.example header"
+    },
+    {
+      "claim": "A 429 benches the key and model pair",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "A timeout, 5xx, 410 or 400 moves the chain to another model",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "Anthropic's terms do not permit routing plan credentials for third-party users",
+      "evidence": "docs/OAUTH-PROVIDERS.md"
+    },
+    {
+      "claim": "Four rotation policies",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "The pricing ladder order",
+      "evidence": "docs/MEDIA.md §What it costs"
+    },
+    {
+      "claim": "REQUEST_LOG_ENABLED controls the log",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "The search index stores each distinct text in its own file",
+      "evidence": "README.md §Observability and cost capability table"
+    },
+    {
+      "claim": "15 search backends",
+      "evidence": "docs/WEB-SEARCH.md §Search Providers"
+    },
+    {
+      "claim": "Messaging is optional and off by default",
+      "evidence": "ARCHITECTURE.md §Messaging Architecture"
+    },
+    {
+      "claim": "Windows, macOS and Linux; a desktop app with a tray",
+      "evidence": "README.md §Platform capability table"
+    },
+    {
+      "claim": "An update is atomic",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "Uninstall verifies every command is gone",
+      "evidence": "README.md §Update and uninstall"
+    },
+    {
+      "claim": "The dashboard's Docs page renders the bundled documentation",
+      "evidence": "README.md §Dashboard"
+    }
+  ]
+}

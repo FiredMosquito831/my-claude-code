@@ -1,0 +1,70 @@
+{
+  "path": "/architecture/data-and-storage/",
+  "title": "Data and storage | My Claude Code",
+  "description": "One configuration home, one .env, a SQLite request log, a search index, a prompt chunk store and the documents that must not live in a settings file.",
+  "nav": "Data and storage",
+  "eyebrow": "Architecture · Data",
+  "h1": "What is stored, and where",
+  "intro": "Everything MCC keeps is under one configurable directory on your machine. There is no remote database, no account and no second copy. What is stored is deliberately split between a settings file, a request log and a set of documents that a settings save must never rewrite. This page is the LLM gateway storage layout: what is written, where it lives, and what is never stored at all.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Data and storage"}],
+  "blocks": [
+    {"type": "h2", "text": "The configuration home"},
+    {"type": "p", "text": "A new install keeps everything in <code>~/.mcc</code>: the <code>.env</code>, the request log under <code>logs/</code>, the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file because they hold more than a scalar. <code>MCC_CONFIG_DIR</code> pins the directory to an absolute path and must be set in the shell, because the directory has to be known before there is a file to read."},
+    {"type": "diagram", "name": "data-layout", "caption": "The configuration home and the documents beside the .env.", "alt": "A diagram of the configuration home with the .env, the request log, updates and cache, and the JSON documents beside them."},
+    {"type": "p", "text": "The split is deliberate. A custom provider's static credential travels on its descriptor rather than through a settings field, so it lives in <code>custom_providers.json</code> and a settings save cannot rewrite it. Learned facts live in their own document because they expire on a clock and are forgettable per row. Per-agent tier overrides live in their own document because a dashboard write must land without a restart, which it does by caching on the file's own timestamp."},
+
+    {"type": "h2", "text": "The request log"},
+    {"type": "p", "text": "The request log is a local SQLite database, <code>logs/requests.db</code>. A completed request is written once with its endpoint, harness, provider, key, model, status, turn, tokens, cost, time to first token and duration, plus the attempts it walked and the rung that priced it. A request answered by a local optimization records no provider, because none served it, and carries the rule and the tokens it saved for exactly those rows."},
+    {"type": "p", "text": "Columns cannot be added to an existing database by an open; the code that opens the log knows which columns its version requires and mirrors them in one place. That is why an older log keeps working rather than being silently migrated into an unusable shape."},
+    {"type": "diagram", "name": "data-request-log", "caption": "The log, its search index, its chunk store and the analytics built over them.", "alt": "A diagram of a completed request written to requests.db, with a search index, a prompt chunk store and analytics over the log."},
+
+    {"type": "h2", "text": "The search index and the chunk store"},
+    {"type": "p", "text": "Searching the log does not unpack every stored request. The search index stores each distinct piece of text in its own file beside the log. New requests are indexed as they are written; older ones are indexed when you press Build search index. The prompt chunk store keeps each repeated prompt part once, so turn N+1 of a conversation no longer stores turn N again. History is converted in the background, each prompt is read back byte for byte before it is replaced, and Pause and Continue sit beside the log's size."},
+    {"type": "p", "text": "Retention is a cap. <code>REQUEST_LOG_MAX_ROWS</code> prunes the oldest rows periodically, so the database does not grow without bound; once the cap is reached the log is a rolling window. The all-time strip on Analytics is kept separately and is never pruned, which is why a count can keep rising after the stored rows have rolled over."},
+
+    {"type": "h2", "text": "Credentials and OAuth stores"},
+    {"type": "p", "text": "OAuth credentials live in owner-only stores in the configuration home. MCC's own store is separate from Claude Code's, and MCC never refreshes Claude Code's file in place: rotating it would log out the real client, so a shared credential is renewed under Claude Code's own lock and written back by compare-and-swap. A credential read from another application's file is read-only to MCC unless it is explicitly MCC's own."},
+
+    {"type": "h2", "text": "Logs and diagnostics"},
+    {"type": "p", "text": "The server log rotates at 50 MB and retains five rotated files, bounding normal on-disk usage. API payloads and streamed events are not logged raw unless explicitly enabled. Values under keys that look like an API key, an authorization, a token or a secret are redacted where structured traces are emitted. Messaging text, transcription previews, CLI diagnostics and detailed messaging exception strings each have their own diagnostic flag, so a normal install does not record a conversation by accident."},
+    {"type": "figure", "shot": "dashboard-analytics-storage", "caption": "The storage panel: the request log's size, its retention, and the controls that keep it bounded."},
+
+    {"type": "h2", "text": "What is never stored remotely"},
+    {"type": "ul", "items": [
+      "There is no telemetry and no call home.",
+      "There is no remote request log and no account to reconcile against.",
+      "The only outbound traffic is a request to a provider you configured, a search service you enabled, or a web page a client asked to fetch.",
+      "A generated media file is stored only when storage is switched on, and with its own size cap."
+    ]},
+    {"type": "figure", "shot": "dashboard-request-detail", "caption": "One logged request: the attempts, tokens, timing and reasoning fields stored with it."},
+
+    {"type": "h2", "text": "Limits and behaviour"},
+    {"type": "ul", "items": [
+      "A configuration save and a credential refresh write different files, so one cannot corrupt the other.",
+      "The log is local SQLite; a second MCC server with a different configuration home has its own log.",
+      "Retention prunes the oldest rows; the all-time figure survives it.",
+      "The search index returns the same results as a full scan.",
+      "A legacy configuration home is moved by one atomic rename, nothing copied or merged."
+    ]},
+    {"type": "related", "links": [
+      {"href": "/configuration/", "label": "Configuration: the configuration home and the .env"},
+      {"href": "/architecture/cost-provenance/", "label": "Cost: what the stored price means"},
+      {"href": "/features/observability-and-cost/", "label": "Feature: the request log and analytics"},
+      {"href": "/features/platform/", "label": "Platform: the legacy-home migration"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "A new install keeps everything in ~/.mcc", "evidence": ".env.example header"},
+    {"claim": "The request log is logs/requests.db, SQLite", "evidence": "src/my_claude_code/config/paths.py REQUEST_LOG_FILENAME"},
+    {"claim": "A request answered by an optimization records the rule and tokens saved", "evidence": "ARCHITECTURE.md §Local Optimizations And Server Tools"},
+    {"claim": "Columns cannot be added to an existing database by an open", "evidence": "src/my_claude_code/config/paths.py comment on required columns"},
+    {"claim": "The search index stores each distinct text in its own file", "evidence": "README.md §Observability and cost capability table"},
+    {"claim": "The prompt chunk store keeps each repeated part once and history is converted in the background", "evidence": "README.md §Observability and cost capability table"},
+    {"claim": "REQUEST_LOG_MAX_ROWS prunes the oldest rows", "evidence": "README.md §Configuration reference"},
+    {"claim": "The all-time strip is never pruned", "evidence": "README.md §Dashboard"},
+    {"claim": "MCC never refreshes Claude Code's credential file in place", "evidence": "docs/OAUTH-PROVIDERS.md"},
+    {"claim": "The server log rotates at 50 MB and retains five files", "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety"},
+    {"claim": "A legacy home is moved by one atomic rename", "evidence": ".env.example header"}
+  ]
+}

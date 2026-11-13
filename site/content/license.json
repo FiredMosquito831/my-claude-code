@@ -1,0 +1,52 @@
+{
+  "path": "/license/",
+  "title": "Licence | My Claude Code",
+  "description": "My Claude Code is dual-licensed: the GNU Affero General Public License v3.0 or later at no cost, or a commercial licence on negotiated terms. The exact terms.",
+  "nav": "Licence",
+  "eyebrow": "Licence",
+  "h1": "The exact terms",
+  "intro": "My Claude Code is dual-licensed. The free option is the GNU Affero General Public License, version 3 or later. The other option is a commercial licence, negotiated case by case. This page states what each one means; it is not legal advice. The free option is AGPL-3.0-or-later; the other is a commercial licence agreed in writing.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Licence"}],
+  "blocks": [
+    {"type": "callout", "kind": "accent", "text": "<strong>Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</strong>"},
+
+    {"type": "h2", "text": "The AGPL option"},
+    {"type": "p", "text": "The AGPL option is free and open source, and it is open to everyone. Personal use, study, modification, and commercial use are all permitted at no cost, including running the proxy for your own work or for your employer's work. What the AGPL asks in return is source code: if you convey the software, or run a modified version of it as a network service that other people interact with, you must offer those users the complete corresponding source of your version under the same licence. Section 13, Remote Network Interaction, is the clause that extends that duty to network use."},
+    {"type": "p", "text": "The Required Notice at the top of the licence file must be preserved. That is a term of the AGPL grant, stated under the additional term of AGPL section 7(b):"},
+    {"type": "code", "label": "Required Notice", "text": "Copyright (c) 2026 FiredMosquito831\nhttps://github.com/FiredMosquito831/my-claude-code"},
+
+    {"type": "h2", "text": "The commercial option"},
+    {"type": "p", "text": "The commercial licence releases you from the AGPL's source-sharing obligation. It is the right choice if you want to offer the software, or a work based on it, as a hosted or managed service; route model or API traffic commercially through it as part of a paid product; reuse its code, its routing logic or its algorithms inside a product you ship without publishing that product's source under the AGPL; or distribute it inside a closed-source appliance, gateway or bundle."},
+    {"type": "p", "text": "A commercial licence is the only way to use the software outside the terms of the AGPL. There is no other exception, standing permission or informal allowance. Terms are negotiated case by case: scope, duration, support expectations and price depend on what you are building. There is no published price list and no click-through agreement; every commercial licence is a written agreement with the author."},
+
+    {"type": "h2", "text": "The inherited MIT portion"},
+    {"type": "p", "text": "The model-routing infrastructure of this project is derived from the MIT-licensed Free Claude Code by Ali Khokhar (Alishahryar1), whose notice is reproduced in the licence file. Substantial portions of that original work remain in this project, and the MIT terms continue to apply to them. The inherited upstream code stays under its original MIT licence in every case: a commercial licence changes the terms of the author's own work, not of that inherited portion."},
+
+    {"type": "h2", "text": "Trademarks and non-affiliation"},
+    {"type": "p", "text": "My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google. Other marks are their owners'. Provider names are used to describe what the software connects to, not to claim any relationship."},
+
+    {"type": "h2", "text": "What this page is not"},
+    {"type": "ul", "items": [
+      "It is not legal advice.",
+      "It is not a licence in itself. The licence is the full text in the repository's licence file; a commercial licence exists only once it is agreed in writing.",
+      "It does not relicense any provider's terms. Your use of a model or an API is governed by that provider's own agreement."
+    ]},
+    {"type": "related", "links": [
+      {"href": "https://github.com/FiredMosquito831/my-claude-code/blob/main/LICENSE", "label": "The full licence text in the repository"},
+      {"href": "https://github.com/FiredMosquito831/my-claude-code/blob/main/COMMERCIAL-LICENSE.md", "label": "The commercial licence document"},
+      {"href": "/about/", "label": "About: the project and its history"},
+      {"href": "/features/", "label": "Features: what is licensed"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "MCC is dual-licensed under AGPL-3.0-or-later or a commercial licence", "evidence": "LICENSE; COMMERCIAL-LICENSE.md"},
+    {"claim": "The AGPL option is free for personal, study, modification and commercial use", "evidence": "LICENSE Required Notice paragraph"},
+    {"claim": "Section 13 extends the source duty to network use", "evidence": "LICENSE; COMMERCIAL-LICENSE.md §What the commercial license is for"},
+    {"claim": "The Required Notice must be preserved under AGPL section 7(b)", "evidence": "LICENSE Additional term under AGPL section 7(b)"},
+    {"claim": "A commercial licence is the only way to use the software outside the AGPL", "evidence": "COMMERCIAL-LICENSE.md"},
+    {"claim": "Terms are negotiated case by case and there is no published price list", "evidence": "COMMERCIAL-LICENSE.md §Terms"},
+    {"claim": "The inherited model-routing code stays under MIT", "evidence": "LICENSE base attribution; COMMERCIAL-LICENSE.md §Terms"},
+    {"claim": "MCC is not affiliated with Anthropic, OpenAI, Google or OpenCode", "evidence": "README.md §What is My Claude Code?"}
+  ]
+}

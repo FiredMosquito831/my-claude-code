@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t9 d9" font-family="ui-monospace, Consolas, monospace">
+<title id="t9">Subsystem map: the packages and their allowed dependency edges</title>
+<desc id="d9">Eight packages. Config and core are leaves with no dependencies. Application depends on config and core. Messaging depends on core. Providers depends on application, config and core. The API depends on application, config and core. The CLI depends on config and core. The runtime is the composition root and depends on every other package.</desc>
+<defs>
+<marker id="a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g font-size="12">
+<rect x="350" y="26" width="160" height="46" rx="8" fill="#111821" stroke="#3FB950" stroke-width="2"/>
+<text x="368" y="54" fill="#3FB950">runtime</text>
+<text x="526" y="54" fill="#7D8FA3" font-size="11">composition root</text>
+<g stroke="#5D6E84" stroke-width="1.2" fill="none">
+<path d="M390 72 V118" marker-end="url(#a9)"/>
+<path d="M470 72 V118" marker-end="url(#a9)"/>
+<path d="M410 72 L250 118" marker-end="url(#a9)"/>
+<path d="M430 72 L610 118" marker-end="url(#a9)"/>
+</g>
+<rect x="120" y="120" width="150" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="138" y="148" fill="#58A6FF">api</text>
+<rect x="350" y="120" width="160" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="368" y="148" fill="#58A6FF">application</text>
+<rect x="600" y="120" width="150" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="618" y="148" fill="#58A6FF">cli</text>
+<g stroke="#5D6E84" stroke-width="1.2" fill="none">
+<path d="M190 166 V222" marker-end="url(#a9)"/>
+<path d="M430 166 V222" marker-end="url(#a9)"/>
+<path d="M675 166 V222" marker-end="url(#a9)"/>
+<path d="M430 166 L320 222" marker-end="url(#a9)"/>
+</g>
+<rect x="80" y="224" width="180" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="98" y="252" fill="#E6EDF3">providers</text>
+<rect x="320" y="224" width="170" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="338" y="252" fill="#E6EDF3">messaging</text>
+<rect x="600" y="224" width="160" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="618" y="252" fill="#E6EDF3">config</text>
+<g stroke="#5D6E84" stroke-width="1.2" fill="none">
+<path d="M170 270 V320" marker-end="url(#a9)"/>
+<path d="M400 270 V320" marker-end="url(#a9)"/>
+<path d="M680 270 V320" marker-end="url(#a9)"/>
+<path d="M250 270 L330 320" marker-end="url(#a9)"/>
+</g>
+<rect x="340" y="322" width="180" height="46" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="358" y="350" fill="#3FB950">core</text>
+<text x="530" y="350" fill="#7D8FA3" font-size="11">protocol-neutral</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="402">Least-privilege edges, checked by an import-boundary test. The graph is acyclic; config and core import nothing.</text>
+<text x="20" y="422">One deliberate exception: the CLI delegates server construction to the runtime composition root.</text>
+</g>
+</svg>

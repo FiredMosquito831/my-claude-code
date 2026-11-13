@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reasoning control and output budgets per request</title>
+<meta name="description" content="Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.">
+<meta name="keywords" content="llm reasoning control, output token budget, reasoning effort claude, llm budget per request, token budget llm, reasoning replay, claude code reasoning, adaptive reasoning, prompt cache lifetime, reasoning dialect translation">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Reasoning control and output budgets per request">
+<meta property="og:description" content="Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Reasoning control and output budgets per request">
+<meta name="twitter:description" content="Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Reasoning control and output budgets per request", "url": "https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/", "description": "Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Reasoning and budgets"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Reasoning control and output budgets per request", "description": "Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.", "url": "https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Reasoning and budgets</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>Reasoning control and output budgets</h1>
+<p class="page-intro">Every provider spells reasoning differently. MCC keeps one neutral policy, then lets each provider adapter translate only the subset its wire API can express. The same page also decides how long a model may think, how many tokens it may spend, and how long the router waits before it calls a silent model a failure. This page is LLM reasoning control and the output token budget that goes with it.</p>        <p>Reasoning is not one setting. It is three independent facts: whether the client wants reasoning on, off or by default; the named effort it asked for, when it named one; and an exact token budget, when it supplied one. MCC resolves those facts once, at the application boundary, and passes one immutable policy to the provider. Provider adapters alone decide how to spell it.</p>
+
+        <h2 id="one-scale-many-dialects">One scale, many dialects</h2>
+
+        <p>When a numeric-budget provider needs a number, MCC expresses named effort through one product scale: <code>minimal</code> and <code>low</code> are 512 tokens, <code>medium</code> is 1,024, <code>high</code> is 2,048, <code>xhigh</code> is 4,096 and <code>max</code> is 8,192. An exact client budget takes precedence over the scale.</p>
+
+        <p>Each host declares a reasoning dialect: which fields it parses, the words it accepts in an effort field, whether it has an on/off channel, a numeric budget, an OFF spelling and an adaptive channel. A control is emitted only where the model has that knob <em>and</em> the host has a field to spell it in. Where one of the two is missing, the nearest thing both can express goes instead: an effort outside the host's vocabulary clamps to the nearest rung that host spells, and a toggle-only model on an effort-only host is sent the rung the client asked for, clamped to that host's enum. Where nothing can be expressed, nothing is sent, the model's own default applies, and the request log records that rather than implying an instruction was honoured.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-model-config-reasoning.webp" alt="The Model Config page&#39;s reasoning section: an adaptive reasoning control, a prompt-cache-lifetime picker and learned-provider toggle, with Validate and Apply buttons." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Reasoning policy and route-specific overrides on Model Config, beside the local web-tool switches.</figcaption>
+</figure>
+
+        <h2 id="adaptive-reasoning-on-every-door">Adaptive reasoning on every door</h2>
+
+        <p><code>ADAPTIVE</code> is not an effort level and not a budget. It asks the host to think as much as it decides it needs, and each door says that in the host's own words: Anthropic's <code>thinking: {"type":"adaptive"}</code> verbatim; an on/off field switched on where that is a different field from its effort one; the highest rung the host publishes where effort is all it has, recorded as a substitution; and nothing at all where the host parses no reasoning field. Every request that does not ask for adaptive is byte-for-byte unchanged.</p>
+
+        <h2 id="learned-rejections">Learned rejections</h2>
+
+        <p>A host that answers a 400 naming a reasoning field is retried once without that field, and on success the <code>(provider, model)</code> pair is remembered for the life of the process. The narrowing is instance-scoped: a configuration reload rebuilds the provider and forgets it. A complaint naming a sampling field is never treated as a reasoning rejection, and an unrecognised 400 still fails visibly.</p>
+
+        <h2 id="reasoning-replay-across-turns">Reasoning replay across turns</h2>
+
+        <p>A coding conversation spans many turns, and each turn has to decide what to carry forward. MCC keeps that decision explicit per provider: native reasoning content, a native reasoning field, think tags, provider-specific chunks, or no replay. Turning computation off for the next generation does not silently erase prior assistant state a valid continuation needs.</p>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Mechanism</th><th scope="col">Default</th><th scope="col">What it does</th></tr></thead>
+<tbody><tr><td>Encrypted reasoning replay</td><td>off</td><td>carries a Responses host's opaque encrypted item through your client's transcript and replays it only to the provider, endpoint, account and model that minted it; no readable reasoning text is written back</td></tr><tr><td>Carrier provenance guard</td><td>always on</td><td>refuses an MCC reasoning envelope at every door that cannot have minted it, and counts the refusal</td></tr><tr><td>Carrier text recovery</td><td>always on</td><td>where a Messages host signs nothing, keeps the readable summary and drops only the signature</td></tr><tr><td>Readable reasoning replay on Responses</td><td>on</td><td>replays an earlier turn's plain thinking text as a summary-only reasoning item, never as output text or a think tag</td></tr><tr><td>Parallel tool calls on Responses</td><td>on</td><td>asks a Responses host to batch independent tool calls into one turn</td></tr></tbody>
+</table></div>
+
+        <p>The provenance guard is the safety net. An envelope is host-bound: it is replayed only to the exact provider, endpoint, account and model that produced it. A request that carries an envelope into a door that cannot have minted it is refused and counted as <code>history_carrier_foreign</code>. Readable reasoning is untouched and still crosses models and providers.</p>
+
+        <h2 id="prompt-cache-lifetime">Prompt-cache lifetime</h2>
+
+        <p>Prompt caching is off by default: the client's own lifetimes go untouched. Set minutes per tier and MCC sends the host's nearest lifetime at least that long: 5 minutes or 1 hour on Anthropic and on Claude models through OpenRouter, <code>in_memory</code> or 24-hour retention on Azure OpenAI. Hosts that cache automatically, including ChatGPT, Gemini, DeepSeek, Nous and NIM, get nothing. A per-provider or per-model row can override the lifetime, or force <em>From client</em>, for gateways that speak Anthropic's protocol.</p>
+
+        <h2 id="output-budgets-and-deadlines">Output budgets and deadlines</h2>
+
+        <p>The output allowance is resolved separately from reasoning, and the order matters. When the resolved policy will ask the model to think, the ask is first raised to the model's own published output limit, because thinking and answer tokens are spent from one allowance the client sized for the answer alone. Then the model limit applies, then the unknown-default, then the floor, then the ceiling, then context headroom. The floor is the only step that raises, and it sits after the model limit so it can never ask for more than the model published, and before context headroom so it can never re-inflate a budget the remaining context cannot hold.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-limits.webp" alt="The Limits and Resilience page: output budgets, a reasoning control, credential rotation policies, proxy chains and diagnostics controls." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Limits and Resilience: output budgets, deadlines, chain benching, retries and credential health on one page.</figcaption>
+</figure>
+
+        <p>Deadlines are the other half of a budget. A first-token deadline and a total deadline per route turn a silent model into a failure instead of a hang. The calculator shows what each model on your chains actually gets, which is rarely the number in the box, because the model limit, the floor, the ceiling and context headroom all interact.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-limits-calculator.webp" alt="The deadline calculator on the Limits page, showing a per-model table of budget, cap, first-token and total values." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The deadline calculator: what each model on your chains actually receives after every bound is applied.</figcaption>
+</figure>
+
+        <h2 id="configuration">Configuration</h2>
+
+        <p>The reasoning policy and its per-tier overrides live on Model Config. The budgets and deadlines live on Limits and Resilience. The settings are named <code>REASONING_*</code>, <code>MAX_OUTPUT_TOKENS_*</code>, <code>REQUEST_*_DEADLINE*</code> and <code>PROMPT_CACHE_*</code>; the exact names and their purposes are on the configuration page. No example values are published for any secret-like setting.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>The router never uses the output-token limit as a reasoning budget. A named or numeric reasoning budget travels only through documented fields.</li><li>A provider-default intent emits no compute-control field at all.</li><li>An exact client token budget takes precedence over MCC's named-effort scale.</li><li>A reasoning control the host cannot express is not invented: nothing is sent and the request log says so.</li><li>Learned rejections are per process. A reload forgets them, deliberately.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/architecture/request-path/">Architecture: where reasoning is resolved in the request path</a></li><li><a href="/features/routing/">Routing: which model receives the policy</a></li><li><a href="/configuration/environment/">Configuration: the variable names behind these controls</a></li><li><a href="/glossary/">Glossary: reasoning policy, dialect, carrier, budget</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#one-scale-many-dialects">One scale, many dialects</a></li>
+          <li><a href="#adaptive-reasoning-on-every-door">Adaptive reasoning on every door</a></li>
+          <li><a href="#learned-rejections">Learned rejections</a></li>
+          <li><a href="#reasoning-replay-across-turns">Reasoning replay across turns</a></li>
+          <li><a href="#prompt-cache-lifetime">Prompt-cache lifetime</a></li>
+          <li><a href="#output-budgets-and-deadlines">Output budgets and deadlines</a></li>
+          <li><a href="#configuration">Configuration</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

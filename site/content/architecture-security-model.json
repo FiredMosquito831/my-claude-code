@@ -1,0 +1,70 @@
+{
+  "path": "/architecture/security-model/",
+  "title": "Security model | My Claude Code",
+  "description": "The principles the security boundary is built on: local by default, a token once the proxy leaves loopback, owner-only stores, redacted logs and narrow egress.",
+  "nav": "Security model",
+  "eyebrow": "Architecture · Security",
+  "h1": "The principles the boundary is built on",
+  "intro": "This page states what MCC does to keep a local proxy local, and what it refuses to do. It is a description of the design, not a security audit, and it makes no claim that a deployment is safe without the operator's own choices. It is the LLM gateway security model: local by default, a token once it leaves the machine, owner-only stores, redacted logs and narrow egress.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Security model"}],
+  "blocks": [
+    {"type": "p", "text": "The threat model starts from one fact: the proxy holds the keys to providers that bill. A local service with those keys has to be reachable by the tools that need it and by nothing else. The principles below are how the code enforces that, and each one has a visible consequence."},
+    {"type": "diagram", "name": "security-principles", "caption": "Five principles: local by default, a token once it leaves, owner-only stores, redacted logs and narrow egress.", "alt": "A diagram listing five security principles with a one-line consequence for each."},
+
+    {"type": "h2", "text": "Local by default"},
+    {"type": "p", "text": "The admin UI and the admin APIs are loopback-only. They have no login because they are not reachable from another machine, and the proxy's own listen address is a setting the operator chooses. The dashboard does not open a second port and does not embed a remote widget."},
+
+    {"type": "h2", "text": "A token once it leaves this machine"},
+    {"type": "p", "text": "Proxy authentication is a bearer token. When it is set, the proxy accepts exactly that token, compares it in constant time, and ignores other credential headers so a stale provider key cannot mask valid proxy authorization. When the host is opened to other machines and the token is empty, the server refuses to start rather than serving an unauthenticated proxy. The token is generated for the machine on first start and lives in the configuration home."},
+
+    {"type": "h2", "text": "Owner-only stores"},
+    {"type": "p", "text": "OAuth credentials live in owner-only files, and a login a proxy listener asks for is stored owner-only and never shown again. A credential read from another application's file is read-only to MCC. The configuration home is one directory, so an operator can see and protect everything in one place rather than hunting for scattered state."},
+    {"type": "diagram", "name": "security-boundary", "caption": "The boundary: local surfaces, the token guard and the single outbound path.", "alt": "A diagram of the local dashboard and proxy, the token guard and the only outbound path to configured providers."},
+
+    {"type": "h2", "text": "Redacted by default"},
+    {"type": "p", "text": "Values under keys that look like an API key, an authorization, a token or a secret are redacted where structured traces are emitted. API payloads and streamed events are not logged raw unless explicitly enabled. The provider's own bytes are kept only behind an opt-in flag. Messaging text, transcription previews and CLI diagnostics each have their own flag, so a normal install does not record a conversation by accident."},
+
+    {"type": "h2", "text": "Narrow egress"},
+    {"type": "p", "text": "The only outbound traffic is a request to a provider the operator configured, a search service the operator enabled, or a web page a client asked to fetch. There is no telemetry and no call home. Web fetch enforces its allowed URL schemes and blocks private-network targets unless the operator explicitly allows them. Local provider status checks are exposed only through the local admin API."},
+
+    {"type": "h2", "text": "Evidence over assertion"},
+    {"type": "p", "text": "A price is recorded with the source that stated it. A skipped model is a row with its reason. A key's health is decided from the provider's own signals, and a bench duration is never invented. The same discipline is applied to this site: every claim is recorded against a path or a command in the repository, and a figure that cannot be traced is not published."},
+
+    {"type": "h2", "text": "What this page does not claim"},
+    {"type": "ul", "items": [
+      "It does not claim the software is free of defects. No such claim is made anywhere on this site.",
+      "It does not claim a deployment is safe regardless of how it is configured. Opening the proxy without a token is refused, but the operator still chooses the address, the network and the keys.",
+      "It does not describe an audit, a penetration test or a certification, and none is implied.",
+      "It does not repeat a known issue as a public roadmap. Issues are handled in the repository's own channel."
+    ]},
+    {"type": "figure", "shot": "dashboard-credential-health", "caption": "Credential health is one of the visible controls: a key is judged only on the provider's own signals."},
+
+    {"type": "h2", "text": "Operating principles for the reader"},
+    {"type": "ul", "items": [
+      "Keep the proxy on loopback unless a client on another machine genuinely needs it; if it needs it, set the token and put the proxy behind a network you control.",
+      "Use a separate key per machine or per purpose, so a key can be revoked without taking everything down.",
+      "Read a provider's own terms before routing a subscription credential through any proxy. MCC documents the Anthropic subscription position rather than hiding it.",
+      "Treat the configuration home as a secret. It holds the keys, the stores and the log.",
+      "Prefer a short retention window and raw logging off unless you are actively diagnosing a request."
+    ]},
+    {"type": "related", "links": [
+      {"href": "/architecture/data-and-storage/", "label": "Data and storage: what the configuration home holds"},
+      {"href": "/architecture/credential-health/", "label": "Credential health: the provider's own signals"},
+      {"href": "/license/", "label": "Licence: AGPL-3.0-or-later or commercial"},
+      {"href": "/configuration/environment/", "label": "Configuration: HOST, PORT and the token variable"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "The admin UI and admin APIs are loopback-only", "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety; README.md §Dashboard"},
+    {"claim": "Proxy auth accepts exactly a bearer token and compares it in constant time", "evidence": "ARCHITECTURE.md §HTTP Request Flow"},
+    {"claim": "With HOST open and ANTHROPIC_AUTH_TOKEN empty the server refuses to start", "evidence": "README.md §Platform capability table"},
+    {"claim": "The token is generated for the machine on first start", "evidence": "README.md §Configuration reference"},
+    {"claim": "OAuth credentials live in owner-only stores and a proxy login is stored owner-only", "evidence": "docs/OAUTH-PROVIDERS.md; README.md §Providers and credentials capability table"},
+    {"claim": "A credential read from another application's file is read-only to MCC", "evidence": "docs/OAUTH-PROVIDERS.md"},
+    {"claim": "Values under key-like names are redacted in traces", "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety"},
+    {"claim": "API payloads and SSE events are not logged raw unless enabled", "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety"},
+    {"claim": "web_fetch blocks private-network targets unless allowed", "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety"},
+    {"claim": "There is no telemetry and the only outbound traffic is to configured providers", "evidence": "README.md §What is My Claude Code?"}
+  ]
+}

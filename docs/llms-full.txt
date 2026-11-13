@@ -1,0 +1,3145 @@
+# My Claude Code
+
+Release 8.17.0. A local multi-provider LLM proxy, model router and control plane for AI coding agents.
+
+Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.
+
+## My Claude Code: local LLM gateway for coding agents
+https://myclaudecode.danubelabs.net/
+
+One address in front of every model and every coding agent
+
+My Claude Code is a local multi-provider proxy, model router and control plane for AI coding agents. Point Claude Code, Codex, OpenCode, Gemini CLI and the rest at one address on your machine, and manage providers, keys, fallback chains, reasoning, budgets, web search and cost in one place. Your models, your keys, your machine. It is a Claude Code proxy first, and a proxy for every other coding agent beside it.
+
+What it is
+
+MCC is a local LLM gateway, proxy and model router for AI coding agents. Instead of configuring providers, API keys, models, fallbacks, reasoning effort and spend tracking separately inside every coding tool you use, you point those tools at one address on your own machine and manage the routing layer once.
+
+It runs entirely on your machine. It has no telemetry and phones home to nothing; its only outbound traffic goes to the providers you configure. Your keys stay in one .env you own.
+
+60
+
+provider cards in the README's provider table
+
+4
+
+protocol doors behind one router
+
+905
+
+test files in the repository
+
+8.17.0
+
+the release this site documents
+
+Why it exists
+
+A coding agent is a client. It speaks one protocol, expects one model name, and has no idea which provider answered. MCC makes that separation real: the agent keeps its own interface, while the model behind it can be a cloud API, a subscription, a gateway or a local server, with a fallback chain behind every route.
+
+That separation is what makes the rest possible. A request can be re-routed when a model rate-limits. A key can be rotated without touching the agent's configuration. Reasoning effort can be translated once into each provider's own dialect. Every request can be priced at the moment it is logged, with the source of each number recorded beside it.
+
+Who it is for
+
+It is for the developer who runs more than one agent and more than one provider: Claude Code on one project, Codex on another, a local model for a private repository, and a paid API for the work that needs it. Each of those tools has its own configuration file, its own key store and its own idea of what a model is called. MCC gives them one address and one place to change the answer.
+
+It is also for the person who wants to know what a routing decision actually did. A fallback that fired, a key that was benched, a price that no source could state: each is a row in the log, not a story reconstructed from a terminal. That is why the analytics pages are as detailed as the settings pages.
+
+It is not a managed service. MCC runs on your machine, with your keys, and there is no account to create and no dashboard outside your own address.
+
+The request path
+
+Four protocol doors reach the same router. Claude Code, Pi, OpenCode, Crush, Kimi Code and Qwen Code speak Anthropic Messages; Codex speaks OpenAI Responses; Cline, Goose, Aider and every OpenAI-shaped SDK speak Chat Completions; Gemini CLI and Antigravity speak Google's Gemini API. The router resolves the requested tier to a real model, applies your reasoning and output-budget settings, picks a healthy credential and walks the fallback chain when a provider fails. The reply is translated back into the protocol the agent asked in, and the whole exchange is priced and logged once on its way out.
+
+Four protocol doors, one router and one executor.
+
+A diagram showing Claude Code, Codex, Cline and Gemini CLI entering four protocol doors that all meet one shared router and executor.
+
+What you can do with it
+
+Model tiers and fallback chains
+
+Route Fable, Opus, Sonnet and Haiku traffic to a model you chose, with an ordered stand-in list behind every tier.
+
+Reasoning and budgets
+
+One effort setting translated into each provider's dialect, plus output ceilings, deadlines and a per-model calculator.
+
+Providers and credential health
+
+Cloud, subscription and local backends, multi-key rotation, per-key health and learned provider facts.
+
+Agent support
+
+Launchers for the CLI agents, Configure and Undo for desktop apps, generated model catalogues and request attribution.
+
+Analytics and cost provenance
+
+A searchable request log, rollups and latency, and cost that keeps reported and estimated figures apart.
+
+Native web search and fetch
+
+Claude Code's web_search and web_fetch tools fulfilled at the proxy, with a chain of search providers and a keyless fallback.
+
+Discord and Telegram sessions
+
+Run managed coding-agent sessions from a chat, with voice-note transcription and stop and clear commands.
+
+Media routing
+
+Image, speech, transcription and video endpoints over rails with the chat engine's retry, key and proxy rules.
+
+Platform and packaging
+
+Windows, macOS and Linux, a desktop app and tray, one update path and npm and PyPI packaging.
+
+The command line
+
+Launchers, the headless mcc-apps controls and the installer's own flags.
+
+The local dashboard
+
+Every setting above, local-only, at one address, with its own appearance, updates and docs.
+
+A control plane, not a wrapper
+
+The dashboard is the part you can see. It opens on a Get Started checklist and then gets out of the way. The Providers page is one searchable card per provider. Model Config is one rail per tier with its real fallback chain. Analytics is a request log and everything computed from it. Each of those pages reads and writes the same .env the server reads, so the dashboard and the file never disagree.
+
+Six tier rails, each with its primary model and its numbered fallback chain. A struck-through row is paused and is never tried.
+
+The request log is the other half of the control plane. Every completed request is logged, priced and searchable across prompt, reply, reasoning and tool calls. A fallback that fired, a key that was benched, a reasoning field a host refused: each is a row with its reason, not a story you have to reconstruct from a terminal.
+
+Analytics: stored requests, success rate, fallback share and token totals, with an all-time strip that keeps counting after stored rows roll over.
+
+Install it in one line
+
+Every install route ends at the same server, the same dashboard and the same configuration directory. The one-liners install uv and a managed Python 3.14 if they are missing, verify the release wheel's SHA-256 and put every mcc-* command on your PATH.
+
+Linux, macOS or WSL
+
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh
+
+Windows Command Prompt and PowerShell have their own one-liners, and there is a native desktop app for each platform. After any install, close and reopen your terminal: the installer adds ~/.local/bin to your PATH, and a shell that was already open cannot see it.
+
+Then: run mcc-server , open http://127.0.0.1:8082/admin , add one provider key on Providers , set your tiers on Model Config , and launch an agent with mcc-claude .
+
+Verified quick facts
+
+Fact
+
+Value
+
+Where it comes from
+
+Version
+
+8.17.0
+
+pyproject.toml
+
+Licence
+
+AGPL-3.0-or-later or commercial
+
+LICENSE , COMMERCIAL-LICENSE.md
+
+Provider cards
+
+60
+
+the README's provider table
+
+Protocol doors
+
+4
+
+ARCHITECTURE.md , HTTP request flow
+
+Test files
+
+905
+
+tests/test_*.py
+
+Platforms
+
+Windows, macOS, Linux
+
+installers and CI workflows
+
+Where to go next
+
+If you are installing for the first time, the quick start walks the first five minutes and the update and uninstall paths. If you want to know how it works before you trust it, the architecture pages are written from the source and the product's own documentation. If you want to see the product, the gallery holds every reviewed screen with a caption.
+
+Quick start: install, first five minutes, update, uninstall
+
+Every capability, with a deep page for each
+
+Architecture: the system map and six deep pages
+
+Gallery: the reviewed screenshots, grouped
+
+FAQ: the questions this site is asked most
+
+## About My Claude Code
+https://myclaudecode.danubelabs.net/about/
+
+The project and its history
+
+My Claude Code is an independent open-source project maintained by FiredMosquito831. It is a local routing layer for AI coding agents, and it says what it does without claiming more. This page is About My Claude Code: who maintains the project, what state it is in, and what it does not claim.
+
+Status
+
+The current release is 8.17.0. The project is active: providers, routing rules and protocol surfaces change release by release, and the documentation is updated beside the code. The repository is public, the test suite is in the repository, and the issue tracker is the place to report a defect. This site documents the behaviour the repository verifies; where a source disagrees with itself, the discrepancy is noted in the site's own record rather than smoothed over.
+
+8.17.0
+
+current release
+
+905
+
+test files
+
+60
+
+provider cards
+
+AGPL
+
+or commercial
+
+How it got here
+
+This repository began as a fork of an earlier MIT-licensed project by Ali Khokhar (Alishahryar1) and became a standalone project on 2026-09-05. Every commit, branch and tag carried across unchanged: the Git history here is byte-for-byte the history it always had, and every release from v4.x onward is present with its original notes and assets. The upstream author and the MIT notice are credited in the licence file.
+
+GitHub pull requests are database records rather than Git objects, so they could not travel with the code. They are preserved as documents instead: the repository's history/pull-requests/ directory holds all 284 of them with their descriptions, conversations, reviews and commit lists, plus the raw API payloads. Each one names the commit it merged as, and that commit is in this repository's history.
+
+Two consequences are worth knowing. Pull request numbers written into old commit subjects refer to those archived records rather than to anything in this repository. And release publication dates all read 2026-09-05, because the API cannot backdate them; the tag and commit dates are the real ones.
+
+What was inherited
+
+The model-routing infrastructure inherited from the upstream project by Ali Khokhar stays under its original MIT license, and substantial portions of it remain in this project. The repository's licence file carries the full terms, including the MIT notice. The rest of the project is dual-licensed under the AGPL or a commercial licence, which the licence page sets out exactly.
+
+What this site is
+
+A product site, not a documentation reader. It is generated from the repository by a deterministic builder and committed alongside the documentation source, which it never modifies. Every capability page carries a claims list, every number is either computed from the repository or recorded against the command that produced it, and the screenshots are the product's own captures, reviewed and redacted on copies before publication.
+
+The site is deliberately plain in one respect: it loads no external font, no content delivery network, no analytics and no embed. It reads as text with JavaScript disabled. That is a choice about trust, not a limitation of the tooling.
+
+Contact
+
+The project's GitHub profile is the contact channel: github.com/FiredMosquito831 . A defect or a feature request goes to the repository's issues. A vulnerability goes to the private security route named in the repository's policy, never to a public issue.
+
+Licence: AGPL-3.0-or-later or commercial, exactly
+
+Features: what the project actually does
+
+Architecture: how it is built
+
+The repository
+
+## Architecture: how the local LLM gateway works
+https://myclaudecode.danubelabs.net/architecture/
+
+How the system is put together
+
+MCC is a local proxy, a set of launchers and an optional messaging bridge, built from eight packages with one dependency rule. This page is the map; the six pages after it go into the machinery a request actually touches. Read together, they are the LLM gateway architecture: the doors, the routing ladder, the credential layer, the request log and the cost model.
+
+The repository documents its own architecture in a long, maintained file. This page condenses the parts that explain the behaviour you can see: why one address can serve four protocols, why a credential can be judged without judging the model, and why a request is priced once rather than reconstructed later.
+
+Three runtime surfaces
+
+The HTTP proxy. A FastAPI application exposes the Anthropic Messages, OpenAI Responses, Chat Completions and Gemini routes, the health and model-listing routes, and the admin surface.
+
+The CLI launchers. Wrapper entrypoints prepare a coding agent, or a managed session, to target the local proxy.
+
+The messaging bridge. Optional Discord or Telegram adapters turn chat messages into managed client sessions.
+
+Four protocol doors, one router and one executor.
+
+A diagram of the four client protocols meeting one shared router and executor.
+
+All three surfaces end at the same proxy. A chat-driven request and a terminal-driven one are the same kind of request once they reach the router, which is why routing, keys, cost and health behave identically whichever surface sent them.
+
+Eight packages, one dependency rule
+
+The installable wheel is eight packages. config and core are dependency leaves and import nothing first-party. application depends on those two. messaging depends on core . providers depends on application , config and core . The api depends on the same three. The cli depends on config and core . The runtime is the composition root and depends on everything else. There is one deliberate exception: the CLI delegates server construction to the runtime's bootstrap.
+
+The package graph and its allowed edges. An import-boundary test derives and checks it.
+
+A diagram of eight packages: config and core as leaves, application, messaging, providers, api and cli above them, and runtime as the composition root.
+
+An import-boundary contract derives every static production edge with one AST scanner and checks the package matrix, the exact exception, facade ownership and lazy optional imports. The resulting graph must stay acyclic. The same contract rejects untyped provider collaborators and private provider access from helper modules. This is the structural reason the boundaries hold: they are tested, not merely documented.
+
+One request, from door to log
+
+A request enters a route, passes proxy authentication, acquires the current provider generation, is validated and routed, is shaped by reasoning and budget settings, and is executed against one provider at a time. The reply is translated back into the client's protocol. The whole exchange is priced and logged once. The next pages take that apart.
+
+What the pipeline produces: one request's route attempts, the reasoning it sent and the fallback that answered.
+
+Where the state lives
+
+One configuration directory holds one .env and the documents beside it. The request log is a local SQLite database, with a search index and a prompt chunk store beside it. Catalogue snapshots, OAuth stores, proxy chains and learned facts are separate documents, so a settings save does not rewrite a credential and a credential refresh does not rewrite a setting.
+
+The loop the architecture is built to support: serve, log, inspect, change, re-measure.
+
+A six-step loop from a served request through the log and analytics to a change and a re-measurement.
+
+The six deep pages
+
+The request path
+
+Ingress, auth, routing, the provider lease and the commit boundary of a streamed reply.
+
+Provider routing
+
+How a tier becomes a model, how the chain is walked, and how a platform narrows what a stream can say.
+
+Credential health
+
+The rotation engine, the three health signals and the two ladders that can bench a key.
+
+Cost provenance
+
+The pricing ladder, the rung stored beside each number, and why reported and estimated never merge.
+
+Data and storage
+
+The configuration home, the request log, the search index and the chunk store.
+
+Security model
+
+The principles the boundary is built on: local by default, a token once it leaves, narrow egress.
+
+Testing and CI
+
+Deterministic tests cover API routes, configuration, provider conversion, upstream adapters, streaming contracts, messaging, CLI adapters, import boundaries and provider-catalogue contracts. Local and live smoke tests live apart, so a test that launches a subprocess or touches a real service cannot be mistaken for a unit test. The repository holds 905 test files, and the CI workflows name the checks that must pass before a change lands.
+
+What this architecture does not claim
+
+It does not claim a provider is available. Availability is the provider's, and the chain exists because it varies.
+
+It does not claim a price is correct. It records the source that stated it and says when none did.
+
+It does not claim a model can reason. It records the fields the host parses and sends only what both sides can express.
+
+It does not claim the proxy is an authenticator. The subscription client gate reads an attribution field; it does not verify a claim.
+
+Request path
+
+Provider routing
+
+Credential health
+
+Cost provenance
+
+Data and storage
+
+Security model
+
+## Cost provenance: where every number comes from
+https://myclaudecode.danubelabs.net/architecture/cost-provenance/
+
+Where a price came from
+
+A cost is only useful if you can tell how it was produced. MCC prices a request once, as it is logged, and stores the rung of the pricing ladder that answered each field beside the number. A figure no source states is shown as not priced, with the reason. That is what cost provenance means here: every number carries the source that stated it.
+
+The ladder
+
+Model metadata is resolved by a single ten-rung ladder, and cost is one of the fields it answers. The provider's own model list is the first rung; models.dev follows; the LiteLLM map is consulted when it is switched on; a cross-provider vote covers what remains; and a field no rung can answer is unpriced. The same resolver answers context, output limit, vision, tool support and the four cache prices, and the Models page and every generated agent catalogue read it, so they cannot disagree about a number or about where it came from.
+
+The pricing ladder: each field walks its rungs, and the rung that answered is stored.
+
+A diagram of five rungs: provider list, models.dev, LiteLLM when on, cross-provider vote, and unpriced.
+
+A model's billed and estimated row: two figures kept apart, each with its own source.
+
+When the provider's own list states a value, the badge reads provider or models.dev with no rung, because the enrichment step that merged them keeps no record of which won. When the ladder supplied it, the rung is exact, down to a cross-provider vote over strangers who merely share a name, which is badged approximate. Nothing about a request is reconstructed after the fact.
+
+One price, one log row
+
+A request is priced at the moment it is logged, and the rung that answered each price is stored in the row. That is what makes a total traceable: a number on a card can be followed back to the requests that produced it, and each request names its source. The attempt-level export writes one row per model the chain tried, so a fallback that spent tokens is in the export even though it did not answer.
+
+Anthropic's split of cache writes into five-minute and one-hour writes is recorded, and a one-hour write is priced at a rate a source states, or shown as not priced with the reason. Requests that predate the split keep their five-minute price; a historical row is not repriced by a later release.
+
+Reported, estimated, unpriced
+
+Reported and estimated are two figures and are never summed. A reported figure is one a source stated; an estimated figure is one the install computed. Both are shown with their own priced-of-total denominator, so a partial figure cannot read as a complete one. A request no source could price is a dash, not a zero, and a request with no price does not quietly enter a total as if it cost nothing.
+
+Reported, estimated and unpriced, with denominators that stop a partial figure reading as complete.
+
+A diagram of three cost states, reported, estimated and unpriced, each with its own denominator and no summing.
+
+The Cost panel: reported and estimated kept apart, each total carrying its priced-of-total denominator.
+
+The all-time strip below the stat cards is never pruned, so it keeps counting after stored rows roll over at the retention cap. All time in a range control means all time still stored, and the two figures are labelled so they cannot be confused.
+
+Usage is not cost
+
+What a provider says is left is a different figure from what a request cost. The Usage page shows the Claude and ChatGPT subscription windows with their reset times, the credits and rate-limit figures that Nous Portal, DeepSeek, OpenRouter, Kimi and Command Code send on responses you already get, and a Read now button that asks seven providers for their own figure. A window and a cash balance are two blocks and never one total. A provider that publishes a percentage is shown as a percentage, with no currency sign beside it.
+
+The honesty note on a cost panel: an unpriceable request is a dash, and every total names its denominator.
+
+A read can never charge a key or bench a provider. The page refreshes on its own only while it is open, at an interval you set, once per provider, and a hidden tab reads nothing. A 429 skips only the provider that sent it, and a repeatedly failing provider backs off on its own.
+
+Media and the marketplace
+
+Media requests are priced like chat ones: a provider figure, then models.dev, then LiteLLM when on, else unpriced. A Mistral image is recorded unpriced because no source publishes a per-image rate for it, and MCC never invents one. InferHub is a marketplace rather than an ordinary provider: a profile sets a price ceiling, and MCC sends that ceiling on every attempt so a request is never charged above it.
+
+Limits and behaviour
+
+A price is never invented, rounded up to a plausible number or copied from an old README.
+
+A total with no denominator is not published.
+
+A request whose cost came from an estimate is marked as estimated, not reported.
+
+The all-time figure and the stored-window figure are separate and labelled.
+
+A media model that a provider declares no price for stays unpriced.
+
+Feature: analytics and cost with provenance
+
+Data: where the priced row lives
+
+Routing: which model the price belongs to
+
+Glossary: rung, provenance, denominator
+
+## Credential health and key rotation
+https://myclaudecode.danubelabs.net/architecture/credential-health/
+
+How a key earns a bench
+
+A provider holding several keys has to answer two independent questions about one failure: should another key be tried, and does this failure cost the credential anything? MCC answers each from its own allow-list, rather than from one deny-list that defaults to blaming the key. This page is the credential health internals: the two questions, the allow-list behind each, and the per-key attribution that follows.
+
+Question one: try another key?
+
+Only three failures justify a different credential: an auth rejection, a 429 and a transport fault. A different credential means a different account or a different connection, so one of them might help. Nothing else does. Every key in the pool reaches the same model and would meet the same timeout, 5xx, 410 or 400, so those raise out of the rotating loop and the fallback chain moves on to the next model instead.
+
+Credentials already tried in a request are passed to the pool as an avoid set, so rotation cannot end with keys untried. The timeout class is excluded by name, because a model that never answered is not a broken socket and spending the whole pool on it would be a self-inflicted outage.
+
+A key pool, the four rotation policies and the three failures that justify another key.
+
+A diagram of a key pool with healthy, benched and locked-out keys, four rotation policies and the three failures that try another key.
+
+Question two: what does it cost the credential?
+
+Only the three signals that describe the credential charge it. A 401 or 403 walks an escalating lockout ladder: five minutes, one hour, one day by default, one step per consecutive rejection, staying at the last entry. A 429 is benched for exactly the wait the provider published, or for the configured cooldown when it published none, under the operator's ceiling. That bench is scoped to the (key, model) pair, and it leaves the slot healthy, because a gateway that limits one model has made no statement about the key's other models.
+
+An exhausted-credit refusal is different. Where the provider says in words that the account behind the key has no balance left, the whole key is benched for the cooldown window, because a wallet is not per model. The matcher reads only the provider's own structured words, through an echo-safe reader, so a prompt that happens to contain a billing phrase cannot bench a key. A bare 402 that names no phrase rotates and falls through but charges nothing.
+
+The three signals and what each one costs. Everything else leaves health untouched.
+
+A diagram of three health signals: a rejected credential walks a lockout ladder, a 429 benches a key-and-model pair, and an exhausted balance benches the whole key.
+
+The key itself is benched only once a configured number of distinct models hold a live bench on it at the same time, for the longest window already published and never less than the triggering 429 asked for. No ladder and no escalation beyond that one step are invented.
+
+The credential-health card: the lockout ladder and the rate-limit cooldown, plus the per-pool rotation policy.
+
+Rotate the pool, or route around the model?
+
+Not every 429 should rotate. When route-around is on, the pool reports the failure, decides health as usual, and then raises a typed model-rate-limited signal. The executor moves to the next chain model on that same provider, because that is where the evidence points: on one measured request all three keys refused one model inside 0.2 seconds each while another model answered on the first key in the same second. With no such model on the chain, one bounded diagnostic probe on a model the operator already configured there decides whether to keep the scoped bench or promote it to the whole key.
+
+The probe's clock belongs to the executor; the pool holds none of its own. That deliberate cost is that a key failing 5xx or transport on every request is retried once per request rather than benched, because the failure classes that could identify a dead key were the same ones emptying healthy pools.
+
+One mechanism, two tunings
+
+The rotation engine exists once, in core, and each frontend parameterises it. The provider tuning reaches neither the generic cooldown ladder nor the circuit breaker, because a provider adapter never classifies a failure as transient. The web-search tuning keeps both, because a search key that keeps erroring is worth resting. No half-open probe state remains: a slot reserved on acquire used to outlive a request that reported neither success nor failure, leaving the key unselectable until reset by hand, so a credential now wakes straight to healthy at the cost of at most one extra failed request.
+
+Per-key attribution
+
+Every request records which key answered, and the key is shown by name where a name exists and by a mask where it does not. The Analytics key filter still matches a renamed key's history by its mask, and the exports carry both the mask and the name. A masked label two keys share resolves to no name at all rather than to a guess.
+
+Per-key performance: requests, error rate, cache hit and latency, with the errors each key actually returned.
+
+Limits and behaviour
+
+A country refusal is about the address, not the key: it never locks a key out on any route.
+
+The pool never invents a ceiling: a wait comes from the provider's own headers or the configured window.
+
+A key's health is decided before the response is committed and is visible in the request log afterwards.
+
+Rotation changes which key is tried, never which model a route points at.
+
+Feature: providers and credential health
+
+Provider routing: the chain that follows a key's refusal
+
+Observability: per-key attribution
+
+Configuration: CREDENTIAL_* and RATE_LIMIT_*
+
+## Data and storage: what MCC keeps and where
+https://myclaudecode.danubelabs.net/architecture/data-and-storage/
+
+What is stored, and where
+
+Everything MCC keeps is under one configurable directory on your machine. There is no remote database, no account and no second copy. What is stored is deliberately split between a settings file, a request log and a set of documents that a settings save must never rewrite. This page is the LLM gateway storage layout: what is written, where it lives, and what is never stored at all.
+
+The configuration home
+
+A new install keeps everything in ~/.mcc : the .env , the request log under logs/ , the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file because they hold more than a scalar. MCC_CONFIG_DIR pins the directory to an absolute path and must be set in the shell, because the directory has to be known before there is a file to read.
+
+The configuration home and the documents beside the .env.
+
+A diagram of the configuration home with the .env, the request log, updates and cache, and the JSON documents beside them.
+
+The split is deliberate. A custom provider's static credential travels on its descriptor rather than through a settings field, so it lives in custom_providers.json and a settings save cannot rewrite it. Learned facts live in their own document because they expire on a clock and are forgettable per row. Per-agent tier overrides live in their own document because a dashboard write must land without a restart, which it does by caching on the file's own timestamp.
+
+The request log
+
+The request log is a local SQLite database, logs/requests.db . A completed request is written once with its endpoint, harness, provider, key, model, status, turn, tokens, cost, time to first token and duration, plus the attempts it walked and the rung that priced it. A request answered by a local optimization records no provider, because none served it, and carries the rule and the tokens it saved for exactly those rows.
+
+Columns cannot be added to an existing database by an open; the code that opens the log knows which columns its version requires and mirrors them in one place. That is why an older log keeps working rather than being silently migrated into an unusable shape.
+
+The log, its search index, its chunk store and the analytics built over them.
+
+A diagram of a completed request written to requests.db, with a search index, a prompt chunk store and analytics over the log.
+
+The search index and the chunk store
+
+Searching the log does not unpack every stored request. The search index stores each distinct piece of text in its own file beside the log. New requests are indexed as they are written; older ones are indexed when you press Build search index. The prompt chunk store keeps each repeated prompt part once, so turn N+1 of a conversation no longer stores turn N again. History is converted in the background, each prompt is read back byte for byte before it is replaced, and Pause and Continue sit beside the log's size.
+
+Retention is a cap. REQUEST_LOG_MAX_ROWS prunes the oldest rows periodically, so the database does not grow without bound; once the cap is reached the log is a rolling window. The all-time strip on Analytics is kept separately and is never pruned, which is why a count can keep rising after the stored rows have rolled over.
+
+Credentials and OAuth stores
+
+OAuth credentials live in owner-only stores in the configuration home. MCC's own store is separate from Claude Code's, and MCC never refreshes Claude Code's file in place: rotating it would log out the real client, so a shared credential is renewed under Claude Code's own lock and written back by compare-and-swap. A credential read from another application's file is read-only to MCC unless it is explicitly MCC's own.
+
+Logs and diagnostics
+
+The server log rotates at 50 MB and retains five rotated files, bounding normal on-disk usage. API payloads and streamed events are not logged raw unless explicitly enabled. Values under keys that look like an API key, an authorization, a token or a secret are redacted where structured traces are emitted. Messaging text, transcription previews, CLI diagnostics and detailed messaging exception strings each have their own diagnostic flag, so a normal install does not record a conversation by accident.
+
+The storage panel: the request log's size, its retention, and the controls that keep it bounded.
+
+What is never stored remotely
+
+There is no telemetry and no call home.
+
+There is no remote request log and no account to reconcile against.
+
+The only outbound traffic is a request to a provider you configured, a search service you enabled, or a web page a client asked to fetch.
+
+A generated media file is stored only when storage is switched on, and with its own size cap.
+
+One logged request: the attempts, tokens, timing and reasoning fields stored with it.
+
+Limits and behaviour
+
+A configuration save and a credential refresh write different files, so one cannot corrupt the other.
+
+The log is local SQLite; a second MCC server with a different configuration home has its own log.
+
+Retention prunes the oldest rows; the all-time figure survives it.
+
+The search index returns the same results as a full scan.
+
+A legacy configuration home is moved by one atomic rename, nothing copied or merged.
+
+Configuration: the configuration home and the .env
+
+Cost: what the stored price means
+
+Feature: the request log and analytics
+
+Platform: the legacy-home migration
+
+## Provider routing and the fallback ladder
+https://myclaudecode.danubelabs.net/architecture/provider-routing/
+
+From a tier name to one real model
+
+The router answers one question: which concrete provider model serves this request, with which reasoning preference, and what happens if it cannot. It is deliberately small, and the rules it follows are the product's contract. This page is the provider routing internals: the three ways to name a model, the tier map, and the order the fallback ladder is walked in.
+
+Three ways to name a model
+
+Resolution takes three forms. A direct provider model ref names the provider and the exact model. A gateway model ID is decoded by the gateway-ID codec. The five tier aliases are intercepted ahead of both, and are pointers rather than models. If the incoming name is not direct, the router maps it by Claude tier: a name containing fable, opus, sonnet or haiku uses the matching tier override when set, and otherwise falls back to the default model.
+
+The router also selects the reasoning preference. A direct ref uses the root policy; a Claude tier route uses a non-inherited tier override or the root fallback; the no-thinking gateway variant forces off. The application layer combines that preference with the concrete client request exactly once, and the resulting plan owns both the selected route and the final request-scoped policy.
+
+The tier map, with a primary model and an ordered chain per route.
+
+A diagram of five tiers, each with a primary model and fallback rows, one paused.
+
+What the picker is told
+
+The model-listing route advertises configured provider refs, cached provider-discovered models, no-thinking variants where appropriate, and built-in Claude model IDs for compatibility. A discovered model's thinking support is used for presentation only; it never selects request behaviour. A per-client picker is shaped outside the route: the composition bridge builds catalogue records from the same ladder, using the same visibility filter and projection, so a model cannot appear in one surface and not the other, and it writes each harness's catalogue without making a loopback HTTP request.
+
+One consequence is worth stating because it is visible: a catalogue is a snapshot. The Codex App reads its catalogue at startup, so it must restart to see a later publication, and the Codex launcher remains a launch-time synchroniser for the same reason. An existing last-known-good catalogue is preserved when a projection resolves no routable models.
+
+Aliases are pointers
+
+The protocol names mcc/cyber , mcc/best , mcc/good , mcc/medium , mcc/cheap and mcc/vision serve harnesses that have no Claude vocabulary of their own. Each names one of the router's global routes, together with that route's fallback chain and pause list, and an unset route collapses onto the default model exactly as the Claude tier does. The provider ID mcc is reserved so a custom provider cannot make an alias ambiguous.
+
+The tier segment is matched exactly, not by substring. The router takes an optional harness name from the request header or the user-agent fingerprint; an unidentified request resolves against the global chain rather than failing. The resolved tier route is recorded on the plan, which is what lets the request log name the tier, its source and its harness without adding a column to the log.
+
+Walking the chain
+
+Each route has a model and an ordered chain of stand-ins. The executor attempts the route's model first, then each entry in order. A model listed twice is tried twice, and each listing is judged when it is reached. A paused entry keeps its place and is never tried: no attempt is spent, no deadline is consumed, and the log records the reason.
+
+A walked chain: skipped, answered and never reached, each with its reason.
+
+A diagram of a four-model chain with a cooldown, a pause, an answer and an unreached model.
+
+The chain's decision rules come from the failure, not from a general retry count. An auth rejection, a 429 and a transport fault can all be helped by a different key, so the pool rotates. A timeout, a 5xx, a 410 or a plain 400 cannot: every key talks to the same model and would hear the same answer, so those raise out of the rotating loop and the chain moves to the next model. A timeout is explicitly excluded from the transport-fault class, because a model that never answered is not a broken socket.
+
+The chain as the request log shows it: each attempt with its key, timings and the reason it was or was not tried.
+
+Media rails are not chat tiers
+
+The image, speech, transcription and video rails walk their chains under the same rules through a separate copy of the engine, and a contract test holds the two copies to the same decisions. They keep their own key, model and proxy health, so a media failure never benches anything for chat. Nothing on a media rail is listed in the model catalogue or offered to a coding agent.
+
+Limits and behaviour
+
+The router never inspects an upstream model name or version to choose reasoning behaviour.
+
+A route whose every model is paused fails with an error naming the key rather than silently falling through.
+
+A failure after the first streamed chunk is not retried; the response is already committed.
+
+An unknown harness is served, not refused.
+
+A catalogue write that resolves no routable models preserves the last good file.
+
+Feature: routing and fallback chains
+
+Request path: where resolution sits
+
+Credential health: what the chain asks the pool
+
+Configuration: MODEL_* and the chain variables
+
+## Request path: from a door to a committed reply
+https://myclaudecode.danubelabs.net/architecture/request-path/
+
+From a door to a committed reply
+
+A request is authenticated once, correlated once, routed once and executed against one provider at a time. The hard part is not the happy path; it is deciding when a failure is still an HTTP error and when it is already part of a stream. This page is the LLM request path, from the door the client entered by to the point the reply is committed.
+
+The routes
+
+The proxy exposes POST /v1/messages for Anthropic Messages, POST /v1/responses for OpenAI Responses, POST /v1/chat/completions for Chat Completions, POST /v1/messages/count_tokens for Anthropic token counting, GET /v1/models for the gateway and Claude-compatible model list, GET /health , POST /stop , and HEAD and OPTIONS probes on the supported endpoints. Google's surface lives in its own module because its path shape is unlike every other route: POST /v1beta/models/{model}:generateContent and its streaming, token-count and list siblings.
+
+The four client protocols and the routes they enter.
+
+A diagram showing four client protocols entering four routes that meet one router.
+
+Authentication and correlation
+
+Proxy authentication is one function. If ANTHROPIC_AUTH_TOKEN is blank, proxy authentication is disabled. Otherwise the proxy accepts exactly a bearer token, and other credential headers are ignored, so a stale provider key cannot mask valid proxy authorization. The complete token is compared in constant time, and no model suffix or other token mutation is accepted.
+
+A pure ASGI boundary creates one opaque request ID before routing, places it in the log context and request state, and adds it to the response while forwarding the real response-start message. The Responses surface and the shared model catalogue expose the same value as a request-id header. Provider execution receives that existing ID; it never creates a second one. Keeping the context around the whole inner call is what preserves correlation during streaming.
+
+Routing and shaping
+
+The product handler validates the request, resolves the model and the reasoning intent, applies Claude-only safety-classifier and local-optimization policy, handles local server tools, and then asks the executor to stream the routed request. The Responses handler is streaming-only and delegates its protocol work to an adapter that converts the payload into an Anthropic Messages request before execution and converts the streamed events back afterwards.
+
+Seven stages from ingress to a priced, logged reply.
+
+A numbered seven-stage pipeline: ingress, route, shape, credential, attempt, fallback and reply, ending in one price and log row.
+
+The result of the pipeline: one request's attempts, with a reason beside every model it did not try.
+
+The commit boundary
+
+The executor resolves a provider from the current generation, synchronously preflights the upstream request, emits trace events, counts input tokens and returns an iterator of protocol events. The response layer then waits for the first protocol chunk before it returns a successful streaming response. That wait is the commit boundary. A provider failure before it stays a typed non-2xx JSON response, and that response carries a retry header set to false, because MCC retains ownership of upstream retry rather than causing a second client retry loop.
+
+After the first chunk has escaped, HTTP status is committed. The Messages surface then emits an Anthropic error event and closes without a synthetic message-stop; the Responses surface emits a failed response with its original ID. Non-streaming Messages requests aggregate internally and return a non-2xx JSON for any terminal stream error, discarding incomplete content rather than presenting a partial success.
+
+Close ownership
+
+The public response chain follows a transitive close-ownership rule. A response owns its replay iterator; replay owns the active protocol adapter; each adapter owns its direct input; tracing owns the executor body; the executor body owns the provider iterator; and the provider runner owns its upstream stream. Each owner closes its direct input on normal completion, failure, cancellation and early consumer close. A generation lease is released only after the body chain has finished closing.
+
+Failures that are not provider failures
+
+Ingress authentication, request validation, model routing and deterministic preflight failures are ordinary HTTP errors and do not receive the terminal retry header. Missing provider configuration and a shutting-down request runtime are application-readiness errors: the Messages surface serialises them as Anthropic JSON and the Responses surface as OpenAI JSON, and neither is misclassified as an already-finalised provider failure.
+
+The Gemini difference
+
+The Gemini door keeps Google's error envelope, because Gemini CLI branches on the status string when it decides whether to retry. Its prompt token count includes the cached prompt, unlike Anthropic's, because Google's field includes it and reports the served part separately; a straight rename would under-report every cached request. Its stream has no done sentinel, because that is OpenAI's convention and Google's client would try to parse it as JSON.
+
+A request detail: what entered, what was routed, what was sent and what answered.
+
+Limits and behaviour
+
+One request ID, created at ingress, is reused by every stage. There is no second identifier.
+
+A failure after the first chunk cannot change the HTTP status; it is an in-band event.
+
+A non-streaming request discards an incomplete reply rather than returning partial content as success.
+
+The executor depends on a provider port, not on a provider implementation, which is why four doors can share one executor.
+
+Provider routing: what happens inside the routed stage
+
+Credential health: what happens before an attempt
+
+Feature: routing and fallback chains
+
+Glossary: commit boundary, generation lease, request ID
+
+## Security model: keys, boundaries and local-first
+https://myclaudecode.danubelabs.net/architecture/security-model/
+
+The principles the boundary is built on
+
+This page states what MCC does to keep a local proxy local, and what it refuses to do. It is a description of the design, not a security audit, and it makes no claim that a deployment is safe without the operator's own choices. It is the LLM gateway security model: local by default, a token once it leaves the machine, owner-only stores, redacted logs and narrow egress.
+
+The threat model starts from one fact: the proxy holds the keys to providers that bill. A local service with those keys has to be reachable by the tools that need it and by nothing else. The principles below are how the code enforces that, and each one has a visible consequence.
+
+Five principles: local by default, a token once it leaves, owner-only stores, redacted logs and narrow egress.
+
+A diagram listing five security principles with a one-line consequence for each.
+
+Local by default
+
+The admin UI and the admin APIs are loopback-only. They have no login because they are not reachable from another machine, and the proxy's own listen address is a setting the operator chooses. The dashboard does not open a second port and does not embed a remote widget.
+
+A token once it leaves this machine
+
+Proxy authentication is a bearer token. When it is set, the proxy accepts exactly that token, compares it in constant time, and ignores other credential headers so a stale provider key cannot mask valid proxy authorization. When the host is opened to other machines and the token is empty, the server refuses to start rather than serving an unauthenticated proxy. The token is generated for the machine on first start and lives in the configuration home.
+
+Owner-only stores
+
+OAuth credentials live in owner-only files, and a login a proxy listener asks for is stored owner-only and never shown again. A credential read from another application's file is read-only to MCC. The configuration home is one directory, so an operator can see and protect everything in one place rather than hunting for scattered state.
+
+The boundary: local surfaces, the token guard and the single outbound path.
+
+A diagram of the local dashboard and proxy, the token guard and the only outbound path to configured providers.
+
+Redacted by default
+
+Values under keys that look like an API key, an authorization, a token or a secret are redacted where structured traces are emitted. API payloads and streamed events are not logged raw unless explicitly enabled. The provider's own bytes are kept only behind an opt-in flag. Messaging text, transcription previews and CLI diagnostics each have their own flag, so a normal install does not record a conversation by accident.
+
+Narrow egress
+
+The only outbound traffic is a request to a provider the operator configured, a search service the operator enabled, or a web page a client asked to fetch. There is no telemetry and no call home. Web fetch enforces its allowed URL schemes and blocks private-network targets unless the operator explicitly allows them. Local provider status checks are exposed only through the local admin API.
+
+Evidence over assertion
+
+A price is recorded with the source that stated it. A skipped model is a row with its reason. A key's health is decided from the provider's own signals, and a bench duration is never invented. The same discipline is applied to this site: every claim is recorded against a path or a command in the repository, and a figure that cannot be traced is not published.
+
+What this page does not claim
+
+It does not claim the software is free of defects. No such claim is made anywhere on this site.
+
+It does not claim a deployment is safe regardless of how it is configured. Opening the proxy without a token is refused, but the operator still chooses the address, the network and the keys.
+
+It does not describe an audit, a penetration test or a certification, and none is implied.
+
+It does not repeat a known issue as a public roadmap. Issues are handled in the repository's own channel.
+
+Credential health is one of the visible controls: a key is judged only on the provider's own signals.
+
+Operating principles for the reader
+
+Keep the proxy on loopback unless a client on another machine genuinely needs it; if it needs it, set the token and put the proxy behind a network you control.
+
+Use a separate key per machine or per purpose, so a key can be revoked without taking everything down.
+
+Read a provider's own terms before routing a subscription credential through any proxy. MCC documents the Anthropic subscription position rather than hiding it.
+
+Treat the configuration home as a secret. It holds the keys, the stores and the log.
+
+Prefer a short retention window and raw logging off unless you are actively diagnosing a request.
+
+Data and storage: what the configuration home holds
+
+Credential health: the provider's own signals
+
+Licence: AGPL-3.0-or-later or commercial
+
+Configuration: HOST, PORT and the token variable
+
+## Configuration: how MCC settings are provided
+https://myclaudecode.danubelabs.net/configuration/
+
+How settings are provided
+
+MCC has one configuration home, one .env and one set of documents beside it. The dashboard writes the file, the server reads it, and the launchers resolve the same directory. There is no second configuration system to reconcile. This page is the LLM gateway configuration map: the home, the file, the documents beside it and the variables that are read before the file is.
+
+The configuration home
+
+A new install keeps everything in ~/.mcc . That directory holds the .env , the request log under logs/ , the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file: custom provider definitions, per-agent tier overrides, credential names, OAuth stores, model overrides, learned facts, proxy chains and marketplace profiles. An install from before 6.40.0 is migrated from its legacy directory on its first start by one atomic rename, nothing copied or merged, and the startup log always names the directory in use.
+
+One variable resolves before the file does. MCC_CONFIG_DIR pins the configuration home to an absolute path and overrides every default. It must be set in your shell, not written into the .env, because the directory has to be known before there is a file to read. Set it for the mcc-* launchers too, or they will read a different directory than the server.
+
+The .env
+
+The .env is the settings file. Every setting lives there with the same name it has in the documentation, and the dashboard writes the same file, so a value set on a page and a value set by hand are the same value. On a new install the server writes the file on first start and generates the proxy token for that machine.
+
+The repository ships an annotated example file, .env.example , with inline comments and cost notes. Its variable names are public; its values are not, and this site never publishes one. For a secret-like setting the configuration page on this site gives the name and the purpose only.
+
+The documents beside the .env
+
+Document
+
+What it holds
+
+custom_providers.json
+
+custom provider definitions, including their static credentials
+
+harness_tiers.json
+
+per-agent tier overrides
+
+credential_names.json
+
+display names for keys, keyed by a hash of the key
+
+model_overrides.json
+
+operator overrides for a model's fields
+
+learned_facts.json
+
+what this install learned about a provider, with expiry
+
+proxy_chains.json
+
+named proxy chains and their exits
+
+marketplace_profiles.json
+
+InferHub price-ceiling profiles
+
+anthropic_oauth.json
+
+MCC's own OAuth credential store, owner-only
+
+chatgpt-oauth.json
+
+the ChatGPT OAuth store
+
+logs/requests.db
+
+the request log
+
+Environment variables that are not settings
+
+A settings save and a credential refresh write different files. That split is what lets a provider be re-keyed without rewriting the routing map, and a tier change without touching an OAuth store. It is also why the dashboard can show a key round-trip and a tier change as two independent actions rather than one save that rewrites everything.
+
+A few variables are read before or outside the settings file. MCC_CONFIG_DIR chooses the directory. MCC_ENV_FILE names an explicit dotenv file to load instead of the default one. The install scripts read MCC_INSTALL_NO_START and MCC_INSTALL_NO_DESKTOP , and the npm wrapper reads MCC_NPM_INSTALL . HTTPS_PROXY , HTTP_PROXY and NO_PROXY are honoured by the installers and by outbound requests.
+
+Editing rules
+
+A blank value means unset. Removing a value from the page writes a blank, and the default applies.
+
+A restart-required setting is labelled on the page; Apply does not pretend it took effect.
+
+A managed write backs the file up before it changes it.
+
+A leftover setting from a removed feature is ignored at startup and dropped on the next save.
+
+The launchers read the same directory as the server; a mismatch is the one configuration mistake the product cannot fix for you.
+
+Environment reference: the variable names, grouped by area
+
+The dashboard: where most settings are edited
+
+Architecture: what is stored and where
+
+Quick start: the first settings you will touch
+
+## Environment variables and settings reference
+https://myclaudecode.danubelabs.net/configuration/environment/
+
+Environment reference
+
+This page is the LLM gateway environment variables reference. It names the settings, grouped by what they decide, and gives no values. For a secret-like variable it never shows an example: a documentation page is not a place to invent one. The annotated .env.example carries the same names, with comments.
+
+Names, not values. Nothing on this page is a usable setting. Copy a name into your own .env and read its comment in .env.example before choosing a value.
+
+Core server
+
+Name
+
+What it decides
+
+HOST
+
+the address the server listens on; loopback by default
+
+PORT
+
+the port the server listens on; 8082 by default
+
+ANTHROPIC_AUTH_TOKEN
+
+the bearer token proxy clients present; generated for this machine on first start; required once the host is not loopback
+
+MCC_CONFIG_DIR
+
+the configuration home; environment-only, resolved before the .env is read
+
+MCC_ENV_FILE
+
+an explicit dotenv file to load instead of the default one
+
+LOG_LEVEL
+
+the server log level
+
+SERVER_LOG_RETAIN_FILES
+
+how many rotated server log files are kept
+
+Request log and analytics
+
+Name
+
+What it decides
+
+REQUEST_LOG_ENABLED
+
+whether the persistent request log, and therefore Analytics, is on
+
+REQUEST_LOG_MAX_ROWS
+
+the retention cap; the oldest rows are pruned periodically
+
+LOG_RAW_API_PAYLOADS
+
+whether API payloads are kept raw
+
+LOG_RAW_SSE_EVENTS
+
+whether streamed events are kept raw
+
+LOG_RAW_UPSTREAM_BYTES
+
+whether the provider's own bytes are kept exactly as received; off by default
+
+LOG_API_ERROR_TRACEBACKS
+
+whether API error tracebacks are kept
+
+LOG_RAW_CLI_DIAGNOSTICS
+
+whether CLI diagnostics are kept raw
+
+USAGE_AUTO_REFRESH_SECONDS
+
+how often the Usage page refreshes itself while open; zero turns it off
+
+USAGE_LAYOUT
+
+which of the five Usage layouts is shown
+
+Models, tiers and reasoning
+
+Name
+
+What it decides
+
+MODEL
+
+the model used when nothing more specific matches
+
+MODEL_MYTHOS , MODEL_FABLE , MODEL_OPUS , MODEL_SONNET , MODEL_HAIKU
+
+each coding-agent tier's model
+
+MODEL_VISION
+
+the model the vision adapter routes an image request to
+
+MODEL_*_FALLBACKS
+
+each route's ordered stand-ins
+
+MODEL_*_PAUSED
+
+the entries kept in place but never tried
+
+HARNESS_TIER_ALIASES
+
+whether the per-agent tier aliases are offered
+
+VISION_ADAPTER_MODE
+
+route, describe or the behaviour the request would have had without the adapter
+
+REASONING_POLICY
+
+the root reasoning policy
+
+REASONING_MYTHOS , REASONING_FABLE , REASONING_OPUS , REASONING_SONNET , REASONING_HAIKU
+
+per-tier reasoning overrides
+
+REASONING_EFFORT_BUDGET_RATIOS
+
+how much of the output allowance a thinking rung may take
+
+REASONING_ANSWER_FLOOR_MAX
+
+the answer reserve kept aside from the thinking budget
+
+PROMPT_CACHE_TTL , PROMPT_CACHE_TTL_*
+
+the prompt-cache lifetime per route or per tier; client by default
+
+Output budgets, retries and limits
+
+Name
+
+What it decides
+
+MAX_OUTPUT_TOKENS_CEILING
+
+the ceiling applied to an output budget; zero is the sentinel for none
+
+MAX_OUTPUT_TOKENS_FLOOR
+
+the floor that stops a long prompt squeezing the reply to nothing
+
+MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT
+
+the value used when no source publishes a model's limit
+
+MAX_OUTPUT_TOKENS_CONTEXT_MARGIN , MAX_OUTPUT_TOKENS_CONTEXT_FLOOR
+
+the context-headroom bounds
+
+FALLBACK_TOTAL_TIMEOUT , FALLBACK_FIRST_TOKEN_TIMEOUT , FALLBACK_STALL_TIMEOUT
+
+the deadlines that make a silent model a failure
+
+FALLBACK_RETRY_FIRST , FALLBACK_SKIP_KINDS
+
+what the chain retries and what it skips
+
+FALLBACK_BENCH_ENABLED , FALLBACK_EJECT_*
+
+whether and when a chain entry is benched
+
+PROVIDER_RETRY_ATTEMPTS , PROVIDER_RETRY_BACKOFF_*
+
+the retry count and backoff
+
+RATE_LIMIT_COOLDOWN_SECONDS , RATE_LIMIT_COOLDOWN_MAX_SECONDS , RATE_LIMIT_COOLDOWN_MODE
+
+what a 429 costs a key
+
+RATE_LIMIT_ROUTES_AROUND_MODEL
+
+whether a 429 tries another model on the same provider
+
+CREDENTIAL_LOCKOUT_TIERS
+
+the escalating bench for a rejected key
+
+CREDENTIAL_MODEL_BENCH_ESCALATION
+
+how many models must be limited before the whole key is benched
+
+Web search and fetch
+
+Name
+
+What it decides
+
+WEB_SEARCH_PROVIDER
+
+auto, off, disabled or one search backend
+
+WEB_SEARCH_FALLBACK_POLICY
+
+how far the search chain may move
+
+WEB_SEARCH_CHAIN , WEB_SEARCH_CHAIN_PAUSED
+
+the ordered search services and the ones paused
+
+ENABLE_WEB_SERVER_TOOLS
+
+whether web search and web fetch are fulfilled at the proxy
+
+WEBSEARCH_PROXY
+
+an optional outbound proxy for search
+
+WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS
+
+optional spacing between keyless-hop requests
+
+WEBSEARCH_LOG_ENABLED , WEBSEARCH_LOG_MAX_ROWS
+
+the web-search log and its retention
+
+DDGS_REGION , DDGS_TIMELIMIT , DDGS_BACKEND , DDGS_SAFESEARCH
+
+the keyless metasearch's region, freshness, engine and safe-search
+
+WEB_FETCH_EXTRACTOR
+
+the page extractor; basic restores earlier bytes
+
+WEB_FETCH_ALLOWED_SCHEMES , WEB_FETCH_ALLOW_PRIVATE_NETWORKS
+
+the web-fetch egress rules
+
+Media, messaging and the dashboard
+
+Name
+
+What it decides
+
+MODEL_IMAGE , MODEL_TTS , MODEL_ASR , MODEL_VIDEO
+
+the four media rails and their chains
+
+MEDIA_UPLOAD_MAX_MB
+
+the optional media upload cap
+
+MEDIA_STORE_ENABLED , MEDIA_STORE_MAX_MB
+
+whether generated media is stored, and its size cap
+
+MCP_MEDIA_APPS
+
+the agents the media server is added to
+
+MESSAGING_PLATFORM
+
+discord, telegram or none
+
+MESSAGING_RATE_LIMIT , MESSAGING_RATE_WINDOW
+
+the outbound message rate
+
+ADMIN_DESIGN , ADMIN_THEME , ADMIN_MODE , ADMIN_DENSITY
+
+the dashboard's machine-wide appearance
+
+ENABLE_TITLE_GENERATION_SKIP , ENABLE_SUGGESTION_MODE_SKIP
+
+the local optimization rules
+
+Reading a name
+
+A blank value means unset; the default applies.
+
+A restart-required setting is labelled on the dashboard, because the running process read it at startup.
+
+A value is never published here, and a secret-like name never gets an example.
+
+Configuration: how settings are provided
+
+Reasoning and budgets: what these settings decide
+
+Web search: the search chain in practice
+
+Troubleshooting: when a setting does not take effect
+
+## Frequently asked questions about the gateway
+https://myclaudecode.danubelabs.net/faq/
+
+Questions this site is asked most
+
+Each answer below is written from the product's own documentation and, where it matters, from the source. The same questions and answers are published as structured data for search engines, generated from this one list so the two cannot drift. It is the LLM gateway FAQ: the questions this site is asked most, answered once.
+
+What is My Claude Code?
+
+A local multi-provider LLM proxy, model router and control plane for AI coding agents. You point the agents at one address on your machine and manage providers, keys, routing, reasoning, budgets, web search and cost in one place.
+
+Does it send anything to a remote server?
+
+No. It has no telemetry and phones home to nothing. Its only outbound traffic goes to the providers you configure, a search service you enable, or a web page a client asked to fetch. The dashboard and admin APIs are loopback-only.
+
+Which coding agents can use it?
+
+Claude Code, Codex, OpenCode and OpenCode 2, Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, OpenClaw, Hermes Agent, Droid, Pi and Kilo have launchers. Desktop apps and other clients are configured from the dashboard or pointed at the proxy directly.
+
+Which providers are supported?
+
+Sixty provider cards across cloud APIs, subscription and OAuth sign-ins, gateways, local servers and marketplaces, from Anthropic and OpenAI to OpenRouter, Mistral, Gemini, Vertex, DeepSeek, Ollama, LM Studio and llama.cpp. Local models connect through a base URL rather than a key, and any other OpenAI-compatible endpoint can be added as a custom provider.
+
+Is it free?
+
+MCC itself is free under AGPL-3.0-or-later, or a commercial licence by negotiation. The models behind it may be free, paid, subscription-based or local; that is your choice and your account.
+
+Does it work without an API key?
+
+Yes, for the free path. A fresh install routes the Mythos, Fable, Opus and Sonnet tiers to OpenCode Zen's free model with no key at all. The default model and the Haiku tier still point at NVIDIA NIM, so they need a key or a new model.
+
+Where do my keys live?
+
+In one configuration home on your machine, by default ~/.mcc . The .env holds the settings, and the documents beside it hold custom providers, OAuth stores and credential names. MCC never sends a key anywhere except the provider it belongs to.
+
+What happens when a provider is down?
+
+The fallback chain walks to the next model. A model that errors, rate-limits or refuses moves the request down its chain, and the first attempt that succeeds ends the walk. Every step is recorded in the request log with its reason.
+
+Does it retry the same model forever?
+
+No. A 429 benches the key and model pair for the wait the provider published, and the chain moves on. A timeout, a 5xx, a 410 or a plain 400 is treated as the model's answer, so the chain tries a different model instead of spending the rest of the key pool.
+
+Can I use a Claude subscription?
+
+MCC can route an Anthropic subscription credential, but Anthropic's published terms do not permit routing Free, Pro or Max plan credentials on behalf of third-party users, and the risk is to your account. MCC documents the position in full rather than hiding it; read the Anthropic subscription page before enabling it.
+
+What is a tier?
+
+A coding-agent route such as Fable, Opus, Sonnet, Haiku or Mythos, mapped to a real model and an ordered chain. Tier aliases such as mcc/cyber and mcc/best are protocol names for those routes, not models.
+
+What is a fallback chain?
+
+An ordered list of stand-ins behind a route. If the model a request routes to cannot serve it, the next entry is tried, then the next. A model listed twice is tried twice. A paused entry keeps its place and is never tried.
+
+What does a 429 do to my key?
+
+It benches that key for that one model, for exactly the wait the provider published or a configured cooldown when it published none. The key stays healthy for its other models. The key itself is benched only once several models hold a live bench at once.
+
+Can I use several keys per provider?
+
+Yes. Put them in one comma-separated variable and choose a policy: single, round robin, least used or failover. Each key gets its own upstream client and rate-limit window, and the order in the pool is the order the policy reads.
+
+How is cost calculated?
+
+Each request is priced once, as it is logged. The price comes from a ladder: the provider's own model list first, then models.dev, then LiteLLM when it is switched on, then a cross-provider vote. The source that answered is stored beside the number.
+
+Why are reported and estimated cost separate?
+
+Because they are different claims. A reported figure is one a source stated; an estimated figure is one the install computed. MCC never sums them, and every total carries a priced-of-total denominator so a partial figure cannot read as a complete one.
+
+Does it log my prompts?
+
+The request log stores completed requests locally and is searchable across prompt, reply, reasoning and tool calls. It is on by default and controlled by REQUEST_LOG_ENABLED , with a row cap that prunes the oldest rows. Raw provider bytes and payloads are separate opt-in flags. The log is local SQLite, and a hidden dashboard tab reads nothing.
+
+Can I search my request log?
+
+Yes. The search index stores each distinct piece of text in its own file beside the log, so a search does not unpack every stored request. New requests are indexed as they are written, and older ones when you press Build search index.
+
+How do I connect Claude Code?
+
+Run mcc-claude . For the native model picker, run mcc-claude --discover-models . The dashboard's Configure Claude Code page can also write MCC's proxy settings into Claude Code's own settings file.
+
+How do I connect Codex?
+
+Run mcc-codex . It speaks the OpenAI Responses surface and keeps its own generated catalogue, because the Codex App reads that catalogue at startup and must restart to see a later one.
+
+Can I use a local model?
+
+Yes. LM Studio, llama.cpp and Ollama are provider cards that need a base URL rather than a key, and they sit behind the same address and the same routing as a cloud provider.
+
+Does it support images?
+
+Yes. A vision adapter can divert an image request to a model that can see, and describe mode has a sighted model describe each image for a blind tier. Outbound pictures are resized to a 1568-pixel long edge on the router's own copy.
+
+Does it do web search?
+
+Yes. Claude Code's web_search and web_fetch tools are fulfilled at the proxy instead of by Anthropic, over fifteen search backends or a keyless fallback. No Anthropic search credits are used.
+
+Can I run it from Discord or Telegram?
+
+Yes, optionally. A messaging bridge turns chat messages into managed coding-agent sessions, with voice-note transcription and stop and clear commands. It is off by default and skipped cleanly when it is not configured.
+
+What platforms does it run on?
+
+Windows, macOS and Linux, as a server or as a native desktop app with a tray. The one-liners install a managed Python 3.14 through uv, so no system Python is needed. The desktop app is a window onto the same server.
+
+How do I update it?
+
+The dashboard announces releases and installs them with checksum verification, or re-run the install command, which always fetches the newest release. An update is atomic: the new version is built beside the running one and swapped in only after it answers the health check. The desktop window shows each stage while it runs.
+
+How do I uninstall it?
+
+Run the uninstall one-liner, or mcc uninstall if you installed through npm. It verifies every MCC command is gone before it reports success. The desktop app is removed separately, through the platform's own mechanism.
+
+Is it affiliated with Anthropic, OpenAI or Google?
+
+No. My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude, Codex, ChatGPT and Gemini are trademarks of their owners. Provider names are used to describe what the software connects to, not to claim a relationship.
+
+Where is the full documentation?
+
+The repository's docs/ directory holds the complete usage guide, the routing reference, the architecture file and the per-surface guides. The dashboard's Docs page renders the same documents offline for the version you installed.
+
+Why does the dashboard not open?
+
+The usual reasons are a server that is not running, a different port, or a configuration directory the launcher and the server do not share. Check mcc-server --version , then the health endpoint, then MCC_CONFIG_DIR if you set it.
+
+Still stuck?
+
+The troubleshooting page covers the failures this site can verify, with the symptom, the cause and the fix. For anything else, the repository's issue tracker is the channel, and a security report has its own private route.
+
+Troubleshooting: verified symptoms and fixes
+
+Quick start: install and the first five minutes
+
+Features: every capability in depth
+
+Licence: the exact terms
+
+## Features: every capability of the local LLM gateway
+https://myclaudecode.danubelabs.net/features/
+
+Every capability, with a deep page for each
+
+MCC is deep because a proxy that sits in front of every coding agent has to be. Each area below has its own page, written from the source and the product's own documentation, with real screenshots of the dashboard where the feature lives. This page is the index of LLM gateway features: every capability area, with a deep page for each.
+
+The shortcut below is the whole product in one sentence: one address, every provider you configure, and a control plane that keeps the model, the credential, the reasoning setting and the cost in one place. The pages after it go one area at a time.
+
+The pages are written this way because the product is not one feature. A proxy that sits in front of sixteen agents and sixty providers has to answer the same question differently for each of them, and a one-page summary would either flatten that or repeat it. Each page takes one area and follows it through the code, the dashboard and the request log.
+
+The order is deliberate: a reader who wants the architecture can start there, and a reader who wants to install can stop after the quick start. Nothing on a page depends on having read another first, though the related links at the foot of each one point at the neighbour that explains a term in more depth.
+
+The Providers page: one searchable card per provider, each naming the setting that holds its key.
+
+Model tiers and fallback chains
+
+Tier aliases, per-agent overrides, ordered fallbacks, pausing, the vision adapter and describe mode.
+
+Reasoning and budgets
+
+One effort setting, adaptive reasoning, encrypted reasoning replay, prompt-cache lifetime, output ceilings and deadlines.
+
+Providers and credentials
+
+60 provider cards, custom providers, four rotation policies, key health, proxy chains and OAuth sign-ins.
+
+Agent support
+
+Launchers, dashboard installs, desktop-app Configure and Undo, generated catalogues and per-agent attribution.
+
+Analytics and cost
+
+The request log, search, rollups, latency, exports and cost with provenance.
+
+Web search and fetch
+
+The native server-tool proxy, 15 search backends, a keyless fallback and web fetch extraction.
+
+Messaging
+
+Discord and Telegram sessions, voice-note transcription, and the stop and clear commands.
+
+Media routing
+
+Image, edit, speech, transcription, translation and video endpoints over their own rails.
+
+Platform and packaging
+
+Windows, macOS and Linux, the desktop app and tray, the update path, npm and PyPI.
+
+The CLI
+
+The launchers, headless app control, the installer's flags and the migration command.
+
+The dashboard
+
+Every setting, local-only, with appearance, updates and the in-app docs.
+
+How to read these pages
+
+Each deep page answers the same questions in order: what the capability is, why it matters, how to use it with verified steps, what you see in the dashboard, and what its limits are. Configuration is named by variable, never by value. Where a feature depends on another, the related links at the foot of the page point at it.
+
+A capability is on this site only when the code or the tests prove it exists. Every number is either computed from the repository or recorded against the command that produced it. If a page is not here, the feature did not meet that bar.
+
+## Agent support: Claude Code, Codex, OpenCode, Gemini CLI
+https://myclaudecode.danubelabs.net/features/agents/
+
+A first-class client for every agent
+
+Claude Code is one client here, not the frame around everything else. MCC can launch the CLI agents, configure the desktop apps it cannot launch, generate a real model catalogue for each one, and name the agent behind every request in the log. The launchers are how a Claude Code agent, a Codex agent, an OpenCode agent and the rest are pointed at one address.
+
+Every agent MCC can launch is declared in one registry, and the Coding agents page shows each one's installed state, its commands and flags with a copy button, its protocol and its generated catalogue. Applications MCC does not launch get a Configure button on the same page instead, which edits the one file each of them reads.
+
+The Coding agents page: one card per agent, each with an Install or Configure button, its protocol and its catalogue.
+
+The launchers
+
+A launcher is a small command that points an agent at the local proxy and starts it. The set covers Claude Code ( mcc-claude ), Codex ( mcc-codex ), OpenCode and OpenCode 2 ( mcc-opencode , mcc-opencode2 ), Gemini CLI ( mcc-gemini ), Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command Code, OpenClaw, Hermes Agent, Droid, Pi and Kilo. mcc-claude --discover-models wires Claude Code's native /model picker to MCC's catalogue; mcc-claude-old keeps the older launch shape.
+
+The launchers list: every mcc-* command MCC puts on your PATH, with its install state.
+
+Claude Code's native model picker, listing the routed models through MCC's catalogue.
+
+Installing an agent from the dashboard
+
+An agent that is not installed gets an Install button on its card, with the vendor's own line beside it to copy instead. The plan is shown before anything runs: every download, command, permission prompt and PATH or profile change. The vendor's own installer is used first, npm only where it is the only way, and Node.js is installed first only when it is missing. MCC never runs sudo and never upgrades your Node.js.
+
+Desktop apps: Configure and Undo
+
+For an app MCC cannot launch, Configure writes MCC's keys into the one file that app reads and carries every other byte through. A .mcc-backup is taken before the first edit, a diff preview is shown before every write, and a drift badge appears after a hand-edit. Undo works two ways: remove only MCC's keys, or restore the exact values MCC replaced. The files MCC does not reformat are left alone.
+
+Desktop apps: cards for the apps MCC does not launch, each with Configure, a backup note and an Undo path.
+
+Claude Code's settings, edited from the dashboard: every setting the CLI reads, with a backup taken before the write.
+
+The same work is available without a browser. mcc-apps list , mcc-apps status , mcc-apps configure [--preview] and mcc-apps undo [--restore] do what the buttons do, which matters on a headless machine.
+
+Claude Desktop's connection dialog: a base URL and a gateway key field, the one place that app is pointed at MCC.
+
+Generated catalogues
+
+Each agent's model list is generated from the same metadata the router uses: real context windows, output ceilings, vision support, tool support and the host's own effort vocabulary. The composition bridge that writes a catalogue uses the same visibility filter, ref enumeration and projection as /v1/models , so a model cannot appear in one and not the other. Writes are atomic, identical bytes are not rewritten, and a last-known-good catalogue is preserved when a projection resolves no routable models.
+
+Request attribution
+
+Analytics names the coding agent behind every request. The harness is identified from the x-mcc-harness header or the request's user-agent fingerprint, and it drives both the log's attribution and the per-agent tier map. An unidentified request is not failed; it resolves against the global chain and is logged as unidentified.
+
+The same attribution is what lets one agent run a different tier map from another without a second proxy. Claude Code can route Opus-tier traffic to one model and Codex to another while both talk to the same address.
+
+Media tools for an agent
+
+MCC's media server, mcc-mcp , gives an agent one tool per filled media rail, plus a free status tool. It is added per agent with an Add MCP server button and taken out with Remove. The buttons write only MCC's own launch lines and configuration layers, never your files; the token stays in MCC's settings; each agent's own prompt asks before a paid tool. It is off for every agent by default.
+
+Other clients
+
+Anything that speaks OpenAI, Anthropic or Gemini can be pointed at the proxy, including VS Code's Copilot custom endpoint and the JetBrains ACP surface. The clients documentation carries an API reference with one runnable example per endpoint. An agent MCC cannot launch and an app MCC cannot configure are both still clients if the user points them here. A client that speaks one of the four protocols needs no plugin, and a client that speaks none of them is out of scope rather than half-supported.
+
+A live Claude Code session running through the proxy, mid-conversation.
+
+Limits and behaviour
+
+A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself.
+
+A drift badge appears when a hand-edit moves a configured file away from what MCC wrote.
+
+A tool-returned image and a media request share the same rails and the same cost accounting as chat.
+
+The Media server is off for every agent until it is added, and no agent button writes to a file MCC did not create.
+
+Quick start: install and launch your first agent
+
+Providers: what the agent is routed to
+
+Observability: where the attribution appears
+
+The CLI: the launchers and headless controls
+
+Claude Code through the proxy: the mcc-claude command
+
+Codex CLI through the proxy: the mcc-codex command
+
+OpenCode through the proxy: the mcc-opencode command
+
+Gemini CLI through the proxy: the mcc-gemini command
+
+## The MCC command line
+https://myclaudecode.danubelabs.net/features/cli/
+
+The commands MCC puts on your PATH
+
+The dashboard is optional. Everything the page can do has a command, and the launchers are how most people start an agent. This page is the reference for the commands, with the flags that exist and the ones that do not. It is the reference for the LLM gateway CLI: mcc-server, the launchers and the headless tools beside them.
+
+An install puts mcc-server and the mcc-* launchers on your PATH, and adds the headless tools beside them. A launcher whose agent is missing prints that agent's own install command and exits; it does not try to install the agent itself.
+
+The launcher set is generated from one registry, so a new agent is a registry entry rather than a new script. A launcher whose agent is missing prints that agent's own install command and exits, which is why the CLI never installs an agent on its own.
+
+The server and the launchers
+
+Start the server
+
+mcc-server
+
+mcc-server --version prints the running release. The server listens on loopback port 8082 by default, serves the dashboard at /admin and answers /health . Every other MCC server on the machine is left alone.
+
+Command
+
+What it does
+
+mcc-claude
+
+launch Claude Code against the proxy; --discover-models wires the native model picker, and mcc-claude-old keeps the older launch shape
+
+mcc-codex
+
+launch Codex CLI over the OpenAI Responses surface
+
+mcc-opencode , mcc-opencode2
+
+launch OpenCode over Anthropic Messages
+
+mcc-gemini
+
+launch Gemini CLI over the Gemini API surface
+
+mcc-crush , mcc-cline , mcc-goose , mcc-aider
+
+launch the matching agent
+
+mcc-kimi , mcc-qwen , mcc-commandcode
+
+launch Kimi Code, Qwen Code and Command Code
+
+mcc-openclaw , mcc-hermes , mcc-droid , mcc-pi , mcc-kilo
+
+launch the matching agent
+
+Claude Code's native model picker after mcc-claude --discover-models, listing the routed models.
+
+Headless app control
+
+mcc-apps does what the Desktop apps cards do, which matters on a headless machine or over SSH. Its subcommands are list , status , configure (with --preview to show the change without writing it) and undo (with --restore to put back the exact values MCC replaced).
+
+Preview a desktop-app change
+
+mcc-apps configure --preview
+
+Sign-in, migration and the token optimizer
+
+mcc-anthropic-oauth-login signs in from a terminal. It takes --paste , --no-browser , --list and --remove <id> , and answers --help without starting anything.
+
+mcc-migrate runs the legacy-home move by hand. It refuses while it can see a live server.
+
+mcc-rtk status|enable|disable|uninstall|apply controls the opt-in token optimizer per agent, the same control the dashboard's Token optimizer card writes.
+
+mcc-desktop fetches and verifies the desktop app, and refuses rather than pretending on a machine with no tray.
+
+A launcher starts the agent with the proxy address, the token and the catalogue in place; the agent itself looks unchanged.
+
+The installer's flags
+
+The one-liners accept --dry-run to see the plan without changing anything, --version to pin a release, --desktop to install the app too, --no-restart to leave a running server alone, --no-start to stop and start nothing, --no-desktop to leave the app alone and --yes-sudo to answer the sudo prompt for the Linux package step. The npm wrapper accepts --server-only , --desktop-only , --no-desktop and --yes-sudo , and reads MCC_NPM_INSTALL=server|desktop|both|none .
+
+See what an install would do
+
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh -s -- --dry-run
+
+The dashboard lists every launcher it installed, with its state and a copy button.
+
+A first run, in order
+
+Install with the one-liner for your platform, then reopen the terminal so the PATH change is visible.
+
+Run mcc-server ; on first start it writes the configuration home and generates the proxy token.
+
+Add one provider key on the Providers page, then set the tiers on Model Config.
+
+Launch the agent with its own command, for example mcc-claude . The launcher passes the proxy address, the token and the generated catalogue, and the agent itself looks unchanged.
+
+Where the CLI and the dashboard meet
+
+The command line and the dashboard are two front doors to one configuration. A command does not keep a private copy of a setting, and a page does not write somewhere the server will not read. mcc-apps configure shows the same diff preview the card shows, and mcc-apps undo performs the same two undo modes.
+
+The exceptions are the things that must be decided before the settings file exists. MCC_CONFIG_DIR is a shell variable, not a setting, and the install-time switches are flags rather than values. Everything else has one name and one place, which is what makes a command and a page safe to use interchangeably.
+
+A command that needs a provider key reads it from the same configuration home the server reads, through the same settings resolution. There is no separate credential path for the CLI, and no command that writes a key the dashboard would not show.
+
+What the commands do not do
+
+A launcher does not install its agent. It prints the agent's own install line and exits.
+
+The installer does not install curl, and it does not upgrade your system Python. It uses Python 3.14 through uv.
+
+The CLI does not write a file the dashboard does not also write; both go through the same configuration.
+
+No command changes repository settings, DNS or a hosting account.
+
+Quick start: the exact install commands
+
+Agents: what each launcher starts
+
+Platform: the desktop app and the update path
+
+Configuration: how settings reach the commands
+
+## The local control-plane dashboard
+https://myclaudecode.danubelabs.net/features/dashboard/
+
+The local control panel
+
+The Admin UI is local-only and is where everything is configured. It opens on a Get Started checklist and gets out of the way once dismissed. It reads and writes the same .env the server reads, so the page and the file never disagree. It is the LLM dashboard: the local control panel, and the one place every setting can be changed.
+
+The dashboard is served by the server it configures, on loopback, at http://127.0.0.1:8082/admin . It has no login because it is not reachable from another machine. A change is collected on the page and written only when you press Apply, at the foot of the page, which validates first.
+
+Get Started: the first-run checklist, from a provider key to a running agent.
+
+The pages
+
+Page
+
+What it is for
+
+Get Started
+
+the first-run checklist: provider, tiers, an agent, optionally web search and analytics
+
+Providers
+
+one searchable card per provider: keys, key pools, rotation, per-key health and Refresh models
+
+Configure Claude Code
+
+pointing Claude Code at the proxy, per session or permanently
+
+Coding agents
+
+each launcher's installed state and flags, Install, and Configure and Undo for desktop apps
+
+Model Config
+
+the tier map, fallback chains, the vision adapter, reasoning control and the media rails
+
+Models
+
+every model every provider publishes, with bulk visibility, capability probes and learned facts
+
+Web Search
+
+route policy, the search chain, provider cards, key health and search analytics
+
+Limits & Resilience
+
+output budgets, deadlines and their calculator, chain benching, retries, credential health, diagnostics
+
+Analytics
+
+the request log and everything computed from it, plus storage settings
+
+Token Optimizer
+
+what never reached a provider, and the opt-in trimming and RTK controls
+
+Messaging
+
+the Discord or Telegram bot, its allowed scope and voice settings
+
+Usage
+
+what each provider says is left, in five layouts over one payload
+
+Proxying
+
+proxy chains, the local scan, Tor, VPN accounts and WireGuard runners
+
+InferHub
+
+the marketplace page: profile, balance read-only, offers and the market snapshot
+
+Guide and Docs
+
+the task-oriented guide, and these documents rendered in the app
+
+The Providers page in a fresh state, with its search box and the provider grid below.
+
+Appearance
+
+A page is a view over configuration, not a separate store. The Analytics page reads the request log; Model Config reads and writes the tier variables; the Providers page reads the key pools and the credential stores. Closing the browser changes nothing, and reopening it shows the server's current state rather than a cached copy.
+
+The dashboard's own look is a feature. There are two designs, Today and Hybrid, the latter with a masthead, a numbered rail and a right-hand drawer; seven colour families, each in light and dark; and three densities. They are chosen per browser on Get Started, or machine-wide with ADMIN_DESIGN , ADMIN_THEME , ADMIN_MODE and ADMIN_DENSITY . A browser choice always wins, and a shell that cannot start falls back to Today with a one-line note.
+
+Validate and Apply
+
+The footer of a settings page validates before it writes. A setting the server can only read at startup is marked restart-required, so Apply cannot report success while a running server keeps using the old value. A managed write backs the file up first. The dashboard and the file are one source of truth: a value set by hand is shown on the page, and a value set on the page is in the file.
+
+Updates
+
+The sidebar shows the running version and live status. A newer release is announced with its changelog, and the Update button runs the same installer path as the command line: checksum verified, built beside the running version, run once, swapped in, and the previous version restored if the health check never answers.
+
+The update banner: a newer release, its changelog and a one-click update that uses the same verified path as the CLI.
+
+The version panel in the sidebar: the running release and a live status dot.
+
+Local only, by construction
+
+The admin UI and admin APIs are loopback-only.
+
+The dashboard has no third-party analytics, no remote fonts and no embedded widgets.
+
+A hidden tab reads nothing; the Usage page refreshes only while it is open.
+
+The Docs page renders the documentation bundled with the installed version, so it works offline.
+
+The page loads no remote font, script or image; its stylesheet and its one small script are served by the server itself.
+
+Configuration
+
+Most settings are written to the managed .env . The appearance settings are ADMIN_DESIGN , ADMIN_THEME , ADMIN_MODE and ADMIN_DENSITY ; the log retention settings are on the Analytics page; and the usage auto-refresh interval is USAGE_AUTO_REFRESH_SECONDS . The configuration home itself is MCC_CONFIG_DIR , which is environment-only and cannot be set from the dashboard.
+
+Limits and behaviour
+
+A restart-required change is labelled, not silently deferred.
+
+A setting the page cannot validate is not written.
+
+The dashboard never opens a port beyond the server's own address.
+
+A browser-level appearance choice overrides a machine-wide one without changing it.
+
+Observability: the Analytics page in depth
+
+Web search: the Web Search page in depth
+
+Configuration: how settings are provided
+
+Gallery: every reviewed dashboard screen
+
+## Media handling in the local LLM gateway
+https://myclaudecode.danubelabs.net/features/media/
+
+Image, speech and video over the same engine
+
+Media is not bolted on. The image, speech, transcription and video endpoints run over their own rails, but they share the chat engine's retry, key rotation, 429 handling and proxy rules, with health records of their own so a media failure never benches a model for chat. This page is the LLM media path: four rails, one engine, and the same logging and cost accounting as text.
+
+A media request names a model on a media rail. MCC walks that rail's chain exactly as it walks a chat chain: the same deadlines, pauses, skip kinds and retry rules, through a separate copy of the engine that a contract test holds to chat's decisions. The rails keep their own key, model and proxy health, so a failed image request does not bench anything for a chat.
+
+Endpoint
+
+Rail
+
+Settings
+
+POST /v1/images/generations
+
+Image
+
+MODEL_IMAGE , MODEL_IMAGE_FALLBACKS , MODEL_IMAGE_PAUSED
+
+POST /v1/images/edits
+
+Image
+
+the same rail
+
+POST /v1/audio/speech
+
+Speech
+
+MODEL_TTS and its chain
+
+POST /v1/audio/transcriptions , /v1/audio/translations
+
+Transcription
+
+MODEL_ASR and its chain
+
+POST /v1/videos and the job endpoints
+
+Video
+
+MODEL_VIDEO and its chain
+
+Gemini :generateContent with image or audio output, :predictLongRunning
+
+Image, Speech, Video
+
+the same rails
+
+The image rail on Model Config: the media endpoints it serves and the label each row carries.
+
+A provider serves only what it declares
+
+A provider serves a media operation only when it declares that endpoint. MCC never guesses from a model name. A model on a provider that declares nothing for the operation is skipped and not charged a failure; the request log shows it as unsupported . An edit therefore skips every model whose provider declares no edit endpoint, uncharged, and is served by the first one that does.
+
+Most image providers are passed through field for field: the body the client sent is forwarded with the model replaced by the rail's model, so a parameter only one host understands still reaches it, and the host's answer is returned as it came. Gemini's native speech and transcription surfaces and Mistral's image surface are translated instead. MCC builds those requests itself, lists any field it has no place for under not_forwarded on the request row rather than guessing, and turns the host's answer back into what an OpenAI client reads.
+
+Mistral images are the unusual wire: Mistral does not document an image-generation endpoint. MCC asks for the picture on chat/completions with the image_generation built-in tool, then fetches the result with a second call on the same key and the same proxy exit. Only the prompt is forwarded; the rest is recorded as not forwarded, and the image is recorded as unpriced because no source publishes a per-image rate.
+
+Uploads, edits and streaming
+
+An edit is forwarded in the client's own encoding. A multipart upload goes out as multipart, streamed from the server's spooled copy of each file, and re-read from the start if the rail falls back to the next model. The JSON variant goes out as JSON. MEDIA_UPLOAD_MAX_MB sets an optional upload limit: above zero, a file larger than that many megabytes is refused with a 413 before any provider is asked, so nothing is spent on it.
+
+A request that asks to stream is routed to a surface documented to stream it. When a rail has no such surface, a streamed image or speech request is answered as one event rather than a stalled stream.
+
+What you see and what it costs
+
+The Models page lists every media-rail model with its declared endpoints and media health, and each model publishes the fields its request takes as a JSON Schema per operation, each with who said so. That schema is shown only; nothing sent changes. Clients can read it from GET /v1/media/models . Analytics has a separate Media card, and every row is labelled by its own API, so a generated image reads as such in the requests table.
+
+Media analytics: image, speech and video rows with their own cost figures, separate from the chat totals.
+
+Media requests are priced like chat ones: a provider figure first, then models.dev, then LiteLLM when it is on, else unpriced. Generated media can optionally be stored, controlled by MEDIA_STORE_ENABLED .
+
+The Models page names each model's kind, so a media model is offered on its rail and not to a coding agent.
+
+Media tools for coding agents
+
+MCC's media server, mcc-mcp , exposes one tool per filled rail plus a free status tool over MCP. It can be added to an agent from the Coding agents page, or written into Codex's config.toml , OpenCode's opencode.json and Command Code's mcp.json from the Desktop apps cards. The change is shown first, written only on confirmation, backed up once, and removable back to the same bytes. An entry MCC did not add is left alone. The server is off for every agent by default.
+
+Configuration
+
+The rails are MODEL_IMAGE , MODEL_TTS , MODEL_ASR and MODEL_VIDEO , each with a _FALLBACKS and _PAUSED list. The upload cap is MEDIA_UPLOAD_MAX_MB , optional storage is MEDIA_STORE_ENABLED , and the agent tools are gated by MCP_MEDIA_APPS . None of the rails is a chat tier: nothing on them is listed in /v1/models or offered to a coding agent.
+
+Limits and behaviour
+
+A model whose provider declares no endpoint for the operation is skipped uncharged and logged as unsupported.
+
+A Mistral image fetch that fails after the host billed the picture fails the attempt, because the host has already charged it.
+
+A media failure never benches a chat model; the rails keep their own health records.
+
+An upload over the configured cap is refused before any provider is asked.
+
+A field MCC cannot place on a translated surface is listed as not forwarded rather than silently dropped.
+
+Providers: which hosts declare a media endpoint
+
+Observability: media rows and media cost
+
+Agents: the media server over MCP
+
+Configuration: the media variables, names only
+
+## Messaging surfaces for the local gateway
+https://myclaudecode.danubelabs.net/features/messaging/
+
+Coding-agent sessions over Discord and Telegram
+
+Messaging is optional. When it is on, a chat message becomes an inbound turn to a managed coding-agent session, and the reply comes back to the chat. It is the same proxy underneath, with the same routing, keys and log. It is optional and off by default. It is LLM messaging in its narrowest sense: a chat surface for a coding-agent session, over Discord or Telegram.
+
+The messaging bridge is skipped entirely when the platform is none or when the selected platform's token is missing. Nothing else in MCC depends on it. When it is configured, an inbound message is normalised by the platform adapter, handed to one platform-agnostic workflow, and answered through an outbound messenger that queues sends, edits and deletes.
+
+The Messaging page: the platform, its token fields, allowed channels or user IDs, an allowed directory and voice settings.
+
+Discord
+
+Create a bot in the Discord Developer Portal.
+
+Enable Message Content Intent and invite it with read, send, message-history and Manage Messages permissions, so clear can remove user prompts.
+
+Set Messaging Platform to discord .
+
+Enter the Discord bot token, the allowed channels and an absolute allowed directory.
+
+Apply the settings and restart the server if the page asks for it.
+
+Telegram
+
+Create a bot with BotFather.
+
+Get your numeric user ID from userinfobot. In groups, grant the bot permission to delete messages.
+
+Set Messaging Platform to telegram .
+
+Enter the Telegram bot token, the allowed user ID and an absolute allowed directory.
+
+Apply the settings and restart the server if the page asks for it.
+
+An allowed directory is required and absolute, so a chat cannot be pointed at an arbitrary path by a message. The bot is the only ingress, and a chat that is not allowed is not served.
+
+Commands
+
+Usage
+
+Behaviour
+
+/stats
+
+show session state
+
+standalone /stop
+
+cancel all work
+
+reply with /stop
+
+cancel only the selected request while other queued requests continue
+
+standalone /clear
+
+reset all MCC state and remove every tracked message in that chat, including user prompts, voice notes, MCC replies, Telegram's online notice and the clear command itself
+
+reply with /clear
+
+delete the selected message and its literal platform reply subtree, preserving its ancestors and siblings
+
+The workflow keeps a per-chat generation and a global stop generation. A standalone stop invalidates every older provisional turn; a standalone clear invalidates only the invoking chat. Reply-scoped commands apply an exact reference transition, so a voice cancellation or an admitted tree wins without double-counting.
+
+Voice notes
+
+A voice note is downloaded, size-checked, transcribed and handed to the same inbound path as text. The transcription backend is chosen at install time: NVIDIA NIM, local Whisper on CPU or CUDA, or both. Local gated models need a Hugging Face key; NIM transcription needs the NVIDIA NIM key. Changing the credential an active voice backend uses requires a restart, while the same provider credential stays hot-replaceable when voice does not use it.
+
+Install a voice backend (Linux, macOS or WSL)
+
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh -s -- --voice-local
+
+Pending voice notes have their own registry, which owns an optional status binding, cancellation by either message ID, and the exclusive handoff lease. A voice-transcribed stop or clear cannot cancel itself, and a stale flow cannot bind or remove a newer generation that reuses the same ID.
+
+What you see
+
+The Messaging page holds the platform, its token fields, the allowed channels or user ID, the allowed directory and the voice controls. The optional messaging step also appears in the Get Started checklist, so a new install is told it exists without being forced through it.
+
+Get Started: messaging is one of the optional steps after the provider, the tier map and the agent.
+
+Requests made through a messaging session are ordinary proxied requests and appear in Analytics like any other. The harness attribution names the agent behind them, so a chat-driven session can be told apart from a terminal one. A chat-driven request is not a special kind of request; it is the same proxy with a different ingress.
+
+Analytics attributes each request to the coding agent harness that sent it, including sessions driven through messaging.
+
+Configuration
+
+The names are MESSAGING_PLATFORM , the platform token variables, MESSAGING_RATE_LIMIT and MESSAGING_RATE_WINDOW , and the voice settings for backend, device and model. A Telegram proxy URL is optional and used only for that transport. Values are configured on the Messaging page and written to the same .env the server reads; this site publishes no values.
+
+Limits and behaviour
+
+Messaging is off by default and skipped cleanly when it is not configured.
+
+An allowed directory is required; a chat cannot widen it.
+
+A voice note that fails transcription gets an error reply and is cleaned up; it does not leave a temp file behind.
+
+A reply-scoped clear deletes only the selected subtree, never its ancestors.
+
+The bridge is optional, but a request it makes is an ordinary request for routing, keys, cost and health.
+
+Architecture: the session and request path
+
+Agents: the sessions messaging drives
+
+Observability: where a chat-driven request appears
+
+Configuration: the messaging variables, names only
+
+## Request log, analytics and cost with provenance
+https://myclaudecode.danubelabs.net/features/observability-and-cost/
+
+The request log, analytics and cost with provenance
+
+Every request through the proxy is logged, priced and searchable afterwards. That is what turns a router from a guess into a measurement: which model answered, which fallback spent the time, which key it cost, and where each price came from. This page is LLM observability and cost tracking in one place: the request log, the analytics and the source of every number.
+
+The request log stores every completed request locally. It is searchable across prompt, reply, reasoning and tool calls, and it is the source of every number on the Analytics page: there is no second accounting system and no remote dashboard to reconcile against.
+
+Analytics: stored requests, success rate, fallback share and token totals, over an all-time strip that keeps counting after stored rows roll over.
+
+The log
+
+One row per completed request carries its endpoint, harness, provider, key, model, status, turn, tokens, cost, time to first token and duration. A request that a local optimization answered records no provider, because none served it, and carries the rule and the prompt tokens no provider ever received. A hidden tab reads nothing.
+
+The request log: provider, model, key, harness, tokens, reasoning, cost and latency for a range of requests.
+
+A request's detail opens the attempts it walked, the key each one used, its timings, and the reasoning fields that went out. Raw diagnostics sit in five collapsed boxes below it: API payloads from both sides of the exchange, streamed events, the provider's raw output, API error tracebacks and CLI diagnostics, with a Raw or Normalized toggle. Every recorded line is shown a page at a time and never cut, and an empty box says which door or which setting is why.
+
+One request expanded: its route attempts, the reasoning fields the router sent, and the fallback that answered.
+
+Search and storage
+
+The search index stores each distinct piece of text in its own file beside the log, so a search does not unpack every stored request. New requests are indexed as they are written; older ones are indexed when you press Build search index. The prompt chunk store keeps each repeated prompt part once, so turn N+1 of a conversation no longer stores turn N again. History is converted in the background, each prompt is read back byte for byte before it is replaced, and Pause and Continue sit beside the log's size.
+
+The storage panel: the request log's size, its retention, and the controls that keep it bounded.
+
+Retention is a cap, not a promise. REQUEST_LOG_ENABLED turns the log and Analytics on or off, and REQUEST_LOG_MAX_ROWS prunes the oldest rows periodically. Once the cap is reached the log is a rolling window, so All time means all time still stored, and counts stop rising rather than the dashboard being broken. The all-time strip below the stat cards is never pruned, so it keeps counting after stored rows roll over.
+
+Analytics
+
+Analytics is range-aware: any period you like, not just the presets, converted per boundary in your own timezone. It computes p50 and p95 latency, provider and model breakdowns, top errors and a failover panel that counts each primary-to-stand-in pair that fired. The wide-search cost of a query is said under the search box before you run it, as advice only: never narrowed, never refused, never truncated.
+
+Model latency, p50 and p95, per model.
+
+Failover: every primary-to-stand-in pair that actually fired, with its count, beside the statuses that caused them.
+
+Cost with provenance
+
+Each request is priced once, as it is logged, and the rung of the pricing ladder that answered each field is stored beside the number. The provider's own model list is the first rung; models.dev follows; the LiteLLM map is consulted when it is switched on; a cross-provider vote covers what remains. A request no source can price is stored as unpriced and shown as a dash, never as a fabricated zero.
+
+The Cost panel: reported and estimated are two figures, never summed, and every total carries its priced denominator.
+
+Honest totals are the rule here. A request whose cost was reported by a source and a request whose cost MCC estimated are shown side by side and never added into one number. Every total carries an N of M priced denominator so a partial figure cannot read as a complete one. Anthropic's 5-minute and 1-hour cache writes are recorded separately, and a 1-hour write is priced at a rate a source states, or shown as not priced with the reason; requests before the split keep their 5-minute price.
+
+Exports and raw output
+
+A JSON export covers whatever the filters currently select, and an attempt-level export writes one row per model the chain tried, not per request, so the fallbacks that spent the time are in the file too. Raw diagnostics can be exported in any of the same formats, and the Analytics export itself takes an opt-in Raw diagnostics field, off by default and bounded.
+
+The provider's own bytes are available when you ask for them. With LOG_RAW_UPSTREAM_BYTES on, every chunk is kept exactly as the transport received it: stream comments, ID and retry lines, data prefixes, the done sentinel and in-band error frames all survive, and a refusal body is kept whole. It ships off, because raw output is the largest thing the log can hold.
+
+The Token Optimizer
+
+The Token Optimizer page shows what never reached a provider: tokens saved, rule fire counts and prompt-cache effectiveness. The local optimization rules that answer a request without a provider are listed there, and each request they answer records the rule and the tokens it saved.
+
+The Token Optimizer: what never reached a provider, plus the opt-in trimming and RTK controls.
+
+Limits and behaviour
+
+Analytics is local-only, like the rest of the dashboard.
+
+Every widget that aggregates history shows the window it covers; a chain from before a settings change is not read as the current config.
+
+A read can never charge a key or bench a provider.
+
+A request detail's empty diagnostic box names why it is empty rather than showing a blank panel.
+
+Retention prunes the oldest rows; the all-time strip is the figure that survives it.
+
+Architecture: how a request is priced and the rung stored
+
+Architecture: the log, the index and the chunk store
+
+Providers: the keys these costs are attributed to
+
+Configuration: retention and log variables, names only
+
+## Platform support: Windows, macOS and Linux
+https://myclaudecode.danubelabs.net/features/platform/
+
+Platform, desktop app and updates
+
+MCC runs on Windows, macOS and Linux, as a server, as a native desktop app, or both. There is one update path, one configuration directory and one set of commands, whichever route you took in. This page is the LLM gateway update path, and the platform support behind it: what the installer does on each system, and what it deliberately does not touch.
+
+The server is the product; the desktop app is a window onto it. Every install route ends at the same server, the same dashboard and the same configuration directory. The server one-liners are the right choice on a headless box, a VPS, over SSH or inside WSL, where there is no tray to draw into.
+
+Get Started: the same checklist in a browser tab or inside the desktop window.
+
+What the installer does
+
+Installs uv if it is missing, and replaces one below the required floor.
+
+Installs Python 3.14 through uv, so no system Python is needed and none is used.
+
+Downloads the latest release wheel and verifies the SHA-256 GitHub publishes for it.
+
+Installs MCC into an isolated tool environment and puts every mcc-* command on your PATH.
+
+Creates the configuration home, and with the desktop flag, installs the desktop app too.
+
+The installer needs no Node, no Python and no git. It cannot install curl on Linux, macOS or WSL: it names the exact package-manager line for your machine and stops. On Windows it uses the built-in PowerShell, and the Command Prompt route passes the execution-policy flag a saved script would otherwise need.
+
+After it finishes, close and reopen your terminal. The installer adds ~/.local/bin to your PATH, and a shell that was already open cannot see it. That is the single most common reason mcc-server looks missing straight after a successful install.
+
+The desktop app and tray
+
+The desktop app is a real window with its own icon and tray, not a second copy of the server. It has three server modes: spawn , where it starts the server; attach , where it connects to one already running; and off , where it does neither. It can start at login, and its preferences persist in the configuration home. The tray menu covers Open Admin, Check Server Status, Restart Server, the server mode, Start at Login, Tray Enabled, a Token optimizer submenu and Quit.
+
+Its own prerequisites travel with its packages: the Windows installer bootstraps WebView2, the .deb declares its webkit dependency, and macOS needs nothing extra. WSL has no tray, and the app says so and refuses rather than pretending.
+
+One update path
+
+The dashboard shows the running version, announces releases and installs them with checksum verification. The installer is the same path: re-running it always fetches the newest release. An update is atomic. The new version is built beside the running one, run once to prove it works, and swapped in by two directory renames; if it never answers the health endpoint, the previous version is put back and started. The server is down for the stop, the rename and the start, not for the download and the dependency resolve.
+
+A newer release is announced in the dashboard, with its changelog and a one-click update.
+
+During an update the desktop window shows a stage timeline with timestamps, elapsed time and the installer's log tailed live. The progress document and the install log are written into the configuration home, so a failed update can be read afterwards.
+
+The version panel: the running release and live status, in the dashboard sidebar.
+
+Packaging
+
+MCC ships as a Python wheel on PyPI, as an npm package that wraps the same digest-verified installer, and as native desktop installers for each platform. The npm route reads the machine before it installs anything: where there is a desktop session it also installs the native app, each verified against the release's checksum manifest; over SSH, in CI, on a headless box or in WSL without a display it installs the server alone and says why. The PyPI route is the one that assumes something: it requires Python 3.14 and provisions nothing for you.
+
+Update and uninstall
+
+Uninstall is one line, and it verifies every MCC command is gone before it reports success. The desktop app is removed separately, by the platform's own mechanism. A pre-6.40.0 install that lives in the legacy configuration home is migrated on first start by one atomic rename, nothing copied or merged, provided nothing is holding the directory open; mcc-migrate runs the same move by hand and refuses while it can see a live server.
+
+Uninstall (Linux, macOS or WSL)
+
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/uninstall.sh" | sh
+
+Configuration
+
+The install-time switches are flags, not settings: --dry-run , --version , --desktop , --no-restart , --no-start , --no-desktop and --yes-sudo . MCC_INSTALL_REF points the installer at a branch, and MCC_INSTALL_NO_START and MCC_INSTALL_NO_DESKTOP carry the same intent as environment variables. The server's own host and port are HOST and PORT .
+
+Limits and behaviour
+
+The Windows installer is unsigned, so SmartScreen asks for More info then Run anyway. Machines with Smart App Control on cannot run it; use the PowerShell one-liner there.
+
+The macOS disk image is unsigned and quarantined, so moving the app across needs one quarantine-removal command. The server one-liner is never quarantined.
+
+The installer cannot install curl, and it does not install Claude Code or any other agent.
+
+Every other MCC server on the machine is listed and left running. A port held by something that is not MCC is reported rather than touched.
+
+Quick start: install, first five minutes, update and uninstall
+
+The CLI: the commands the installer puts on your PATH
+
+The dashboard: the Update button and the version panel
+
+Licence: AGPL-3.0-or-later or commercial
+
+## 60 providers, keys and credential health
+https://myclaudecode.danubelabs.net/features/providers-and-credentials/
+
+Providers, keys and credential health
+
+Every provider MCC can route to is a card on one page. A card holds a key or a pool of keys, its rotation policy, its model list and its health. The rest of this page is what happens when a provider answers, refuses, or says nothing at all. Sixty LLM providers sit behind that one page, each with its own keys and its own health.
+
+The provider table in the repository lists 60 cards across cloud APIs, subscription and OAuth sign-ins, gateways, local servers and marketplaces. MCC builds each model slug as <provider-id>/<exact-provider-model-id> , and free-text entry stays available when a provider cannot list its models.
+
+The Providers page: a searchable card per provider, each badged Configured or Missing key and naming the setting that holds its key.
+
+One key, or a pool
+
+Put multiple API keys in one variable, comma-separated, and choose a policy with {ENV}_ROTATION . Every key in a pool gets its own upstream client and its own rate-limit window, so one key saturating or stalling never throttles the others. The order in the pool is the order the policies read.
+
+Policy
+
+Behaviour
+
+single
+
+always the first key; the default when one key is set
+
+round_robin
+
+spread requests across healthy keys in turn
+
+least_used
+
+the healthy key with the fewest requests goes first
+
+failover / on_error
+
+stick to the first healthy key until it fails, then move to the next; the default when several keys are set
+
+Keys can be reordered without retyping the variable, and each key can carry a name. Names live in credential_names.json , keyed by a hash of the key and never by the key itself; they never reach an upstream request or the request log. A renamed key keeps its history, and two keys given one name read as the name plus their masked label.
+
+Health is judged on the key, not on the weather
+
+A key is only ever judged on signals about the credential. There are exactly three. A 401 or 403 walks an escalating lockout ladder of five minutes, one hour and one day, on its own counter. A 429 benches the (key, model) pair for exactly the wait the provider published, or a configured cooldown when it published none, and the key stays healthy for its other models. An exhausted-credit refusal, where the provider says in words that the account has no balance left, benches the whole key, because a wallet is not per model.
+
+Credential health on Limits and Resilience: the two settings that can bench a key, and nothing else.
+
+Everything else, including timeouts, 5xx, a 410 model-gone, other 4xx and transport faults, leaves every key untouched. A model that will not answer is the model's problem: the fallback chain moves to the next model instead of spending the pool on it. A timeout is explicitly not read as a broken socket, so a model that never answered is not charged against the rest of the pool.
+
+Per-key performance on Analytics, with the provider diagnostics each key actually returned.
+
+Custom providers and the model catalogue
+
+Any other OpenAI-compatible endpoint can be added as a custom provider from the same page. A custom provider is not a second kind of provider: it is an ordinary descriptor injected from a different source. Its definition lives in custom_providers.json , never in the .env , because its static credential travels on the descriptor rather than through a settings field. Deleting a custom provider removes its refs from every route; disabling it leaves the refs and pauses them.
+
+Custom provider cards: a base URL, a key pool and a measured reasoning dialect.
+
+A custom provider cannot inherit its host's reasoning_effort vocabulary, so MCC measures it. At most two 16-token chat completions are sent, the first with a deliberately invalid effort value, and the enum is read out of the 400 the host answers with. The learned words are persisted and bound to a reasoning encoder exactly as a static provider declaration would be.
+
+The Models page is the catalogue behind that: every model every configured provider publishes, with bulk visibility, capability probes, learned facts and an hourly background refresh. Each row names where its entry came from. Hiding a model changes what is listed, never what is routed.
+
+The Models page: every model across every configured provider, each row naming the source its entry came from.
+
+Learned facts: every negative this install taught MCC, shown with its evidence, expiring on a clock and forgettable per row.
+
+OAuth sign-ins
+
+An OAuth provider sits in the same grid and carries the same badges, but its credential is a sign-in rather than a string you paste. MCC supports a Claude subscription, ChatGPT and Kimi For Coding. The Claude subscription route is not permitted by Anthropic : Anthropic's published terms forbid routing Free, Pro or Max plan credentials on behalf of third-party users, and the risk is to your account. MCC limits it by admitting only Anthropic's own clients, using an attribution line that travels in the request body, and it documents the position rather than hiding it. Read docs/ANTHROPIC-SUBSCRIPTION.md before enabling it. The ChatGPT subscription has its own caveats and is documented in the same place.
+
+InferHub is a marketplace, not an ordinary provider: a profile sets a price ceiling and MCC sends it on every attempt.
+
+Proxy chains
+
+A provider can go out through a named chain of proxy exits. A chain whose provider limits per address moves a refused or dropped request to another exit on the same model, within your switch limit, and remembers the refused exits across saves. A country refusal is about the address, not the key: it never locks a key out, on any route. Three ways to fill a chain are built in: a scan for a proxy you already run on this machine, a bring-your-own-tor card where each SOCKS port becomes one named identity, and VPN accounts, gateways and provider proxy lists. WireGuard files your VPN exports can be run by MCC as named loopback exits.
+
+A proxy chain: named exits a request can move between on the same model, with their own keep-alive and recency controls.
+
+Configuration
+
+The provider credential settings are the environment variables named on the provider's card, for example ANTHROPIC_API_KEY , OPENROUTER_API_KEY or GEMINI_API_KEY . Rotation is {ENV}_ROTATION . The health knobs are CREDENTIAL_LOCKOUT_TIERS , RATE_LIMIT_COOLDOWN_SECONDS , RATE_LIMIT_COOLDOWN_MAX_SECONDS , RATE_LIMIT_COOLDOWN_MODE and CREDENTIAL_MODEL_BENCH_ESCALATION . Variables are named, never given example values.
+
+Limits and behaviour
+
+No bench duration is invented at the rotation layer: it comes from the provider's own Retry-After or the configured window.
+
+A bare 402 that names no billing phrase rotates and falls through but charges nothing.
+
+A key that fails 5xx or transport on every request is retried once per request rather than benched. That is the deliberate trade that stopped healthy keys being benched for faults they did not cause.
+
+A custom provider's URL is called as typed; the generic profile deliberately does not normalise it.
+
+Local providers (LM Studio, llama.cpp, Ollama) need a base URL rather than a key.
+
+Architecture: the credential and health machinery
+
+Routing: what a key is asked to serve
+
+Configuration: the credential variables, names only
+
+Glossary: rotation, bench, lockout, dial
+
+## Reasoning control and output budgets per request
+https://myclaudecode.danubelabs.net/features/reasoning-and-budgets/
+
+Reasoning control and output budgets
+
+Every provider spells reasoning differently. MCC keeps one neutral policy, then lets each provider adapter translate only the subset its wire API can express. The same page also decides how long a model may think, how many tokens it may spend, and how long the router waits before it calls a silent model a failure. This page is LLM reasoning control and the output token budget that goes with it.
+
+Reasoning is not one setting. It is three independent facts: whether the client wants reasoning on, off or by default; the named effort it asked for, when it named one; and an exact token budget, when it supplied one. MCC resolves those facts once, at the application boundary, and passes one immutable policy to the provider. Provider adapters alone decide how to spell it.
+
+One scale, many dialects
+
+When a numeric-budget provider needs a number, MCC expresses named effort through one product scale: minimal and low are 512 tokens, medium is 1,024, high is 2,048, xhigh is 4,096 and max is 8,192. An exact client budget takes precedence over the scale.
+
+Each host declares a reasoning dialect: which fields it parses, the words it accepts in an effort field, whether it has an on/off channel, a numeric budget, an OFF spelling and an adaptive channel. A control is emitted only where the model has that knob and the host has a field to spell it in. Where one of the two is missing, the nearest thing both can express goes instead: an effort outside the host's vocabulary clamps to the nearest rung that host spells, and a toggle-only model on an effort-only host is sent the rung the client asked for, clamped to that host's enum. Where nothing can be expressed, nothing is sent, the model's own default applies, and the request log records that rather than implying an instruction was honoured.
+
+Reasoning policy and route-specific overrides on Model Config, beside the local web-tool switches.
+
+Adaptive reasoning on every door
+
+ADAPTIVE is not an effort level and not a budget. It asks the host to think as much as it decides it needs, and each door says that in the host's own words: Anthropic's thinking: {"type":"adaptive"} verbatim; an on/off field switched on where that is a different field from its effort one; the highest rung the host publishes where effort is all it has, recorded as a substitution; and nothing at all where the host parses no reasoning field. Every request that does not ask for adaptive is byte-for-byte unchanged.
+
+Learned rejections
+
+A host that answers a 400 naming a reasoning field is retried once without that field, and on success the (provider, model) pair is remembered for the life of the process. The narrowing is instance-scoped: a configuration reload rebuilds the provider and forgets it. A complaint naming a sampling field is never treated as a reasoning rejection, and an unrecognised 400 still fails visibly.
+
+Reasoning replay across turns
+
+A coding conversation spans many turns, and each turn has to decide what to carry forward. MCC keeps that decision explicit per provider: native reasoning content, a native reasoning field, think tags, provider-specific chunks, or no replay. Turning computation off for the next generation does not silently erase prior assistant state a valid continuation needs.
+
+Mechanism
+
+Default
+
+What it does
+
+Encrypted reasoning replay
+
+off
+
+carries a Responses host's opaque encrypted item through your client's transcript and replays it only to the provider, endpoint, account and model that minted it; no readable reasoning text is written back
+
+Carrier provenance guard
+
+always on
+
+refuses an MCC reasoning envelope at every door that cannot have minted it, and counts the refusal
+
+Carrier text recovery
+
+always on
+
+where a Messages host signs nothing, keeps the readable summary and drops only the signature
+
+Readable reasoning replay on Responses
+
+on
+
+replays an earlier turn's plain thinking text as a summary-only reasoning item, never as output text or a think tag
+
+Parallel tool calls on Responses
+
+on
+
+asks a Responses host to batch independent tool calls into one turn
+
+The provenance guard is the safety net. An envelope is host-bound: it is replayed only to the exact provider, endpoint, account and model that produced it. A request that carries an envelope into a door that cannot have minted it is refused and counted as history_carrier_foreign . Readable reasoning is untouched and still crosses models and providers.
+
+Prompt-cache lifetime
+
+Prompt caching is off by default: the client's own lifetimes go untouched. Set minutes per tier and MCC sends the host's nearest lifetime at least that long: 5 minutes or 1 hour on Anthropic and on Claude models through OpenRouter, in_memory or 24-hour retention on Azure OpenAI. Hosts that cache automatically, including ChatGPT, Gemini, DeepSeek, Nous and NIM, get nothing. A per-provider or per-model row can override the lifetime, or force From client , for gateways that speak Anthropic's protocol.
+
+Output budgets and deadlines
+
+The output allowance is resolved separately from reasoning, and the order matters. When the resolved policy will ask the model to think, the ask is first raised to the model's own published output limit, because thinking and answer tokens are spent from one allowance the client sized for the answer alone. Then the model limit applies, then the unknown-default, then the floor, then the ceiling, then context headroom. The floor is the only step that raises, and it sits after the model limit so it can never ask for more than the model published, and before context headroom so it can never re-inflate a budget the remaining context cannot hold.
+
+Limits and Resilience: output budgets, deadlines, chain benching, retries and credential health on one page.
+
+Deadlines are the other half of a budget. A first-token deadline and a total deadline per route turn a silent model into a failure instead of a hang. The calculator shows what each model on your chains actually gets, which is rarely the number in the box, because the model limit, the floor, the ceiling and context headroom all interact.
+
+The deadline calculator: what each model on your chains actually receives after every bound is applied.
+
+Configuration
+
+The reasoning policy and its per-tier overrides live on Model Config. The budgets and deadlines live on Limits and Resilience. The settings are named REASONING_* , MAX_OUTPUT_TOKENS_* , REQUEST_*_DEADLINE* and PROMPT_CACHE_* ; the exact names and their purposes are on the configuration page. No example values are published for any secret-like setting.
+
+Limits and behaviour
+
+The router never uses the output-token limit as a reasoning budget. A named or numeric reasoning budget travels only through documented fields.
+
+A provider-default intent emits no compute-control field at all.
+
+An exact client token budget takes precedence over MCC's named-effort scale.
+
+A reasoning control the host cannot express is not invented: nothing is sent and the request log says so.
+
+Learned rejections are per process. A reload forgets them, deliberately.
+
+Architecture: where reasoning is resolved in the request path
+
+Routing: which model receives the policy
+
+Configuration: the variable names behind these controls
+
+Glossary: reasoning policy, dialect, carrier, budget
+
+## Model routing and fallback chains for coding agents
+https://myclaudecode.danubelabs.net/features/routing/
+
+Model tiers and fallback chains
+
+A coding agent asks for a model by a name it knows. This page is LLM model routing: MCC turns that name into a real provider model, applies your reasoning and budget settings, and walks an ordered chain of stand-ins when the first cannot serve the request. The chain is yours, and every step is in the log.
+
+Routing is the reason a proxy can be useful at all. Without it, every coding tool carries its own model list, its own keys and its own idea of what to do when a provider says no. With it, one tier map serves every tool, and swapping a model is one edit on one page.
+
+What a request can name
+
+The router accepts three forms. A direct provider model ref such as nvidia_nim/nvidia/model-name names the provider and the exact model. A gateway model ID is decoded by MCC's own ID codec. And the five coding-agent tier aliases are intercepted ahead of both: mcc/cyber , mcc/best , mcc/good , mcc/medium and mcc/cheap . They are pointers, not models. Each names one of the router's own global routes, together with that route's fallback chain and pause list.
+
+A name that is not a direct ref or a tier alias is mapped by Claude tier. Names containing fable , opus , sonnet or haiku use the matching tier override when one is set, and otherwise fall back to MODEL . A blank MODEL_HAIKU follows MODEL , which is what a fresh install ships.
+
+The tier map
+
+Each tier has three settings: the model it routes to, an ordered comma-separated fallback chain, and a pause list. The dashboard renders them as one rail per tier, in the order the router walks them.
+
+Five coding-agent tiers and their chains. A paused row keeps its place and is never tried.
+
+A diagram of five tiers, each with a primary model and an ordered fallback chain, one row marked paused and the Haiku tier following the default model.
+
+Six rails side by side, each with a primary model and up to ten numbered fallback rows. A struck-through row with an amber Paused badge keeps its place.
+
+How a fallback chain behaves
+
+The router resolves the requested tier to its primary model and records the route on the request.
+
+The executor attempts the primary model with a healthy credential.
+
+If the model rate-limits, errors or refuses, the next entry in that tier's chain is tried, then the next.
+
+The first attempt that succeeds ends the walk. Every later entry is recorded as not reached.
+
+The chain does not retry the same model forever. A 429 benches the (key, model) pair for the wait the provider published, and the key keeps serving its other models. An auth rejection locks that key out on an escalating ladder. A timeout, a 5xx, a 410 or a plain 400 is treated as the model's answer, and the chain moves to the next model instead of spending the rest of the key pool on it.
+
+One request's ladder: a model sat out a rate-limit cooldown, another was paused, one answered, and the rest were never reached.
+
+A request detail: the route attempts the router walked, the reasoning fields it sent, and the fallback that answered.
+
+A walked chain with a recorded reason beside every model.
+
+A diagram of a four-model chain where the first was in a rate-limit cooldown, the second was paused, the third answered and the fourth was never reached.
+
+Pausing one entry
+
+Each row on a rail has a Pause button. A paused model keeps its place and stays fully on screen, but the router never tries it: no attempt is spent, no deadline is consumed, and the request log lists it as not tried with the reason paused . Unlike most of the page, a pause is written the moment you click it, with no Apply, and the status panel offers an Undo. Pausing is per route: the same model paused on Opus keeps serving Sonnet.
+
+Pausing is not hiding. Visibility changes on the Models page change what appears in /v1/models and never change routing; a pause changes routing and never changes listings. A route whose every model is paused fails with an error naming the key rather than quietly falling through to another route.
+
+Per-agent tiers
+
+A different agent can have a different tier map. MCC identifies the harness from the x-mcc-harness header or from the request's user-agent fingerprint, and resolves against that agent's override when one exists. The overrides live in harness_tiers.json , are parsed defensively and are cached on the file's own timestamp, so a dashboard write lands without a restart.
+
+The vision adapter
+
+An image request can be diverted to a model that can see, with its own chain. VISION_ADAPTER_MODE=describe adds a third behaviour for a blind tier: instead of dropping the image, MCC builds one ordinary routed plan per image over the vision chain, has a sighted model describe it, and sends the description onward. The description is cached on the image's content address, so a screenshot re-sent every turn is described once. Every failure returns to the behaviour the request would have had without the adapter: divert, or send the substitute image.
+
+The vision adapter on Model Config, with its own rail and the describe-mode control.
+
+Two image behaviours are automatic. Outbound pictures are resized to a 1568-pixel long edge on the router's own copy, never the client's. And an image a tool returns reaches the model as a picture rather than as base64 text: one walk finds an image or document inside a tool result, and the token estimator and the outbound converters call the same walk, so they cannot disagree about whether it is an image or 680,000 characters of text.
+
+Where you see it
+
+The tier map is on Model Config . The chain a request actually walked is on Analytics : the Failover panel counts every primary-to-stand-in pair that fired, and one request's detail shows each attempt with its key, timings and the reason it was or was not tried. The Models page lists what /v1/models advertises to clients.
+
+Retries, credential health and rotation policies, which decide what a chain does between attempts.
+
+Configuration
+
+Routing is configured by names, not values. The tier models are MODEL , MODEL_MYTHOS , MODEL_FABLE , MODEL_OPUS , MODEL_SONNET , MODEL_HAIKU and MODEL_VISION . Each has a _FALLBACKS list and a _PAUSED list. The media rails use MODEL_IMAGE , MODEL_TTS , MODEL_ASR and MODEL_VIDEO , and are not chat tiers: nothing on them is listed in /v1/models or offered to a coding agent.
+
+Setting
+
+What it decides
+
+MODEL
+
+the model used when nothing more specific matches
+
+MODEL_MYTHOS
+
+Mythos-tier traffic, alias mcc/cyber
+
+MODEL_FABLE
+
+Fable-tier traffic, alias mcc/best
+
+MODEL_OPUS
+
+Opus-tier traffic, alias mcc/good
+
+MODEL_SONNET
+
+Sonnet-tier traffic, alias mcc/medium
+
+MODEL_HAIKU
+
+Haiku-tier traffic, alias mcc/cheap ; blank follows MODEL
+
+MODEL_*_FALLBACKS
+
+the ordered stand-ins walked after that route's model
+
+MODEL_*_PAUSED
+
+the entries kept in place but never tried
+
+Limits and behaviour
+
+Failover happens before the first streamed chunk. Once output has started, switching models would corrupt the response, so a mid-stream failure is surfaced to the client.
+
+A request that carries no identifying harness resolves against the global chain. It is never failed for being unidentified.
+
+Model Config: one rail per tier, with drag handles, Pause buttons and the Apply control that writes the .env.
+
+Architecture: how the router and the chain are built
+
+Reasoning and budgets: what is applied before an attempt
+
+Providers and credentials: what a chain entry points at
+
+Configuration: the settings named on this page
+
+## Native web search and fetch proxy for any model
+https://myclaudecode.danubelabs.net/features/web-search/
+
+The native web-search and web-fetch proxy
+
+Claude Code's web_search and web_fetch are Anthropic server tools: normally Anthropic runs the search and bills you for it. MCC fulfils them at the proxy instead, against a provider you choose or a keyless fallback, and streams the result back as ordinary text. No Anthropic search credits are used, and it works with any model provider. It is a web search proxy and a web fetch proxy, in front of fifteen search backends.
+
+A client emits a web_search tool-use block. MCC runs the search against the configured chain and returns the results as a regular text block, so a model that has never heard of the tool still receives useful text. The same shape covers web_fetch , which retrieves a page and returns its main content.
+
+The Web Search page: route policy, provider cards with key health, the chain editor and advanced options.
+
+Fifteen search backends
+
+The search backends are DuckDuckGo (keyless), Ollama Web Search, Exa, Tavily, Brave Search, SearXNG, Jina Search, Serper, Firecrawl, Linkup, Perplexity Search, Parallel, SearchAPI.io, SerpAPI and Context7 for library documentation. WEB_SEARCH_PROVIDER accepts auto , off , disabled or one of those provider IDs.
+
+Setting
+
+Behaviour
+
+auto
+
+the first configured provider in catalogue order, never Context7; with no keys set it falls back to the keyless hops, so search works zero-config
+
+off
+
+only the keyless DuckDuckGo hop, without the provider registry
+
+disabled
+
+reject web searches without making an outbound search request
+
+an explicit ID
+
+pin that provider; missing credentials or an upstream failure are surfaced instead of silently changing providers
+
+WEB_SEARCH_FALLBACK_POLICY controls how far the chain may move after the selected provider: auto , none , ddgs or legacy . Configuration failures such as a missing API key always fail visibly, DDGS is never attempted twice, and the rich digest names the provider that ultimately produced the results.
+
+The search chain: a selected provider, then the keyless hops, with the provider named in the digest.
+
+A diagram showing the selected search provider, the keyless ddgs metasearch and the keyless DuckDuckGo page hop, with fallback policies and zero-config behaviour.
+
+The keyless DuckDuckGo hop
+
+The last hop reads DuckDuckGo's HTML page first and its lite page only as a second try, with declared parser profiles and headers. Snippets are kept, ads are skipped, and your region and time window are respected through the DDGS_REGION and DDGS_TIMELIMIT settings. A bot check is reported as a rate limit rather than as no results, and optional spacing between requests is available, off by default.
+
+Keys rotate like model keys
+
+Every search service's keys follow the same rules as a model provider's keys: comma-separated pools, the same rotation policies, and the same health engine. The bench is shown in plain words with a Reset, and every key try is a row in Analytics. The chain itself is an ordered list of services with repeats, pause and drag, edited on the Search chain card.
+
+The chain editor: an ordered list of search services with pause and reorder controls.
+
+Web fetch
+
+Web fetch returns the page's main content as markdown with links and tables: menus and footers are dropped. The extractor is loaded on the first fetch of a process, the output is capped at 24,000 characters and the marker names the extracted total, markdown is asked for in the Accept header, a Cloudflare challenge gets one honest retry, and a page served without a charset is read rather than refused. WEB_FETCH_EXTRACTOR=basic restores every earlier release's bytes.
+
+Analytics
+
+Web search has its own route and attempt analytics, with the captured input and output, separate from the chat log. That split matters because a search attempt is a different kind of call: it can fail on a key, on the query or on the search host, and the analytics keeps those apart from the model request that asked for it.
+
+Web-search analytics: separate route and attempt analytics with the captured input and output.
+
+Configuration
+
+The route is WEB_SEARCH_PROVIDER and WEB_SEARCH_FALLBACK_POLICY . Each backend has its own key variable, named on its card. The keyless hop uses DDGS_REGION and DDGS_TIMELIMIT , and optional request spacing uses WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS . Web fetch uses WEB_FETCH_EXTRACTOR . Variable names only; no values are published.
+
+Limits and behaviour
+
+Context7 is never picked by auto: it answers with library documentation rather than web pages.
+
+An explicit provider is strict by default; a missing key fails visibly instead of silently swapping to another backend.
+
+The keyless hop is an unofficial metasearch and its engines may rate-limit an address. That is reported as a rate limit, not as an empty result.
+
+Advanced options allow the model to receive full page text rather than snippets, restrict searches to specific sites, and set safe search, locale and freshness.
+
+This is a server-tool proxy: a client that does not use the Anthropic server-tool shape is not affected.
+
+Providers: the key pools and rotation this shares
+
+Observability: where search requests are logged
+
+Configuration: the search variables, names only
+
+Glossary: server tool, chain, keyless hop
+
+## Claude Code through a local LLM proxy
+https://myclaudecode.danubelabs.net/for/claude-code/
+
+Claude Code through one local address
+
+Claude Code is Anthropic's terminal agent, and it is one client here, not the frame around everything else. mcc-claude points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the Claude Code proxy setup in one command.
+
+The command
+
+Install Claude Code yourself, because MCC never installs an agent, then launch it through the proxy with one command:
+
+Launch Claude Code against the local proxy
+
+mcc-claude
+
+The launcher sets the proxy address and the proxy token in the child process only, so nothing is written into your shell profile, your Claude Code settings or your own authentication. Every argument you pass is handed to Claude Code unchanged, which means the launcher is a drop-in replacement for the command you already type.
+
+Add --discover-models to wire Claude Code's native /model picker to MCC's catalogue, which is built from the models your routes actually resolve to:
+
+Launch with the native model picker wired to MCC's catalogue
+
+mcc-claude --discover-models
+
+A single prompt runs the same way, because -p is Claude Code's own flag: mcc-claude -p "summarise this diff" . mcc-claude-old keeps the earlier launch shape, which sets the full proxy environment and leaves auto-compact on.
+
+What Claude Code gets
+
+One address for every provider. Anthropic Messages traffic reaches whichever model your tiers resolve to, including a local server, without a second client configuration.
+
+Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.
+
+Reasoning control and output budgets, translated once into each provider's own dialect rather than set per client.
+
+Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.
+
+A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.
+
+The web tools, when the proxy's web-search setting is on. Claude Code's web_search and web_fetch are fulfilled at the proxy instead of by Anthropic.
+
+What the launcher does not change
+
+Your Claude Code installation, its settings files and its own authentication are untouched. The launcher sets environment variables for one process and exits with it, so a terminal that never ran mcc-claude is exactly the terminal it was before. If Claude Code is not installed, the launcher prints Anthropic's own install line and exits rather than installing anything on your behalf.
+
+Where to go next
+
+Every agent MCC can launch or configure
+
+Quick start: install, run, and the first five minutes
+
+Routing: tiers and fallback chains
+
+Providers and credentials: what the request is routed to
+
+## Codex CLI through a local LLM proxy
+https://myclaudecode.danubelabs.net/for/codex/
+
+Codex CLI through one local address
+
+Codex CLI is OpenAI's terminal agent, and it speaks the OpenAI Responses API. mcc-codex points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the Codex CLI proxy setup in one command.
+
+The command
+
+Install Codex CLI yourself, because MCC never installs an agent, then launch it through the proxy with one command:
+
+Launch Codex CLI against the local proxy
+
+mcc-codex
+
+The launcher passes the proxy as an ephemeral -c assignment on the command line, so your own config.toml is never rewritten. The provider it declares is named for the proxy, points at the proxy's /v1 root, uses the Responses wire API and reads its key from an environment variable the launcher sets for that one process.
+
+A single prompt runs the same way, using Codex's own subcommand: mcc-codex exec "summarise this diff" . mcc-codex resume --last continues the most recent session, and neither form needs a different launcher.
+
+MCC also generates a model catalogue for Codex and points the launch at it, so the models Codex offers are the ones your routes actually resolve to, with the limits and prices the metadata ladder found.
+
+The catalog is written under the MCC configuration home and named on the command line for that one launch, in the same way as the provider assignment. Nothing under your Codex home is rewritten, and a Codex session you start without mcc-codex sees exactly the configuration it saw before.
+
+What Codex gets
+
+One address for every provider, over the OpenAI Responses API that Codex already speaks.
+
+Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.
+
+A generated model catalogue, so the models Codex lists are the ones your routes resolve to.
+
+Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.
+
+A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.
+
+Per-agent attribution. The launcher marks the request as Codex's, so the log can name the agent behind it.
+
+What the launcher does not change
+
+Your Codex installation and its config.toml are untouched, because every assignment the launcher adds exists for one launch only. If Codex is not installed, the launcher prints OpenAI's own install line and exits rather than installing anything on your behalf.
+
+Where to go next
+
+Every agent MCC can launch or configure
+
+Quick start: install, run, and the first five minutes
+
+Routing: tiers and fallback chains
+
+Providers and credentials: what the request is routed to
+
+## Gemini CLI through a local LLM proxy
+https://myclaudecode.danubelabs.net/for/gemini-cli/
+
+Gemini CLI through one local address
+
+Gemini CLI is Google's terminal agent, and it speaks the Gemini API. mcc-gemini points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the Gemini CLI proxy setup in one command.
+
+The command
+
+Install Gemini CLI yourself, because MCC never installs an agent, then launch it through the proxy with one command:
+
+Launch Gemini CLI against the local proxy
+
+mcc-gemini
+
+Gemini CLI publishes one variable for the endpoint, GOOGLE_GEMINI_BASE_URL , and it takes the proxy root with no /v1 and no /v1beta , because the SDK appends the model path itself. Setting that variable alone is not enough: Gemini CLI's own auth check refuses its gateway mode in a non-interactive run, so the launcher also writes one settings key into a document MCC owns and points Gemini CLI at it through its own GEMINI_CLI_SYSTEM_SETTINGS_PATH , in the child process only.
+
+That document is merged as the system scope, so MCC's keys win while your own ~/.gemini/settings.json still supplies everything MCC does not name: your theme, your MCP servers, your memory. It is never written, never backed up and never read for authentication. The proxy token is not on disk either: GEMINI_API_KEY is read from the environment, and the launcher sets it for the child process only.
+
+A single prompt runs with Gemini CLI's own flag: mcc-gemini -p "summarise this diff" , and -o json makes the same run machine-readable. Gemini CLI's own model picker lists Google's models only, so -m anthropic/<provider>/<model> is how MCC's routed models are reached.
+
+What Gemini CLI gets
+
+One address for every provider, over the Gemini API surface that Gemini CLI already speaks.
+
+Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.
+
+MCC's routed models at -m , beside the Google models Gemini CLI lists itself.
+
+Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.
+
+A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.
+
+Per-agent attribution. The launcher marks the request as Gemini CLI's, so the log can name the agent behind it.
+
+What the launcher does not change
+
+Your own ~/.gemini/settings.json and the OAuth tokens under ~/.gemini are untouched, because the launcher writes a separate document and the API-key path returns before the OAuth path is reached. If Gemini CLI is not installed, the launcher prints Google's own install line and exits rather than installing anything on your behalf.
+
+Where to go next
+
+Every agent MCC can launch or configure
+
+Quick start: install, run, and the first five minutes
+
+Routing: tiers and fallback chains
+
+Providers and credentials: what the request is routed to
+
+## OpenCode through a local LLM proxy
+https://myclaudecode.danubelabs.net/for/opencode/
+
+OpenCode through one local address
+
+OpenCode is an open-source terminal agent that reads its providers from a config file. mcc-opencode points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the OpenCode proxy setup in one command.
+
+The command
+
+Install OpenCode yourself, because MCC never installs an agent, then launch it through the proxy with one command:
+
+Launch OpenCode against the local proxy
+
+mcc-opencode
+
+OpenCode reads its provider configuration from files rather than from arguments, so the launcher writes a config document of its own under the MCC configuration home and points the launched process at it through OpenCode's own OPENCODE_CONFIG variable. That variable names an extra config file that is merged into the precedence chain, so your opencode.json is never read, never written and never backed up.
+
+The generated document names two environment variables rather than the token itself, and the launcher sets them in the child process only, so the proxy token is never on disk. A single prompt runs with OpenCode's own subcommand: mcc-opencode run "summarise this diff" .
+
+mcc-opencode models mcc lists the models MCC published, with the limits and prices the metadata ladder resolved. mcc-opencode -m mcc/<provider>/<model> starts on one specific MCC-routed model. OpenCode 2, which installs beside v1 under its own binary, has its own launcher: mcc-opencode2 .
+
+What OpenCode gets
+
+One address for every provider, over the Anthropic Messages surface OpenCode already speaks.
+
+Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.
+
+A generated model list with the limits and prices the metadata ladder resolved, reachable with models mcc .
+
+Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.
+
+A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.
+
+Per-agent attribution. The launcher marks the request as OpenCode's, so the log can name the agent behind it.
+
+What the launcher does not change
+
+Your own opencode.json is untouched, because MCC writes a separate document and points one process at it. Stop launching through MCC and the file you wrote is the file you have. If OpenCode is not installed, the launcher prints its own install line and exits rather than installing anything on your behalf.
+
+Where to go next
+
+Every agent MCC can launch or configure
+
+Quick start: install, run, and the first five minutes
+
+Routing: tiers and fallback chains
+
+Providers and credentials: what the request is routed to
+
+## Gallery: the MCC dashboard and screens
+https://myclaudecode.danubelabs.net/gallery/
+
+Every reviewed screen, grouped
+
+These are the product's own captures, reviewed one by one before publication. Each was checked for keys, tokens, account names, file paths and real prompt text; where a capture carried something that did not belong on a public page, it was redacted on a copy and the original was left untouched. Every image below has a caption, and every caption describes the state the screen is actually in. Together they are the LLM dashboard screenshots: the control plane, the request log and the agent pages, as they actually look.
+
+The screens are grouped by the area of the product they belong to, in the same order as the features: the dashboard itself, providers and credentials, routing, reasoning and limits, observability and cost, web search, agents, media and messaging. A capture appears once, in the group where it is most useful.
+
+The dashboard
+
+Providers and credentials
+
+Routing and limits
+
+Reasoning and budgets
+
+Observability and cost
+
+Web search
+
+Agents
+
+Media
+
+Messaging
+
+A capture shows the version that was running when it was taken. The version panel in each screen is the honest record; the current release is on the home page.
+
+The dashboard
+
+The first-run checklist, the Providers page, the version panel and an announced update.
+
+Providers and credentials
+
+The provider grid, the model catalogue, custom providers, credential health and per-key performance, plus the proxy and marketplace cards.
+
+Routing and limits
+
+The tier rails, a walked fallback chain, the vision adapter and the resilience controls.
+
+Reasoning and budgets
+
+Reasoning policy and overrides, the limits page and the deadline calculator.
+
+Observability and cost
+
+The request log, analytics panels, latency, failover, storage and the token optimizer.
+
+Web search
+
+The search route, the chain editor and web-search analytics.
+
+Agents
+
+The coding-agent cards, the launchers list, desktop-app configuration and two live agent sessions.
+
+Media
+
+The media rails and media analytics.
+
+Messaging
+
+The Discord and Telegram settings with the voice controls.
+
+How the screens were reviewed
+
+Every tracked image in the repository was inventoried, hashed and de-duplicated first. The survivors were reviewed on contact sheets and, where a leak was plausible, at full resolution. The verdicts were include, redact or exclude with a reason. Redactions are solid rectangles applied to a copy, and each rectangle is recorded with its coordinates. The excluded captures are the ones that were not product screens, or that could not be cleaned without destroying what they showed.
+
+Features: the pages these screens illustrate
+
+The dashboard in depth
+
+Architecture: what the screens are showing
+
+## Glossary of gateway and routing terms
+https://myclaudecode.danubelabs.net/glossary/
+
+The words this product uses
+
+MCC uses some ordinary words in a specific way. This page defines them once, from the product's own documentation, so a page elsewhere can use them without repeating the definition. It is the LLM gateway glossary: bench, chain, tier, rung, credential health and cost provenance, each defined once.
+
+A — C
+
+Adaptive reasoning
+
+A request, spelled ADAPTIVE , that asks the host to think as much as it decides it needs. It is not an effort level and not a budget; each door says it in the host's own words, and a host with no reasoning field is sent nothing.
+
+Bench
+
+A time-bounded refusal to use a credential or a chain entry. A bench is scoped: a 429 benches a key and model pair, while an exhausted balance benches the whole key.
+
+Budget
+
+An exact output allowance, or the reasoning budget a client supplied. MCC keeps the two separate, and never uses an output limit as a reasoning budget.
+
+Carrier
+
+MCC's envelope for a Responses host's opaque encrypted reasoning item, carried through the client's own transcript. A carrier is host-bound: it is replayed only to the provider, endpoint, account and model that minted it.
+
+Chain
+
+An ordered list of stand-ins behind a route. A model listed twice is tried twice, and each listing is judged when it is reached.
+
+Commit boundary
+
+The moment the first protocol chunk is sent and the HTTP status can no longer change. A failure before it is an HTTP error; a failure after it is an in-band event.
+
+Config home
+
+The one directory that holds the .env, the request log and the documents beside them. It is ~/.mcc by default and is pinned by MCC_CONFIG_DIR .
+
+Country refusal
+
+A 403 that refuses the address rather than the credential. It never locks a key out, and the request still tries the next key, then the next model.
+
+Credential pool
+
+The comma-separated keys behind one provider, each with its own upstream client and rate-limit window, read in the order they are listed.
+
+D — F
+
+Dialect
+
+The reasoning fields one host parses: an effort field and its words, an on/off channel, a numeric budget, an OFF spelling or an adaptive channel. A control is emitted only where the model has the knob and the host has the field.
+
+Direct ref
+
+A model named as provider/model , resolved without a tier. It is one of the three forms the router accepts, beside gateway IDs and tier aliases.
+
+Door
+
+One of the four protocol surfaces a client can enter: Anthropic Messages, OpenAI Responses, Chat Completions or Google Gemini. All four meet the same router.
+
+Exit
+
+One named address in a proxy chain. A refused or dropped request can move to another exit on the same model, within the chain's switch limit.
+
+Failover
+
+Moving from the route's primary model to a stand-in after a failure. It happens before the first streamed chunk; after that, the response is committed.
+
+Fallback
+
+One entry in a chain, or the act of walking the chain. A fallback can be paused, which keeps its place and never tries it.
+
+G — I
+
+Gateway model ID
+
+A model identifier decoded by MCC's own gateway-ID codec, rather than a direct provider ref or a tier alias.
+
+Generation
+
+One provider-runtime snapshot with its own provider instances, limiters and quota state. A hot replacement publishes a new generation; old request leases drain against the one they started on.
+
+Harness
+
+The coding agent behind a request, identified from a header or the user-agent fingerprint. It drives per-agent tier maps and the request log's attribution.
+
+Headroom
+
+The context left after a prompt, which bounds how large an output allowance can be. It is applied after the floor, so it can lower a budget but never re-inflate one the context cannot hold.
+
+InferHub
+
+A marketplace provider that resells pooled accounts behind one key. A profile sets a price ceiling, and MCC sends it on every attempt so a request is never charged above it.
+
+J — L
+
+Key health
+
+A key's state, decided only from signals about the credential: an auth rejection, a 429, or an exhausted balance. Timeouts, 5xx and other 4xx leave it untouched.
+
+Keyless hop
+
+The last search hop, which reads DuckDuckGo's HTML page and then its lite page without a key. It is unofficial and may be rate-limited, which is reported as a rate limit rather than as no results.
+
+Learned fact
+
+A negative this install taught the router, shown with its evidence, expiring on a clock and forgettable per row. A reasoning field a host refused is one example.
+
+Lockout
+
+The escalating bench for a key the provider keeps rejecting with an auth error: five minutes, one hour and one day by default, one step per consecutive rejection.
+
+M — O
+
+Media rail
+
+One of the image, speech, transcription and video routes. A media rail walks its chain like a chat route but keeps its own health, and is never offered to a coding agent.
+
+Model kind
+
+What a model is for: chat, image, speech, transcription or video. A picker offers only its own kind, and a model whose kind is stated and is not chat is left out of the chat catalogue.
+
+Model slug
+
+The provider/model string MCC builds from the provider ID and the exact provider model ID. Free-text entry stays available where a provider cannot list its models.
+
+No-thinking variant
+
+A model-listing entry that forces reasoning off. It exists for compatibility, and the router treats the no-thinking name as a distinct route.
+
+Optimization rule
+
+A narrow local rule that answers a common low-value request before a provider is asked. A request it answers records the rule and the tokens no provider received.
+
+OAuth provider
+
+A provider whose credential is a sign-in rather than a pasted string: a Claude subscription, ChatGPT or Kimi For Coding. It sits in the same grid as a key-based provider.
+
+Output allowance
+
+The number of tokens a reply may use, resolved from the model, the route's ceiling and floor, context headroom and, when thinking is requested, the model's own published limit.
+
+P — R
+
+Provenance
+
+The recorded source of a value. A price carries the rung that stated it; a claim on this site carries the path or command that proves it.
+
+Provider card
+
+One provider's entry on the Providers page: its badge, its key count, its rotation policy and its Configure and Refresh models controls.
+
+Proxy token
+
+The bearer token clients present to the proxy. It is generated for the machine on first start, and it is required once the host is not loopback.
+
+Rail
+
+A route rendered as a row on Model Config: a primary model and its ordered fallbacks. A media rail is the same shape for a media endpoint.
+
+Rate-limit window
+
+One key's own quota state. Every key in a pool has its own, so one key saturating or stalling never throttles the others.
+
+Request log
+
+The local SQLite record of every completed request, with its attempts, tokens, cost and latency. Analytics is computed from it; it is not a second accounting system.
+
+Rotation
+
+Choosing which key in a pool serves a request: single, round robin, least used or failover. Rotation is per pool, and each key's order is the order the policy reads.
+
+Rung
+
+One step of a resolution ladder, such as the pricing ladder or the metadata ladder. A value records the rung that answered it, so two surfaces cannot disagree about its source.
+
+S — U
+
+Safety classifier
+
+Claude Code's narrow auto-mode prompt shape. It is a routing policy, not a short-circuit: MCC forces reasoning off so the client receives a parser-readable verdict.
+
+Search chain
+
+An ordered list of search services with repeats, pause and drag. It is walked at the proxy, and its keys follow the same rotation and health rules as a model key.
+
+Server tool
+
+A tool the protocol expects the server to run, such as web search or web fetch. MCC fulfils it at the proxy instead of sending it upstream.
+
+Subscription window
+
+A plan's usage limit with its reset time, as a provider reports it. A window and a cash balance are two blocks and never one total.
+
+Tier
+
+A coding-agent route such as Fable, Opus, Sonnet or Haiku, mapped to a real model and a chain. A tier alias is the protocol name for one of those routes.
+
+Tier alias
+
+One of mcc/cyber , mcc/best , mcc/good , mcc/medium , mcc/cheap or mcc/vision . It is a pointer to a global route, not a model.
+
+Token optimizer
+
+The page and the opt-in RTK integration that show what never reached a provider: tokens saved, rule counts and prompt-cache effectiveness.
+
+Tuning
+
+A parameter set for the shared rotation engine. The provider tuning excludes the generic cooldown ladder; the web-search tuning keeps it, because a search key that keeps erroring is worth resting.
+
+V — Z
+
+Vision adapter
+
+The route that diverts an image request to a model that can see. In describe mode, a sighted model describes each image and the description is cached on the image's content address.
+
+Wire capture
+
+The recorded message and tool structure actually sent, bounded and inspectable. It is what lets a reasoning adaptation appear in the request detail.
+
+## Licence: AGPL and the commercial option
+https://myclaudecode.danubelabs.net/license/
+
+The exact terms
+
+My Claude Code is dual-licensed. The free option is the GNU Affero General Public License, version 3 or later. The other option is a commercial licence, negotiated case by case. This page states what each one means; it is not legal advice. The free option is AGPL-3.0-or-later; the other is a commercial licence agreed in writing.
+
+Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.
+
+The AGPL option
+
+The AGPL option is free and open source, and it is open to everyone. Personal use, study, modification, and commercial use are all permitted at no cost, including running the proxy for your own work or for your employer's work. What the AGPL asks in return is source code: if you convey the software, or run a modified version of it as a network service that other people interact with, you must offer those users the complete corresponding source of your version under the same licence. Section 13, Remote Network Interaction, is the clause that extends that duty to network use.
+
+The Required Notice at the top of the licence file must be preserved. That is a term of the AGPL grant, stated under the additional term of AGPL section 7(b):
+
+Required Notice
+
+Copyright (c) 2026 FiredMosquito831
+https://github.com/FiredMosquito831/my-claude-code
+
+The commercial option
+
+The commercial licence releases you from the AGPL's source-sharing obligation. It is the right choice if you want to offer the software, or a work based on it, as a hosted or managed service; route model or API traffic commercially through it as part of a paid product; reuse its code, its routing logic or its algorithms inside a product you ship without publishing that product's source under the AGPL; or distribute it inside a closed-source appliance, gateway or bundle.
+
+A commercial licence is the only way to use the software outside the terms of the AGPL. There is no other exception, standing permission or informal allowance. Terms are negotiated case by case: scope, duration, support expectations and price depend on what you are building. There is no published price list and no click-through agreement; every commercial licence is a written agreement with the author.
+
+The inherited MIT portion
+
+The model-routing infrastructure of this project is derived from the MIT-licensed Free Claude Code by Ali Khokhar (Alishahryar1), whose notice is reproduced in the licence file. Substantial portions of that original work remain in this project, and the MIT terms continue to apply to them. The inherited upstream code stays under its original MIT licence in every case: a commercial licence changes the terms of the author's own work, not of that inherited portion.
+
+Trademarks and non-affiliation
+
+My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google. Other marks are their owners'. Provider names are used to describe what the software connects to, not to claim any relationship.
+
+What this page is not
+
+It is not legal advice.
+
+It is not a licence in itself. The licence is the full text in the repository's licence file; a commercial licence exists only once it is agreed in writing.
+
+It does not relicense any provider's terms. Your use of a model or an API is governed by that provider's own agreement.
+
+The full licence text in the repository
+
+The commercial licence document
+
+About: the project and its history
+
+Features: what is licensed
+
+## Quick start: install and run the LLM gateway
+https://myclaudecode.danubelabs.net/quick-start/
+
+Install, run, and the first five minutes
+
+Every route ends at the same server, the same dashboard and the same configuration directory. Pick the one that fits your machine, then follow four steps. This is the LLM proxy quick start: install, start, add a key, launch an agent.
+
+Install
+
+The one-liners install uv if it is missing, install Python 3.14 through uv, verify the release wheel's SHA-256, install MCC into an isolated tool environment and put every mcc-* command on your PATH. The wheel is the same one the PyPI route installs, and the desktop app installs the server on first launch if it is not there yet.
+
+Linux, macOS or WSL
+
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh" | sh
+
+Windows PowerShell
+
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.ps1")))
+
+Windows Command Prompt
+
+curl -fsSL -o "%TEMP%\install-mcc.cmd" https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.cmd && "%TEMP%\install-mcc.cmd"
+
+npm, any platform
+
+npm install -g @firedmosquito831/my-claude-code
+
+There are also native desktop installers for Windows, Linux and macOS on the latest release page, and a PyPI route for people who already manage Python 3.14. Close and reopen your terminal after installing: the installer adds ~/.local/bin to your PATH, and a shell that was already open cannot see it.
+
+The first five minutes
+
+Start it and open the dashboard: run mcc-server , then open http://127.0.0.1:8082/admin . The desktop app does both for you.
+
+Add a provider key: on Providers, find your provider, click Configure, paste the key, then Validate and Apply.
+
+Point the tiers at a model: on Model Config set MODEL and, if you want per-tier routing, the Mythos, Fable, Opus, Sonnet and Haiku models, each with a fallback chain.
+
+Launch an agent: mcc-claude , mcc-codex , mcc-opencode , mcc-gemini , or Configure on the Coding agents page for a desktop app.
+
+A fresh install already routes. Since 7.78.0, the Mythos, Fable, Opus and Sonnet tiers start on OpenCode Zen's free model with no key at all. MODEL and Haiku still point at NVIDIA NIM, so they need a key or a new model.
+
+The Get Started checklist tracks the same four steps and gets out of the way once dismissed.
+
+Update
+
+The dashboard shows your version, announces releases and installs them with checksum verification. Re-running the install command does the same thing, because it always fetches the newest release. Since 7.1.0 every install restarts the server by default: it stops the one server bound to that configuration directory's port, by its exact process ids, installs, starts the server again and waits until the health endpoint answers. --no-restart never stops a running server, and --no-start stops and starts nothing. There is no separate updater to install.
+
+An update is atomic. The new version is built beside the running one, run once to prove it works, and swapped in by two directory renames. If it never answers the health endpoint, the previous version is put back and started.
+
+Uninstall
+
+Uninstall is one line, and it verifies every MCC command is gone before it reports success. If you installed through npm, mcc uninstall is the other route. The desktop app is removed separately, through Apps and Features, the package manager, the app's own uninstall script or the Trash.
+
+Uninstall (Linux, macOS or WSL)
+
+curl -fsSL "https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/uninstall.sh" | sh
+
+Four things that bite
+
+Windows SmartScreen flags the unsigned installer: choose More info, then Run anyway. With Smart App Control on, use the PowerShell server one-liner instead.
+
+macOS quarantines the unsigned disk image. After dragging the app across, run one xattr command to clear the quarantine, or take the server one-liner and let the desktop command fetch the same binary.
+
+WSL has no tray. Install the server there and reach the dashboard in a Windows browser.
+
+A pre-6.40.0 install lives in the legacy configuration home. The first start of 6.65.0 or later migrates it by one atomic rename, provided nothing is holding the directory open.
+
+Platform: the desktop app, update path and packaging
+
+The CLI: every command and flag
+
+Providers: add a key and understand its health
+
+Troubleshooting: when a step does not work
+
+## Troubleshooting the local gateway
+https://myclaudecode.danubelabs.net/troubleshooting/
+
+When a step does not work
+
+Each entry below is a symptom the product's own documentation names, its verified cause, and the fix it gives. If your case is not here, the repository's issue tracker is the right channel. It is the LLM gateway troubleshooting page: the failures this site can verify, with the fix for each.
+
+mcc-server is not found after a successful install
+
+Symptom: the installer finished, but mcc-server is not recognised. Cause: the installer added ~/.local/bin to your PATH, and a terminal that was already open cannot see the change. Fix: close and reopen the terminal, then check mcc-server --version .
+
+Windows SmartScreen refuses the desktop installer
+
+Symptom: Windows blocks the unsigned installer. Cause: the desktop installer is unsigned. Fix: choose More info, then Run anyway. On a machine with Smart App Control on, the app cannot run at all; use the PowerShell server one-liner instead.
+
+macOS will not open the app
+
+Symptom: the app is blocked after it is dragged across. Cause: the disk image is unsigned and macOS quarantines it. Fix: clear the quarantine once with the xattr command the documentation gives, or take the server one-liner and let the desktop command fetch the same binary, which is never quarantined.
+
+The tray is missing in WSL
+
+Symptom: the desktop app refuses to start in WSL. Cause: WSL has no tray. Fix: run the server in WSL and reach the dashboard in a Windows browser. The app says so and refuses rather than pretending.
+
+The dashboard will not open
+
+Symptom: the admin address does not answer. Cause: one of three things: the server is not running, it is on a different port, or a launcher and the server resolved different configuration directories. Fix: start the server and read the startup log, which names the directory in use; check PORT ; and if you set MCC_CONFIG_DIR , set it for the launchers too.
+
+The install reports a port it will not touch
+
+Symptom: the installer says the port is held by something that is not MCC. Cause: another program owns the port. Fix: MCC reports it and leaves it alone rather than killing an unknown process. Choose another PORT or stop the other program yourself.
+
+Every key is benched
+
+Symptom: a provider card says every key is benched until a time. Cause: the provider rate-limited the keys or refused the balance. Fix: wait for the bench to expire, or read the credential-health card to see which signal caused it. A 429 bench lasts the wait the provider published; an exhausted balance benches the whole key for the cooldown window.
+
+A request fails with a readiness error
+
+Symptom: a request returns an error before any provider is called. Cause: a missing provider configuration or a request runtime that is shutting down. This is an application-readiness error, not a provider failure. Fix: open Providers, confirm the card is configured, and Validate and Apply. A request that never reached a provider is not a credential problem.
+
+Web fetch refuses a page
+
+Symptom: a fetch to a local or private address is refused. Cause: web-fetch egress enforces its allowed URL schemes and blocks private-network targets by default. Fix: this is the intended boundary. If the target is genuinely intended, the operator can allow private networks explicitly; do not widen it to make one page load.
+
+A model is missing from the picker
+
+Symptom: a model a provider publishes does not appear in /v1/models or an agent's picker. Cause: the model is hidden, or its stated kind is not chat, or a catalogue snapshot predates the latest refresh. Fix: check visibility on the Models page, check the model's kind, and restart the client that reads a startup catalogue. Hiding changes listings and never routing.
+
+A media request is skipped as unsupported
+
+Symptom: an image or speech request moves past a model without trying it. Cause: the provider declares no endpoint for that operation. MCC never guesses from a model name. Fix: put a model whose provider declares the endpoint on that rail. The skipped model is not charged a failure.
+
+An update does not finish
+
+Symptom: an update runs but the new version never answers the health check. Cause: the new build failed to start. Fix: the previous version is put back and started automatically. Read the install log and the progress document in the configuration home to see where it stopped, then re-run the update.
+
+A setting does not take effect
+
+Symptom: a saved setting appears to be ignored. Cause: the setting is restart-required, so the running process still holds the value it read at startup. Fix: the dashboard marks these settings for exactly this reason. Restart the server, or use the update's restart, after saving.
+
+A launcher will not start its agent
+
+Symptom: a launcher exits instead of starting the agent. Cause: the agent is not installed. Fix: the launcher prints that agent's own install command and exits, and the Coding agents page has an Install button for the same job. MCC does not install agents on its own.
+
+Quick start: the install and first-run steps
+
+Providers: key health and rotation
+
+Configuration: HOST, PORT, MCC_CONFIG_DIR
+
+FAQ: the broader questions

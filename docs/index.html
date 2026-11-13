@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Claude Code: local LLM gateway for coding agents</title>
+<meta name="description" content="A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost.">
+<meta name="keywords" content="claude code proxy, llm gateway, local llm proxy, model router, claude code router, ai coding agent gateway, multi provider llm proxy, llm control plane, codex proxy, opencode proxy, gemini cli proxy, llm cost tracking, self hosted llm gateway, anthropic api proxy">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="My Claude Code — a local LLM gateway and control plane">
+<meta property="og:description" content="A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="My Claude Code — a local LLM gateway and control plane">
+<meta name="twitter:description" content="A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "My Claude Code: local LLM gateway for coding agents", "url": "https://myclaudecode.danubelabs.net/", "description": "A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "My Claude Code", "alternateName": "my-claude-code", "description": "A local multi-provider LLM proxy, model router and control plane for AI coding agents.", "applicationCategory": "DeveloperApplication", "operatingSystem": "Windows, macOS, Linux", "softwareVersion": "8.17.0", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "license": "https://www.gnu.org/licenses/agpl-3.0.html", "isAccessibleForFree": true, "featureList": ["Tier routing with fallback chains", "Multi-key credential rotation and health", "Reasoning control and encrypted reasoning replay", "A native web-search and web-fetch tool proxy", "Request log, analytics and cost with provenance", "Sixteen agent launchers and desktop app configuration", "Media routing over image, speech, transcription and video rails"], "codeRepository": "https://github.com/FiredMosquito831/my-claude-code", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span> Local LLM gateway · control plane</p>
+      <h1>One address in front of every model and every coding agent</h1>
+      <p class="lead">My Claude Code is a local multi-provider proxy, model router and control plane for AI coding agents. Point Claude Code, Codex, OpenCode, Gemini CLI and the rest at one address on your machine, and manage providers, keys, fallback chains, reasoning, budgets, web search and cost in one place. Your models, your keys, your machine. It is a Claude Code proxy first, and a proxy for every other coding agent beside it.</p>
+      <div class="hero-actions">
+        <a class="button button--primary" href="/quick-start/">Install and run</a>
+        <a class="button" href="/features/">See every capability</a>
+        <a class="button" href="/gallery/">Browse the screens</a>
+      </div>
+    </div>
+    <aside class="status-board" aria-label="Verified quick facts">
+      <div class="status-board__head"><span>Control plane</span><span><span class="dot" aria-hidden="true"></span> local</span></div>
+      <div class="status-board__body">
+        <div class="readout"><span class="readout__label">Release</span><span class="readout__value">8.17.0</span></div>
+        <div class="readout"><span class="readout__label">Provider cards</span><span class="readout__value">60</span></div>
+        <div class="readout"><span class="readout__label">Protocol doors</span><span class="readout__value">4</span></div>
+        <div class="readout"><span class="readout__label">Test files</span><span class="readout__value">905</span></div>
+        <div class="readout"><span class="readout__label">Runs on</span><span class="readout__value">your machine</span></div>
+      </div>
+    </aside>
+  </div>
+</section>
+<div class="section">
+  <div class="wrap">
+    <h2 id="what-it-is">What it is</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>MCC is a local LLM gateway, proxy and model router for AI coding agents. Instead of configuring providers, API keys, models, fallbacks, reasoning effort and spend tracking separately inside every coding tool you use, you point those tools at one address on your own machine and manage the routing layer once.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>It runs entirely on your machine. It has no telemetry and phones home to nothing; its only outbound traffic goes to the providers you configure. Your keys stay in one <code>.env</code> you own.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <div class="facts">
+<div class="fact"><div class="fact__value">60</div><div class="fact__label">provider cards in the README&#39;s provider table</div></div><div class="fact"><div class="fact__value">4</div><div class="fact__label">protocol doors behind one router</div></div><div class="fact"><div class="fact__value">905</div><div class="fact__label">test files in the repository</div></div><div class="fact"><div class="fact__value">8.17.0</div><div class="fact__label">the release this site documents</div></div></div>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="why-it-exists">Why it exists</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>A coding agent is a client. It speaks one protocol, expects one model name, and has no idea which provider answered. MCC makes that separation real: the agent keeps its own interface, while the model behind it can be a cloud API, a subscription, a gateway or a local server, with a fallback chain behind every route.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>That separation is what makes the rest possible. A request can be re-routed when a model rate-limits. A key can be rotated without touching the agent's configuration. Reasoning effort can be translated once into each provider's own dialect. Every request can be priced at the moment it is logged, with the source of each number recorded beside it.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="who-it-is-for">Who it is for</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>It is for the developer who runs more than one agent and more than one provider: Claude Code on one project, Codex on another, a local model for a private repository, and a paid API for the work that needs it. Each of those tools has its own configuration file, its own key store and its own idea of what a model is called. MCC gives them one address and one place to change the answer.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>It is also for the person who wants to know what a routing decision actually did. A fallback that fired, a key that was benched, a price that no source could state: each is a row in the log, not a story reconstructed from a terminal. That is why the analytics pages are as detailed as the settings pages.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>It is not a managed service. MCC runs on your machine, with your keys, and there is no account to create and no dashboard outside your own address.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="the-request-path">The request path</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>Four protocol doors reach the same router. Claude Code, Pi, OpenCode, Crush, Kimi Code and Qwen Code speak Anthropic Messages; Codex speaks OpenAI Responses; Cline, Goose, Aider and every OpenAI-shaped SDK speak Chat Completions; Gemini CLI and Antigravity speak Google's Gemini API. The router resolves the requested tier to a real model, applies your reasoning and output-budget settings, picks a healthy credential and walks the fallback chain when a provider fails. The reply is translated back into the protocol the agent asked in, and the whole exchange is priced and logged once on its way out.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <figure class="figure figure--diagram" id="fig-request-path-doors">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t1 d1" font-family="ui-monospace, Consolas, monospace">
+<title id="t1">Four protocol doors reach one router and one provider executor</title>
+<desc id="d1">Claude Code, Pi, OpenCode, Crush, Kimi and Qwen enter the Anthropic Messages door; Codex enters the Responses door; Cline, Goose and Aider enter the Chat Completions door; Gemini CLI and Antigravity enter the Gemini door. All four doors meet the same router, which resolves a tier to a model, then the provider executor walks the fallback chain and returns a reply in the protocol the client asked in.</desc>
+<defs>
+<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M200 60 H360" marker-end="url(#a1)"/>
+<path d="M200 140 H360" marker-end="url(#a1)"/>
+<path d="M200 220 H360" marker-end="url(#a1)"/>
+<path d="M200 300 H360" marker-end="url(#a1)"/>
+<path d="M600 180 H700" marker-end="url(#a1)"/>
+</g>
+<g font-size="13" fill="#E6EDF3">
+<rect x="20" y="40" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="65">Claude Code · Pi</text>
+<rect x="20" y="120" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="145">Codex</text>
+<rect x="20" y="200" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="225">Cline · Goose · Aider</text>
+<rect x="20" y="280" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="305">Gemini CLI · Antigravity</text>
+</g>
+<g font-size="12" fill="#3FB950">
+<rect x="380" y="40" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="58">POST /v1/messages</text>
+<text x="394" y="73" fill="#A9B7C6">Anthropic Messages</text>
+<rect x="380" y="120" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="138">POST /v1/responses</text>
+<text x="394" y="153" fill="#A9B7C6">OpenAI Responses</text>
+<rect x="380" y="200" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="218">POST /v1/chat/completions</text>
+<text x="394" y="233" fill="#A9B7C6">Chat Completions</text>
+<rect x="380" y="280" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="298">POST /v1beta/models/{model}</text>
+<text x="394" y="313" fill="#A9B7C6">Google Gemini</text>
+</g>
+<rect x="620" y="120" width="220" height="120" rx="8" fill="#111821" stroke="#58A6FF" stroke-width="2"/>
+<g font-size="13" fill="#E6EDF3">
+<text x="636" y="146" font-weight="700">Router + executor</text>
+<text x="636" y="168" fill="#A9B7C6">resolve tier → model</text>
+<text x="636" y="188" fill="#A9B7C6">reasoning · budget</text>
+<text x="636" y="208" fill="#A9B7C6">credential · fallback</text>
+<text x="636" y="228" fill="#A9B7C6">price · log once</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="370" width="14" height="14" rx="3" fill="#18212C" stroke="#5D6E84"/><text x="42" y="382">client</text>
+<rect x="130" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="152" y="382">protocol door</text>
+<rect x="280" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="302" y="382">shared router</text>
+<text x="430" y="382">The reply is translated back into the client's protocol.</text>
+</g>
+</svg>
+</div>
+<figcaption>Four protocol doors, one router and one executor.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram showing Claude Code, Codex, Cline and Gemini CLI entering four protocol doors that all meet one shared router and executor.</p>
+</figure>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="what-you-can-do-with-it">What you can do with it</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <div class="card-grid">
+<a class="card" href="/features/routing/">
+<span class="card__kicker">Routing</span><span class="card__title">Model tiers and fallback chains</span>
+<span class="card__text">Route Fable, Opus, Sonnet and Haiku traffic to a model you chose, with an ordered stand-in list behind every tier.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/reasoning-and-budgets/">
+<span class="card__kicker">Reasoning</span><span class="card__title">Reasoning and budgets</span>
+<span class="card__text">One effort setting translated into each provider's dialect, plus output ceilings, deadlines and a per-model calculator.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/providers-and-credentials/">
+<span class="card__kicker">Credentials</span><span class="card__title">Providers and credential health</span>
+<span class="card__text">Cloud, subscription and local backends, multi-key rotation, per-key health and learned provider facts.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/agents/">
+<span class="card__kicker">Agents</span><span class="card__title">Agent support</span>
+<span class="card__text">Launchers for the CLI agents, Configure and Undo for desktop apps, generated model catalogues and request attribution.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/observability-and-cost/">
+<span class="card__kicker">Observability</span><span class="card__title">Analytics and cost provenance</span>
+<span class="card__text">A searchable request log, rollups and latency, and cost that keeps reported and estimated figures apart.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/web-search/">
+<span class="card__kicker">Web</span><span class="card__title">Native web search and fetch</span>
+<span class="card__text">Claude Code's web_search and web_fetch tools fulfilled at the proxy, with a chain of search providers and a keyless fallback.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/messaging/">
+<span class="card__kicker">Messaging</span><span class="card__title">Discord and Telegram sessions</span>
+<span class="card__text">Run managed coding-agent sessions from a chat, with voice-note transcription and stop and clear commands.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/media/">
+<span class="card__kicker">Media</span><span class="card__title">Media routing</span>
+<span class="card__text">Image, speech, transcription and video endpoints over rails with the chat engine's retry, key and proxy rules.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/platform/">
+<span class="card__kicker">Platform</span><span class="card__title">Platform and packaging</span>
+<span class="card__text">Windows, macOS and Linux, a desktop app and tray, one update path and npm and PyPI packaging.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/cli/">
+<span class="card__kicker">CLI</span><span class="card__title">The command line</span>
+<span class="card__text">Launchers, the headless <code>mcc-apps</code> controls and the installer's own flags.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/features/dashboard/">
+<span class="card__kicker">Dashboard</span><span class="card__title">The local dashboard</span>
+<span class="card__text">Every setting above, local-only, at one address, with its own appearance, updates and docs.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+</div>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="a-control-plane-not-a-wrapper">A control plane, not a wrapper</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>The dashboard is the part you can see. It opens on a Get Started checklist and then gets out of the way. The Providers page is one searchable card per provider. Model Config is one rail per tier with its real fallback chain. Analytics is a request log and everything computed from it. Each of those pages reads and writes the same <code>.env</code> the server reads, so the dashboard and the file never disagree.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <figure class="figure">
+<img src="/assets/shots/readme-model-config.webp" alt="Six tier rails side by side, each with a primary model and numbered fallback rows, one row struck through and badged Paused." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Six tier rails, each with its primary model and its numbered fallback chain. A struck-through row is paused and is never tried.</figcaption>
+</figure>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>The request log is the other half of the control plane. Every completed request is logged, priced and searchable across prompt, reply, reasoning and tool calls. A fallback that fired, a key that was benched, a reasoning field a host refused: each is a row with its reason, not a story you have to reconstruct from a terminal.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <figure class="figure">
+<img src="/assets/shots/readme-analytics-overview.webp" alt="Rows of stat cards counting stored requests, success rate, fallback share and token totals, above an all-time strip and a per-model table." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Analytics: stored requests, success rate, fallback share and token totals, with an all-time strip that keeps counting after stored rows roll over.</figcaption>
+</figure>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="install-it-in-one-line">Install it in one line</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>Every install route ends at the same server, the same dashboard and the same configuration directory. The one-liners install <code>uv</code> and a managed Python 3.14 if they are missing, verify the release wheel's SHA-256 and put every <code>mcc-*</code> command on your PATH.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <span class="code-label">Linux, macOS or WSL</span><pre><code>curl -fsSL &#34;https://raw.githubusercontent.com/FiredMosquito831/my-claude-code/main/scripts/install.sh&#34; | sh</code></pre>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>Windows Command Prompt and PowerShell have their own one-liners, and there is a native desktop app for each platform. After any install, close and reopen your terminal: the installer adds <code>~/.local/bin</code> to your PATH, and a shell that was already open cannot see it.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <div class="callout callout--accent"><strong>Then:</strong> run <code>mcc-server</code>, open <code>http://127.0.0.1:8082/admin</code>, add one provider key on <strong>Providers</strong>, set your tiers on <strong>Model Config</strong>, and launch an agent with <code>mcc-claude</code>.</div>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="verified-quick-facts">Verified quick facts</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <div class="table-wrap"><table>
+<thead><tr><th scope="col">Fact</th><th scope="col">Value</th><th scope="col">Where it comes from</th></tr></thead>
+<tbody><tr><td>Version</td><td>8.17.0</td><td><code>pyproject.toml</code></td></tr><tr><td>Licence</td><td>AGPL-3.0-or-later or commercial</td><td><code>LICENSE</code>, <code>COMMERCIAL-LICENSE.md</code></td></tr><tr><td>Provider cards</td><td>60</td><td>the README's provider table</td></tr><tr><td>Protocol doors</td><td>4</td><td><code>ARCHITECTURE.md</code>, HTTP request flow</td></tr><tr><td>Test files</td><td>905</td><td><code>tests/test_*.py</code></td></tr><tr><td>Platforms</td><td>Windows, macOS, Linux</td><td>installers and CI workflows</td></tr></tbody>
+</table></div>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <h2 id="where-to-go-next">Where to go next</h2>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <p>If you are installing for the first time, the quick start walks the first five minutes and the update and uninstall paths. If you want to know how it works before you trust it, the architecture pages are written from the source and the product's own documentation. If you want to see the product, the gallery holds every reviewed screen with a caption.</p>
+
+  </div>
+</div>
+<div class="section">
+  <div class="wrap">
+    <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/quick-start/">Quick start: install, first five minutes, update, uninstall</a></li><li><a href="/features/">Every capability, with a deep page for each</a></li><li><a href="/architecture/">Architecture: the system map and six deep pages</a></li><li><a href="/gallery/">Gallery: the reviewed screenshots, grouped</a></li><li><a href="/faq/">FAQ: the questions this site is asked most</a></li></ul>
+</nav>
+
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t14 d14" font-family="ui-monospace, Consolas, monospace">
+<title id="t14">The web-search chain: a selected provider, then the keyless hops, with the provider named in the digest</title>
+<desc id="d14">The search chain starts at the selected provider. Under the auto fallback policy it may move to the keyless ddgs metasearch and then to the keyless DuckDuckGo page hop. A named provider is strict. Every search key uses the same rotation engine as a model key, and the rich digest names the provider that ultimately produced the results.</desc>
+<defs>
+<marker id="a14" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M260 90 H330" marker-end="url(#a14)"/>
+<path d="M510 90 H580" marker-end="url(#a14)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="50" width="240" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="76" fill="#3FB950">selected provider</text>
+<text x="36" y="98" fill="#A9B7C6" font-size="11">15 search backends</text>
+<text x="36" y="118" fill="#A9B7C6" font-size="11">its own keys and rotation</text>
+<rect x="330" y="50" width="180" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="346" y="76" fill="#58A6FF">ddgs metasearch</text>
+<text x="346" y="98" fill="#A9B7C6" font-size="11">keyless</text>
+<text x="346" y="118" fill="#A9B7C6" font-size="11">unofficial, may be rate-limited</text>
+<rect x="580" y="50" width="260" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="596" y="76" fill="#58A6FF">keyless DuckDuckGo hop</text>
+<text x="596" y="98" fill="#A9B7C6" font-size="11">html page first, lite second</text>
+<text x="596" y="118" fill="#A9B7C6" font-size="11">region and time via DDGS_*</text>
+</g>
+<g font-size="12">
+<rect x="20" y="160" width="820" height="90" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="186" fill="#E6EDF3" font-weight="700">The fallback policy decides how far the chain may move</text>
+<text x="36" y="210" fill="#A9B7C6" font-size="11">auto: selected → ddgs → legacy · none: selected only · ddgs: selected → ddgs · legacy: selected → ddgs → legacy</text>
+<text x="36" y="232" fill="#A9B7C6" font-size="11">An explicit provider is strict: missing credentials or an upstream failure are surfaced, not silently swapped.</text>
+</g>
+<g font-size="12">
+<rect x="20" y="270" width="400" height="90" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="296" fill="#3FB950" font-weight="700">Zero-config</text>
+<text x="36" y="320" fill="#A9B7C6" font-size="11">with no keys set, auto falls back to the two</text>
+<text x="36" y="340" fill="#A9B7C6" font-size="11">keyless hops, so search works out of the box</text>
+<rect x="440" y="270" width="400" height="90" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="456" y="296" fill="#D29922" font-weight="700">Recorded, not guessed</text>
+<text x="456" y="320" fill="#A9B7C6" font-size="11">the digest names the provider that answered;</text>
+<text x="456" y="340" fill="#A9B7C6" font-size="11">every key try is a row in web-search analytics</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="398">Context7 is never picked by auto: it answers with library documentation rather than web pages.</text>
+<text x="20" y="420">Web fetch extracts the page's main content as markdown with a 24,000-character cap and names the extracted total.</text>
+</g>
+</svg>

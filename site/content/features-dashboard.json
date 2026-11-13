@@ -1,0 +1,248 @@
+{
+  "path": "/features/dashboard/",
+  "title": "The dashboard | My Claude Code",
+  "description": "Every setting on one local-only page at 127.0.0.1:8082/admin: providers, tiers, models, search, limits, analytics, appearance, updates and the in-app docs.",
+  "nav": "Dashboard",
+  "eyebrow": "Feature · Dashboard",
+  "h1": "The local control panel",
+  "intro": "The Admin UI is local-only and is where everything is configured. It opens on a Get Started checklist and gets out of the way once dismissed. It reads and writes the same .env the server reads, so the page and the file never disagree. It is the LLM dashboard: the local control panel, and the one place every setting can be changed.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Features",
+      "href": "/features/"
+    },
+    {
+      "label": "Dashboard"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "p",
+      "text": "The dashboard is served by the server it configures, on loopback, at <code>http://127.0.0.1:8082/admin</code>. It has no login because it is not reachable from another machine. A change is collected on the page and written only when you press Apply, at the foot of the page, which validates first."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-get-started",
+      "caption": "Get Started: the first-run checklist, from a provider key to a running agent."
+    },
+    {
+      "type": "h2",
+      "text": "The pages"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Page",
+        "What it is for"
+      ],
+      "rows": [
+        [
+          "Get Started",
+          "the first-run checklist: provider, tiers, an agent, optionally web search and analytics"
+        ],
+        [
+          "Providers",
+          "one searchable card per provider: keys, key pools, rotation, per-key health and Refresh models"
+        ],
+        [
+          "Configure Claude Code",
+          "pointing Claude Code at the proxy, per session or permanently"
+        ],
+        [
+          "Coding agents",
+          "each launcher's installed state and flags, Install, and Configure and Undo for desktop apps"
+        ],
+        [
+          "Model Config",
+          "the tier map, fallback chains, the vision adapter, reasoning control and the media rails"
+        ],
+        [
+          "Models",
+          "every model every provider publishes, with bulk visibility, capability probes and learned facts"
+        ],
+        [
+          "Web Search",
+          "route policy, the search chain, provider cards, key health and search analytics"
+        ],
+        [
+          "Limits & Resilience",
+          "output budgets, deadlines and their calculator, chain benching, retries, credential health, diagnostics"
+        ],
+        [
+          "Analytics",
+          "the request log and everything computed from it, plus storage settings"
+        ],
+        [
+          "Token Optimizer",
+          "what never reached a provider, and the opt-in trimming and RTK controls"
+        ],
+        [
+          "Messaging",
+          "the Discord or Telegram bot, its allowed scope and voice settings"
+        ],
+        [
+          "Usage",
+          "what each provider says is left, in five layouts over one payload"
+        ],
+        [
+          "Proxying",
+          "proxy chains, the local scan, Tor, VPN accounts and WireGuard runners"
+        ],
+        [
+          "InferHub",
+          "the marketplace page: profile, balance read-only, offers and the market snapshot"
+        ],
+        [
+          "Guide and Docs",
+          "the task-oriented guide, and these documents rendered in the app"
+        ]
+      ]
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-page",
+      "caption": "The Providers page in a fresh state, with its search box and the provider grid below."
+    },
+    {
+      "type": "h2",
+      "text": "Appearance"
+    },
+    {
+      "type": "p",
+      "text": "A page is a view over configuration, not a separate store. The Analytics page reads the request log; Model Config reads and writes the tier variables; the Providers page reads the key pools and the credential stores. Closing the browser changes nothing, and reopening it shows the server's current state rather than a cached copy."
+    },
+    {
+      "type": "p",
+      "text": "The dashboard's own look is a feature. There are two designs, Today and Hybrid, the latter with a masthead, a numbered rail and a right-hand drawer; seven colour families, each in light and dark; and three densities. They are chosen per browser on Get Started, or machine-wide with <code>ADMIN_DESIGN</code>, <code>ADMIN_THEME</code>, <code>ADMIN_MODE</code> and <code>ADMIN_DENSITY</code>. A browser choice always wins, and a shell that cannot start falls back to Today with a one-line note."
+    },
+    {
+      "type": "h2",
+      "text": "Validate and Apply"
+    },
+    {
+      "type": "p",
+      "text": "The footer of a settings page validates before it writes. A setting the server can only read at startup is marked restart-required, so Apply cannot report success while a running server keeps using the old value. A managed write backs the file up first. The dashboard and the file are one source of truth: a value set by hand is shown on the page, and a value set on the page is in the file."
+    },
+    {
+      "type": "h2",
+      "text": "Updates"
+    },
+    {
+      "type": "p",
+      "text": "The sidebar shows the running version and live status. A newer release is announced with its changelog, and the Update button runs the same installer path as the command line: checksum verified, built beside the running version, run once, swapped in, and the previous version restored if the health check never answers."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-update-banner",
+      "caption": "The update banner: a newer release, its changelog and a one-click update that uses the same verified path as the CLI."
+    },
+    {
+      "type": "figure",
+      "shot": "dashboard-version",
+      "caption": "The version panel in the sidebar: the running release and a live status dot."
+    },
+    {
+      "type": "h2",
+      "text": "Local only, by construction"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "The admin UI and admin APIs are loopback-only.",
+        "The dashboard has no third-party analytics, no remote fonts and no embedded widgets.",
+        "A hidden tab reads nothing; the Usage page refreshes only while it is open.",
+        "The Docs page renders the documentation bundled with the installed version, so it works offline.",
+        "The page loads no remote font, script or image; its stylesheet and its one small script are served by the server itself."
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Configuration"
+    },
+    {
+      "type": "p",
+      "text": "Most settings are written to the managed <code>.env</code>. The appearance settings are <code>ADMIN_DESIGN</code>, <code>ADMIN_THEME</code>, <code>ADMIN_MODE</code> and <code>ADMIN_DENSITY</code>; the log retention settings are on the Analytics page; and the usage auto-refresh interval is <code>USAGE_AUTO_REFRESH_SECONDS</code>. The configuration home itself is <code>MCC_CONFIG_DIR</code>, which is environment-only and cannot be set from the dashboard."
+    },
+    {
+      "type": "h2",
+      "text": "Limits and behaviour"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "A restart-required change is labelled, not silently deferred.",
+        "A setting the page cannot validate is not written.",
+        "The dashboard never opens a port beyond the server's own address.",
+        "A browser-level appearance choice overrides a machine-wide one without changing it."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/observability-and-cost/",
+          "label": "Observability: the Analytics page in depth"
+        },
+        {
+          "href": "/features/web-search/",
+          "label": "Web search: the Web Search page in depth"
+        },
+        {
+          "href": "/configuration/",
+          "label": "Configuration: how settings are provided"
+        },
+        {
+          "href": "/gallery/",
+          "label": "Gallery: every reviewed dashboard screen"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "The Admin UI is local-only at http://127.0.0.1:8082/admin",
+      "evidence": "README.md §Dashboard"
+    },
+    {
+      "claim": "It opens on a Get Started checklist",
+      "evidence": "README.md §Dashboard"
+    },
+    {
+      "claim": "The page list is the dashboard's own set",
+      "evidence": "README.md §Dashboard table"
+    },
+    {
+      "claim": "Two designs, seven colour families in light and dark, three densities",
+      "evidence": "README.md §Platform capability table"
+    },
+    {
+      "claim": "ADMIN_DESIGN, ADMIN_THEME, ADMIN_MODE and ADMIN_DENSITY set appearance machine-wide",
+      "evidence": "README.md §Platform capability table"
+    },
+    {
+      "claim": "Restart-required settings are marked so Apply cannot claim success",
+      "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety"
+    },
+    {
+      "claim": "The Update button runs the same installer path",
+      "evidence": "README.md §Update and uninstall"
+    },
+    {
+      "claim": "The dashboard writes the same .env the server reads",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "MCC_CONFIG_DIR is environment-only and cannot be set from the dashboard",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "The Docs page renders the bundled documentation offline",
+      "evidence": "README.md §Dashboard; docs/README.md"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t10 d10" font-family="ui-monospace, Consolas, monospace">
+<title id="t10">The configuration home: one directory, one .env, and documents beside it</title>
+<desc id="d10">The configuration home is one directory, relocatable with MCC_CONFIG_DIR. It holds the .env settings file and the request log in logs/requests.db. Beside them live documents for custom providers, per-agent tier overrides, credential names, OAuth stores, model overrides, learned facts, proxy chains and marketplace profiles. The desktop app and token optimizer keep their own documents.</desc>
+<g font-size="12">
+<rect x="20" y="30" width="820" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="36" y="58" fill="#58A6FF">~/.mcc</text>
+<text x="150" y="58" fill="#A9B7C6" font-size="11">one directory · relocatable with MCC_CONFIG_DIR</text>
+</g>
+<g font-size="12">
+<rect x="20" y="92" width="390" height="150" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="118" fill="#E6EDF3" font-weight="700">Settings and the log</text>
+<text x="36" y="144" fill="#A9B7C6">.env</text>
+<text x="320" y="144" fill="#7D8FA3" font-size="11">every setting</text>
+<text x="36" y="168" fill="#A9B7C6">logs/requests.db</text>
+<text x="320" y="168" fill="#7D8FA3" font-size="11">SQLite request log</text>
+<text x="36" y="192" fill="#A9B7C6">updates/</text>
+<text x="320" y="192" fill="#7D8FA3" font-size="11">progress and log</text>
+<text x="36" y="216" fill="#A9B7C6">cache/</text>
+<text x="320" y="216" fill="#7D8FA3" font-size="11">catalogue snapshots</text>
+<rect x="430" y="92" width="410" height="150" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="446" y="118" fill="#E6EDF3" font-weight="700">Documents beside the .env</text>
+<text x="446" y="144" fill="#A9B7C6">custom_providers.json</text>
+<text x="446" y="166" fill="#A9B7C6">harness_tiers.json · model_overrides.json</text>
+<text x="446" y="188" fill="#A9B7C6">credential_names.json · learned_facts.json</text>
+<text x="446" y="210" fill="#A9B7C6">proxy_chains.json · marketplace_profiles.json</text>
+<text x="446" y="232" fill="#A9B7C6">anthropic_oauth.json · chatgpt-oauth.json</text>
+</g>
+<g font-size="12">
+<rect x="20" y="258" width="390" height="100" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="284" fill="#E6EDF3" font-weight="700">Kept out of the .env on purpose</text>
+<text x="36" y="308" fill="#A9B7C6" font-size="11">a custom provider's static credential travels</text>
+<text x="36" y="326" fill="#A9B7C6" font-size="11">on its descriptor, never as a settings field</text>
+<text x="36" y="344" fill="#A9B7C6" font-size="11">learned facts expire on a clock and are forgettable</text>
+<rect x="430" y="258" width="410" height="100" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="446" y="284" fill="#E6EDF3" font-weight="700">One atomic move, once</text>
+<text x="446" y="308" fill="#A9B7C6" font-size="11">a pre-6.40.0 configuration home is migrated by one rename</text>
+<text x="446" y="326" fill="#A9B7C6" font-size="11">nothing copied or merged; a live server refuses</text>
+<text x="446" y="344" fill="#A9B7C6" font-size="11">mcc-migrate runs the same move by hand</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="392">The dashboard writes the same .env the server reads, so the two never disagree.</text>
+<text x="20" y="414">Nothing here leaves the machine unless a provider you configured causes an outbound request.</text>
+</g>
+</svg>
