@@ -112,12 +112,36 @@ class RequestRuntimeLease(Protocol):
     async def __aexit__(self, *_exc: object) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class CatalogueSnapshotInputs:
+    """The runtime facts a resolved-catalogue snapshot keys on (8.21.0).
+
+    Both halves are revisions, never a clock: ``generation_id`` moves when a
+    settings apply replaces the provider generation, and
+    ``model_cache_revision`` moves when a discovery sweep rewrites the stored
+    provider metadata. ``models_dev_generation`` is the index file's own
+    ``(mtime_ns, size)``, because a refreshed models.dev index changes the
+    ladder's answers with no provider publish at all.
+
+    Defined here rather than beside the snapshot because
+    ``application.catalogue_snapshot`` imports ``application.catalogue_model``,
+    which imports this module; a dataclass the port itself returns is the only
+    place that keeps the import graph acyclic.
+    """
+
+    generation_id: int
+    model_cache_revision: int
+    models_dev_generation: tuple[int, int] | None = None
+
+
 class RequestRuntimePort(Protocol):
     """Provider generation and model metadata required by application requests."""
 
     async def acquire(self) -> RequestRuntimeLease: ...
 
     def current_settings(self) -> Settings: ...
+
+    def catalogue_snapshot_inputs(self) -> CatalogueSnapshotInputs: ...
 
     def cached_model_supports_thinking(
         self, provider_id: str, model_id: str

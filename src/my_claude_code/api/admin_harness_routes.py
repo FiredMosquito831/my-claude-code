@@ -18,15 +18,21 @@ rather than settings keys, so it cannot go through ``/admin/api/config/apply``
 ``(harness, tier)``, and widening it is what would break ``changedValues()``
 and the dirty-state diff on every other page.
 
-``GET /admin/api/catalogue-models`` is the capability-bearing model list.
-``GET /v1/models`` cannot serve this purpose: it is an Anthropic-compatible
-protocol payload consumed by Claude Code itself and its ``ModelResponse``
-carries an id, a display name and no capability fields whatsoever. Extending it
-would risk client-side breakage for a purely internal need. So the launchers --
-which run in their own processes and have no ``RequestRuntimePort`` -- fetch
-this route instead, and get both the neutral records and each harness's
-already-serialised document, so a launcher never has to reimplement a mapping
-the server already owns.
+``GET /admin/api/catalogue-models`` is the capability-bearing model list. Until
+8.21.0 ``GET /v1/models`` could not serve this purpose: it is an
+Anthropic-compatible protocol payload consumed by Claude Code itself and its
+``ModelResponse`` carried an id, a display name and no capability fields
+whatsoever, so extending it would have risked client-side breakage for a purely
+internal need. 8.21.0 took that risk deliberately, after censusing every
+consumer: nothing in the tree asserts an exact key set, the one new key is
+appended last, and every existing key keeps its value and its position. Every
+entry now carries the record as a ``metadata`` object, and this route keeps its
+own reasons for existing -- the whole neutral record, each harness's already
+serialised document, and the optional per-field provenance (``?provenance=1``),
+none of which belongs on the protocol surface. The launchers -- which run in
+their own processes and have no ``RequestRuntimePort`` -- still fetch this route,
+and get both, so a launcher never has to reimplement a mapping the server
+already owns.
 """
 
 import asyncio

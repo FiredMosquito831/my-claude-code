@@ -552,6 +552,27 @@ def _isolate_harness_tiers(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _reset_catalogue_snapshot():
+    """No test may serve another test's resolved catalogue (8.21.0).
+
+    The resolved-catalogue snapshot is process state on purpose -- one process
+    resolves one catalogue -- but a test session builds many runtimes, and two
+    of them can agree on every key component. Cleared either side of every
+    test, so a tuple one test's fixture produced can never answer another
+    test's ``/v1/models``. The API layer's memo of the wire shape derived from
+    one snapshot goes with it.
+    """
+    from my_claude_code.api import model_catalog
+    from my_claude_code.application import catalogue_snapshot
+
+    catalogue_snapshot.reset_catalogue_snapshot()
+    model_catalog.reset_model_metadata_index()
+    yield
+    catalogue_snapshot.reset_catalogue_snapshot()
+    model_catalog.reset_model_metadata_index()
+
+
+@pytest.fixture(autouse=True)
 def _reset_proxy_chain_not_routing():
     """No test may inherit another's "Saved -- not routing yet" (7.78.8).
 

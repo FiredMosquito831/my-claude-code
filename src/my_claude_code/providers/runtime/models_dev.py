@@ -87,6 +87,20 @@ def models_dev_cache_path() -> Path:
     return config_dir_path() / MODELS_DEV_CACHE_DIRNAME / MODELS_DEV_CACHE_FILENAME
 
 
+def models_dev_cache_generation() -> tuple[int, int] | None:
+    """Return the ``(mtime_ns, size)`` of the index on disk, or ``None``.
+
+    The same signature :func:`_read_models_dev_payload` keys its parse on, and
+    the one the resolved-catalogue snapshot keys on: a refreshed index changes
+    the ladder's answers without any provider publish, so a snapshot that did
+    not see this move would keep serving the previous catalogue's numbers
+    (8.21.0). Resolved through :func:`models_dev_cache_path`, so a caller that
+    redirects the path redirects this too.
+    """
+
+    return _cache_generation(models_dev_cache_path())
+
+
 @dataclass(frozen=True, slots=True)
 class ModelsDevCache:
     """Parsed models.dev cache payload with freshness."""

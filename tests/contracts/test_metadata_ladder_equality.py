@@ -1210,6 +1210,13 @@ def test_7_84_0_fills_gaps_and_moves_no_stated_value() -> None:
     assert moved, "the fixture would prove nothing if nothing moved"
     violations: list[str] = []
     for key, recorded_value in moved.items():
+        if key == "v1/models":
+            # A whole listing rather than one capability row (8.21.0): its
+            # entries carry the same records the ``capabilities/`` rows below
+            # police field by field, and
+            # ``test_with_the_live_list_on_only_the_recorded_entries_move``
+            # holds the listing itself to this recorded answer.
+            continue
         before = _expected(key, baseline[key])
         after = _expected(key, recorded_value)
         if key.startswith(DIGESTED_PREFIXES):

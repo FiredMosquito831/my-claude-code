@@ -31204,6 +31204,1567 @@
    "sha256": "61765f785552eed74a354dbd37c90b79275208a9054e852472d500d0f830578e"
   }
  },
+ "kor-live/v1/models": {
+  "data": [
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/test-model",
+    "id": "anthropic/nvidia_nim/test-model",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/test-model (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nvidia_nim/test-model",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/01-ai/yi-large",
+    "id": "anthropic/nvidia_nim/01-ai/yi-large",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/01-ai/yi-large (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nvidia_nim/01-ai/yi-large",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/moonshotai/kimi-k3",
+    "id": "anthropic/nvidia_nim/moonshotai/kimi-k3",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.66,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.0,
+     "max_output_tokens": 131072,
+     "output_price": 0.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nvidia_nim/moonshotai/kimi-k3 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nvidia_nim/moonshotai/kimi-k3",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.66,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.0,
+     "max_output_tokens": 131072,
+     "output_price": 0.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "open_router/stepfun/step-5-preview",
+    "id": "anthropic/open_router/stepfun/step-5-preview",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 1.0,
+     "max_output_tokens": 64000,
+     "output_price": 2.7,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": true,
+      "supported_efforts": [
+       "high",
+       "low",
+       "medium"
+      ],
+      "supports_budget_control": null,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logprobs",
+      "max_tokens",
+      "reasoning",
+      "reasoning_effort",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tools",
+      "top_logprobs",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "open_router/stepfun/step-5-preview (no thinking)",
+    "id": "claude-3-freecc-no-thinking/open_router/stepfun/step-5-preview",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 1.0,
+     "max_output_tokens": 64000,
+     "output_price": 2.7,
+     "reasoning": null,
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logprobs",
+      "max_tokens",
+      "reasoning",
+      "reasoning_effort",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tools",
+      "top_logprobs",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "opencode_go/minimax-m3",
+    "id": "anthropic/opencode_go/minimax-m3",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.06,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.3,
+     "max_output_tokens": 131072,
+     "output_price": 1.2,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": false,
+      "supports_effort_control": false,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "opencode_go/minimax-m3 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/opencode_go/minimax-m3",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.06,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.3,
+     "max_output_tokens": 131072,
+     "output_price": 1.2,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen-3-14b",
+    "id": "anthropic/vercel/alibaba/qwen-3-14b",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 40960,
+     "default_parameters": null,
+     "input_price": 0.12,
+     "max_output_tokens": 16384,
+     "output_price": 0.24,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": false,
+      "supports_effort_control": false,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen-3-14b (no thinking)",
+    "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen-3-14b",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 40960,
+     "default_parameters": null,
+     "input_price": 0.12,
+     "max_output_tokens": 16384,
+     "output_price": 0.24,
+     "reasoning": null,
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen3-embedding-0.6b",
+    "id": "anthropic/vercel/alibaba/qwen3-embedding-0.6b",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 32768,
+     "default_parameters": null,
+     "input_price": 0.01,
+     "max_output_tokens": 32768,
+     "output_price": null,
+     "reasoning": {
+      "can_reason": false,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": null,
+      "supports_effort_control": null,
+      "supports_toggle_control": null
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": false
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "vercel/alibaba/qwen3-embedding-0.6b (no thinking)",
+    "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen3-embedding-0.6b",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 32768,
+     "default_parameters": null,
+     "input_price": 0.01,
+     "max_output_tokens": 32768,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": false
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design",
+    "id": "anthropic/novita/ming-image-0.1-design",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": {
+      "can_reason": false,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": null,
+      "supports_effort_control": null,
+      "supports_toggle_control": null
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design (no thinking)",
+    "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design-layer",
+    "id": "anthropic/novita/ming-image-0.1-design-layer",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": {
+      "can_reason": false,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": null,
+      "supports_effort_control": null,
+      "supports_toggle_control": null
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/ming-image-0.1-design-layer (no thinking)",
+    "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/zai-org/glm-5.3-flash",
+    "id": "anthropic/novita/zai-org/glm-5.3-flash",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.03,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 131072,
+     "output_price": 0.5,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": null,
+      "supports_effort_control": null,
+      "supports_toggle_control": null
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "novita/zai-org/glm-5.3-flash (no thinking)",
+    "id": "claude-3-freecc-no-thinking/novita/zai-org/glm-5.3-flash",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.03,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 131072,
+     "output_price": 0.5,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/anthropic/claude-sonnet-5",
+    "id": "anthropic/nous_portal/anthropic/claude-sonnet-5",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max",
+       "medium",
+       "xhigh"
+      ],
+      "supports_budget_control": true,
+      "supports_effort_control": true,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "reasoning",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/anthropic/claude-sonnet-5 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nous_portal/anthropic/claude-sonnet-5",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": null,
+     "supported_parameters": [
+      "reasoning",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/tencent/hy3",
+    "id": "anthropic/nous_portal/tencent/hy3",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.033,
+     "cache_write_price": 0.0,
+     "context_length": 262144,
+     "default_parameters": [
+      [
+       "temperature",
+       0.9
+      ],
+      [
+       "top_p",
+       1
+      ]
+     ],
+     "input_price": 0.13,
+     "max_output_tokens": 131072,
+     "output_price": 0.53,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": true,
+      "mandatory": false,
+      "supported_efforts": [
+       "high",
+       "low"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logit_bias",
+      "max_completion_tokens",
+      "max_tokens",
+      "min_p",
+      "presence_penalty",
+      "reasoning",
+      "reasoning_effort",
+      "repetition_penalty",
+      "response_format",
+      "seed",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_k",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "nous_portal/tencent/hy3 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/nous_portal/tencent/hy3",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.033,
+     "cache_write_price": 0.0,
+     "context_length": 262144,
+     "default_parameters": [
+      [
+       "temperature",
+       0.9
+      ],
+      [
+       "top_p",
+       1
+      ]
+     ],
+     "input_price": 0.13,
+     "max_output_tokens": 131072,
+     "output_price": 0.53,
+     "reasoning": null,
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logit_bias",
+      "max_completion_tokens",
+      "max_tokens",
+      "min_p",
+      "presence_penalty",
+      "reasoning",
+      "reasoning_effort",
+      "repetition_penalty",
+      "response_format",
+      "seed",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_k",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "kilo/kilo-auto/efficient",
+    "id": "anthropic/kilo/kilo-auto/efficient",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.0325,
+     "cache_write_price": 0.40625,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.325,
+     "max_output_tokens": 65536,
+     "output_price": 1.95,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": true,
+      "supports_effort_control": false,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "temperature",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "kilo/kilo-auto/efficient (no thinking)",
+    "id": "claude-3-freecc-no-thinking/kilo/kilo-auto/efficient",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.0325,
+     "cache_write_price": 0.40625,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.325,
+     "max_output_tokens": 65536,
+     "output_price": 1.95,
+     "reasoning": null,
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "temperature",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/claude-sonnet-5-5",
+    "id": "anthropic/commandcode/claude-sonnet-5-5",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max",
+       "medium",
+       "xhigh"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/claude-sonnet-5-5 (no thinking)",
+    "id": "claude-3-freecc-no-thinking/commandcode/claude-sonnet-5-5",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/deepseek/deepseek-v4-flash-fast",
+    "id": "anthropic/commandcode/deepseek/deepseek-v4-flash-fast",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/deepseek/deepseek-v4-flash-fast (no thinking)",
+    "id": "claude-3-freecc-no-thinking/commandcode/deepseek/deepseek-v4-flash-fast",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/gpt-6-astra",
+    "id": "anthropic/commandcode/gpt-6-astra",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 1.0,
+     "cache_write_price": 12.5,
+     "context_length": 1050000,
+     "default_parameters": null,
+     "input_price": 10.0,
+     "max_output_tokens": 128000,
+     "output_price": 50.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max",
+       "medium",
+       "xhigh"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "commandcode/gpt-6-astra (no thinking)",
+    "id": "claude-3-freecc-no-thinking/commandcode/gpt-6-astra",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 1.0,
+     "cache_write_price": 12.5,
+     "context_length": 1050000,
+     "default_parameters": null,
+     "input_price": 10.0,
+     "max_output_tokens": 128000,
+     "output_price": 50.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "cline/cline-pass/deepseek-v4.1-flash",
+    "id": "anthropic/cline/cline-pass/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.003,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 384000,
+     "output_price": 0.6,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "cline/cline-pass/deepseek-v4.1-flash (no thinking)",
+    "id": "claude-3-freecc-no-thinking/cline/cline-pass/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.003,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 384000,
+     "output_price": 0.6,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "hypercharm/deepseek-v4.1-flash",
+    "id": "anthropic/hypercharm/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.03,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.33,
+     "max_output_tokens": 262144,
+     "output_price": 1.31,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "xhigh"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "hypercharm/deepseek-v4.1-flash (no thinking)",
+    "id": "claude-3-freecc-no-thinking/hypercharm/deepseek-v4.1-flash",
+    "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.03,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.33,
+     "max_output_tokens": 262144,
+     "output_price": 1.31,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2026-06-09T00:00:00Z",
+    "display_name": "Claude Mythos 5.1",
+    "id": "claude-mythos-5.1",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2026-06-09T00:00:00Z",
+    "display_name": "Claude Mythos 5",
+    "id": "claude-mythos-5",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2026-06-09T00:00:00Z",
+    "display_name": "Claude Fable 5",
+    "id": "claude-fable-5",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2025-05-14T00:00:00Z",
+    "display_name": "Claude Opus 4",
+    "id": "claude-opus-4-20250514",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2025-05-14T00:00:00Z",
+    "display_name": "Claude Sonnet 4",
+    "id": "claude-sonnet-4-20250514",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2025-05-14T00:00:00Z",
+    "display_name": "Claude Haiku 4",
+    "id": "claude-haiku-4-20250514",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-02-29T00:00:00Z",
+    "display_name": "Claude 3 Opus",
+    "id": "claude-3-opus-20240229",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-10-22T00:00:00Z",
+    "display_name": "Claude 3.5 Sonnet",
+    "id": "claude-3-5-sonnet-20241022",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-03-07T00:00:00Z",
+    "display_name": "Claude 3 Haiku",
+    "id": "claude-3-haiku-20240307",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": null,
+    "created": 0,
+    "created_at": "2024-10-22T00:00:00Z",
+    "display_name": "Claude 3.5 Haiku",
+    "id": "claude-3-5-haiku-20241022",
+    "is_family_default": null,
+    "metadata": null,
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "mythos",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Mythos (nvidia_nim/test-model)",
+    "id": "mcc/cyber",
+    "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "mythos",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Mythos (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/cyber",
+    "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "fable",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Best (nvidia_nim/test-model)",
+    "id": "mcc/best",
+    "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "fable",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Best (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/best",
+    "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "opus",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Good (nvidia_nim/test-model)",
+    "id": "mcc/good",
+    "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "opus",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Good (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/good",
+    "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Medium (nvidia_nim/test-model)",
+    "id": "mcc/medium",
+    "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Medium (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/medium",
+    "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "haiku",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Cheap (nvidia_nim/test-model)",
+    "id": "mcc/cheap",
+    "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "haiku",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Cheap (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/cheap",
+    "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Vision (nvidia_nim/test-model)",
+    "id": "mcc/vision",
+    "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   },
+   {
+    "anthropic_family_tier": "sonnet",
+    "created": 0,
+    "created_at": "1970-01-01T00:00:00Z",
+    "display_name": "Vision (nvidia_nim/test-model)",
+    "id": "anthropic/mcc/vision",
+    "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
+    "object": "model",
+    "owned_by": "my-claude-code",
+    "type": "model"
+   }
+  ],
+  "first_id": "anthropic/nvidia_nim/test-model",
+  "has_more": false,
+  "last_id": "anthropic/mcc/vision",
+  "object": "list"
+ },
  "kor-substituted/serialiser/aider": {
   "bytes": 14576,
   "sha256": "946dc23bea2893c28929e969844915bc9375ccd0eecc68981952d75e8691c960"
@@ -33098,6 +34659,19 @@
     "display_name": "nvidia_nim/test-model",
     "id": "anthropic/nvidia_nim/test-model",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33109,6 +34683,19 @@
     "display_name": "nvidia_nim/test-model (no thinking)",
     "id": "claude-3-freecc-no-thinking/nvidia_nim/test-model",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33120,6 +34707,19 @@
     "display_name": "nvidia_nim/01-ai/yi-large",
     "id": "anthropic/nvidia_nim/01-ai/yi-large",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33131,6 +34731,19 @@
     "display_name": "nvidia_nim/01-ai/yi-large (no thinking)",
     "id": "claude-3-freecc-no-thinking/nvidia_nim/01-ai/yi-large",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33142,6 +34755,31 @@
     "display_name": "nvidia_nim/moonshotai/kimi-k3",
     "id": "anthropic/nvidia_nim/moonshotai/kimi-k3",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.0,
+     "max_output_tokens": 131072,
+     "output_price": 0.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33153,6 +34791,19 @@
     "display_name": "nvidia_nim/moonshotai/kimi-k3 (no thinking)",
     "id": "claude-3-freecc-no-thinking/nvidia_nim/moonshotai/kimi-k3",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.0,
+     "max_output_tokens": 131072,
+     "output_price": 0.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33164,6 +34815,45 @@
     "display_name": "open_router/stepfun/step-5-preview",
     "id": "anthropic/open_router/stepfun/step-5-preview",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 1.0,
+     "max_output_tokens": 64000,
+     "output_price": 2.7,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": true,
+      "supported_efforts": [
+       "high",
+       "low",
+       "medium"
+      ],
+      "supports_budget_control": null,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logprobs",
+      "max_tokens",
+      "reasoning",
+      "reasoning_effort",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tools",
+      "top_logprobs",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33175,6 +34865,33 @@
     "display_name": "open_router/stepfun/step-5-preview (no thinking)",
     "id": "claude-3-freecc-no-thinking/open_router/stepfun/step-5-preview",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 1.0,
+     "max_output_tokens": 64000,
+     "output_price": 2.7,
+     "reasoning": null,
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logprobs",
+      "max_tokens",
+      "reasoning",
+      "reasoning_effort",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tools",
+      "top_logprobs",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33186,6 +34903,27 @@
     "display_name": "opencode_go/minimax-m3",
     "id": "anthropic/opencode_go/minimax-m3",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.06,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.3,
+     "max_output_tokens": 131072,
+     "output_price": 1.2,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": false,
+      "supports_effort_control": false,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33197,6 +34935,19 @@
     "display_name": "opencode_go/minimax-m3 (no thinking)",
     "id": "claude-3-freecc-no-thinking/opencode_go/minimax-m3",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.06,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.3,
+     "max_output_tokens": 131072,
+     "output_price": 1.2,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33208,6 +34959,37 @@
     "display_name": "vercel/alibaba/qwen-3-14b",
     "id": "anthropic/vercel/alibaba/qwen-3-14b",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 40960,
+     "default_parameters": null,
+     "input_price": 0.12,
+     "max_output_tokens": 16384,
+     "output_price": 0.24,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": false,
+      "supports_effort_control": false,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33219,6 +35001,29 @@
     "display_name": "vercel/alibaba/qwen-3-14b (no thinking)",
     "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen-3-14b",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 40960,
+     "default_parameters": null,
+     "input_price": 0.12,
+     "max_output_tokens": 16384,
+     "output_price": 0.24,
+     "reasoning": null,
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "response_format",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33230,6 +35035,27 @@
     "display_name": "vercel/alibaba/qwen3-embedding-0.6b",
     "id": "anthropic/vercel/alibaba/qwen3-embedding-0.6b",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 32768,
+     "default_parameters": null,
+     "input_price": 0.01,
+     "max_output_tokens": 32768,
+     "output_price": null,
+     "reasoning": {
+      "can_reason": false,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": null,
+      "supports_effort_control": null,
+      "supports_toggle_control": null
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": false
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33241,6 +35067,19 @@
     "display_name": "vercel/alibaba/qwen3-embedding-0.6b (no thinking)",
     "id": "claude-3-freecc-no-thinking/vercel/alibaba/qwen3-embedding-0.6b",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 32768,
+     "default_parameters": null,
+     "input_price": 0.01,
+     "max_output_tokens": 32768,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": false,
+     "supports_vision": false
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33252,6 +35091,19 @@
     "display_name": "novita/ming-image-0.1-design",
     "id": "anthropic/novita/ming-image-0.1-design",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33263,6 +35115,19 @@
     "display_name": "novita/ming-image-0.1-design (no thinking)",
     "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33274,6 +35139,19 @@
     "display_name": "novita/ming-image-0.1-design-layer",
     "id": "anthropic/novita/ming-image-0.1-design-layer",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33285,6 +35163,19 @@
     "display_name": "novita/ming-image-0.1-design-layer (no thinking)",
     "id": "claude-3-freecc-no-thinking/novita/ming-image-0.1-design-layer",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": 1.0,
+     "max_output_tokens": null,
+     "output_price": 1.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33296,6 +35187,27 @@
     "display_name": "novita/zai-org/glm-5.3-flash",
     "id": "anthropic/novita/zai-org/glm-5.3-flash",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 131072,
+     "output_price": 0.5,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": null,
+      "supports_effort_control": null,
+      "supports_toggle_control": null
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33307,6 +35219,19 @@
     "display_name": "novita/zai-org/glm-5.3-flash (no thinking)",
     "id": "claude-3-freecc-no-thinking/novita/zai-org/glm-5.3-flash",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 131072,
+     "output_price": 0.5,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33318,6 +35243,36 @@
     "display_name": "nous_portal/anthropic/claude-sonnet-5",
     "id": "anthropic/nous_portal/anthropic/claude-sonnet-5",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max",
+       "medium",
+       "xhigh"
+      ],
+      "supports_budget_control": true,
+      "supports_effort_control": true,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "reasoning",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33329,6 +35284,22 @@
     "display_name": "nous_portal/anthropic/claude-sonnet-5 (no thinking)",
     "id": "claude-3-freecc-no-thinking/nous_portal/anthropic/claude-sonnet-5",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": [],
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": null,
+     "supported_parameters": [
+      "reasoning",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33340,6 +35311,59 @@
     "display_name": "nous_portal/tencent/hy3",
     "id": "anthropic/nous_portal/tencent/hy3",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.033,
+     "cache_write_price": 0.0,
+     "context_length": 262144,
+     "default_parameters": [
+      [
+       "temperature",
+       0.9
+      ],
+      [
+       "top_p",
+       1
+      ]
+     ],
+     "input_price": 0.13,
+     "max_output_tokens": 131072,
+     "output_price": 0.53,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": true,
+      "mandatory": false,
+      "supported_efforts": [
+       "high",
+       "low"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logit_bias",
+      "max_completion_tokens",
+      "max_tokens",
+      "min_p",
+      "presence_penalty",
+      "reasoning",
+      "reasoning_effort",
+      "repetition_penalty",
+      "response_format",
+      "seed",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_k",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33351,6 +35375,48 @@
     "display_name": "nous_portal/tencent/hy3 (no thinking)",
     "id": "claude-3-freecc-no-thinking/nous_portal/tencent/hy3",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.033,
+     "cache_write_price": 0.0,
+     "context_length": 262144,
+     "default_parameters": [
+      [
+       "temperature",
+       0.9
+      ],
+      [
+       "top_p",
+       1
+      ]
+     ],
+     "input_price": 0.13,
+     "max_output_tokens": 131072,
+     "output_price": 0.53,
+     "reasoning": null,
+     "supported_parameters": [
+      "frequency_penalty",
+      "include_reasoning",
+      "logit_bias",
+      "max_completion_tokens",
+      "max_tokens",
+      "min_p",
+      "presence_penalty",
+      "reasoning",
+      "reasoning_effort",
+      "repetition_penalty",
+      "response_format",
+      "seed",
+      "stop",
+      "structured_outputs",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_k",
+      "top_p"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": false
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33362,6 +35428,33 @@
     "display_name": "kilo/kilo-auto/efficient",
     "id": "anthropic/kilo/kilo-auto/efficient",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.0325,
+     "cache_write_price": 0.40625,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.325,
+     "max_output_tokens": 65536,
+     "output_price": 1.95,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": null,
+      "supports_budget_control": true,
+      "supports_effort_control": false,
+      "supports_toggle_control": true
+     },
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "temperature",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33373,6 +35466,25 @@
     "display_name": "kilo/kilo-auto/efficient (no thinking)",
     "id": "claude-3-freecc-no-thinking/kilo/kilo-auto/efficient",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.0325,
+     "cache_write_price": 0.40625,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.325,
+     "max_output_tokens": 65536,
+     "output_price": 1.95,
+     "reasoning": null,
+     "supported_parameters": [
+      "include_reasoning",
+      "max_tokens",
+      "reasoning",
+      "temperature",
+      "tools"
+     ],
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33384,6 +35496,33 @@
     "display_name": "commandcode/claude-sonnet-5-5",
     "id": "anthropic/commandcode/claude-sonnet-5-5",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max",
+       "medium",
+       "xhigh"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33395,6 +35534,19 @@
     "display_name": "commandcode/claude-sonnet-5-5 (no thinking)",
     "id": "claude-3-freecc-no-thinking/commandcode/claude-sonnet-5-5",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.2,
+     "cache_write_price": 2.5,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 2.0,
+     "max_output_tokens": 128000,
+     "output_price": 10.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33406,6 +35558,19 @@
     "display_name": "commandcode/deepseek/deepseek-v4-flash-fast",
     "id": "anthropic/commandcode/deepseek/deepseek-v4-flash-fast",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33417,6 +35582,19 @@
     "display_name": "commandcode/deepseek/deepseek-v4-flash-fast (no thinking)",
     "id": "claude-3-freecc-no-thinking/commandcode/deepseek/deepseek-v4-flash-fast",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33428,6 +35606,33 @@
     "display_name": "commandcode/gpt-6-astra",
     "id": "anthropic/commandcode/gpt-6-astra",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 1.0,
+     "cache_write_price": 12.5,
+     "context_length": 1050000,
+     "default_parameters": null,
+     "input_price": 10.0,
+     "max_output_tokens": 128000,
+     "output_price": 50.0,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max",
+       "medium",
+       "xhigh"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33439,6 +35644,19 @@
     "display_name": "commandcode/gpt-6-astra (no thinking)",
     "id": "claude-3-freecc-no-thinking/commandcode/gpt-6-astra",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 1.0,
+     "cache_write_price": 12.5,
+     "context_length": 1050000,
+     "default_parameters": null,
+     "input_price": 10.0,
+     "max_output_tokens": 128000,
+     "output_price": 50.0,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33450,6 +35668,31 @@
     "display_name": "cline/cline-pass/deepseek-v4.1-flash",
     "id": "anthropic/cline/cline-pass/deepseek-v4.1-flash",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.003,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 384000,
+     "output_price": 0.6,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "max"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33461,6 +35704,19 @@
     "display_name": "cline/cline-pass/deepseek-v4.1-flash (no thinking)",
     "id": "claude-3-freecc-no-thinking/cline/cline-pass/deepseek-v4.1-flash",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.003,
+     "cache_write_price": null,
+     "context_length": 1000000,
+     "default_parameters": null,
+     "input_price": 0.15,
+     "max_output_tokens": 384000,
+     "output_price": 0.6,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33472,6 +35728,31 @@
     "display_name": "hypercharm/deepseek-v4.1-flash",
     "id": "anthropic/hypercharm/deepseek-v4.1-flash",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.03,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.33,
+     "max_output_tokens": 262144,
+     "output_price": 1.31,
+     "reasoning": {
+      "can_reason": true,
+      "default_enabled": null,
+      "mandatory": null,
+      "supported_efforts": [
+       "high",
+       "low",
+       "xhigh"
+      ],
+      "supports_budget_control": false,
+      "supports_effort_control": true,
+      "supports_toggle_control": false
+     },
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33483,6 +35764,19 @@
     "display_name": "hypercharm/deepseek-v4.1-flash (no thinking)",
     "id": "claude-3-freecc-no-thinking/hypercharm/deepseek-v4.1-flash",
     "is_family_default": null,
+    "metadata": {
+     "cache_read_price": 0.03,
+     "cache_write_price": null,
+     "context_length": 1048576,
+     "default_parameters": null,
+     "input_price": 0.33,
+     "max_output_tokens": 262144,
+     "output_price": 1.31,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": true,
+     "supports_vision": true
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33494,6 +35788,7 @@
     "display_name": "Claude Mythos 5.1",
     "id": "claude-mythos-5.1",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33505,6 +35800,7 @@
     "display_name": "Claude Mythos 5",
     "id": "claude-mythos-5",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33516,6 +35812,7 @@
     "display_name": "Claude Fable 5",
     "id": "claude-fable-5",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33527,6 +35824,7 @@
     "display_name": "Claude Opus 4",
     "id": "claude-opus-4-20250514",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33538,6 +35836,7 @@
     "display_name": "Claude Sonnet 4",
     "id": "claude-sonnet-4-20250514",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33549,6 +35848,7 @@
     "display_name": "Claude Haiku 4",
     "id": "claude-haiku-4-20250514",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33560,6 +35860,7 @@
     "display_name": "Claude 3 Opus",
     "id": "claude-3-opus-20240229",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33571,6 +35872,7 @@
     "display_name": "Claude 3.5 Sonnet",
     "id": "claude-3-5-sonnet-20241022",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33582,6 +35884,7 @@
     "display_name": "Claude 3 Haiku",
     "id": "claude-3-haiku-20240307",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33593,6 +35896,7 @@
     "display_name": "Claude 3.5 Haiku",
     "id": "claude-3-5-haiku-20241022",
     "is_family_default": null,
+    "metadata": null,
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33604,6 +35908,19 @@
     "display_name": "Mythos (nvidia_nim/test-model)",
     "id": "mcc/cyber",
     "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33615,6 +35932,19 @@
     "display_name": "Mythos (nvidia_nim/test-model)",
     "id": "anthropic/mcc/cyber",
     "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33626,6 +35956,19 @@
     "display_name": "Best (nvidia_nim/test-model)",
     "id": "mcc/best",
     "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33637,6 +35980,19 @@
     "display_name": "Best (nvidia_nim/test-model)",
     "id": "anthropic/mcc/best",
     "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33648,6 +36004,19 @@
     "display_name": "Good (nvidia_nim/test-model)",
     "id": "mcc/good",
     "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33659,6 +36028,19 @@
     "display_name": "Good (nvidia_nim/test-model)",
     "id": "anthropic/mcc/good",
     "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33670,6 +36052,19 @@
     "display_name": "Medium (nvidia_nim/test-model)",
     "id": "mcc/medium",
     "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33681,6 +36076,19 @@
     "display_name": "Medium (nvidia_nim/test-model)",
     "id": "anthropic/mcc/medium",
     "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33692,6 +36100,19 @@
     "display_name": "Cheap (nvidia_nim/test-model)",
     "id": "mcc/cheap",
     "is_family_default": true,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33703,6 +36124,19 @@
     "display_name": "Cheap (nvidia_nim/test-model)",
     "id": "anthropic/mcc/cheap",
     "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33714,6 +36148,19 @@
     "display_name": "Vision (nvidia_nim/test-model)",
     "id": "mcc/vision",
     "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"
@@ -33725,6 +36172,19 @@
     "display_name": "Vision (nvidia_nim/test-model)",
     "id": "anthropic/mcc/vision",
     "is_family_default": false,
+    "metadata": {
+     "cache_read_price": null,
+     "cache_write_price": null,
+     "context_length": null,
+     "default_parameters": null,
+     "input_price": null,
+     "max_output_tokens": null,
+     "output_price": null,
+     "reasoning": null,
+     "supported_parameters": null,
+     "supports_tool_calls": null,
+     "supports_vision": null
+    },
     "object": "model",
     "owned_by": "my-claude-code",
     "type": "model"

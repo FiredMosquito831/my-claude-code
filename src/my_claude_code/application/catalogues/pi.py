@@ -4,9 +4,9 @@ What this replaced: a TypeScript builder inside the bundled Pi extension that
 gave every model ``contextWindow: 128000``, ``maxTokens: 16384`` and
 ``cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0}``, and decided
 ``reasoning`` purely from which id prefix the model had arrived under. It could
-not have done better: it read ``GET /v1/models``, which carries no capability
-fields. The extension now fetches the capability-bearing route instead and
-registers what MCC's ladder actually resolved.
+not have done better: it read ``GET /v1/models``, which carried no capability
+fields until 8.21.0. The extension now fetches the capability-bearing route
+instead and registers what MCC's ladder actually resolved.
 
 Pi's ``ProviderModelConfig`` requires every field it declares, so nothing here
 can be omitted the way Codex's optional keys can. Unknowns therefore take Pi's

@@ -2923,8 +2923,9 @@ never written as a context window MCC believes in.
 **`:batch` refs are excluded from every agent catalogue.** A `:batch` route is
 an asynchronous pricing tier of a model you already have, not a second
 interactive model, so it doubles a picker for nothing. They remain in
-`GET /v1/models`, which answers "what ids may I send?" rather than "what should
-I pick". On a real install that is 142 entries down to 82.
+`GET /v1/models`, which answers "what ids may I send?" — every id, each with
+the capabilities MCC resolved for it since 8.21.0 — rather than "what should I
+pick". On a real install that is 142 entries down to 82.
 
 **The catalogue obeys `MODEL_VISIBILITY_ALLOW` / `MODEL_VISIBILITY_DENY`**
 exactly as `/v1/models` does — same two glob lists, same filter — so a model
@@ -4758,8 +4759,9 @@ provider row's `context_length` is ignored with a log line -- and a 0, a
 negative number or a fraction is refused. Routing uses it from the next
 request; the agent catalogue files under `~/.mcc`, which the `mcc-<agent>`
 launchers read, pick it up at the next model-list refresh or restart, as they
-do any catalogue change. `/v1/models` carries no window, and Claude Code
-launched by `mcc` keeps its own fixed compaction window.
+do any catalogue change. Since 8.21.0 `/v1/models` carries the same window on
+the model's own entry (`metadata.context_length`), but Claude Code launched by
+`mcc` still keeps its own fixed compaction window.
 
 **New in 7.105.0: a prompt cache lifetime, the 14th key.** A provider row or a
 model row may carry `prompt_cache_ttl` -- whole minutes from `1` to `60`:

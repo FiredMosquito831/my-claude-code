@@ -23,6 +23,20 @@ class ProviderModelCache:
             available_provider_ids = get_provider_registry().supported_ids()
         self._available_provider_ids = frozenset(available_provider_ids)
         self._model_infos_by_provider: dict[str, dict[str, ProviderModelInfo]] = {}
+        #: Monotonic count of the writes that change what this cache answers
+        #: (8.21.0). The resolved-catalogue snapshot keys on it, so a sweep that
+        #: lands between two publishes invalidates the snapshot instead of
+        #: leaving it describing a catalogue that no longer exists. Only the
+        #: writes that can change the *listing* bump it: adding or removing one
+        #: provider is published by its own caller, and bumping here too would
+        #: only cost a redundant rebuild.
+        self._revision = 0
+
+    @property
+    def revision(self) -> int:
+        """Return the revision of the stored catalogue, for cache keys."""
+
+        return self._revision
 
     def cache_model_ids(self, provider_id: str, model_ids: Iterable[str]) -> None:
         """Store raw provider model ids with unknown capability metadata."""
@@ -38,6 +52,7 @@ class ProviderModelCache:
             info.model_id: info for info in model_infos if info.model_id.strip()
         }
         self._model_infos_by_provider[provider_id] = clean_infos
+        self._revision += 1
 
     def set_available_providers(self, provider_ids: Iterable[str]) -> None:
         """Replace the provider scope and discard entries outside it."""
@@ -47,6 +62,7 @@ class ProviderModelCache:
             for provider_id, infos in self._model_infos_by_provider.items()
             if provider_id in self._available_provider_ids
         }
+        self._revision += 1
 
     def add_provider(self, provider_id: str) -> None:
         """Make one dynamically authenticated provider cacheable."""
@@ -235,3 +251,4 @@ class ProviderModelCache:
     def clear(self) -> None:
         """Clear all cached model metadata."""
         self._model_infos_by_provider.clear()
+        self._revision += 1

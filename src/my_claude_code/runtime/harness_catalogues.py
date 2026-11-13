@@ -52,6 +52,10 @@ from my_claude_code.application.catalogue_model import (
     CatalogueModel,
     build_catalogue_models,
 )
+from my_claude_code.application.catalogue_snapshot import (
+    catalogue_snapshot_key,
+    store_catalogue_snapshot,
+)
 from my_claude_code.application.catalogues import serialise, serialise_sidecar
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.atomic_json import write_json_document_atomically_if_changed
@@ -123,11 +127,19 @@ class HarnessCatalogueFanoutPublisher:
             return
 
         harness_tiers = current_harness_tiers()
+        # The key these records are about to be built from, taken BEFORE the
+        # walk: ``store_catalogue_snapshot`` re-reads the inputs afterwards and
+        # drops the tuple if one moved while the ladder ran (8.21.0). The
+        # snapshot is filled here, where the tuple already exists, so
+        # ``/v1/models`` never pays for a second resolution of the same
+        # catalogue.
+        snapshot_key = catalogue_snapshot_key(runtime, harness_tiers)
         models = build_catalogue_models(settings, runtime, harness_tiers=harness_tiers)
         if not models:
             # Preserve every last-known-good file rather than replacing them
             # with an empty picker during a provider outage.
             raise ValueError("Harness catalogues contain no routable models.")
+        store_catalogue_snapshot(runtime, harness_tiers, snapshot_key, models)
 
         for spec, path in targets:
             # One shared build for the common case, a second one only for an
