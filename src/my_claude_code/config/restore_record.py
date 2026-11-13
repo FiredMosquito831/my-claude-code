@@ -120,6 +120,39 @@ class OverwrittenValue:
 
 
 @dataclass(frozen=True, slots=True)
+class CreatedKey:
+    """One key MCC created outside its own block, or one it appended to an array.
+
+    ``overwritten`` answers "what did the user have here"; this answers the
+    other half of a merge -- "did MCC put this here" -- for a key that sits
+    beside MCC's block rather than inside it and that Undo therefore has to
+    take back out (8.20.3: OpenClaw's ``agents.defaults.models["mcc/*"]``, and
+    the ``"mcc/*"`` element appended to ``agents.defaults.modelPolicy.allow``).
+    A key MCC's own block covers needs none of this: the block is one delete.
+    """
+
+    #: The key, outermost first -- or the array, when ``in_sequence`` is set.
+    key_path: tuple[str, ...]
+    #: The value MCC wrote, or the element it appended.
+    value: object
+    #: Whether ``key_path`` names an array and ``value`` is an element of it.
+    #: Undo removes an element by value and a key by path, and the two must
+    #: never be guessed from each other.
+    in_sequence: bool = False
+
+    def as_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "key_path": list(self.key_path),
+            "value": self.value,
+        }
+        # Only when true, so a key-shaped entry is written the same way for
+        # ever, including by a reader that does not know this field exists.
+        if self.in_sequence:
+            payload["in_sequence"] = True
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class RestoreEntry:
     """Everything Undo needs about one document MCC edited."""
 
@@ -157,6 +190,10 @@ class RestoreEntry:
     #: removes exactly those -- ``models``/``providers`` in a document that had
     #: neither -- and leaves an empty container the user already had alone.
     created_parents: tuple[tuple[str, ...], ...] = ()
+    #: Keys MCC created outside its own block, and array elements it appended,
+    #: which Undo removes (8.20.3). Empty for every record written before it
+    #: and for every merge target whose block is the whole of what it writes.
+    created_keys: tuple[CreatedKey, ...] = ()
 
     def as_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -174,6 +211,8 @@ class RestoreEntry:
             payload["created_parents"] = [
                 list(key_path) for key_path in self.created_parents
             ]
+        if self.created_keys:
+            payload["created_keys"] = [key.as_payload() for key in self.created_keys]
         return payload
 
 
@@ -300,6 +339,7 @@ def write_entry(
         entry.overwritten
         or entry.created_file
         or entry.created_parents
+        or entry.created_keys
         or keep_when_empty
     )
     if records_something:
@@ -315,6 +355,7 @@ def write_entry(
                 overwritten=existing.overwritten or entry.overwritten,
                 created_file=existing.created_file or entry.created_file,
                 created_parents=existing.created_parents or entry.created_parents,
+                created_keys=existing.created_keys or entry.created_keys,
             )
         subjects[entry.subject] = entry.as_payload()
     else:
@@ -370,6 +411,22 @@ def read_entry(subject: str, *, path: Path | None = None) -> RestoreEntry | None
         if key_path is not None
     )
 
+    raw_created = payload.get("created_keys")
+    created_keys: list[CreatedKey] = []
+    for item in raw_created if isinstance(raw_created, list) else []:
+        if not isinstance(item, dict):
+            continue
+        key_path = _key_path(item.get("key_path"))
+        if key_path is None:
+            continue
+        created_keys.append(
+            CreatedKey(
+                key_path=key_path,
+                value=item.get("value"),
+                in_sequence=bool(item.get("in_sequence")),
+            )
+        )
+
     return RestoreEntry(
         subject=str(payload.get("subject", subject)),
         document_path=str(payload.get("document_path", "")),
@@ -378,6 +435,7 @@ def read_entry(subject: str, *, path: Path | None = None) -> RestoreEntry | None
         undone_at=str(payload.get("undone_at", "")),
         created_file=bool(payload.get("created_file")),
         created_parents=created_parents,
+        created_keys=tuple(created_keys),
     )
 
 
@@ -410,6 +468,7 @@ def mark_undone(subject: str, *, path: Path | None = None) -> None:
         undone_at=datetime.now(UTC).isoformat(timespec="seconds"),
         created_file=entry.created_file,
         created_parents=entry.created_parents,
+        created_keys=entry.created_keys,
     )
     subjects[subject] = stamped.as_payload()
     write_json_document_atomically(record_path, _with_subjects(record, subjects))
@@ -551,6 +610,7 @@ def refresh_document_sha256(
         overwritten=entry.overwritten,
         created_file=entry.created_file,
         created_parents=entry.created_parents,
+        created_keys=entry.created_keys,
     ).as_payload()
     write_json_document_atomically(record_path, _with_subjects(record, subjects))
     _harden(record_path)

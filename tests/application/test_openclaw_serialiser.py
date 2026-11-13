@@ -146,7 +146,14 @@ def test_a_model_with_no_price_writes_no_cost_block_at_all() -> None:
 
 
 def test_the_provider_block_names_the_token_by_reference_only() -> None:
-    """The proxy token never lands in a file the user owns."""
+    """The serialised document never carries the token itself.
+
+    It is the document ``GET /admin/api/catalogue-models`` hands the dashboard
+    and every launcher, so the credential must not be in it: the merge engine
+    substitutes the configured token for this reference on the way to disk
+    (8.20.3). The reference is also what is written when no token is
+    configured, so the document stays exactly what earlier releases published.
+    """
 
     block = _block([_model()])
 

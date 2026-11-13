@@ -9,9 +9,12 @@ file VS Code is happy with does not make Configure fail.
 import pytest
 
 from my_claude_code.config.document_codecs import (
+    AddKeyIfAbsent,
+    AppendToSequenceIfAbsent,
     DeleteKey,
     DocumentFormat,
     DocumentFormatError,
+    RemoveFromSequence,
     SetScalar,
     SetTable,
     apply_edits,
@@ -134,3 +137,156 @@ def test_masking_a_document_it_cannot_parse_returns_it_unchanged():
 def test_the_array_format_is_still_edited_through_its_object_model():
     with pytest.raises(DocumentFormatError):
         apply_edits("[]", DocumentFormat.JSON_ARRAY, [DeleteKey(("a",))])
+
+
+# --------------------------------------------------------------------------
+# Additive edits (8.20.3): add a key, append an element, and nothing else.
+# --------------------------------------------------------------------------
+
+
+def test_add_if_absent_creates_the_key_and_its_chain():
+    after = edit(
+        '{\n  "logging": {"level": "info"}\n}\n',
+        AddKeyIfAbsent(("agents", "defaults", "models", "mcc/*"), {}),
+    )
+
+    assert parse_document(after, DocumentFormat.JSON) == {
+        "logging": {"level": "info"},
+        "agents": {"defaults": {"models": {"mcc/*": {}}}},
+    }
+
+
+def test_add_if_absent_leaves_an_existing_key_and_its_value_alone():
+    text = '{\n  "models": {\n    "mcc/*": {"pickerRuntimes": ["cli"]}\n  }\n}\n'
+
+    assert edit(text, AddKeyIfAbsent(("models", "mcc/*"), {})) == text
+
+
+def test_add_if_absent_keeps_the_users_entries_and_comments_byte_for_byte():
+    text = (
+        "// mine\n"
+        "{\n"
+        '  "models": {\n'
+        '    "openai/gpt": {},   // the one I use\n'
+        '    "openrouter/auto": {}\n'
+        "  }\n"
+        "}\n"
+    )
+    after = edit(text, AddKeyIfAbsent(("models", "mcc/*"), {}))
+
+    assert "// mine" in after
+    assert '    "openai/gpt": {},   // the one I use\n' in after
+    assert '    "openrouter/auto": {},\n' in after
+    assert parse_document(after, DocumentFormat.JSON) == {
+        "models": {
+            "openai/gpt": {},
+            "openrouter/auto": {},
+            "mcc/*": {},
+        }
+    }
+
+
+def test_add_if_absent_refuses_to_replace_a_value_it_sits_in():
+    with pytest.raises(DocumentFormatError):
+        edit(
+            '{\n  "models": "nonsense"\n}\n',
+            AddKeyIfAbsent(("models", "mcc/*"), {}),
+        )
+
+
+def test_append_if_absent_adds_one_element_to_a_block_array():
+    text = '{\n  "allow": [\n    "openai/gpt",\n    "openrouter/auto"\n  ]\n}\n'
+    after = edit(text, AppendToSequenceIfAbsent(("allow",), "mcc/*"))
+
+    assert after == (
+        '{\n  "allow": [\n    "openai/gpt",\n    "openrouter/auto",\n'
+        '    "mcc/*"\n  ]\n}\n'
+    )
+    assert parse_document(after, DocumentFormat.JSON) == {
+        "allow": ["openai/gpt", "openrouter/auto", "mcc/*"]
+    }
+
+
+def test_append_if_absent_keeps_a_one_line_array_on_one_line():
+    text = '{\n  "allow": ["openai/gpt"]\n}\n'
+
+    assert (
+        edit(text, AppendToSequenceIfAbsent(("allow",), "mcc/*"))
+        == '{\n  "allow": ["openai/gpt", "mcc/*"]\n}\n'
+    )
+
+
+def test_append_if_absent_respects_a_trailing_comma():
+    text = '{\n  "allow": [\n    "openai/gpt",\n  ]\n}\n'
+    after = edit(text, AppendToSequenceIfAbsent(("allow",), "mcc/*"))
+
+    assert parse_document(after, DocumentFormat.JSON) == {
+        "allow": ["openai/gpt", "mcc/*"]
+    }
+
+
+def test_append_if_absent_is_a_no_op_when_the_element_is_already_there():
+    text = '{\n  "allow": ["openai/gpt", "mcc/*"]\n}\n'
+
+    assert edit(text, AppendToSequenceIfAbsent(("allow",), "mcc/*")) == text
+
+
+def test_append_if_absent_refuses_a_path_that_is_not_an_array():
+    with pytest.raises(DocumentFormatError):
+        edit(
+            '{\n  "allow": "openai/gpt"\n}\n', AppendToSequenceIfAbsent(("allow",), "x")
+        )
+
+
+def test_remove_from_sequence_takes_back_only_its_own_element():
+    text = '{\n  "allow": ["openai/gpt", "mcc/*"]\n}\n'
+
+    assert (
+        edit(text, RemoveFromSequence(("allow",), "mcc/*"))
+        == '{\n  "allow": ["openai/gpt"]\n}\n'
+    )
+
+
+def test_remove_from_sequence_is_a_no_op_when_the_element_is_gone():
+    text = '{\n  "allow": ["openai/gpt"]\n}\n'
+
+    assert edit(text, RemoveFromSequence(("allow",), "mcc/*")) == text
+
+
+def test_an_emptied_container_comes_back_as_the_empty_object_it_was():
+    """Q6b, measured on the reported fixture: ``{}`` must not become ``{\\n}``."""
+
+    text = '{\n  "models": {\n    "mode": "merge",\n    "providers": {}\n  }\n}\n'
+    filled = edit(text, SetTable(("models", "providers", "mcc"), {"n": 1}))
+    assert '"providers": {' in filled
+
+    assert (
+        edit(
+            filled,
+            DeleteKey(("models", "providers", "mcc"), prune_empty_ancestors=False),
+        )
+        == text
+    )
+
+
+def test_an_emptied_container_keeps_a_comment_the_user_wrote_in_it():
+    text = '{\n  "providers": {\n    "mcc": {"n": 1}\n    // mine\n  }\n}\n'
+    after = edit(text, DeleteKey(("providers", "mcc"), prune_empty_ancestors=False))
+
+    # Not whitespace between the braces, so the collapse leaves it alone and
+    # the user's comment is still there.
+    assert after == '{\n  "providers": {\n    // mine\n  }\n}\n'
+
+
+def test_an_empty_object_elsewhere_in_the_document_is_not_re_rendered():
+    text = '{\n  "scripts": {\n  },\n  "providers": {"mcc": {"n": 1}}\n}\n'
+    after = edit(text, DeleteKey(("providers", "mcc")))
+
+    assert '"scripts": {\n  }' in after
+    assert parse_document(after, DocumentFormat.JSON) == {"scripts": {}}
+
+
+def test_additive_edits_are_json_only():
+    for document_format in (DocumentFormat.TOML, DocumentFormat.YAML):
+        with pytest.raises(DocumentFormatError):
+            apply_edits("", document_format, [AddKeyIfAbsent(("a",), {})])

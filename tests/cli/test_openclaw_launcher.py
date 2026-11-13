@@ -20,6 +20,9 @@ from my_claude_code.config.restore_record import UndoMode
 SPEC = harness_spec("openclaw")
 ROOT = "http://127.0.0.1:8082"
 
+#: Fake, always -- a real token must never reach a test's file or its output.
+FAKE_TOKEN = "mcc-fake-token-0123456789abcdef"
+
 
 def _payload(model_count: int = 2) -> dict[str, Any]:
     document, defaulted = serialise(
@@ -66,7 +69,13 @@ def _seed(tmp_path: Path) -> Path:
     return path
 
 
-def _patch(monkeypatch, path: Path, payload: dict[str, Any] | None = None) -> None:
+def _patch(
+    monkeypatch,
+    path: Path,
+    payload: dict[str, Any] | None = None,
+    *,
+    token: str = FAKE_TOKEN,
+) -> None:
     """Point the launcher at a scratch document, record and canned catalogue."""
 
     canned = payload if payload is not None else _payload()
@@ -81,8 +90,21 @@ def _patch(monkeypatch, path: Path, payload: dict[str, Any] | None = None) -> No
     )
     # The ownership check asks this server's own address; a canned settings
     # object keeps the test away from the real settings file.
-    monkeypatch.setattr(openclaw, "get_settings", lambda: object())
+    monkeypatch.setattr(openclaw, "get_settings", lambda: _Settings(token))
+    # The merge engine resolves the token itself -- the launcher is frozen and
+    # cannot pass it -- so it needs the same canned answer (8.20.3).
+    monkeypatch.setattr(
+        "my_claude_code.config.harness_config_merge.get_settings",
+        lambda: _Settings(token),
+    )
     monkeypatch.setattr(openclaw, "local_proxy_root_url", lambda _settings: ROOT)
+
+
+class _Settings:
+    """The one field the launcher and the merge engine read off Settings."""
+
+    def __init__(self, token: str) -> None:
+        self.anthropic_auth_token = token
 
 
 def test_the_launched_environment_carries_the_token_and_nothing_stale() -> None:
@@ -128,27 +150,52 @@ def test_the_config_path_is_the_one_the_cli_reads() -> None:
     assert resolved == Path("C:/u/ada/.openclaw/openclaw.json")
 
 
-def test_the_written_block_never_holds_the_token(
+def test_the_written_block_carries_the_configured_token(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
+    """OpenClaw must be able to resolve the credential in its own process.
+
+    Its availability label is computed from credentials it can read, so a
+    ``$VAR`` the launcher exports only into the child leaves a gateway started
+    any other way at "Connection not confirmed". The token therefore goes in
+    literally -- read from settings by the merge engine, not the copy the
+    launcher keeps for the child's environment (the user's Q2).
+    """
+
     path = _seed(tmp_path)
     _patch(monkeypatch, path)
 
     assert openclaw.write_provider_block(SPEC, ROOT, "secret-token") is True
 
     text = path.read_bytes().decode("utf-8")
-    assert "secret-token" not in text
-    assert "$MCC_OPENCLAW_API_KEY" in text
+    assert FAKE_TOKEN in text
+    assert "secret-token" not in text, "the engine reads settings, not the argument"
+    assert "$MCC_OPENCLAW_API_KEY" not in text
     assert "// hand-written" in text
     document = json.loads(text.replace("// hand-written", ""))
     assert document["models"]["providers"]["mcc"]["baseUrl"] == f"{ROOT}/v1"
     assert [
         entry["id"] for entry in document["models"]["providers"]["mcc"]["models"]
     ] == ["openrouter/configured", "openrouter/other"]
-    assert document["agents"]["defaults"]["model"] == {
-        "primary": "openrouter/configured"
-    }
+    # The user's own default is a string here: it is never replaced (Q1).
+    assert document["agents"]["defaults"]["model"] == "openai/gpt-5"
+    assert document["agents"]["defaults"]["models"] == {"mcc/*": {}}
     assert "Updated models.providers.mcc" in capsys.readouterr().err
+
+
+def test_a_proxy_with_no_token_leaves_the_variable_reference(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """Never an empty ``apiKey``: the reference still works under the launcher."""
+
+    path = _seed(tmp_path)
+    _patch(monkeypatch, path, token="")
+
+    assert openclaw.write_provider_block(SPEC, ROOT, "") is True
+
+    text = path.read_bytes().decode("utf-8")
+    assert '"apiKey": "$MCC_OPENCLAW_API_KEY"' in text
+    assert capsys.readouterr().err
 
 
 def test_disconnect_puts_the_users_own_file_back(

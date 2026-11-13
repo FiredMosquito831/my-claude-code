@@ -241,6 +241,9 @@ class HarnessCatalogueFanoutPublisher:
                     # survives the refresh, and the replaced default model is
                     # left alone (``claim=False``): it is the user's choice of
                     # model, and a provider refresh must not move it back.
+                    # The token is passed rather than resolved inside the
+                    # engine so this write and the launcher's cannot disagree
+                    # about which settings object they mean (8.20.3).
                     configure_owned_block(
                         merge=merge,
                         path=path,
@@ -248,6 +251,7 @@ class HarnessCatalogueFanoutPublisher:
                         proxy_root_url=proxy_root_url,
                         subject=spec.id,
                         claim=False,
+                        proxy_token=settings.anthropic_auth_token,
                     )
                 else:
                     merge_owned_block(

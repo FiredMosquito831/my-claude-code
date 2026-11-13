@@ -228,8 +228,8 @@ AIDER_API_KEY_ENV = "OPENAI_API_KEY"
 DROID_API_KEY_ENV = "MCC_DROID_API_KEY"
 DROID_API_KEY_REFERENCE = "${MCC_DROID_API_KEY}"
 
-#: OpenClaw's credential, the two constants that describe the block MCC writes,
-#: and the three variables the CLI itself reads to find its file.
+#: OpenClaw's credential, the constants that describe the block MCC writes, and
+#: the three variables the CLI itself reads to find its file.
 #:
 #: ``openclaw`` resolves its configuration the way its own ``dist/*.mjs`` does:
 #: ``OPENCLAW_CONFIG_PATH`` names the file outright, else ``OPENCLAW_STATE_DIR``
@@ -239,12 +239,23 @@ DROID_API_KEY_REFERENCE = "${MCC_DROID_API_KEY}"
 #: writing one file while the CLI reads another fails silently, as a picker
 #: that never shows MCC's models.
 #:
-#: The proxy token never lands on disk. OpenClaw expands a ``$VAR`` reference in
-#: ``apiKey`` from the process environment, and ``mcc-openclaw`` sets this
-#: variable in the child process only. The base URL beside it *is* written
-#: literally -- a loopback address on the user's own machine, not a secret --
-#: because OpenClaw validates it as a URL and substitutes nothing into it.
+#: **The proxy token is written literally (2026-11-13, the user's decision).**
+#: OpenClaw 2026.11.3 decides a provider's availability from credentials it can
+#: resolve in its *own* process, so a ``$MCC_OPENCLAW_API_KEY`` reference is
+#: only usable when OpenClaw was started by ``mcc-openclaw`` -- a gateway run
+#: from the user's shell or a unit file has no such variable and every model is
+#: labelled "Connection not confirmed". ``apiKey`` therefore carries the
+#: configured proxy token, exactly as OpenClaw's own custom-provider flow
+#: writes it. The serialiser keeps writing the reference, and
+#: ``config/harness_config_merge.py`` substitutes on the way to disk: the token
+#: when one is configured, the reference itself when it is empty. The
+#: serialised document therefore stays byte-identical to what every earlier
+#: release published -- the metadata-ladder baseline pins it -- and no secret
+#: ever reaches ``GET /admin/api/catalogue-models``. The base URL beside it is
+#: written literally for the same reason it always was: a loopback address is
+#: not a secret and OpenClaw substitutes nothing into it.
 OPENCLAW_API_KEY_ENV = "MCC_OPENCLAW_API_KEY"
+OPENCLAW_API_KEY_FALLBACK = f"${OPENCLAW_API_KEY_ENV}"
 OPENCLAW_BASE_URL_SENTINEL = "https://base-url.mcc.invalid/v1"
 
 #: The three variables OpenClaw itself reads to find its document, named here
@@ -258,15 +269,36 @@ OPENCLAW_HOME_ENV = "OPENCLAW_HOME"
 #: The provider id MCC owns inside ``models.providers``.
 OPENCLAW_PROVIDER_ID = "mcc"
 
-#: The one key MCC *replaces* rather than creates in the user's document:
-#: OpenClaw's default model. Configure records what it held (a string, an
-#: absent key, or an object with its own ``primary``), and Undo puts it back.
+#: The one key MCC writes *outside* its own block: OpenClaw's default model.
+#: Since 8.20.3 it is written only when it is absent -- an existing value is
+#: the user's, and replacing it was never "pure addition" (the user's Q1).
+#: Nothing is recorded for it when it is left alone, because nothing changed.
 OPENCLAW_PRIMARY_MODEL_PATH: tuple[str, ...] = (
     "agents",
     "defaults",
     "model",
     "primary",
 )
+
+#: OpenClaw's model allowlist, and the one ref MCC adds to whichever container
+#: governs it (8.20.3). ``resolveConfiguredModelPolicyAllow``
+#: (``dist/model-selection-shared-BwqT1-JC.mjs:878-908``) reads, in this order,
+#: an explicit ``modelPolicy.allow`` and then -- only when ``modelPolicy`` is
+#: not a record at all -- the legacy map's own keys
+#: (``collectLegacyDefaultModelAllowRefs``,
+#: ``dist/model-policy-allowlist-migration-BErDvsnV.mjs:58-68``). A non-empty
+#: answer is an allowlist: every ``mcc/…`` row falls out of the picker and the
+#: menu keeps only the default one, which is the "1 model / 0 of 1 available"
+#: the user reported. One wildcard admits them all, and
+#: ``isModelKeyAllowedBySet`` (``:934-942``) matches it on segment boundaries.
+OPENCLAW_MODEL_POLICY_ALLOW_PATH: tuple[str, ...] = (
+    "agents",
+    "defaults",
+    "modelPolicy",
+    "allow",
+)
+OPENCLAW_MODELS_ALLOWLIST_PATH: tuple[str, ...] = ("agents", "defaults", "models")
+OPENCLAW_VISIBILITY_REF = f"{OPENCLAW_PROVIDER_ID}/*"
 
 
 #: Hermes Agent's credential, the base-URL placeholder, and the variables the
@@ -594,6 +626,36 @@ class HarnessConfigMerge:
     #: The placeholder the serialiser writes there, replaced with this
     #: install's own proxy root on the way to disk.
     base_url_sentinel: str = COMMANDCODE_BASE_URL_SENTINEL
+    #: The key inside MCC's block that carries the proxy token, when this CLI
+    #: cannot be told to read one from its own environment. ``apiKey`` for
+    #: OpenClaw, whose ``availability`` is computed from credentials resolvable
+    #: in *its* process -- a ``$VAR`` reference is unusable there unless the
+    #: CLI was started by MCC's launcher.
+    proxy_token_key: str | None = None
+    #: The placeholder the serialiser writes into that key, replaced on the way
+    #: to disk with the configured token or, when there is none, with
+    #: :attr:`proxy_token_fallback`. A sentinel rather than the token keeps the
+    #: secret out of every serialised document -- the route the dashboard and
+    #: the launchers read (``GET /admin/api/catalogue-models``).
+    proxy_token_sentinel: str | None = None
+    #: What is written when no token is configured: the CLI's own variable
+    #: reference, which still works when the CLI is started by MCC's launcher.
+    #: Never an empty string -- an empty ``apiKey`` reads as "no credential"
+    #: and is a worse answer than one the launcher can satisfy.
+    proxy_token_fallback: str | None = None
+    #: The document's model allowlist, whether the CLI will only offer models
+    #: the list names, and the one ref MCC adds to whichever container governs
+    #: it (8.20.3). Empty for every merge target whose CLI has no such list.
+    #: :attr:`model_policy_allow_path` is the explicit policy -- an array --
+    #: and :attr:`models_allowlist_path` the legacy map whose *keys* are the
+    #: allowlist; the engine applies the CLI's own precedence between them.
+    model_policy_allow_path: tuple[str, ...] = ()
+    models_allowlist_path: tuple[str, ...] = ()
+    visibility_ref: str = ""
+    #: Keys MCC writes only when they are absent, never replacing a value the
+    #: user already has (8.20.3, the user's Q1). Nothing is recorded for one
+    #: that is already there, because nothing was written.
+    create_only_key_paths: tuple[tuple[str, ...], ...] = ()
     #: Whether the *document* is edited as text through
     #: ``config/document_codecs`` -- so every byte MCC does not own survives,
     #: comments and layout included -- rather than rebuilt canonically from
@@ -1327,10 +1389,29 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
                 # client appends ``chat/completions`` to ``<baseUrl>/v1``.
                 base_url_key="baseUrl",
                 base_url_sentinel=OPENCLAW_BASE_URL_SENTINEL,
+                # OpenClaw decides availability from credentials it can
+                # resolve itself, so the token goes in literally -- the
+                # serialiser writes its ``$MCC_OPENCLAW_API_KEY`` reference and
+                # the engine substitutes (2026-11-13, the user's Q2). The
+                # reference is both the placeholder and the fallback, so the
+                # serialised document is byte-identical to what earlier
+                # releases published and what the metadata-ladder baseline
+                # records.
+                proxy_token_key="apiKey",
+                proxy_token_sentinel=OPENCLAW_API_KEY_FALLBACK,
+                proxy_token_fallback=OPENCLAW_API_KEY_FALLBACK,
+                # A non-empty model allowlist filters every mcc/… row out of
+                # the picker (2026.11.3), so MCC adds one wildcard to whichever
+                # container governs it.
+                model_policy_allow_path=OPENCLAW_MODEL_POLICY_ALLOW_PATH,
+                models_allowlist_path=OPENCLAW_MODELS_ALLOWLIST_PATH,
+                visibility_ref=OPENCLAW_VISIBILITY_REF,
                 # The user's own JSON5 document: comments, indentation and key
                 # order survive because the edit is made to the text.
                 preserve_bytes=True,
-                overwritten_key_paths=(OPENCLAW_PRIMARY_MODEL_PATH,),
+                # The default model is written only when the file has none:
+                # replacing a value the user chose was never pure addition.
+                create_only_key_paths=(OPENCLAW_PRIMARY_MODEL_PATH,),
             ),
         ),
         passthrough_commands=frozenset(

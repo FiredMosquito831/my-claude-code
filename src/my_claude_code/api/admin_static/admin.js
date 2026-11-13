@@ -31234,19 +31234,36 @@ function harnessMeta(harness) {
 
   if (catalogue && catalogue.merged_key) {
     // This agent reads only its own config file, so MCC writes one key into
-    // it. Saying which key, and that nothing else is touched, is the whole
-    // difference between an edit a user can audit and one they cannot.
+    // it. Saying which key, and what else MCC may add, is the whole difference
+    // between an edit a user can audit and one they cannot.
     const replaced = catalogue.replaced_keys || [];
-    rows.push([
-      "Merged key",
-      replaced.length
-        ? `${catalogue.merged_key} - the only block MCC writes; it also sets ` +
+    const added = catalogue.added_keys || [];
+    if (replaced.length) {
+      rows.push([
+        "Merged key",
+        `${catalogue.merged_key} - the only block MCC writes; it also sets ` +
           `${replaced.join(", ")}, recorded so Undo puts your value back. ` +
           `Every other key is left byte-for-byte, comments and all, and your ` +
-          `file is backed up before the first edit`
-        : `${catalogue.merged_key} - the only key MCC writes; every other key is ` +
+          `file is backed up before the first edit`,
+      ]);
+    } else if (added.length) {
+      // 8.20.3: the additive keys (OpenClaw's model-allowlist wildcard and its
+      // add-only default model). They are written only when the file does not
+      // have them, so the row says so rather than claiming one key.
+      rows.push([
+        "Merged key",
+        `${catalogue.merged_key} - the only block MCC writes; it also adds ` +
+          `${added.join(", ")} only when your file does not have them, and ` +
+          `Undo takes them back out. Every other key is left byte-for-byte, ` +
+          `comments and all, and your file is backed up before the first edit`,
+      ]);
+    } else {
+      rows.push([
+        "Merged key",
+        `${catalogue.merged_key} - the only key MCC writes; every other key is ` +
           `left byte-for-byte, and your file is backed up before the first edit`,
-    ]);
+      ]);
+    }
   }
 
   if (catalogue && catalogue.config_flag) {

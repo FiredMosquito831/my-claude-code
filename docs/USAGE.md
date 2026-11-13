@@ -2287,28 +2287,43 @@ treats everything else as yours:
 
 | Guarantee | How |
 | --- | --- |
-| One owner | Only `models.providers.mcc` is written, and one recorded value beside it — `agents.defaults.model.primary`, below. Comments, indentation, key order and every other key come back byte for byte, because the edit is made to the text rather than to a re-serialised copy. |
+| One owner | Only `models.providers.mcc` is written, plus two additive keys beside it (`agents.defaults.models["mcc/*"]` and, when your file has no default model, `agents.defaults.model.primary` — see below). Comments, indentation, key order and every other key come back byte for byte, because the edit is made to the text rather than to a re-serialised copy. |
 | Backed up once | The document is copied to `openclaw.json.mcc-backup` before MCC's first edit, and that copy is never overwritten — so it is always your pre-MCC file. |
 | Idempotent | A refresh that resolves the same models writes nothing. |
 | Never uninvited | The background refresh only touches the file when `models.providers.mcc` is already there and names *this* server's address. Having an `openclaw.json` is not consent; running `mcc-openclaw` is. |
-| Reversible | `mcc-openclaw --disconnect` removes the block, puts your default model back, and leaves the rest of the document exactly as it was. `mcc-openclaw --restore` does the same but refuses if the file changed since MCC wrote it, and consumes the record. A file `mcc-openclaw` created is removed again. |
+| Reversible | `mcc-openclaw --disconnect` removes the block and the two keys MCC added, and leaves the rest of the document exactly as it was. `mcc-openclaw --restore` does the same but refuses if the file changed since MCC wrote it, and consumes the record. A file `mcc-openclaw` created is removed again. |
 
 **What MCC writes, precisely.** `models.providers.mcc` carries the proxy base
-URL, a `$MCC_OPENCLAW_API_KEY` reference (the launcher sets that variable in
-the child process only, so **your proxy token is never in the file**), the
-`openai-completions` API and every model MCC can route, each with the limits
-and prices the resolution ladder actually resolved: `contextWindow`,
-`maxTokens`, `input`, `reasoning`, `cost` in USD per million tokens. A value
-nobody published is **omitted**, never written as `0` — a zero window or a
-zero price is a claim MCC cannot make, and a free-looking model is worse than
-one with no price.
+URL, **your proxy token in plaintext**, the `openai-completions` API and every
+model MCC can route, each with the limits and prices the resolution ladder
+actually resolved: `contextWindow`, `maxTokens`, `input`, `reasoning`, `cost`
+in USD per million tokens. A value nobody published is **omitted**, never
+written as `0` — a zero window or a zero price is a claim MCC cannot make, and
+a free-looking model is worse than one with no price.
 
-**The one value outside the block.** OpenClaw's default model lives at
-`agents.defaults.model.primary`, so `mcc-openclaw` sets it to MCC's starting
-model and records what it replaced — a string, an existing `primary`, or
-nothing at all. `--disconnect` puts back exactly the bytes that were there.
-The background refresh deliberately never touches it: your choice of model is
-yours.
+The token is written literally because OpenClaw decides whether a provider is
+usable from credentials it can read in *its own* process: a
+`$MCC_OPENCLAW_API_KEY` reference only resolves when OpenClaw was started by
+`mcc-openclaw`, so a gateway started from your shell or a unit file showed
+every model as "Connection not confirmed". The file is yours, so treat it like
+one — `openclaw.json` now contains a credential. With no proxy token
+configured, MCC writes the `$MCC_OPENCLAW_API_KEY` reference instead (never an
+empty value), which `mcc-openclaw` supplies to the process it launches.
+
+**The two keys outside the block, and why.** OpenClaw reads a non-empty
+`agents.defaults.models` map — or an explicit `agents.defaults.modelPolicy.allow`
+list — as an **allowlist** and offers only the models it names. If you already
+restrict your own models there, every `mcc/…` row is filtered out and the
+picker shows a single entry, which is the "1 model" this release fixes. So
+`mcc-openclaw` adds **one** wildcard, `mcc/*`, to whichever of those containers
+governs your file (the explicit policy if it has one, else the map, else it
+creates the map holding only that key). Per-agent policies
+(`agents.entries.<id>.modelPolicy.allow`) are yours and are never touched. The
+other key is OpenClaw's default model, `agents.defaults.model.primary`: it is
+written **only when your file has none**, and an existing value — including a
+plain string — is left exactly as it is. Both additions are recorded, so
+`--disconnect` takes them back out. The background refresh never writes your
+default model.
 
 MCC appears inside OpenClaw as the provider `mcc`:
 
