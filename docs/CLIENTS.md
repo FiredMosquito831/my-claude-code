@@ -240,8 +240,12 @@ An optional `x-mcc-harness: <name>` request header names the client in
 | `provider/model` (`opencode/big-pickle`, `custom_x/y`) | that one model, which needs that provider's key |
 | anything else | the default route (`MODEL`) |
 
-`GET /v1/models` lists what your clients may pick. The media routes pick their
-rail by endpoint; a `provider/model` sent there must be one of that rail's models
+`GET /v1/models` lists what your clients may pick, and since 8.21.0 each entry
+carries the resolution ladder's record for that model under `metadata`: its
+context window, output limit, vision and tool-call support, reasoning controls
+and effort vocabulary, the four prices, and any parameters the provider
+publishes or pins. The media routes pick their rail by endpoint; a
+`provider/model` sent there must be one of that rail's models
 (7.95.0: one that is not is refused with `400`; any other name uses the rail --
 [Media routing](MEDIA.md#how-a-request-finds-its-model)).
 
@@ -347,6 +351,20 @@ too, slash and all). `GET /v1beta/models` lists the same models in Google's shap
 curl http://127.0.0.1:8082/v1/models -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN"
 curl -i http://127.0.0.1:8082/health
 ```
+
+An entry keeps the OpenAI-shaped keys it always had — `object`, `created`,
+`owned_by`, `created_at`, `display_name`, `id`, `type`, plus Claude Desktop's
+`anthropic_family_tier` / `is_family_default` — and since 8.21.0 appends a
+`metadata` object holding what MCC's resolution ladder answered for that model:
+`context_length`, `max_output_tokens`, `supports_vision`, `supports_tool_calls`,
+`reasoning` (`can_reason`, the three control flags, `supported_efforts`,
+`mandatory`, `default_enabled`), the four prices flat and per million tokens
+(`input_price`, `output_price`, `cache_read_price`, `cache_write_price`),
+`supported_parameters` and `default_parameters`. Every one of them is `null`
+when no source stated it — a stated `0.0` price and an unknown one are different
+answers — and the ten fixed Claude protocol aliases carry `"metadata": null`
+because they name a route rather than a model. The four prices are MCC's
+per-million floats, not OpenRouter's per-token strings.
 
 `/health` needs no token and answers `{"status": "healthy"}`, with an
 `x-mcc-pid` header naming the server's process; while the server is starting

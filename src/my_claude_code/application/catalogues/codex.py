@@ -4,7 +4,8 @@ What this replaced: a builder that emitted the *same dict for every model*,
 varying only the slug, the display name and the priority. Every entry claimed
 ``"context_window": 200000``, the same four reasoning rungs, and
 ``"input_modalities": ["text"]``, because its only input was ``GET /v1/models``
-and that payload carries no capability fields at all. A 32k deployment and a
+and that payload carried no capability fields at all until 8.21.0 gave it the
+record as a ``metadata`` object. A 32k deployment and a
 1M-token model were advertised to Codex's picker as identical.
 
 Now every field that has a ladder answer carries it, and every field that does

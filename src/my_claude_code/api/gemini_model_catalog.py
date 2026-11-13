@@ -1,12 +1,14 @@
 """``GET /v1beta/models`` built from the resolution ladder.
 
 ``/v1/models`` answers the OpenAI-shaped question -- "what ids may I send?" --
-and carries an id and a display name because that is all its schema has room
-for. Google's ``Model`` resource has room for two more facts a coding agent
-actually uses: ``inputTokenLimit``, which is the context gauge every Gemini
-client renders, and ``outputTokenLimit``, which is what one of them uses to cap
-``maxOutputTokens``. Those come from :class:`CatalogueModel` -- the ladder's own
-answer -- rather than from the ``/v1/models`` payload, which never had them.
+and since 8.21.0 every entry there carries the ladder's own record for that id
+as a ``metadata`` object. Google's ``Model`` resource has room for two of those
+facts under its own names: ``inputTokenLimit``, which is the context gauge every
+Gemini client renders, and ``outputTokenLimit``, which is what one of them uses
+to cap ``maxOutputTokens``. Both come from the same :class:`CatalogueModel` the
+``/v1/models`` metadata is serialised from, so the two routes cannot disagree
+about a window. Before 8.21.0 this route was the only listing surface that read
+the record; ``/v1/models`` carried an id and a display name and nothing else.
 
 **Unknown stays unknown.** A ``None`` from the ladder omits the key; nothing
 here substitutes a number. See ``application/catalogues/base.py`` for the rule
@@ -19,7 +21,7 @@ every generated harness catalogue uses. That last step is the difference
 between this route and ``/v1/models``, and it is deliberate: a Gemini client
 is a picker, not a protocol surface, so it gets the picker's list -- one entry
 per model under its plain id, no ``claude-3-freecc-no-thinking/`` twin and no
-``:batch`` pricing tier. The eight fixed Claude protocol aliases are absent
+``:batch`` pricing tier. The ten fixed Claude protocol aliases are absent
 from both, being protocol names rather than routable refs.
 """
 

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from my_claude_code.application import catalogue_snapshot
 from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_metadata import (
@@ -17,8 +18,13 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.application.openrouter_live import LiveCatalogue
-from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
+from my_claude_code.application.ports import (
+    CatalogueSnapshotInputs,
+    RequestRuntimeLease,
+    RequestRuntimePort,
+)
 from my_claude_code.config.document_codecs import yaml_mapping_at
+from my_claude_code.config.harness_tiers import current_harness_tiers
 from my_claude_code.config.harnesses import (
     MCC_HARNESS_ID_SENTINEL,
     harness_spec,
@@ -52,6 +58,13 @@ class FakeRuntime(RequestRuntimePort):
 
     def current_settings(self) -> Settings:
         return self._settings
+
+    def catalogue_snapshot_inputs(self) -> CatalogueSnapshotInputs:
+        # The publisher records the tuple it built under these inputs; the
+        # fan-out tests assert which files were written, not the snapshot.
+        return CatalogueSnapshotInputs(
+            generation_id=1, model_cache_revision=0, models_dev_generation=None
+        )
 
     def cached_model_supports_thinking(
         self, provider_id: str, model_id: str
@@ -204,6 +217,29 @@ def test_the_fan_out_creates_a_missing_document(tmp_path: Path) -> None:
         "nvidia_nim/configured",
         "open_router/discovered",
     ]
+
+
+def test_a_publish_fills_the_route_snapshot(tmp_path: Path) -> None:
+    """The fan-out is the resolved-catalogue snapshot's writer (8.21.0).
+
+    ``/v1/models`` joins each entry to the record of the same id, and this is
+    where that tuple comes from: the publish already builds it, so recording it
+    costs one assignment and the route never walks the ladder. The records must
+    be the ones this publish serialised, under the key the current inputs
+    spell.
+    """
+
+    runtime = _runtime()
+    _publisher(tmp_path / "codex-model-catalog.json").publish(runtime)
+
+    snapshot = catalogue_snapshot.read_catalogue_snapshot(runtime)
+
+    assert snapshot is not None
+    assert snapshot.key == catalogue_snapshot.catalogue_snapshot_key(
+        runtime, current_harness_tiers()
+    )
+    assert "anthropic/nvidia_nim/configured" in snapshot.by_gateway_id
+    assert "anthropic/mcc/best" in snapshot.by_gateway_id
 
 
 def test_an_existing_catalogue_is_refreshed_in_place(tmp_path: Path) -> None:

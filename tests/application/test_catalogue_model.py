@@ -15,7 +15,11 @@ from my_claude_code.application.model_metadata import (
     ProviderModelInfo,
 )
 from my_claude_code.application.openrouter_live import LiveCatalogue
-from my_claude_code.application.ports import RequestRuntimeLease, RequestRuntimePort
+from my_claude_code.application.ports import (
+    CatalogueSnapshotInputs,
+    RequestRuntimeLease,
+    RequestRuntimePort,
+)
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.gateway_model_ids import gateway_model_id
 from my_claude_code.core.model_ids import ResolutionTier
@@ -65,6 +69,13 @@ class FakeRuntime(RequestRuntimePort):
 
     def current_settings(self) -> Settings:
         return self._settings
+
+    def catalogue_snapshot_inputs(self) -> CatalogueSnapshotInputs:
+        # Nothing here builds the process-wide snapshot; the double states the
+        # two revisions so the port is satisfied without inventing an answer.
+        return CatalogueSnapshotInputs(
+            generation_id=1, model_cache_revision=0, models_dev_generation=None
+        )
 
     def cached_model_supports_thinking(
         self, provider_id: str, model_id: str

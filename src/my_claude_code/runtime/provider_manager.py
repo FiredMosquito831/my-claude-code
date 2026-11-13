@@ -32,7 +32,10 @@ from my_claude_code.application.model_metadata import (
     ProviderModelRefreshResult,
 )
 from my_claude_code.application.openrouter_live import LiveCatalogue
-from my_claude_code.application.ports import RequestRuntimePort
+from my_claude_code.application.ports import (
+    CatalogueSnapshotInputs,
+    RequestRuntimePort,
+)
 from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.marketplaces import (
     PROVIDER_MARKETPLACE,
@@ -84,6 +87,7 @@ from my_claude_code.providers.runtime.models_dev import (
     model_reasoning_capability_tiered,
     model_tool_call_tiered,
     model_vision_tiered,
+    models_dev_cache_generation,
     resolve_model_reasoning_capability,
 )
 from my_claude_code.providers.runtime.openrouter_catalogue import (
@@ -257,6 +261,22 @@ class ProviderRuntimeManager:
     @property
     def current_generation_id(self) -> int:
         return self._current.generation_id
+
+    def catalogue_snapshot_inputs(self) -> CatalogueSnapshotInputs:
+        """The revisions the resolved-catalogue snapshot keys on (8.21.0).
+
+        Read on ``GET /v1/models``, so every part is an attribute read or one
+        ``stat``: the generation id (a settings apply replaces the generation),
+        the model cache's revision (a discovery sweep rewrote the stored
+        metadata) and the models.dev index's own on-disk signature (a refreshed
+        index changes the ladder's answers with no publish at all).
+        """
+
+        return CatalogueSnapshotInputs(
+            generation_id=self._current.generation_id,
+            model_cache_revision=self._model_cache.revision,
+            models_dev_generation=models_dev_cache_generation(),
+        )
 
     async def acquire(self) -> ProviderGenerationLease:
         # ``_closing`` is set inside ``close()``, i.e. in the lifespan shutdown,

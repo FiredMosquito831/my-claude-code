@@ -4,9 +4,10 @@ Before this module existed, each generated CLI catalogue invented its own
 numbers. Codex's builder emitted ``"context_window": 200000`` and the same
 four reasoning rungs for *every* model, and Pi's bundled extension emitted
 ``contextWindow: 128000`` and zero costs for every model, because both were
-built from ``GET /v1/models`` -- whose payload carries an id, a display name
-and nothing else. Neither had any way to reach the resolution ladder, so
-neither could have told the truth even in principle.
+built from ``GET /v1/models`` -- whose payload carried an id, a display name
+and nothing else until 8.21.0 gave it this record as a ``metadata`` object.
+Neither had any way to reach the resolution ladder, so neither could have told
+the truth even in principle.
 
 :class:`CatalogueModel` is that missing input: the ladder's own answer for one
 routable (provider, model), in MCC's vocabulary rather than any CLI's. The
@@ -26,7 +27,10 @@ The record is built alongside :func:`my_claude_code.api.model_catalog.build_mode
 from the same visibility filter, the same kind filter
 (``application/model_kinds.chat_listing_filter``, 7.78.2), the same ref
 enumeration and the same two-variant projection, so a model can never appear in
-``/v1/models`` and not in a harness catalogue, or the reverse.
+``/v1/models`` and not in a harness catalogue, or the reverse. Since 8.21.0 the
+listing reads this record too: the tuple is held in
+``application.catalogue_snapshot`` and each entry's ``metadata`` is the record
+with the same gateway id, so the wire and the catalogues speak one vocabulary.
 """
 
 from collections.abc import Callable, Mapping
@@ -192,7 +196,7 @@ def build_catalogue_models(
 
     Mirrors ``build_models_list_response`` exactly -- same visibility filter,
     same configured-then-discovered enumeration, same normal/no-thinking
-    projection -- minus the eight fixed Claude protocol aliases, which are
+    projection -- minus the ten fixed Claude protocol aliases, which are
     protocol names rather than routable refs and carry no capabilities to
     publish.
 
@@ -305,7 +309,7 @@ def _tier_alias_models(
     live: LiveCatalogue | None = None,
     overrides: ModelParameterOverrides,
 ) -> tuple[CatalogueModel, ...]:
-    """Build the five tier records, each a copy of the model it points at.
+    """Build the six tier records, each a copy of the model it points at.
 
     **The primary's metadata, verbatim.** Every capability field, every
     ``field_provenance`` entry and every ``None`` travels with it untouched; only

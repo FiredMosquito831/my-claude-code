@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from loguru import logger
 
+from my_claude_code.application.catalogue_snapshot import current_catalogue_records
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.application.ports import ProviderResolver, RequestRuntimeLease
 from my_claude_code.application.routing import ModelRouter
@@ -288,9 +289,17 @@ async def list_models(
     settings: Settings = Depends(get_settings),
     _auth=Depends(require_proxy_auth),
 ):
-    """List the model ids this proxy advertises to compatible clients."""
+    """List the model ids this proxy advertises to compatible clients.
+
+    Every entry carries the resolution ladder's record for it as ``metadata``
+    (8.21.0). The records come from the process-wide snapshot, filled by the
+    harness fan-out publisher and rebuilt here only when an input changed --
+    never walked per request, because the walk costs seconds on a real
+    catalogue and this handler runs on the event loop.
+    """
     trace_event(stage="ingress", event="my_claude_code.api.models.list", source="api")
-    return build_models_list_response(settings, services.requests)
+    records = await current_catalogue_records(settings, services.requests)
+    return build_models_list_response(settings, services.requests, records=records)
 
 
 @router.post("/stop")
