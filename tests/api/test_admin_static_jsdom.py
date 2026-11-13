@@ -1746,9 +1746,14 @@ MOVED_VIEWS = {
     "models": "the bulk bar's no-op label and the receipt's new sentences",
     # 8.12.4: the Reasoning guide section gained two sentences explaining that
     # an ``output_config`` effort counts as an instruction that went out and
-    # that the badge names the field when it carried the only one. Prose only;
-    # no control, id or anchor moved.
-    "guide": "the Reasoning section explains the output_config badge wording",
+    # that the badge names the field when it carried the only one. 8.20.3 adds
+    # two more to the OpenClaw section: the additive keys MCC writes beside its
+    # block, and the token that now lands in the file. Prose only; no control,
+    # id or anchor moved.
+    "guide": "the Reasoning and OpenClaw sections changed their wording",
+    # 8.20.3: the OpenClaw launcher card on the Claude page names the model
+    # allowlist wildcard and the add-only default model. Prose only.
+    "claude": "the OpenClaw launcher card names MCC's two additive keys",
 }
 
 #: The base-written per-view digests. Recorded by running THIS harness against

@@ -31238,20 +31238,32 @@ function harnessMeta(harness) {
     // between an edit a user can audit and one they cannot.
     const replaced = catalogue.replaced_keys || [];
     const added = catalogue.added_keys || [];
-    let mergedDetail = `${catalogue.merged_key} - the only key MCC writes`;
     if (replaced.length) {
-      mergedDetail +=
-        `; it also sets ${replaced.join(", ")}, recorded so Undo puts your value back`;
+      rows.push([
+        "Merged key",
+        `${catalogue.merged_key} - the only block MCC writes; it also sets ` +
+          `${replaced.join(", ")}, recorded so Undo puts your value back. ` +
+          `Every other key is left byte-for-byte, comments and all, and your ` +
+          `file is backed up before the first edit`,
+      ]);
+    } else if (added.length) {
+      // 8.20.3: the additive keys (OpenClaw's model-allowlist wildcard and its
+      // add-only default model). They are written only when the file does not
+      // have them, so the row says so rather than claiming one key.
+      rows.push([
+        "Merged key",
+        `${catalogue.merged_key} - the only block MCC writes; it also adds ` +
+          `${added.join(", ")} only when your file does not have them, and ` +
+          `Undo takes them back out. Every other key is left byte-for-byte, ` +
+          `comments and all, and your file is backed up before the first edit`,
+      ]);
+    } else {
+      rows.push([
+        "Merged key",
+        `${catalogue.merged_key} - the only key MCC writes; every other key is ` +
+          `left byte-for-byte, and your file is backed up before the first edit`,
+      ]);
     }
-    if (added.length) {
-      mergedDetail +=
-        `; it adds ${added.join(", ")} only when your file does not have them, and Undo removes them`;
-    }
-    rows.push([
-      "Merged key",
-      `${mergedDetail}. Every other key is left byte-for-byte, comments and all, ` +
-        `and your file is backed up before the first edit`,
-    ]);
   }
 
   if (catalogue && catalogue.config_flag) {

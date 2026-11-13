@@ -527,9 +527,7 @@ def _added_keys(merge: HarnessConfigMerge) -> list[str]:
 
     added = [".".join(key_path) for key_path in merge.create_only_key_paths]
     if merge.visibility_ref and merge.models_allowlist_path:
-        added.append(
-            f"{'.'.join(merge.models_allowlist_path)}[{merge.visibility_ref!r}]"
-        )
+        added.append(f"{'.'.join(merge.models_allowlist_path)}[{merge.visibility_ref}]")
     return added
 
 
