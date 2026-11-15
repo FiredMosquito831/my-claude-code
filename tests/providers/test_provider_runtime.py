@@ -24,6 +24,7 @@ from my_claude_code.config.provider_catalog import (
 from my_claude_code.core.rate_limit import RateLimitCooldown
 from my_claude_code.providers.anthropic import AnthropicProvider
 from my_claude_code.providers.anthropic_oauth import AnthropicOAuthProvider
+from my_claude_code.providers.antigravity_oauth import AntigravityOAuthProvider
 from my_claude_code.providers.chatgpt_oauth import ChatGPTOAuthProvider
 from my_claude_code.providers.cloudflare import CloudflareProvider
 from my_claude_code.providers.commandcode import CommandCodeProvider
@@ -574,6 +575,8 @@ def test_create_provider_instantiates_each_builtin():
         "kilo": KiloProvider,
         "anthropic": AnthropicProvider,
         "anthropic_oauth": AnthropicOAuthProvider,
+        # 8.22.0: the Antigravity scaffold constructs its own BaseProvider.
+        "antigravity_oauth": AntigravityOAuthProvider,
         "commandcode": CommandCodeProvider,
         "qwencloud": OpenAIChatProvider,
         "qwencloud_coding": OpenAIChatProvider,

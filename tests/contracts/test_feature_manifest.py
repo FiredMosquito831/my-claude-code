@@ -5,6 +5,7 @@ from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.messaging.platforms.factory import create_messaging_components
 from my_claude_code.providers.anthropic import AnthropicProvider
 from my_claude_code.providers.anthropic_oauth import AnthropicOAuthProvider
+from my_claude_code.providers.antigravity_oauth import AntigravityOAuthProvider
 from my_claude_code.providers.base import BaseProvider
 from my_claude_code.providers.chatgpt_oauth import ChatGPTOAuthProvider
 from my_claude_code.providers.cloudflare import CloudflareProvider
@@ -120,6 +121,9 @@ def test_provider_and_platform_registries_include_advertised_builtins() -> None:
         # ``openai`` is a connected-account alias of the ChatGPT/Codex OAuth
         # backend; both ids construct the same provider.
         "openai": ChatGPTOAuthProvider,
+        # 8.22.0: the Antigravity scaffold is a specialist factory owner, not a
+        # Chat profile (factory option A).
+        "antigravity_oauth": AntigravityOAuthProvider,
     }
     assert set(OPENAI_CHAT_PROFILES).isdisjoint(specialized_provider_classes)
     assert set(PROVIDER_CATALOG) == (

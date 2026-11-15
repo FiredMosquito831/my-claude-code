@@ -1,0 +1,45 @@
+{
+  "identity_id": "antigravity-cli",
+  "verified_on": "2026-11-14",
+  "profile": "cli",
+  "default_client_identity": "antigravity",
+  "user_agent": {
+    "prefix": "antigravity/cli/",
+    "version": "1.4.4",
+    "grammar": "antigravity/cli/<version> (aidev_client; os_type=<goos>; arch=<goarch>[; cl=<changelist>]; auth_method=consumer)",
+    "tail_regex": "\\(aidev_client; os_type=[a-z]+; arch=[a-z0-9]+(; cl=[0-9]+)?(; auth_method=[a-z_]+)?\\)"
+  },
+  "accept_header": null,
+  "metadata_shape": "string",
+  "headers_present": [
+    "authorization",
+    "content-type",
+    "user-agent",
+    "accept-encoding"
+  ],
+  "headers_absent": [
+    "client-metadata",
+    "x-goog-api-client",
+    "x-goog-user-project",
+    "x-goog-api-key",
+    "x-stainless-*",
+    "x-parent-session-id"
+  ],
+  "body_metadata": {
+    "loadCodeAssist": {
+      "ideType": "ANTIGRAVITY"
+    }
+  },
+  "onboard_user_metadata": {
+    "ide_type": "ANTIGRAVITY",
+    "ide_name": "antigravity"
+  },
+  "oauth_client_id": null,
+  "oauth_client_id_note": "The installed-app client pair is the SIGN-IN surface's constant set (P2a), not this release's: P1 makes no OAuth token call in production. specs/RESEARCH-ANTIGRAVITY-PROTOCOL.md 6.1 quotes both public ids and both public secrets in full, records that 884354919052-... is the official client and 1071006060591-... the legacy (refused) one, and this repository's push protection refuses the literal identifier pattern, so carrying it is the account owner's decision.",
+  "redirect_uri": "https://antigravity.google/oauth-callback",
+  "hosts": [
+    "https://daily-cloudcode-pa.googleapis.com",
+    "https://cloudcode-pa.googleapis.com"
+  ],
+  "written_by": "8.22.0: the dated CLI profile as DECLARED DATA. specs/RESEARCH-ANTIGRAVITY-IDENTITY.md 11.2 + its AGY-DEEP extension (d), specs/IMPLEMENTATION-ANTIGRAVITY-PROVIDER.md 3.C. The version is a dated constant; the UA is asserted by grammar with it, never as a literal in every cell. outbound_identity_baseline.json is NOT touched by this provider (factory option A: no Chat profile)."
+}

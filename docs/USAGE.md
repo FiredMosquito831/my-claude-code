@@ -3143,6 +3143,8 @@ If a refresh reports that Anthropic is **rate-limiting** (a 429), that means wai
 
 Claude models also reach you through `bedrock`, `vertex`, and gateways such as `kilo`, `nous_portal` and `cline` — all pay-per-token, none with a policy question attached.
 
+**`antigravity_oauth` — Google Antigravity, scaffold only (8.22.0).** The card exists and **sign-in does not**: this release adds the provider, its own account store (`~/.mcc/auth/antigravity-oauth.json`), the `v1internal` door, the `fetchAvailableModels` roster reader and the refusal classifier, and there is no way to obtain a credential yet. Until the next release the card reads **Not signed in**, no model on this provider can serve a request, and **nothing changes for any provider you already use** — with no credential Antigravity is never discovered, never listed and never dialled. Settings, all optional: `ANTIGRAVITY_OAUTH_ACCESS_TOKEN` (advanced override; normally the store holds the credential), `ANTIGRAVITY_OAUTH_BASE_URL`, `ANTIGRAVITY_OAUTH_PROXY`, `ANTIGRAVITY_CLIENT_IDENTITY` (`antigravity` by default — Google's official CLI identity, shown as such; `mcc` presents My Claude Code and is expected to be refused), `ANTIGRAVITY_CLIENT_PROFILE` (`cli` by default; `ide` is a declared, unmeasured second profile) and `ANTIGRAVITY_CLIENT_VERSION` (empty uses the dated constant). This direction is MCC calling Antigravity's upstream; serving the `agy` CLI *through* MCC is the other direction and is unchanged. The refusal taxonomy — a `200` with no `currentTier` and a `403 TOS_VIOLATION` are policy refusals, never a quota — is in [OAUTH-PROVIDERS.md](OAUTH-PROVIDERS.md#google-antigravity-scaffold).
+
 <a id="using-mistral-models"></a>
 
 ### Using Mistral models

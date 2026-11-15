@@ -120,6 +120,22 @@ models.dev's `openai` catalogue is **not** used to decide which models exist (it
 
 **ChatGPT OAuth is experimental and unsanctioned.** It is not an official OpenAI API product. The ChatGPT/Codex backend only exposes a limited set of built-in tools, so custom MCC tools may be rejected; use it at your own risk.
 
+<a id="google-antigravity-scaffold"></a>
+
+### Google Antigravity (OAuth, Caution) — scaffold only (8.22.0)
+
+**Sign-in is not available yet.** 8.22.0 adds the provider, its own store (`~/.mcc/auth/antigravity-oauth.json`, the same `{version, tokens, accounts, accounts_version}` shape as the ChatGPT store), the `v1internal` door, the `fetchAvailableModels` roster reader and the refusal classifier — and no way to obtain a credential. Until sign-in ships in the next release the card reads **Not signed in**, no model on this provider can serve a request, and nothing changes for any provider you already use: with no credential Antigravity is never discovered, never listed and never dialled.
+
+**Two directions, one name.** MCC already serves the `agy` CLI through `/v1beta`; that is `agy` → MCC and is unchanged. This provider is the other direction: MCC is the **client** of Antigravity's own upstream (`cloudcode-pa.googleapis.com` / `daily-cloudcode-pa.googleapis.com`).
+
+**Identity.** Google's backend gates on the claim, so the default is the official Antigravity CLI identity and the card says so: the public installed-app client `884354919052-…` and the user-agent `antigravity/cli/<version> (aidev_client; os_type=…; arch=…; cl=…; auth_method=consumer)`. `ANTIGRAVITY_CLIENT_IDENTITY=mcc` presents My Claude Code's own name instead and is **expected to be refused** — that is the point of the switch and the only way to stop presenting Google's client. `ANTIGRAVITY_CLIENT_PROFILE=ide` selects a second, declared profile (numeric metadata, darwin/arm64, `Accept: text/event-stream`) that MCC has never measured; `cli` is the default. The legacy `1071006060591-…` client is a documented constant and is never the default. Three headers are never sent — `Client-Metadata`, `X-Goog-Api-Client` and `x-goog-user-project` — because Google's backend fingerprints them and silently refuses to provision.
+
+**The model list is detected from the endpoint.** `POST {host}/v1internal:fetchAvailableModels` per account is the strongest listing rung: its `models` object is keyed by model id and carries `displayName`, `maxOutputTokens`, `modelTier`, `isInternal` and `quotaInfo`. Per-model output caps come from that roster — there is no global constant. `-disabled` placeholders and old Gemini families (< 3.5) are hidden from the listing while staying valid if a route names them. The baked-in names are only the last-resort seed. models.dev supplies capabilities and limits only, never existence.
+
+**Two refusals that are not what they look like.** A `loadCodeAssist` answering **HTTP 200 with no `currentTier`** and `ineligibleTiers[].reasonCode = "UNSUPPORTED_CLIENT"` is a refusal, not a success; and a generate call answering **403 PERMISSION_DENIED** with `ErrorInfo.reason = "TOS_VIOLATION"` (and often `metadata.appeal_url`) is a policy refusal. Both are classified as **FREE_TIER**: the credential is valid, nothing is charged against it, and the chain falls through to another model. Retrying, switching accounts or signing in again cannot help, and MCC never says "quota", "top up", "check the key" or "try again" for either. A `400`/`401`/`403` **with a parseable OAuth error body** is the only definitively dead credential, and even then the store is renamed to `antigravity-oauth.json.dead-<epoch>`, never deleted; a `429`, `5xx` or an unparseable edge body keeps the credential.
+
+**Settings:** `ANTIGRAVITY_OAUTH_ACCESS_TOKEN` (advanced override; normally the store holds it), `ANTIGRAVITY_OAUTH_BASE_URL`, `ANTIGRAVITY_OAUTH_PROXY`, `ANTIGRAVITY_CLIENT_IDENTITY`, `ANTIGRAVITY_CLIENT_PROFILE`, `ANTIGRAVITY_CLIENT_VERSION` (empty uses the dated constant).
+
 ### Kimi For Coding Provider
 
 Moonshot's coding-plan endpoint, separate from the standard Kimi platform: OpenAI-compatible at `api.kimi.com/coding/v1`. Set `KIMI_CODING_API_KEY` from [kimi.com/coding](https://kimi.com/coding) and pick a model such as `kimi_coding/kimi-k2.5`.

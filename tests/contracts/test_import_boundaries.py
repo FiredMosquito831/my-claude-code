@@ -278,6 +278,15 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "keeps the hint and the executor one answer. Read-only, no network."
     ),
     (
+        "my_claude_code.api.route_status",
+        "my_claude_code.providers.antigravity_oauth.credentials",
+    ): (
+        "Owner: Model Config per-rail credential hint (8.22.0). "
+        "Reason: whether an Antigravity sign-in can serve is answered by the "
+        "same account listing the executor resolves from; a mirror would be a "
+        "second answer that drifts. Read-only (migrate=False), no network."
+    ),
+    (
         "my_claude_code.api.admin_routes",
         "my_claude_code.providers.runtime.config",
     ): (

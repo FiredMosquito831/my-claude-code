@@ -27,12 +27,16 @@ from typing import Any
 
 from my_claude_code.config.constants import (
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+    ANTIGRAVITY_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
 )
 from my_claude_code.providers.anthropic_oauth.credentials import (
     credential_viability,
     load_accounts,
     load_claude_code_tokens,
+)
+from my_claude_code.providers.antigravity_oauth.credentials import (
+    load_accounts as load_antigravity_accounts,
 )
 from my_claude_code.providers.chatgpt_oauth.credentials import load_chatgpt_accounts
 
@@ -48,10 +52,23 @@ _SIGN_IN_PROVIDERS: dict[str, tuple[str, str]] = {
         "ANTHROPIC_OAUTH_ACCESS_TOKEN",
         ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     ),
+    # 8.22.0: the scaffold is wired, the sign-in surface is not. A rail on this
+    # provider must say so rather than pretend a button exists.
+    "antigravity_oauth": (
+        "ANTIGRAVITY_OAUTH_ACCESS_TOKEN",
+        ANTIGRAVITY_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+    ),
 }
+
+#: The sign-in providers whose card can perform one today. The others are
+#: declared here so their rail's action names the real situation instead of
+#: telling the operator to press a control that does not exist.
+_SIGN_IN_AVAILABLE: frozenset[str] = frozenset({"chatgpt_oauth", "anthropic_oauth"})
 
 NO_CREDENTIALS = "no_credentials"
 ALL_BENCHED = "all_benched"
+#: The action for a provider whose sign-in has not shipped yet.
+SIGN_IN_UNAVAILABLE = "sign_in_unavailable"
 
 
 def _chatgpt_store_usable() -> bool:
@@ -68,9 +85,14 @@ def _anthropic_store_usable() -> bool:
     return credential_viability(load_claude_code_tokens())[0]
 
 
+def _antigravity_store_usable() -> bool:
+    return bool(load_antigravity_accounts(migrate=False))
+
+
 _STORE_CHECKS: dict[str, Callable[[], bool]] = {
     "chatgpt_oauth": _chatgpt_store_usable,
     "anthropic_oauth": _anthropic_store_usable,
+    "antigravity_oauth": _antigravity_store_usable,
 }
 
 
@@ -146,7 +168,11 @@ def credential_problems(
             if not sign_in_usable(provider_id, values):
                 problems[provider_id] = {
                     "state": NO_CREDENTIALS,
-                    "action": "sign_in",
+                    "action": (
+                        "sign_in"
+                        if provider_id in _SIGN_IN_AVAILABLE
+                        else SIGN_IN_UNAVAILABLE
+                    ),
                     "display_name": name,
                 }
                 continue

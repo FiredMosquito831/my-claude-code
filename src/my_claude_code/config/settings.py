@@ -26,6 +26,9 @@ from .constants import (
     ADMIN_THEME_VALUES,
     ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+    ANTIGRAVITY_CLIENT_IDENTITY_DEFAULT,
+    ANTIGRAVITY_CLIENT_PROFILE_DEFAULT,
+    ANTIGRAVITY_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
     CATALOGUE_FETCH_TIMEOUT_SECONDS,
     CHAT_STRUCTURED_REASONING_DEFAULT,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
@@ -269,7 +272,11 @@ from .model_refs import (
     parse_model_ref_list,
 )
 from .nim import NimSettings
-from .paths import anthropic_oauth_managed_store_path, chatgpt_oauth_auth_path
+from .paths import (
+    anthropic_oauth_managed_store_path,
+    antigravity_oauth_store_path,
+    chatgpt_oauth_auth_path,
+)
 from .prompt_cache_lifetimes import normalize_prompt_cache_ttl
 from .provider_registry import get_provider_registry
 from .reasoning import ReasoningPreference
@@ -549,6 +556,42 @@ class Settings(BaseSettings):
     )
     anthropic_oauth_write_back: bool = Field(
         default=True, validation_alias="ANTHROPIC_OAUTH_WRITE_BACK"
+    )
+
+    # ============ Google Antigravity (OAuth) ============
+    # Empty for most setups: the credential lives in MCC's own store once the
+    # provider can sign in (the next release). Until then this field exists so
+    # the card has a control and a raw token can be pasted.
+    antigravity_oauth_access_token: str = Field(
+        default="", validation_alias="ANTIGRAVITY_OAUTH_ACCESS_TOKEN"
+    )
+    # The upstream base URL. Production hosts come from
+    # ``providers/antigravity_oauth/constants.py``; this override is what a
+    # scratch proof points at a loopback fake, and what an operator would use
+    # if a host moves.
+    antigravity_oauth_base_url: str = Field(
+        default="", validation_alias="ANTIGRAVITY_OAUTH_BASE_URL"
+    )
+    antigravity_oauth_proxy: str = Field(
+        default="", validation_alias="ANTIGRAVITY_OAUTH_PROXY"
+    )
+    # What the request claims to be. ``antigravity`` (default) is Google's own
+    # CLI identity and is shown as such on the card; ``mcc`` presents MCC's own
+    # name and is expected to be refused -- see docs/OAUTH-PROVIDERS.md.
+    antigravity_client_identity: str = Field(
+        default=ANTIGRAVITY_CLIENT_IDENTITY_DEFAULT,
+        validation_alias="ANTIGRAVITY_CLIENT_IDENTITY",
+    )
+    # ``cli`` (default) or ``ide``. A second declared profile, never the
+    # default and never measured by MCC.
+    antigravity_client_profile: str = Field(
+        default=ANTIGRAVITY_CLIENT_PROFILE_DEFAULT,
+        validation_alias="ANTIGRAVITY_CLIENT_PROFILE",
+    )
+    # Empty means the dated constant in the provider package. P2a gains the
+    # release feed; P1 never fetches a version.
+    antigravity_client_version: str = Field(
+        default="", validation_alias="ANTIGRAVITY_CLIENT_VERSION"
     )
 
     # ==================== Wafer Config ====================
@@ -3385,6 +3428,22 @@ class Settings(BaseSettings):
         if anthropic_oauth_managed_store_path().is_file():
             self.anthropic_oauth_access_token = (
                 ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE
+            )
+        return self
+
+    @model_validator(mode="after")
+    def reference_managed_antigravity_oauth_credentials(self) -> Settings:
+        """Mark an MCC-owned Antigravity credential without loading a secret.
+
+        Exactly the ChatGPT/Anthropic sentinel rule: a signed-in machine's card
+        must not read "Not signed in" because the credential lives in the store
+        rather than in the setting.
+        """
+        if self.antigravity_oauth_access_token.strip():
+            return self
+        if antigravity_oauth_store_path().is_file():
+            self.antigravity_oauth_access_token = (
+                ANTIGRAVITY_OAUTH_MANAGED_CREDENTIAL_REFERENCE
             )
         return self
 

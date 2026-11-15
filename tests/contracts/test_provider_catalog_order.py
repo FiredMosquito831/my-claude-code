@@ -28,6 +28,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "kimi",
     "kimi_coding",
     "chatgpt_oauth",
+    "antigravity_oauth",
     "minimax",
     "cerebras",
     "groq",

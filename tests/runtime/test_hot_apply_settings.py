@@ -410,12 +410,13 @@ def test_the_restart_list_is_exactly_the_fields_that_physically_need_one() -> No
 
 
 def test_every_hot_field_has_a_proof_here() -> None:
-    """120 fields proved hot; each is in exactly one proof table above.
+    """121 fields proved hot; each is in exactly one proof table above.
 
     116 made hot in 7.48.0, plus 7.94.0's PROXY_KEEPALIVE_SECONDS, plus
     7.109.0's generated INFERHUB_API_KEY_ROTATION, plus 8.12.0's generated
     MISTRAL_VIBE_KEY_ROTATION, plus 8.20.1's
-    REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS.
+    REQUEST_LOG_TOOL_ARGUMENT_MAX_CHARS, plus 8.22.0's generated
+    ANTIGRAVITY_OAUTH_ACCESS_TOKEN_ROTATION.
 
     ``ROTATION_KEYS`` is derived from ``PROVIDER_CATALOG``, so a new provider
     moves both counts by one. That is the additive registration, not a
@@ -427,8 +428,8 @@ def test_every_hot_field_has_a_proof_here() -> None:
     for key in HOT_KEYS:
         assert key in FIELD_BY_KEY, key
         assert FIELD_BY_KEY[key].restart_required is False, key
-    assert len(HOT_KEYS) == 120
-    assert len(ROTATION_KEYS) == 54
+    assert len(HOT_KEYS) == 121
+    assert len(ROTATION_KEYS) == 55
     for key in HOT_KEYS:
         assert "Requires restart" not in FIELD_BY_KEY[key].description, key
 
