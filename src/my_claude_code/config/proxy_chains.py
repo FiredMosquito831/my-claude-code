@@ -272,9 +272,10 @@ CHECK_STATES: tuple[str, ...] = (
 #: ``openai`` since 7.79.2 (C-7): it is the connected-account alias of the same
 #: ChatGPT subscription backend (the factory builds it with the ChatGPT
 #: provider), so a chain on it is the same subscription changing source address
-#: -- and until then it routed without the acknowledgement.
+#: -- and until then it routed without the acknowledgement. ``antigravity_oauth``
+#: since 8.22.0: a Google account's subscription credential, the same risk class.
 OAUTH_PROVIDER_IDS: frozenset[str] = frozenset(
-    {"anthropic_oauth", "chatgpt_oauth", "openai"}
+    {"anthropic_oauth", "chatgpt_oauth", "openai", "antigravity_oauth"}
 )
 
 

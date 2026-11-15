@@ -11725,7 +11725,12 @@ function gsRouteReadiness(snap) {
   const notReady = routes.filter((route) => route.problem);
   const ready = routes.length - notReady.length;
   const because = notReady.slice(0, 2).map((route) => {
-    const action = route.problem.action === "sign_in" ? "sign in" : "no key";
+    const action =
+      route.problem.action === "sign_in"
+        ? "sign in"
+        : route.problem.action === "sign_in_unavailable"
+          ? "sign-in not available yet"
+          : "no key";
     return `${route.label}: ${action}`;
   });
   return {
@@ -13279,7 +13284,15 @@ function routeCredentialProblem(providerId) {
     };
   }
   if (problem.state === "no_credentials") {
-    const action = problem.action === "sign_in" ? "sign in" : "add a key";
+    // Three declared actions, each naming the operator's real next move. A
+    // provider whose sign-in has not shipped says so; telling them to "sign in"
+    // would point at a control that is not there.
+    const action =
+      problem.action === "sign_in"
+        ? "sign in"
+        : problem.action === "sign_in_unavailable"
+          ? "sign-in not available yet"
+          : "add a key";
     return {
       text: `no usable credentials — ${action}`,
       title:

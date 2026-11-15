@@ -41,6 +41,9 @@ CODEX_MODEL_CATALOG_FILENAME = "codex-model-catalog.json"
 AUTH_DIRNAME = "auth"
 CHATGPT_OAUTH_AUTH_FILENAME = "chatgpt-oauth.json"
 ANTHROPIC_OAUTH_MANAGED_STORE_FILENAME = "anthropic_oauth.json"
+#: The third OAuth store, beside the ChatGPT one because it is the same
+#: ``{version, tokens, accounts, accounts_version}`` shape.
+ANTIGRAVITY_OAUTH_STORE_FILENAME = "antigravity-oauth.json"
 CLAUDE_CONFIG_DIRNAME = ".claude"
 CLAUDE_SETTINGS_FILENAME = "settings.json"
 ONBOARDING_STATE_FILENAME = "onboarding.json"
@@ -764,6 +767,17 @@ def anthropic_oauth_managed_store_path() -> Path:
     """Return MCC's private renewable Claude subscription OAuth credential path."""
 
     return config_dir_path() / ANTHROPIC_OAUTH_MANAGED_STORE_FILENAME
+
+
+def antigravity_oauth_store_path() -> Path:
+    """Return MCC's private renewable Antigravity OAuth credential path.
+
+    A separate store from both other OAuth providers on purpose: Antigravity is
+    a third Google credential with its own entitlements (IV.24), never a sibling
+    fallback for ``gemini`` or ``vertex``.
+    """
+
+    return config_dir_path() / AUTH_DIRNAME / ANTIGRAVITY_OAUTH_STORE_FILENAME
 
 
 def claude_settings_path() -> Path:

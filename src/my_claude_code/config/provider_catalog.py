@@ -34,6 +34,10 @@ KIMI_CODING_DEFAULT_BASE = "https://api.kimi.com/coding/v1"
 # ChatGPT OAuth (Codex) backend root. The provider posts to
 # /codex/responses using an OAuth access token.
 CHATGPT_OAUTH_DEFAULT_BASE = "https://chatgpt.com/backend-api"
+# Google Antigravity's daily Cloud Code host -- the first rung of the chat
+# order in ``providers/antigravity_oauth/constants.py`` (daily, then prod). The
+# provider owns the ordered host list; this is only the card's default.
+ANTIGRAVITY_OAUTH_DEFAULT_BASE = "https://daily-cloudcode-pa.googleapis.com"
 # OpenAI / ChatGPT connected account (Codex backend root). This aliases the
 # chatgpt_oauth provider; the codex /responses surface is appended at runtime.
 OPENAI_DEFAULT_BASE = "https://chatgpt.com/backend-api/codex"
@@ -267,6 +271,12 @@ class ProviderDescriptor:
     # host with no published formula ships as ``unknown``; guessing one would
     # produce a confident number nobody could audit.
     image_token_family: str = "unknown"
+    # The label the card shows when the credential field is empty and the
+    # provider's credential is a SIGN-IN rather than a pasted key. ``None`` --
+    # every provider that predates 8.22.0 -- keeps the shipped "Missing key".
+    # Declared rather than branched on the provider id: the status payload is
+    # the server's answer and the page must not match names (IV.6).
+    credential_missing_label: str | None = None
     # The media endpoints this host serves (``config/media_surfaces.py``).
     # Empty is "none declared": the media router skips the provider for every
     # media operation without charging it a failure. Filled only from the
@@ -596,6 +606,29 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=CHATGPT_OAUTH_DEFAULT_BASE,
         base_url_attr="chatgpt_oauth_base_url",
         proxy_attr="chatgpt_oauth_proxy",
+        group="subscription",
+    ),
+    # Google Antigravity (P1 scaffold, 8.22.0). MCC is the *client* of
+    # Antigravity's own upstream here; the existing ``agy`` integration runs the
+    # other way and is untouched. A third Google credential with its own
+    # entitlements, never a fallback for ``gemini`` or ``vertex`` (IV.24).
+    # Sign-in is not available yet: with no credential discovery never lists it,
+    # and the card says "Not signed in" in words.
+    "antigravity_oauth": ProviderDescriptor(
+        provider_id="antigravity_oauth",
+        display_name="Google Antigravity (OAuth, Caution)",
+        credential_env="ANTIGRAVITY_OAUTH_ACCESS_TOKEN",
+        credential_attr="antigravity_oauth_access_token",
+        # The credential is a sign-in MCC performs itself (from the next
+        # release), so an empty setting is not a configuration error.
+        credential_discoverable=True,
+        # What the card says instead of "Missing key" when nothing is signed
+        # in: there is no key to add, and telling the operator to check one
+        # would be a false instruction.
+        credential_missing_label="Not signed in",
+        default_base_url=ANTIGRAVITY_OAUTH_DEFAULT_BASE,
+        base_url_attr="antigravity_oauth_base_url",
+        proxy_attr="antigravity_oauth_proxy",
         group="subscription",
     ),
     "minimax": ProviderDescriptor(

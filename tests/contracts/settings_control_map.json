@@ -168,6 +168,34 @@
       "control": "field-ANTHROPIC_UPSTREAM_BASE_URL",
       "page": "providers"
     },
+    "ANTIGRAVITY_CLIENT_IDENTITY": {
+      "control": "field-ANTIGRAVITY_CLIENT_IDENTITY",
+      "page": "providers"
+    },
+    "ANTIGRAVITY_CLIENT_PROFILE": {
+      "control": "field-ANTIGRAVITY_CLIENT_PROFILE",
+      "page": "providers"
+    },
+    "ANTIGRAVITY_CLIENT_VERSION": {
+      "control": "field-ANTIGRAVITY_CLIENT_VERSION",
+      "page": "providers"
+    },
+    "ANTIGRAVITY_OAUTH_ACCESS_TOKEN": {
+      "control": "field-ANTIGRAVITY_OAUTH_ACCESS_TOKEN",
+      "page": "providers"
+    },
+    "ANTIGRAVITY_OAUTH_ACCESS_TOKEN_ROTATION": {
+      "control": "field-ANTIGRAVITY_OAUTH_ACCESS_TOKEN_ROTATION",
+      "page": "providers"
+    },
+    "ANTIGRAVITY_OAUTH_BASE_URL": {
+      "control": "field-ANTIGRAVITY_OAUTH_BASE_URL",
+      "page": "providers"
+    },
+    "ANTIGRAVITY_OAUTH_PROXY": {
+      "control": "field-ANTIGRAVITY_OAUTH_PROXY",
+      "page": "providers"
+    },
     "AWS_BEARER_TOKEN_BEDROCK": {
       "control": "field-AWS_BEARER_TOKEN_BEDROCK",
       "page": "providers"

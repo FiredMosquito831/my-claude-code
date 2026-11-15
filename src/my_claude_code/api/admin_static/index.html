@@ -3310,6 +3310,47 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   subscription, and use <code>mcc-claude</code> for everything else.
                 </p>
 
+                <h3 id="guide-antigravity-models">Use Google Antigravity models (scaffold only)</h3>
+                <div class="guide-note guide-note-warn">
+                  <p>
+                    <strong>Google Antigravity (OAuth, Caution) exists on the
+                    Providers page, and nothing is signed in yet.</strong> This
+                    release adds the provider, its own account store
+                    (<code>~/.mcc/auth/antigravity-oauth.json</code>), the
+                    <code>v1internal</code> door and the
+                    <code>fetchAvailableModels</code> roster reader &mdash;
+                    <strong>sign-in arrives in the next release</strong>. Until
+                    then the card reads <em>Not signed in</em> and no model on
+                    this provider can serve a request. Nothing changes for any
+                    provider you already use: with no credential Antigravity is
+                    never discovered, never listed and never dialled.
+                  </p>
+                  <p>
+                    <strong>Which direction this is.</strong> Here MCC is the
+                    <em>client</em> of Antigravity&rsquo;s own upstream. Serving
+                    the <code>agy</code> CLI <em>through</em> MCC is the other
+                    direction and is unchanged.
+                  </p>
+                  <p>
+                    <strong>Which identity it presents.</strong> Google&rsquo;s
+                    backend gates on the claim, so the default is the official
+                    Antigravity CLI identity &mdash; the public installed-app
+                    client <code>884354919052-&hellip;</code> and the user-agent
+                    <code>antigravity/cli/&lt;version&gt; (aidev_client; os_type=&hellip;;
+                    arch=&hellip;; cl=&hellip;; auth_method=consumer)</code> &mdash; and
+                    the card says so plainly. <code>ANTIGRAVITY_CLIENT_IDENTITY=mcc</code>
+                    presents My Claude Code&rsquo;s own name instead; Antigravity is
+                    expected to refuse it, which is the point of the switch. The
+                    legacy <code>1071006060591-&hellip;</code> client is a documented
+                    constant and is never the default. Read
+                    <code>docs/OAUTH-PROVIDERS.md</code> for the refusal taxonomy:
+                    a 200 with no <code>currentTier</code> and a 403 whose
+                    <code>ErrorInfo.reason</code> is <code>&quot;TOS_VIOLATION&quot;</code>
+                    are policy refusals, never a quota and never a reason to switch
+                    accounts.
+                  </p>
+                </div>
+
                 <h3 id="guide-mistral-models">Use Mistral models</h3>
                 <p>
                   There are two Mistral providers, and the difference is

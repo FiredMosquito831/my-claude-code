@@ -183,7 +183,7 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 | Where each exit comes out | `PROXY_CHECK_EXIT_IP_URL=provider` asks each provider's own host which address, country and WARP it saw, through the tunnel; entries sharing an exit are grouped, Keep one per exit pauses the duplicates, and Direct's own exit is shown where the chain would use it | **Proxying** page | [Reference](docs/ROUTING-REFERENCE.md#where-each-exit-comes-out-7890) |
 | VPN, WARP and Tor, step by step | Which path fits what you have -- Proton VPN Free through the app, split tunnelling only MCC's program, a VPN account's or gateway's proxies, WARP's proxy mode, your own tor, or gluetun in Docker -- with the exact program to include and the gotchas | **Proxying** page | [Tutorial](docs/USAGE.md#tutorial-route-a-provider-through-a-vpn-warp-or-tor) |
 | Per-model context window | Override the context window MCC extracted for one model; the provider's own figure stays shown beside it | **Models** page | [Guide](docs/USAGE.md#per-model-reasoning-and-output-preferences) |
-| OAuth providers | Claude subscription (**not permitted by Anthropic**), ChatGPT, Kimi For Coding | **Providers** page | [OAuth providers](docs/OAUTH-PROVIDERS.md) |
+| OAuth providers | Claude subscription (**not permitted by Anthropic**), ChatGPT, Google Antigravity (8.22.0 scaffold; **sign-in not available yet**), Kimi For Coding | **Providers** page | [OAuth providers](docs/OAUTH-PROVIDERS.md) |
 | The InferHub page | A marketplace is not an ordinary provider: while InferHub has a key, its own page shows the account and balance read-only, the price profiles and which one each model is assigned, an offer explorer with the ceiling drawn as a dashed line, the last requests with their charged ask, and the market snapshot — with the profile's ceiling sent on every attempt so you are never charged above it | **InferHub** page | [Guide](docs/USAGE.md#the-inferhub-page) |
 
 ### Agents
@@ -318,6 +318,7 @@ every provider below, all managed the same way: enter the listed setting on the 
 | [Kimi](https://platform.moonshot.ai/console/api-keys) | `KIMI_API_KEY` | `kimi/kimi-k2.5` |
 | [Kimi Coding](https://kimi.com/coding) | `KIMI_CODING_API_KEY` | `kimi_coding/kimi-k2.5` |
 | [ChatGPT OAuth](https://github.com/openai/codex) (experimental) | `CHATGPT_OAUTH_ACCESS_TOKEN` + `CHATGPT_OAUTH_BASE_URL` | `chatgpt_oauth/gpt-5` |
+| [Google Antigravity](https://antigravity.google/) (OAuth, scaffold — **sign-in not available yet**; see [docs](docs/OAUTH-PROVIDERS.md)) | `ANTIGRAVITY_OAUTH_ACCESS_TOKEN` + `ANTIGRAVITY_CLIENT_IDENTITY` | `antigravity_oauth/gemini-3.8-flash` |
 | [MiniMax](https://platform.minimax.io/user-center/basic-information/interface-key) | `MINIMAX_API_KEY` | `minimax/MiniMax-M3` |
 | [Cerebras Inference](https://cloud.cerebras.ai/) | `CEREBRAS_API_KEY` | `cerebras/gpt-oss-120b` |
 | [Groq](https://console.groq.com/keys) | `GROQ_API_KEY` | `groq/llama-3.3-70b-versatile` |

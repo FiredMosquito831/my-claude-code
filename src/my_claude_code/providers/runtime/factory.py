@@ -246,6 +246,32 @@ def _create_github_models(
     return GitHubModelsProvider(config, rate_limiter=rate_limiter)
 
 
+def _create_antigravity_oauth(
+    config: ProviderConfig,
+    settings: Settings,
+    rate_limiter: ProviderRateLimiter,
+) -> BaseProvider:
+    """The Google Antigravity provider (8.22.0 scaffold).
+
+    The identity switches are read here — the provider package declares the
+    defaults and the profiles, ``Settings`` carries the operator's choice — and
+    the credential is resolved per request from MCC's own store (or a raw token
+    in the setting) inside the provider, exactly as the two other OAuth
+    providers do.
+    """
+    from my_claude_code.providers.antigravity_oauth import AntigravityOAuthProvider
+
+    return AntigravityOAuthProvider(
+        config,
+        rate_limiter=rate_limiter,
+        provider_id="antigravity_oauth",
+        account_id=config.oauth_account_id,
+        client_identity=settings.antigravity_client_identity,
+        client_profile=settings.antigravity_client_profile,
+        client_version=settings.antigravity_client_version,
+    )
+
+
 def _create_chatgpt_oauth(
     config: ProviderConfig,
     settings: Settings,
@@ -300,6 +326,7 @@ _SPECIAL_PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
     "vertex": _create_vertex,
     "github_models": _create_github_models,
     "chatgpt_oauth": _create_chatgpt_oauth,
+    "antigravity_oauth": _create_antigravity_oauth,
     # ``openai`` is a connected-account alias of the ChatGPT/Codex OAuth backend;
     # it routes through the same provider construction.
     "openai": _create_chatgpt_oauth,
@@ -586,12 +613,14 @@ def _instantiate_leaf(
     return create_openai_chat_provider(descriptor.provider_id, config, rate_limiter)
 
 
-#: The two provider ids whose "credential" is a rotating OAuth token rather
+#: The provider ids whose "credential" is a rotating OAuth token rather
 #: than a secret the operator pasted. Their pool is a list of *accounts*, and
 #: it lives in a store file, not in the env var -- which is why the
 #: ``len(keys) <= 1`` short-circuit below can never see it: both of them
 #: always present exactly one non-secret marker key.
-_OAUTH_PROVIDER_IDS = frozenset({"anthropic_oauth", "chatgpt_oauth", "openai"})
+_OAUTH_PROVIDER_IDS = frozenset(
+    {"anthropic_oauth", "chatgpt_oauth", "openai", "antigravity_oauth"}
+)
 
 
 def _anthropic_oauth_account_ids() -> list[str]:
@@ -618,6 +647,18 @@ def _chatgpt_oauth_account_ids() -> list[str]:
         return []
 
 
+def _antigravity_oauth_account_ids() -> list[str]:
+    """Every stored Antigravity account id. Never raises, never a secret."""
+    try:
+        from my_claude_code.providers.antigravity_oauth.credentials import (
+            load_accounts,
+        )
+
+        return [record.id for record in load_accounts(migrate=False) if record.id]
+    except Exception:  # pragma: no cover - a store problem is not a page
+        return []
+
+
 def _first_chatgpt_account_id() -> str:
     ids = _chatgpt_oauth_account_ids()
     return ids[0] if ids else ""
@@ -634,6 +675,8 @@ def oauth_account_ids(provider_id: str) -> list[str]:
         return _anthropic_oauth_account_ids()
     if provider_id in ("chatgpt_oauth", "openai"):
         return _chatgpt_oauth_account_ids()
+    if provider_id == "antigravity_oauth":
+        return _antigravity_oauth_account_ids()
     return []
 
 

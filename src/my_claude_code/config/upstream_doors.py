@@ -34,6 +34,10 @@ DOOR_OPENAI_RESPONSES: Final = "openai_responses"
 DOOR_OPENAI_CHAT: Final = "openai_chat"
 DOOR_CHATGPT_OAUTH: Final = "chatgpt_oauth"
 DOOR_RESPONSES_TRANSPORT: Final = "openai_chat.responses"
+#: The fifth model door (8.22.0): Google Antigravity's private ``v1internal``
+#: surface, a Gemini-shaped JSON body over SSE. None of the four existing doors
+#: speaks it, and calling it "OpenAI Chat Completions" would be a lie.
+DOOR_ANTIGRAVITY: Final = "antigravity_v1internal"
 DOOR_REFUSAL: Final = "refusal"
 DOOR_MEDIA: Final = "media"
 DOOR_WEBSEARCH: Final = "websearch"
@@ -87,6 +91,11 @@ UPSTREAM_DOORS: dict[str, UpstreamDoor] = {
             CAPTURES_BYTES,
         ),
         UpstreamDoor(
+            DOOR_ANTIGRAVITY,
+            "Google Antigravity (v1internal)",
+            CAPTURES_BYTES,
+        ),
+        UpstreamDoor(
             DOOR_REFUSAL,
             "the provider's refusal body",
             CAPTURES_BYTES,
@@ -112,6 +121,7 @@ MODEL_DOORS: tuple[str, ...] = (
     DOOR_CHATGPT_OAUTH,
     DOOR_RESPONSES_TRANSPORT,
     DOOR_OPENAI_CHAT,
+    DOOR_ANTIGRAVITY,
 )
 
 

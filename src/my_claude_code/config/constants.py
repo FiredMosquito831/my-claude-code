@@ -117,6 +117,19 @@ CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-oauth"
 # directly). See docs/ANTHROPIC-SUBSCRIPTION.md.
 ANTHROPIC_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-anthropic-oauth"
 
+# Non-secret marker stored in Settings when MCC owns a renewable Google
+# Antigravity OAuth credential. The card reads "Not signed in" until this or a
+# raw token is present; the store itself
+# (``config/paths.antigravity_oauth_store_path``) is where the credential lives.
+ANTIGRAVITY_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-antigravity-oauth"
+
+# Which client Antigravity requests claim to be, and which declared identity
+# profile is used. Mirrored here because ``config`` is a LEAF and may not import
+# a provider package; ``tests/providers/test_antigravity_oauth.py`` pins the two
+# spellings equal.
+ANTIGRAVITY_CLIENT_IDENTITY_DEFAULT = "antigravity"
+ANTIGRAVITY_CLIENT_PROFILE_DEFAULT = "cli"
+
 # Fallback timing. These live here rather than beside the executor because
 # Settings needs them and the application layer already reads Settings.
 #

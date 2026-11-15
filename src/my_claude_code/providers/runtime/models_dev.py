@@ -871,6 +871,10 @@ PROVIDER_ID_ALIASES: dict[str, str] = {
     "ollama_cloud": "ollama-cloud",
     "chatgpt_oauth": "openai",
     "anthropic_oauth": "anthropic",
+    # 8.22.0: capability and limits only, never existence (NQ7/Q7). Antigravity
+    # has no models.dev bucket of its own; its published roster is the only
+    # existence source, and this alias must never be read as one.
+    "antigravity_oauth": "google",
     "github_models": "github-copilot",
     "opencode_go": "opencode-go",
     "wafer": "wafer.ai",

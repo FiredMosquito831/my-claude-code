@@ -4,6 +4,8 @@ from typing import Any
 
 from my_claude_code.config.admin.spec import ConfigOptionSpec
 from my_claude_code.config.constants import (
+    ANTIGRAVITY_CLIENT_IDENTITY_DEFAULT,
+    ANTIGRAVITY_CLIENT_PROFILE_DEFAULT,
     MARKETPLACE_PUBLIC_MARKET_DEFAULT,
     OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
@@ -502,6 +504,7 @@ def provider_field_specs() -> tuple[dict[str, Any], ...]:
         *_chatgpt_oauth_login_field_specs(),
         *_chatgpt_oauth_account_field_specs(),
         *_anthropic_oauth_login_field_specs(),
+        *_antigravity_oauth_field_specs(),
         *_cloudflare_account_field_specs(),
         *_vertex_field_specs(),
         *_inferhub_market_field_specs(),
@@ -969,6 +972,88 @@ def _anthropic_oauth_login_field_specs() -> tuple[dict[str, Any], ...]:
                 "harness onto the subscription credential, which is the case "
                 "Anthropic's policy names explicitly -- read "
                 "docs/ANTHROPIC-SUBSCRIPTION.md first."
+            ),
+        },
+    )
+
+
+def _antigravity_oauth_field_specs() -> tuple[dict[str, Any], ...]:
+    """Which client Antigravity requests claim to be, and from which release.
+
+    The identity every request presents is the official Antigravity CLI by
+    default, and the card says so in words. ``mcc`` presents MCC's own name and
+    is expected to be refused — it exists so an operator can say "stop
+    presenting Google's client", and the help text says what will happen.
+
+    No sign-in control here: P1 ships the scaffold and sign-in arrives in the
+    next release. A sign-in pseudo-field would render a button that cannot work.
+    """
+    return (
+        {
+            "key": "ANTIGRAVITY_CLIENT_IDENTITY",
+            "label": "Antigravity Client Identity",
+            "section_id": "providers",
+            "provider": "antigravity_oauth",
+            "settings_attr": "antigravity_client_identity",
+            "field_type": "select",
+            "default": ANTIGRAVITY_CLIENT_IDENTITY_DEFAULT,
+            "options": (
+                ConfigOptionSpec(
+                    "antigravity", "Google Antigravity CLI (default, official)"
+                ),
+                ConfigOptionSpec("mcc", "My Claude Code (honest; expected refusal)"),
+            ),
+            "description": (
+                "What every request claims to be. 'antigravity' presents Google's "
+                "official Antigravity CLI identity -- the public installed-app "
+                "client id 884354919052-... and the user-agent "
+                "antigravity/cli/<version> (aidev_client; os_type=...; "
+                "arch=...; cl=...; auth_method=consumer). Google's backend gates "
+                "on that claim, so this is the working default and the card says "
+                "so plainly. 'mcc' presents my-claude-code's own name instead; "
+                "Antigravity is expected to refuse it, which is the point -- it "
+                "is the only way to stop presenting Google's client. Nothing here "
+                "contacts Google until an account is signed in."
+            ),
+        },
+        {
+            "key": "ANTIGRAVITY_CLIENT_PROFILE",
+            "label": "Antigravity Identity Profile",
+            "section_id": "providers",
+            "provider": "antigravity_oauth",
+            "settings_attr": "antigravity_client_profile",
+            "field_type": "select",
+            "default": ANTIGRAVITY_CLIENT_PROFILE_DEFAULT,
+            "advanced": True,
+            "options": (
+                ConfigOptionSpec("cli", "CLI profile (default)"),
+                ConfigOptionSpec("ide", "IDE profile (darwin/arm64, unmeasured)"),
+            ),
+            "description": (
+                "The declared identity profile, as a set: user-agent shape, "
+                "body metadata shape and whether an Accept header is sent. 'cli' "
+                "is the default and the only profile measured against Google: "
+                "the bare-string metadata, the Go-token user-agent, and no Accept "
+                "header on the stream. 'ide' is a second declared object "
+                "(numeric metadata, darwin/arm64 pinned, Accept: text/event-stream) "
+                "and has never been measured by MCC; mixing one profile's "
+                "user-agent with the other's metadata is a known refusal."
+            ),
+        },
+        {
+            "key": "ANTIGRAVITY_CLIENT_VERSION",
+            "label": "Antigravity Client Version",
+            "section_id": "providers",
+            "provider": "antigravity_oauth",
+            "settings_attr": "antigravity_client_version",
+            "advanced": True,
+            "description": (
+                "Which Antigravity CLI release the user-agent names. Empty -- the "
+                "default -- uses the dated constant this build was verified "
+                "against (1.4.4). A version that is too old is reported to gate "
+                "newer models; too new is a claim no release made. The live "
+                "release feed arrives with sign-in; nothing is fetched today and "
+                "no request is made until an account exists."
             ),
         },
     )

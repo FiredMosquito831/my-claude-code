@@ -118,7 +118,11 @@ def provider_config_status(
         elif _free_tier_ready(descriptor, state):
             status, label = FREE_TIER_READY_STATUS, FREE_TIER_READY_LABEL
         else:
-            status, label = "missing_key", "Missing key"
+            # A provider whose credential is a SIGN-IN declares what its empty
+            # card says; every other provider keeps "Missing key". Declared
+            # data, so no page ever matches a provider id.
+            status = "missing_key"
+            label = descriptor.credential_missing_label or "Missing key"
         remote: dict[str, Any] = {
             "provider_id": provider_id,
             "display_name": descriptor.display_name,

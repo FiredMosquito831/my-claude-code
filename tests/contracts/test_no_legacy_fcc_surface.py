@@ -143,7 +143,9 @@ ALLOWED_FILES: dict[str, str] = {
     ),
     "src/my_claude_code/config/constants.py": (
         '"fcc-managed-oauth"/"fcc-managed-anthropic-oauth" are marker VALUES '
-        "stored in users' .env files; changing them would drop their OAuth"
+        "stored in users' .env files; changing them would drop their OAuth. "
+        '8.22.0 adds "fcc-managed-antigravity-oauth" beside them, in the same '
+        "stored-marker family, so all three keep the one spelling."
     ),
     "src/my_claude_code/providers/chatgpt_oauth/credentials.py": (
         '"fcc-managed" is the stored credential-source name'
