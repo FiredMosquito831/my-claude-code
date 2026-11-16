@@ -404,7 +404,7 @@ header an answer is exactly what it was.
 curl http://127.0.0.1:8082/v1/websearch \
   -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"query": "python 3.14 release notes", "max_results": 5}'
+  -d '{"query": "python 3.14 release notes", "max_results": 5, "synthesize": true}'
 ```
 
 ```sh
@@ -414,9 +414,22 @@ curl http://127.0.0.1:8082/v1/webfetch \
   -d '{"url": "https://docs.python.org/3/", "extractor": "trafilatura"}'
 ```
 
-Both routes accept `Bearer`, `x-api-key`, `x-goog-api-key`, and `?key=`, answer
-`HEAD`/`OPTIONS` probes with `204` (`Allow: POST, HEAD, OPTIONS`), and default to
+Drop-in dialect endpoints reuse MCC's live **Web Search** configuration and key
+pools without changing client SDK code:
+
+- **Tavily:** `POST /v1/websearch/tavily`, `/v1/websearch/tavily/search`, `/v1/websearch/tavily/extract` (also accepts JSON body `api_key`)
+- **Exa:** `POST /v1/websearch/exa`, `/v1/websearch/exa/search`, `/v1/websearch/exa/contents` (`x-api-key` or `Bearer`)
+- **Brave:** `GET /v1/websearch/brave` and `GET /res/v1/web/search` (also accepts `X-Subscription-Token`)
+- **DeepSeek wire dialect:** `POST /v1/websearch/deepseek`, `/v1/websearch/deepseek/tools/search`, `/v1/websearch/deepseek/v1/tools/search`, `/v1/websearch/deepseek/tools/fetch`, `/v1/websearch/deepseek/v1/tools/fetch`
+- **SearXNG JSON:** `GET /v1/websearch/searxng` and `GET /search?format=json&q=...&key=...` (for OpenClaw, Hermes, and DSH; non-JSON `format` returns `400`)
+
+All canonical and dialect search routes accept `Bearer`, `x-api-key`, `x-goog-api-key`,
+and `?key=`, answer `HEAD`/`OPTIONS` probes with `204`, and default to
 the live **Web Search** and **Model Config → Web tools** dashboard configuration.
+`POST /v1/websearch` also accepts `format` (`"mcc"`, `"digest"`, `"tavily"`, `"exa"`,
+`"brave"`, `"deepseek"`, or `"searxng"`) and opt-in `synthesize: true` (+ `model`,
+`synthesis_max_tokens`) to run a priced MCC model turn (`is_local=0` in `requests.db`)
+returning grounded inline `[N]` citations.
 Validation and SSRF refusals answer `400` in OpenAI's `{"error": {...}}`
 envelope; `WEB_SEARCH_PROVIDER=disabled` or `ENABLE_WEB_SERVER_TOOLS=false`
 answers `503`. See [Web search guide](WEB-SEARCH.md#standalone-rest-endpoints-post-v1websearch-post-v1webfetch).

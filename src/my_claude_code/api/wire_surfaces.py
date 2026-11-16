@@ -61,6 +61,8 @@ MEDIA_MODELS_ENDPOINT = "/v1/media/models"
 #: Standalone REST web search & web fetch endpoints.
 WEBSEARCH_ENDPOINT = "/v1/websearch"
 WEBFETCH_ENDPOINT = "/v1/webfetch"
+BRAVE_SEARCH_COMPAT_ENDPOINT = "/res/v1/web/search"
+SEARXNG_SEARCH_COMPAT_ENDPOINT = "/search"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
@@ -101,6 +103,8 @@ def wire_api_for_path(path: str) -> WireApi:
     if path.startswith(VIDEOS_ENDPOINT + "/"):
         # A video job's own paths (``/v1/videos/{id}``, ``.../content``) are
         # OpenAI-shaped like the create; their clients parse OpenAI errors.
+        return "chat_completions"
+    if is_websearch_rest_path(path):
         return "chat_completions"
     return _WIRE_API_BY_PATH.get(path, "messages")
 
@@ -147,10 +151,15 @@ def is_media_path(path: str) -> bool:
 
 
 _WEBSEARCH_REST_PATHS: frozenset[str] = frozenset(
-    {WEBSEARCH_ENDPOINT, WEBFETCH_ENDPOINT}
+    {
+        WEBSEARCH_ENDPOINT,
+        WEBFETCH_ENDPOINT,
+        BRAVE_SEARCH_COMPAT_ENDPOINT,
+        SEARXNG_SEARCH_COMPAT_ENDPOINT,
+    }
 )
 
 
 def is_websearch_rest_path(path: str) -> bool:
     """Whether ``path`` is one of the standalone REST websearch/webfetch routes."""
-    return path in _WEBSEARCH_REST_PATHS
+    return path in _WEBSEARCH_REST_PATHS or path.startswith(WEBSEARCH_ENDPOINT + "/")

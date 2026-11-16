@@ -167,7 +167,13 @@ def _estimated_image_tokens(image: ImageInput, family: str) -> int:
 #: The inbound wire protocol a logged request arrived on. Stored verbatim in
 #: the request log's ``protocol`` column, shown in the request detail pane, and
 #: exported as-is, so a value added here becomes a user-visible vocabulary word.
-WireProtocol = Literal["anthropic", "openai_responses", "openai_chat", "gemini"]
+WireProtocol = Literal[
+    "anthropic",
+    "openai_responses",
+    "openai_chat",
+    "gemini",
+    "rest_websearch",
+]
 
 #: The egress half of the carrier-surface count (8.20.0): an Anthropic
 #: ``content_block_start`` whose block type is one a door cannot hand its
@@ -393,6 +399,7 @@ class RequestCapture:
         # whenever somebody had disabled logging would be worth very little.
         self._attempt_index: int | None = None
         self._attempt_provider: str | None = None
+        self._attempt_model: str | None = None
         self._attempt_model_ref: str | None = None
         # The in-flight view's transitions, stamped where they happen and,
         # like the three fields above, whether or not the request log is on.
@@ -481,6 +488,36 @@ class RequestCapture:
     @property
     def enabled(self) -> bool:
         return self._store is not None
+
+    @property
+    def recorded_cost_usd(self) -> float | None:
+        """Return finalized USD cost if priced, else ``None``."""
+        return self._record.cost_usd
+
+    @property
+    def recorded_provider(self) -> str | None:
+        """Return the winning provider identifier, if known."""
+        return self._record.provider or self._attempt_provider
+
+    @property
+    def recorded_model(self) -> str | None:
+        """Return the winning upstream model identifier, if known."""
+        return self._record.resolved_model or self._attempt_model
+
+    @property
+    def recorded_usage(self) -> tuple[int | None, int | None]:
+        """Return observed ``(tokens_in, tokens_out)`` after stream finalization."""
+        tokens_in = (
+            self._record.tokens_in
+            if self._record.tokens_in is not None
+            else self._tokens_in
+        )
+        tokens_out = (
+            self._record.tokens_out
+            if self._record.tokens_out is not None
+            else self._tokens_out
+        )
+        return tokens_in, tokens_out
 
     def watchdog_progress(self) -> request_tasks.RequestProgress:
         """What the stuck-request watchdog reads off this request.
@@ -894,6 +931,7 @@ class RequestCapture:
             self._proxy.label = None
         self._attempt_index = attempt
         self._attempt_provider = routed.resolved.provider_id
+        self._attempt_model = routed.resolved.provider_model
         self._attempt_model_ref = routed.resolved.provider_model_ref
         if not self.enabled:
             return

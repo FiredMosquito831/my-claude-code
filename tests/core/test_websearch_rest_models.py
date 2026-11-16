@@ -114,14 +114,47 @@ def test_websearch_rest_request_defaults_aliases_and_to_request_options() -> Non
         {"query": "ok", "search_depth": "ultra"},
         {"query": "ok", "start_date": "not-a-date"},
         {"query": "ok", "start_date": "2026-03-01", "end_date": "2026-02-01"},
-        {"query": "ok", "synthesize": True},
-        {"query": "ok", "format": "tavily"},
+        {"query": "ok", "synthesis_max_tokens": 127},
+        {"query": "ok", "synthesis_max_tokens": 8193},
+        {"query": "ok", "synthesis_max_tokens": True},
+        {"query": "ok", "format": "google"},
         {"query": "ok", "unknown_field": 1},
     ],
 )
 def test_websearch_rest_request_rejects_invalid_inputs(payload: dict) -> None:
     with pytest.raises(ValidationError):
         WebSearchRestRequest.model_validate(payload)
+
+
+def test_websearch_rest_request_synthesis_and_dialect_format_fields() -> None:
+    req = WebSearchRestRequest.model_validate(
+        {
+            "query": "explain",
+            "synthesize": True,
+            "model": "  Custom/CaseSensitiveModel  ",
+            "synthesis_max_tokens": 512,
+            "format": "tavily",
+        }
+    )
+    assert req.synthesize is True
+    assert req.model == "Custom/CaseSensitiveModel"
+    assert req.synthesis_max_tokens == 512
+    assert req.format == "tavily"
+
+    blank_model = WebSearchRestRequest(query="q", model="   ")
+    assert blank_model.model is None
+
+    for fmt in ("mcc", "digest", "tavily", "exa", "brave", "deepseek", "searxng"):
+        assert WebSearchRestRequest(query="q", format=fmt).format == fmt
+
+    result_item = WebSearchRestResult(
+        title="T",
+        url="https://a.io",
+        snippet="S",
+        highlight_scores=[0.95],
+    )
+    assert result_item.highlight_scores == [0.95]
+    assert "highlight_scores" not in result_item.model_dump()
 
 
 def test_webfetch_rest_request_validation_and_response_shapes() -> None:
