@@ -61,6 +61,7 @@ MEDIA_MODELS_ENDPOINT = "/v1/media/models"
 #: Standalone REST web search & web fetch endpoints.
 WEBSEARCH_ENDPOINT = "/v1/websearch"
 WEBFETCH_ENDPOINT = "/v1/webfetch"
+WEBSEARCH_MCP_HTTP_PATH = "/v1/mcp/websearch"
 BRAVE_SEARCH_COMPAT_ENDPOINT = "/res/v1/web/search"
 SEARXNG_SEARCH_COMPAT_ENDPOINT = "/search"
 

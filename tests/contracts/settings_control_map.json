@@ -2232,6 +2232,10 @@
       "control": "field-WEB_FETCH_EXTRACTOR",
       "page": "model_config"
     },
+    "WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED": {
+      "control": "field-WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED",
+      "page": "web_search"
+    },
     "WEB_SEARCH_CHAIN": {
       "control": "field-WEB_SEARCH_CHAIN",
       "page": "web_search"
@@ -2240,12 +2244,28 @@
       "control": "field-WEB_SEARCH_CHAIN_PAUSED",
       "page": "web_search"
     },
+    "WEB_SEARCH_DOOR_MODE": {
+      "control": "field-WEB_SEARCH_DOOR_MODE",
+      "page": "web_search"
+    },
     "WEB_SEARCH_FALLBACK_POLICY": {
       "control": "field-WEB_SEARCH_FALLBACK_POLICY",
       "page": "web_search"
     },
+    "WEB_SEARCH_MCP_HTTP_ENABLED": {
+      "control": "field-WEB_SEARCH_MCP_HTTP_ENABLED",
+      "page": "web_search"
+    },
     "WEB_SEARCH_PROVIDER": {
       "control": "field-WEB_SEARCH_PROVIDER",
+      "page": "web_search"
+    },
+    "WEB_SEARCH_RESPONSES_ENABLED": {
+      "control": "field-WEB_SEARCH_RESPONSES_ENABLED",
+      "page": "web_search"
+    },
+    "WEB_SEARCH_TOOL_LOOP_MAX_STEPS": {
+      "control": "field-WEB_SEARCH_TOOL_LOOP_MAX_STEPS",
       "page": "web_search"
     },
     "WHISPER_DEVICE": {

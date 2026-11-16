@@ -257,6 +257,9 @@ from .constants import (
     VISION_ADAPTER_MODE_NAMES,
     WEB_FETCH_EXTRACTOR_DEFAULT,
     WEB_FETCH_EXTRACTOR_NAMES,
+    WEB_SEARCH_DOOR_MODE_DEFAULT,
+    WEB_SEARCH_DOOR_MODE_VALUES,
+    WEB_SEARCH_TOOL_LOOP_MAX_STEPS_DEFAULT,
     WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT,
     WITHHELD_FACT_TTL_SECONDS_DEFAULT,
 )
@@ -2243,6 +2246,22 @@ class Settings(BaseSettings):
     websearch_digest_answer: bool = Field(
         default=True, validation_alias="WEBSEARCH_DIGEST_ANSWER"
     )
+    web_search_responses_enabled: bool = Field(
+        default=True, validation_alias="WEB_SEARCH_RESPONSES_ENABLED"
+    )
+    web_search_anthropic_multi_tool_enabled: bool = Field(
+        default=True, validation_alias="WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED"
+    )
+    web_search_door_mode: str = Field(
+        default=WEB_SEARCH_DOOR_MODE_DEFAULT, validation_alias="WEB_SEARCH_DOOR_MODE"
+    )
+    web_search_tool_loop_max_steps: int = Field(
+        default=WEB_SEARCH_TOOL_LOOP_MAX_STEPS_DEFAULT,
+        validation_alias="WEB_SEARCH_TOOL_LOOP_MAX_STEPS",
+    )
+    web_search_mcp_http_enabled: bool = Field(
+        default=True, validation_alias="WEB_SEARCH_MCP_HTTP_ENABLED"
+    )
 
     # ==================== Debug / diagnostic logging (avoid sensitive content) ====================
     # Minimum log level for the JSON file sink (DEBUG, INFO, WARNING, ERROR, CRITICAL).
@@ -2916,6 +2935,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "web_search_fallback_policy must be 'auto', 'none', 'ddgs', "
                 f"or 'legacy', got {v!r}"
+            )
+        return value
+
+    @field_validator("web_search_door_mode")
+    @classmethod
+    def validate_web_search_door_mode(cls, v: str) -> str:
+        value = v.strip().lower()
+        if value not in WEB_SEARCH_DOOR_MODE_VALUES:
+            raise ValueError(
+                "web_search_door_mode must be 'local', 'passthrough', or 'auto', "
+                f"got {v!r}"
             )
         return value
 

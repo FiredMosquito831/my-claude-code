@@ -3,14 +3,41 @@
 from typing import Any
 
 
-def message_item(item_id: str, text: str, status: str) -> dict[str, Any]:
+def message_item(
+    item_id: str,
+    text: str,
+    status: str,
+    *,
+    annotations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     return {
         "id": item_id,
         "type": "message",
         "status": status,
         "role": "assistant",
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
+        "content": [
+            {
+                "type": "output_text",
+                "text": text,
+                "annotations": list(annotations) if annotations else [],
+            }
+        ],
     }
+
+
+def web_search_call_item(
+    item_id: str,
+    status: str,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": item_id,
+        "type": "web_search_call",
+        "status": status,
+    }
+    if action is not None:
+        item["action"] = action
+    return item
 
 
 def reasoning_item(item_id: str, text: str, status: str) -> dict[str, Any]:

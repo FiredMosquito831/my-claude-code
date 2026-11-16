@@ -5476,6 +5476,23 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   remain blocked even if <code>WEB_FETCH_ALLOW_PRIVATE_NETWORKS</code> is
                   enabled.
                 </p>
+                <h4>Multi-door web search and HTTP MCP</h4>
+                <p>
+                  By default, native <code>web_search*</code> tools also work on
+                  <code>POST /v1/responses</code> (<code>WEB_SEARCH_RESPONSES_ENABLED</code>),
+                  mixed client and server tools work on <code>POST /v1/messages</code>
+                  (<code>WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED</code>), and external MCP
+                  clients (Antigravity, Codex, OpenCode, Cline, Goose, Claude Code) can
+                  connect to MCC&apos;s Streamable HTTP MCP endpoint at
+                  <code>POST /v1/mcp/websearch</code>
+                  (<code>WEB_SEARCH_MCP_HTTP_ENABLED</code>) exposing
+                  <code>web_search</code>, <code>web_fetch</code>, and
+                  <code>search_docs</code>. <code>WEB_SEARCH_DOOR_MODE</code> selects
+                  <code>local</code> (default, exact <code>/v1/messages</code> parity up to
+                  <code>WEB_SEARCH_TOOL_LOOP_MAX_STEPS</code> steps),
+                  <code>passthrough</code>, or <code>auto</code>, and invalid tool inputs
+                  return the expected JSON Schema so models and clients self-correct.
+                </p>
 
                 <h3 id="guide-vpn-tor">Use a VPN, WARP or Tor</h3>
                 <p>

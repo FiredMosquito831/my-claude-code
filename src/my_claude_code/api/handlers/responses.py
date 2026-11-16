@@ -1,6 +1,7 @@
 """OpenAI Responses API product flow for Codex clients."""
 
 from collections.abc import Mapping
+from typing import Any
 
 from fastapi.responses import JSONResponse
 
@@ -34,6 +35,11 @@ from my_claude_code.core.failures import ExecutionFailure, find_execution_failur
 from my_claude_code.core.openai_responses import (
     OpenAIResponsesAdapter,
     OpenAIResponsesRequest,
+    ResponsesWebSearchSpec,
+    build_responses_payload_from_loop,
+    collect_responses_final_text,
+    extract_responses_web_search_spec,
+    iter_responses_sse_from_loop,
     openai_error_type_for_failure,
     openai_failure_payload,
 )
@@ -89,18 +95,26 @@ class ResponsesHandler:
         request_id: str | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> object:
-        """Create a streaming OpenAI Responses-compatible response."""
+        """Create a Responses-compatible response (SSE or opt-in web_search JSON)."""
         request_id = request_id or new_request_id()
         request_payload = request_data.model_dump(mode="json", exclude_none=True)
-        if request_data.stream is False:
-            raise InvalidRequestError(
-                "MCC /v1/responses supports streaming only; omit stream or set stream=true."
-            )
+        allow_web_search = bool(self._settings.web_search_responses_enabled)
 
         capture: RequestCapture | None = None
         try:
+            web_search_spec = extract_responses_web_search_spec(
+                request_data.tools,
+                request_data.tool_choice,
+                allow_web_search=allow_web_search,
+            )
+            if request_data.stream is False and web_search_spec is None:
+                raise InvalidRequestError(
+                    "MCC /v1/responses supports streaming only; omit stream or set stream=true."
+                )
+
             anthropic_payload = self._responses_adapter.to_anthropic_payload(
-                request_data
+                request_data,
+                allow_web_search=allow_web_search,
             )
             response_request = MessagesRequest(**anthropic_payload)
             stamp_prompt_cache_ask(self._settings, response_request)
@@ -113,8 +127,20 @@ class ResponsesHandler:
                 headers=headers,
             )
             require_non_empty_messages(response_request.messages)
+            harness = harness_from_headers(headers).harness
+            if web_search_spec is not None:
+                return await self._create_web_search_response(
+                    request_data,
+                    response_request,
+                    web_search_spec,
+                    request_payload=request_payload,
+                    request_id=request_id,
+                    harness=harness,
+                    capture=capture,
+                )
+
             plan = self._model_router.resolve_messages_plan(
-                response_request, harness=harness_from_headers(headers).harness
+                response_request, harness=harness
             )
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
@@ -176,6 +202,100 @@ class ResponsesHandler:
                     error_type="api_error",
                 ),
             )
+
+    async def _create_web_search_response(
+        self,
+        request_data: OpenAIResponsesRequest,
+        response_request: MessagesRequest,
+        spec: ResponsesWebSearchSpec,
+        *,
+        request_payload: dict[str, Any],
+        request_id: str,
+        harness: str | None,
+        capture: RequestCapture,
+    ) -> object:
+        """Execute Responses ``web_search*`` tools through MCC's local tool loop."""
+        if self._settings.web_search_door_mode == "passthrough":
+            raise InvalidRequestError(
+                "WEB_SEARCH_DOOR_MODE='passthrough' is not supported on POST /v1/responses; "
+                "use 'local' or 'auto' instead."
+            )
+
+        from my_claude_code.api.web_tools.constants import _MAX_SEARCH_RESULTS
+        from my_claude_code.api.web_tools.request import WebSearchToolOptions
+        from my_claude_code.api.web_tools.tool_loop import (
+            WebToolLoopConfig,
+            extract_grounded_citations,
+            iter_anthropic_sse_from_loop,
+            run_routed_web_tool_loop,
+        )
+
+        search_max_results = (
+            5 if spec.search_context_size == "low" else _MAX_SEARCH_RESULTS
+        )
+        config = WebToolLoopConfig(
+            enable_search=True,
+            enable_fetch=False,
+            search_options=WebSearchToolOptions(allowed_domains=spec.allowed_domains),
+            search_external_web_access=spec.external_web_access,
+            search_max_results=search_max_results,
+            user_location=spec.user_location,
+            max_steps=self._settings.web_search_tool_loop_max_steps,
+            initial_force_search=spec.forced,
+            search_allowed_disjoint=spec.allowed_disjoint,
+        )
+        loop_result = await run_routed_web_tool_loop(
+            response_request,
+            config,
+            self._settings,
+            model_router=self._model_router,
+            provider_executor=self._provider_executor,
+            wire_api="responses",
+            request_id=request_id,
+            raw_log_label="FULL_RESPONSES_PAYLOAD",
+            raw_log_payload=request_payload,
+            capture=capture,
+            harness=harness,
+        )
+        # Feed RequestCapture through the canonical Anthropic SSE observer so tokens/cost/text record cleanly.
+        async for _frame in capture.wrap(
+            iter_anthropic_sse_from_loop(
+                loop_result, response_model=request_data.model
+            ),
+            discard_after_terminal=True,
+        ):
+            pass
+
+        full_text = collect_responses_final_text(loop_result.final_step_blocks)
+        annotations = extract_grounded_citations(
+            full_text, loop_result.gathered_sources
+        )
+
+        if request_data.stream is False:
+            return JSONResponse(
+                content=build_responses_payload_from_loop(
+                    request_data,
+                    web_calls=loop_result.web_calls,
+                    final_step_blocks=loop_result.final_step_blocks,
+                    annotations=annotations,
+                    loop_usage=loop_result.usage,
+                )
+            )
+
+        return await openai_sse_streaming_response(
+            iter_responses_sse_from_loop(
+                request_data,
+                web_calls=loop_result.web_calls,
+                final_step_blocks=loop_result.final_step_blocks,
+                annotations=annotations,
+                loop_usage=loop_result.usage,
+            ),
+            headers=self._responses_adapter.sse_headers,
+            pre_start_error_response=lambda exc: self._pre_start_error_response(
+                exc, request_id=request_id
+            ),
+            keepalive=StreamKeepalive.from_settings(self._settings),
+        )
 
     def _pre_start_error_response(
         self, exc: BaseException, *, request_id: str

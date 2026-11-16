@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from my_claude_code.core.anthropic.streaming import format_sse_event
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -379,7 +380,10 @@ def test_create_response_malformed_provider_function_call_fails_stream() -> None
 
 def test_create_response_accepts_codex_namespace_tool_request() -> None:
     provider = FakeProvider(_anthropic_tool_stream(tool_name="mcp__node_repl__js"))
-    app = create_test_app()
+    # Pinned opt-out (8.26.0): WEB_SEARCH_RESPONSES_ENABLED=false keeps web_search passive-dropped.
+    app = create_test_app(
+        Settings.model_validate({"WEB_SEARCH_RESPONSES_ENABLED": False})
+    )
     with (
         patch("my_claude_code.api.routes.resolve_provider", return_value=provider),
         TestClient(app) as client,
@@ -698,12 +702,13 @@ def test_create_response_unsupported_tool_returns_openai_error(
 ) -> None:
     client, _provider = responses_client
 
+    # Genuinely unsupported built-in tools remain rejected even when WEB_SEARCH_RESPONSES_ENABLED=true.
     response = client.post(
         "/v1/responses",
         json={
             "model": "nvidia_nim/test-model",
             "input": "Hello",
-            "tools": [{"type": "web_search_preview"}],
+            "tools": [{"type": "code_interpreter"}],
         },
     )
 
@@ -711,6 +716,28 @@ def test_create_response_unsupported_tool_returns_openai_error(
     payload = response.json()
     assert payload["error"]["type"] == "invalid_request_error"
     assert "Unsupported Responses tool type" in payload["error"]["message"]
+
+    # And when WEB_SEARCH_RESPONSES_ENABLED=false, web_search_preview falls back to legacy 400.
+    off_app = create_test_app(
+        Settings.model_validate({"WEB_SEARCH_RESPONSES_ENABLED": False}),
+        providers={},
+    )
+    with (
+        patch("my_claude_code.api.routes.resolve_provider", return_value=_provider),
+        TestClient(off_app) as off_client,
+    ):
+        off_resp = off_client.post(
+            "/v1/responses",
+            json={
+                "model": "nvidia_nim/test-model",
+                "input": "Hello",
+                "tools": [{"type": "web_search_preview"}],
+            },
+        )
+    assert off_resp.status_code == 400
+    off_payload = off_resp.json()
+    assert off_payload["error"]["type"] == "invalid_request_error"
+    assert "Unsupported Responses tool type" in off_payload["error"]["message"]
 
 
 def _anthropic_text_stream(text: str) -> list[str]:

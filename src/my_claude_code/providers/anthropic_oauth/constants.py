@@ -155,6 +155,7 @@ ANTHROPIC_OAUTH_BETA_ALLOWLIST: frozenset[str] = frozenset(
         "context-management-2025-06-27",
         "structured-outputs-2025-12-15",
         "web-search-2025-03-05",
+        "web-fetch-2025-09-10",
         "advanced-tool-use-2025-11-20",
         "tool-search-tool-2025-10-19",
         "effort-2025-11-24",

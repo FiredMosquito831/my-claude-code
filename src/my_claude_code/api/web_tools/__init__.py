@@ -24,13 +24,25 @@ _EXPORTS: dict[str, str] = {
     "enforce_web_fetch_egress": "egress",
     "is_web_server_tool_request": "request",
     "stream_web_server_tool_response": "streaming",
+    "SYNTHETIC_WEB_SEARCH_TOOL_NAME": "tool_loop",
+    "SYNTHETIC_WEB_FETCH_TOOL_NAME": "tool_loop",
+    "WebToolLoopConfig": "tool_loop",
+    "WebToolLoopResult": "tool_loop",
+    "extract_grounded_citations": "tool_loop",
+    "run_routed_web_tool_loop": "tool_loop",
 }
 
 __all__ = [
+    "SYNTHETIC_WEB_FETCH_TOOL_NAME",
+    "SYNTHETIC_WEB_SEARCH_TOOL_NAME",
     "WebFetchEgressPolicy",
     "WebFetchEgressViolation",
+    "WebToolLoopConfig",
+    "WebToolLoopResult",
     "enforce_web_fetch_egress",
+    "extract_grounded_citations",
     "is_web_server_tool_request",
+    "run_routed_web_tool_loop",
     "stream_web_server_tool_response",
 ]
 

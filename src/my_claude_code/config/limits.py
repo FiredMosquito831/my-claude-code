@@ -370,6 +370,9 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "websearch_legacy_min_interval_seconds": LimitRange(
         0.0, 3_600.0, "0 sends the requests back to back"
     ),
+    "web_search_tool_loop_max_steps": LimitRange(
+        1, 25, "bounds multi-door web search tool loop steps"
+    ),
 }
 
 
