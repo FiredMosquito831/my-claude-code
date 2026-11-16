@@ -3515,6 +3515,8 @@ class RequestLogStore:
         self._scan_local = threading.local()
         # Pause / Continue of the history conversion, from the storage line.
         self._history_paused = False
+        self._history_pause_lock = threading.Lock()
+        self._history_pause_explicit = False
         # Writer thread only: the newest blob rowid the converter has looked
         # at after the history was done (new prompts are converted as they
         # come, idle only).
@@ -5722,7 +5724,9 @@ class RequestLogStore:
         return self.history_conversion_status()
 
     def _set_history_paused(self, paused: bool) -> None:
-        self._history_paused = paused
+        with self._history_pause_lock:
+            self._history_pause_explicit = True
+            self._history_paused = paused
         try:
             with self._connection() as conn:
                 if paused:
@@ -7245,9 +7249,14 @@ class RequestLogStore:
             self._dictionaries_checked.set()
             session_id = self._open_session(conn)
             self._search_start(conn)
-            # A pause pressed in an earlier run holds (7.93.0).
-            if self._meta_get(conn, _HISTORY_PAUSED_KEY) is not None:
-                self._history_paused = True
+            # A pause pressed in an earlier run holds (7.93.0) unless the current
+            # session already called Pause/Continue before startup reached here.
+            with self._history_pause_lock:
+                if (
+                    not self._history_pause_explicit
+                    and self._meta_get(conn, _HISTORY_PAUSED_KEY) is not None
+                ):
+                    self._history_paused = True
             last_heartbeat = time.monotonic()
             while not stopping:
                 # Between batches, never inside one: see ``retune``. A
