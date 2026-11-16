@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic.streaming import format_sse_event
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.reasoning import ReasoningControl, ReasoningEffort
@@ -342,13 +343,31 @@ def test_more_than_one_choice_is_an_openai_shaped_400(chat_client) -> None:
 
 
 def test_an_unsupported_tool_type_is_an_openai_shaped_400(chat_client) -> None:
-    client, _provider = chat_client
+    client, provider = chat_client
 
-    response = client.post(_PATH, json=_payload(tools=[{"type": "web_search_preview"}]))
+    # Genuinely unsupported tool types remain rejected even when WEB_SEARCH_CHAT_ENABLED=true.
+    response = client.post(_PATH, json=_payload(tools=[{"type": "code_interpreter"}]))
 
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "invalid_request_error"
-    assert "web_search_preview" in response.json()["error"]["message"]
+    assert "code_interpreter" in response.json()["error"]["message"]
+
+    # When WEB_SEARCH_CHAT_ENABLED=false, web_search_preview keeps legacy 400 behavior.
+    off_app = create_test_app(
+        Settings.model_validate({"WEB_SEARCH_CHAT_ENABLED": False}),
+        providers={},
+    )
+    with (
+        patch("my_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(off_app) as off_client,
+    ):
+        off_resp = off_client.post(
+            _PATH, json=_payload(tools=[{"type": "web_search_preview"}])
+        )
+
+    assert off_resp.status_code == 400
+    assert off_resp.json()["error"]["type"] == "invalid_request_error"
+    assert "web_search_preview" in off_resp.json()["error"]["message"]
 
 
 def test_a_pre_start_provider_failure_is_a_terminal_openai_error() -> None:

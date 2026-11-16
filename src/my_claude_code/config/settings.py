@@ -257,8 +257,10 @@ from .constants import (
     VISION_ADAPTER_MODE_NAMES,
     WEB_FETCH_EXTRACTOR_DEFAULT,
     WEB_FETCH_EXTRACTOR_NAMES,
+    WEB_SEARCH_CHAT_ENABLED_DEFAULT,
     WEB_SEARCH_DOOR_MODE_DEFAULT,
     WEB_SEARCH_DOOR_MODE_VALUES,
+    WEB_SEARCH_GEMINI_ENABLED_DEFAULT,
     WEB_SEARCH_TOOL_LOOP_MAX_STEPS_DEFAULT,
     WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT,
     WITHHELD_FACT_TTL_SECONDS_DEFAULT,
@@ -2251,6 +2253,14 @@ class Settings(BaseSettings):
     )
     web_search_anthropic_multi_tool_enabled: bool = Field(
         default=True, validation_alias="WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED"
+    )
+    web_search_gemini_enabled: bool = Field(
+        default=WEB_SEARCH_GEMINI_ENABLED_DEFAULT,
+        validation_alias="WEB_SEARCH_GEMINI_ENABLED",
+    )
+    web_search_chat_enabled: bool = Field(
+        default=WEB_SEARCH_CHAT_ENABLED_DEFAULT,
+        validation_alias="WEB_SEARCH_CHAT_ENABLED",
     )
     web_search_door_mode: str = Field(
         default=WEB_SEARCH_DOOR_MODE_DEFAULT, validation_alias="WEB_SEARCH_DOOR_MODE"

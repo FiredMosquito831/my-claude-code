@@ -27,9 +27,14 @@ class GeminiApiAdapter:
         return uuid.uuid4().hex[:22]
 
     def to_anthropic_payload(
-        self, request: GeminiGenerateContentRequest
+        self,
+        request: GeminiGenerateContentRequest,
+        *,
+        allow_web_search: bool = False,
     ) -> GeminiConversion:
-        return convert_request_to_anthropic_payload(request)
+        return convert_request_to_anthropic_payload(
+            request, allow_web_search=allow_web_search
+        )
 
     def iter_sse_from_anthropic(
         self,

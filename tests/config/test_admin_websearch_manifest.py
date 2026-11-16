@@ -180,6 +180,8 @@ def test_websearch_field_specs_cover_section_fields() -> None:
         "WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS",
         "WEB_SEARCH_RESPONSES_ENABLED",
         "WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED",
+        "WEB_SEARCH_GEMINI_ENABLED",
+        "WEB_SEARCH_CHAT_ENABLED",
         "WEB_SEARCH_DOOR_MODE",
         "WEB_SEARCH_TOOL_LOOP_MAX_STEPS",
         "WEB_SEARCH_MCP_HTTP_ENABLED",

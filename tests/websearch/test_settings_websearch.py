@@ -144,6 +144,8 @@ class TestWebSearchSettings:
         defaults = _settings(monkeypatch)
         assert defaults.web_search_responses_enabled is True
         assert defaults.web_search_anthropic_multi_tool_enabled is True
+        assert defaults.web_search_gemini_enabled is True
+        assert defaults.web_search_chat_enabled is True
         assert defaults.web_search_door_mode == "local"
         assert defaults.web_search_tool_loop_max_steps == 5
         assert defaults.web_search_mcp_http_enabled is True
@@ -151,6 +153,8 @@ class TestWebSearchSettings:
         new_keys = (
             "WEB_SEARCH_RESPONSES_ENABLED",
             "WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED",
+            "WEB_SEARCH_GEMINI_ENABLED",
+            "WEB_SEARCH_CHAT_ENABLED",
             "WEB_SEARCH_DOOR_MODE",
             "WEB_SEARCH_TOOL_LOOP_MAX_STEPS",
             "WEB_SEARCH_MCP_HTTP_ENABLED",
@@ -159,6 +163,16 @@ class TestWebSearchSettings:
         for key in new_keys:
             assert FIELD_BY_KEY[key].restart_required is False
             assert FIELD_BY_KEY[key].affects_providers is False
+            assert FIELD_BY_KEY[key].section_id == "websearch"
+
+        # Explicit false overrides work cleanly for both PR 3 door toggles.
+        off = _settings(
+            monkeypatch,
+            WEB_SEARCH_GEMINI_ENABLED="false",
+            WEB_SEARCH_CHAT_ENABLED="false",
+        )
+        assert off.web_search_gemini_enabled is False
+        assert off.web_search_chat_enabled is False
 
     @pytest.mark.parametrize(
         "mode", ["local", "passthrough", "auto", " AUTO ", "Local"]

@@ -11,6 +11,33 @@ from .models import OpenAIChatCompletionRequest
 from .usage import ChatUsageLedger
 
 
+def extract_completion_blocks(
+    blocks: Any,
+    *,
+    usage: ChatUsageLedger,
+) -> tuple[str, str, list[dict[str, Any]]]:
+    """Collect text, reasoning, and function tool calls from Anthropic blocks."""
+    text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+
+    for block in blocks or ():
+        if not isinstance(block, Mapping):
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            text_parts.append(_text(block.get("text")))
+        elif block_type == "thinking":
+            reasoning_parts.append(_text(block.get("thinking")))
+        elif block_type == "tool_use":
+            tool_calls.append(tool_call_from_block(block))
+
+    for reasoning in reasoning_parts:
+        usage.add_reasoning_text(reasoning)
+
+    return "".join(text_parts), "".join(reasoning_parts), tool_calls
+
+
 def chat_completion_from_anthropic_message(
     message: Mapping[str, Any],
     request: OpenAIChatCompletionRequest,
@@ -25,34 +52,19 @@ def chat_completion_from_anthropic_message(
     difference: a client that flips ``stream`` has to see the same text, the
     same tool calls and the same finish reason.
     """
-    text_parts: list[str] = []
-    reasoning_parts: list[str] = []
-    tool_calls: list[dict[str, Any]] = []
-
-    for block in message.get("content") or ():
-        if not isinstance(block, Mapping):
-            continue
-        block_type = block.get("type")
-        if block_type == "text":
-            text_parts.append(_text(block.get("text")))
-        elif block_type == "thinking":
-            reasoning_parts.append(_text(block.get("thinking")))
-        elif block_type == "tool_use":
-            tool_calls.append(_tool_call(block))
-
     usage = ChatUsageLedger()
+    content, reasoning, tool_calls = extract_completion_blocks(
+        message.get("content"), usage=usage
+    )
     usage.absorb(message.get("usage"))
-    for reasoning in reasoning_parts:
-        usage.add_reasoning_text(reasoning)
 
-    content = "".join(text_parts)
     choice_message: dict[str, Any] = {
         "role": "assistant",
         # ``null`` rather than ``""`` when the turn was only tool calls: that
         # is what OpenAI itself sends, and clients branch on it.
         "content": content if content or not tool_calls else None,
     }
-    if reasoning := "".join(reasoning_parts):
+    if reasoning:
         choice_message["reasoning_content"] = reasoning
         choice_message["reasoning"] = reasoning
     if tool_calls:
@@ -78,7 +90,8 @@ def chat_completion_from_anthropic_message(
     }
 
 
-def _tool_call(block: Mapping[str, Any]) -> dict[str, Any]:
+def tool_call_from_block(block: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert one Anthropic ``tool_use`` block into an OpenAI Chat tool_call."""
     arguments = block.get("input")
     return {
         "id": _text(block.get("id")) or new_tool_call_id(),

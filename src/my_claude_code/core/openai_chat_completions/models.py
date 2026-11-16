@@ -55,6 +55,7 @@ class OpenAIChatCompletionRequest(BaseModel):
     tools: list[dict[str, Any]] | None = None
     tool_choice: Any = None
     parallel_tool_calls: bool | None = None
+    web_search_options: Any = None
     reasoning_effort: str | None = None
     response_format: dict[str, Any] | None = None
     logprobs: bool | None = None

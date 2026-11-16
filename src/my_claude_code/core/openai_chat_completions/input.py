@@ -19,6 +19,7 @@ from .models import ChatCompletionMessage, OpenAIChatCompletionRequest
 from .tools import (
     convert_tool_choice,
     convert_tools,
+    extract_chat_web_search_spec,
     parse_arguments,
     tool_choice_forbids_tools,
 )
@@ -48,6 +49,7 @@ def convert_request_to_anthropic_payload(
     request: OpenAIChatCompletionRequest,
     *,
     carrier_surface: dict[str, int] | None = None,
+    allow_web_search: bool = False,
 ) -> dict[str, Any]:
     """Convert a Chat Completions request into an Anthropic Messages payload.
 
@@ -108,12 +110,21 @@ def convert_request_to_anthropic_payload(
     if output_config := _output_config(request.reasoning_effort):
         payload["output_config"] = output_config
 
-    tools = convert_tools(request.tools)
+    if allow_web_search:
+        extract_chat_web_search_spec(
+            request.tools,
+            request.tool_choice,
+            request.web_search_options,
+            allow_web_search=True,
+        )
+
+    tools = convert_tools(request.tools, allow_web_search=allow_web_search)
     if tools and not tool_choice_forbids_tools(request.tool_choice):
         payload["tools"] = tools
         tool_choice = convert_tool_choice(
             request.tool_choice,
             parallel_tool_calls=request.parallel_tool_calls,
+            allow_web_search=allow_web_search,
         )
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice

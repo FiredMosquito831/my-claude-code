@@ -1,10 +1,35 @@
 """Assemble one ``GenerateContentResponse`` from a complete Anthropic message."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .events import finish_reason_for
 from .usage import GeminiUsageLedger
+
+
+def parts_from_anthropic_blocks(
+    blocks: Sequence[Any],
+    *,
+    usage: GeminiUsageLedger,
+    include_thoughts: bool,
+) -> list[dict[str, Any]]:
+    """Convert Anthropic content blocks into Gemini ``Content.parts``."""
+    parts: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, Mapping):
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            if text := _text(block.get("text")):
+                parts.append({"text": text})
+        elif block_type == "thinking":
+            if thought := _text(block.get("thinking")):
+                usage.add_thought_text(thought)
+                if include_thoughts:
+                    parts.append({"text": thought, "thought": True})
+        elif block_type == "tool_use":
+            parts.append(function_call_part(block))
+    return parts
 
 
 def generate_content_response_from_anthropic_message(
@@ -24,24 +49,12 @@ def generate_content_response_from_anthropic_message(
     reason.
     """
 
-    parts: list[dict[str, Any]] = []
     usage = GeminiUsageLedger()
-
-    for block in message.get("content") or ():
-        if not isinstance(block, Mapping):
-            continue
-        block_type = block.get("type")
-        if block_type == "text":
-            if text := _text(block.get("text")):
-                parts.append({"text": text})
-        elif block_type == "thinking":
-            if thought := _text(block.get("thinking")):
-                usage.add_thought_text(thought)
-                if include_thoughts:
-                    parts.append({"text": thought, "thought": True})
-        elif block_type == "tool_use":
-            parts.append(_function_call(block))
-
+    parts = parts_from_anthropic_blocks(
+        message.get("content") or (),
+        usage=usage,
+        include_thoughts=include_thoughts,
+    )
     usage.absorb(message.get("usage"))
 
     return {
@@ -58,7 +71,8 @@ def generate_content_response_from_anthropic_message(
     }
 
 
-def _function_call(block: Mapping[str, Any]) -> dict[str, Any]:
+def function_call_part(block: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert one Anthropic ``tool_use`` block into a Gemini ``functionCall`` part."""
     arguments = block.get("input")
     return {
         "functionCall": {

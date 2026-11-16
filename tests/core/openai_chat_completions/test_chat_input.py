@@ -10,6 +10,8 @@ from my_claude_code.core.openai_chat_completions import (
     ChatCompletionsConversionError,
     OpenAIChatCompletionRequest,
     OpenAIChatCompletionsAdapter,
+    build_nested_chat_annotations,
+    extract_chat_web_search_spec,
 )
 
 _ADAPTER = OpenAIChatCompletionsAdapter()
@@ -342,3 +344,92 @@ def test_the_converted_payload_is_a_valid_messages_request() -> None:
     assert request.system == "be terse"
     assert request.max_tokens == 32
     assert request.stream is True
+
+
+def test_allow_web_search_extracts_options_tools_and_nested_annotations() -> None:
+    req = OpenAIChatCompletionRequest.model_validate(
+        _minimal(
+            web_search_options={
+                "search_context_size": "low",
+                "user_location": {
+                    "type": "approximate",
+                    "approximate": {"country": "US", "city": "NYC"},
+                },
+                "filters": {"allowed_domains": ["docs.python.org", "python.org"]},
+            },
+            tools=[
+                {"type": "function", "function": {"name": "echo"}},
+                {
+                    "type": "web_search_preview",
+                    "filters": {"allowed_domains": ["docs.python.org"]},
+                },
+            ],
+            tool_choice={"type": "web_search"},
+        )
+    )
+    spec = extract_chat_web_search_spec(
+        req.tools,
+        req.tool_choice,
+        req.web_search_options,
+        allow_web_search=True,
+    )
+    assert spec is not None
+    assert spec.search_context_size == "low"
+    assert spec.allowed_domains == ("docs.python.org",)
+    assert spec.user_location == {
+        "type": "approximate",
+        "approximate": {"country": "US", "city": "NYC"},
+    }
+    assert spec.forced is True
+
+    payload = _ADAPTER.to_anthropic_payload(req, allow_web_search=True)
+    assert [t["name"] for t in payload["tools"]] == ["echo"]
+    assert payload["tool_choice"] == {"type": "web_search"}
+
+    nested = build_nested_chat_annotations(
+        [
+            {
+                "type": "url_citation",
+                "url": "https://docs.python.org/3.14/",
+                "title": "Python 3.14",
+                "start_index": 5,
+                "end_index": 34,
+            }
+        ]
+    )
+    assert nested == [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "url": "https://docs.python.org/3.14/",
+                "title": "Python 3.14",
+                "start_index": 5,
+                "end_index": 34,
+            },
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad_kwargs",
+    [
+        {"web_search_options": "invalid"},
+        {"web_search_options": ["bad"]},
+        {"web_search_options": {"search_context_size": "huge"}},
+        {"web_search_options": {"user_location": "NYC"}},
+        {"web_search_options": {"user_location": {"type": "exact"}}},
+        {"web_search_options": {"filters": {"allowed_domains": "python.org"}}},
+        {"tools": [{"type": "web_search", "external_web_access": "yes"}]},
+        {"tools": [], "tool_choice": {"type": "web_search"}},
+    ],
+)
+def test_malformed_chat_web_search_raises_schema_on_error(bad_kwargs: dict) -> None:
+    req = OpenAIChatCompletionRequest.model_validate(_minimal(**bad_kwargs))
+    with pytest.raises(ChatCompletionsConversionError) as excinfo:
+        extract_chat_web_search_spec(
+            req.tools,
+            req.tool_choice,
+            req.web_search_options,
+            allow_web_search=True,
+        )
+    assert "Expected Chat Completions web search" in str(excinfo.value)

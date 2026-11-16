@@ -2244,12 +2244,20 @@
       "control": "field-WEB_SEARCH_CHAIN_PAUSED",
       "page": "web_search"
     },
+    "WEB_SEARCH_CHAT_ENABLED": {
+      "control": "field-WEB_SEARCH_CHAT_ENABLED",
+      "page": "web_search"
+    },
     "WEB_SEARCH_DOOR_MODE": {
       "control": "field-WEB_SEARCH_DOOR_MODE",
       "page": "web_search"
     },
     "WEB_SEARCH_FALLBACK_POLICY": {
       "control": "field-WEB_SEARCH_FALLBACK_POLICY",
+      "page": "web_search"
+    },
+    "WEB_SEARCH_GEMINI_ENABLED": {
+      "control": "field-WEB_SEARCH_GEMINI_ENABLED",
       "page": "web_search"
     },
     "WEB_SEARCH_MCP_HTTP_ENABLED": {
