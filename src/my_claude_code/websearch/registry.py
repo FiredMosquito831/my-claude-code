@@ -32,7 +32,7 @@ from my_claude_code.core.websearch.models import (
 from .adapters import ADAPTER_CLASSES
 from .base import BaseWebSearchProvider, KeyChargeJudge, WebSearchProviderConfig
 from .errors import WebSearchConfigError, WebSearchError
-from .options import read_websearch_options
+from .options import option_enabled, read_websearch_options
 from .rotation import (
     ROTATION_POLICIES,
     default_rotation_policy,
@@ -125,8 +125,8 @@ def resolve_provider_id(settings: Settings) -> str | None:
             continue
         descriptor = WEBSEARCH_CATALOG[provider_id]
         if not descriptor.auto_select:
-            # Context7 answers with library documentation, not web results:
-            # chosen by name or as a chain entry only (7.113.0).
+            # Manual-only providers (Context7 library docs; DeepSeek paid
+            # standalone Search API): chosen by name or as a chain entry only.
             continue
         if _descriptor_is_configured(descriptor, settings):
             return provider_id
@@ -566,7 +566,17 @@ def _descriptor_keys(
     if descriptor.settings_attr is None:
         return ()
     raw = getattr(settings, descriptor.settings_attr)
-    return parse_credential_keys(raw if isinstance(raw, str) else None)
+    keys = parse_credential_keys(raw if isinstance(raw, str) else None)
+    if (
+        not keys
+        and descriptor.provider_id == "deepseek"
+        and option_enabled(_env_or_dotenv("DEEPSEEK_SEARCH_USE_INFERENCE_KEY"))
+    ):
+        inference_raw = getattr(settings, "deepseek_api_key", None)
+        keys = parse_credential_keys(
+            inference_raw if isinstance(inference_raw, str) else None
+        )
+    return keys
 
 
 def _descriptor_base_url(

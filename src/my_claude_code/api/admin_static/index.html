@@ -5443,6 +5443,15 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   documentation answer helps (for example first, ahead of a web search
                   service). It has not been verified on a real key.
                 </p>
+                <p>
+                  <strong>DeepSeek</strong> runs DeepSeek&apos;s standalone Search API
+                  (<code>$0.75</code> per 1,000 calls, no free tier), so Auto never
+                  picks it either: configure a dedicated
+                  <code>DEEPSEEK_SEARCH_API_KEY</code> (kept separate from inference
+                  <code>DEEPSEEK_API_KEY</code> unless you enable
+                  <code>DEEPSEEK_SEARCH_USE_INFERENCE_KEY</code>) and select
+                  <code>deepseek</code> by name or in the Search Chain.
+                </p>
                 <h4>Call web search and fetch over HTTP</h4>
                 <p>
                   Scripts and non-Anthropic clients can call <code>POST /v1/websearch</code>,

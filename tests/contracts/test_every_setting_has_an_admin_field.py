@@ -264,7 +264,7 @@ def test_the_thirteen_recovered_rotation_controls_stay() -> None:
         for field in FIELDS
         if field.section_id == "websearch" and field.key.endswith("_ROTATION")
     )
-    assert len(rotations) == 13
+    assert len(rotations) == 14
     for key in rotations:
         assert entries[key] == {"page": "web_search", "control": f"field-{key}"}, key
 

@@ -26,6 +26,7 @@ WEB_SEARCH_CREDENTIAL_FIELDS: tuple[str, ...] = (
     "searchapi_api_key",
     "serpapi_api_key",
     "context7_api_key",
+    "deepseek_search_api_key",
     "searxng_base_url",
 )
 

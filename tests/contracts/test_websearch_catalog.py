@@ -27,6 +27,8 @@ _EXPECTED_WEBSEARCH_ORDER: tuple[str, ...] = (
     # 7.113.0: library documentation, appended so Auto's order is unchanged
     # (and Auto never picks it: ``auto_select=False``).
     "context7",
+    # 8.25.0: paid standalone Search API ($0.75/1k, ``auto_select=False``).
+    "deepseek",
 )
 
 
@@ -197,17 +199,22 @@ _EXPECTED_ADVANCED_ENVS: dict[str, tuple[str, ...]] = {
     ),
     # Its API takes a query and a library and nothing else MCC would set.
     "context7": (),
+    "deepseek": (
+        "DEEPSEEK_SEARCH_USE_INFERENCE_KEY",
+        "DEEPSEEK_SEARCH_NEED_CONTENT",
+        "DEEPSEEK_SEARCH_LOCALIZATION",
+    ),
 }
 
 
 def test_only_context7_is_kept_out_of_auto() -> None:
-    """Auto picks a web search; a documentation provider is chosen by name."""
+    """Auto only picks web search backends without manual-only opt-in."""
 
     assert [
         provider_id
         for provider_id, desc in WEBSEARCH_CATALOG.items()
         if not desc.auto_select
-    ] == ["context7"]
+    ] == ["context7", "deepseek"]
 
 
 _FIELD_TYPES = frozenset({"select", "text", "number", "boolean"})

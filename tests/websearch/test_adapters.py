@@ -11,6 +11,7 @@ from my_claude_code.websearch.adapters.ddgs import (
     _destination,
     _is_ad,
 )
+from my_claude_code.websearch.adapters.deepseek import DeepSeekWebSearchProvider
 from my_claude_code.websearch.adapters.exa import ExaWebSearchProvider
 from my_claude_code.websearch.adapters.firecrawl import FirecrawlWebSearchProvider
 from my_claude_code.websearch.adapters.jina import JinaWebSearchProvider
@@ -236,6 +237,24 @@ CASES: tuple[AdapterCase, ...] = (
         method="GET",
         path="/search",
         auth_query_key=TEST_KEY,
+    ),
+    AdapterCase(
+        "deepseek",
+        DeepSeekWebSearchProvider,
+        {
+            "results": [
+                {
+                    "title": "T",
+                    "url": "https://a.io/x",
+                    "summary": "S",
+                    "date": "2026-01-02",
+                }
+            ]
+        },
+        path="/v1/tools/search",
+        auth_header=_BEARER,
+        published="2026-01-02",
+        cost=0.00075,
     ),
 )
 

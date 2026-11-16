@@ -11926,14 +11926,22 @@ function gsWebSearchServices(snap) {
       );
       const baseUrl =
         option.value === "searxng" ? gsFieldOf(snap, "SEARXNG_BASE_URL") : null;
+      const inferenceFallback =
+        option.value === "deepseek" &&
+        gsFieldOf(snap, "DEEPSEEK_SEARCH_USE_INFERENCE_KEY")?.value === "true" &&
+        Boolean(
+          gsFieldOf(snap, "DEEPSEEK_API_KEY")?.configured ||
+            gsFieldOf(snap, "DEEPSEEK_API_KEY")?.value,
+        );
       return {
         id: option.value,
         label: option.label,
-        configured: credential
-          ? Boolean(credential.configured)
-          : baseUrl
-            ? Boolean(baseUrl.configured)
-            : true,
+        configured:
+          (credential
+            ? Boolean(credential.configured)
+            : baseUrl
+              ? Boolean(baseUrl.configured)
+              : true) || inferenceFallback,
       };
     });
 }
@@ -24515,11 +24523,19 @@ function webSearchProviders() {
       );
       const baseUrlField =
         item.value === "searxng" ? state.fields.get("SEARXNG_BASE_URL") : null;
-      const configured = credential
-        ? credential.configured
-        : baseUrlField
-          ? baseUrlField.configured
-          : true;
+      const inferenceFallback =
+        item.value === "deepseek" &&
+        state.fields.get("DEEPSEEK_SEARCH_USE_INFERENCE_KEY")?.value === "true" &&
+        Boolean(
+          state.fields.get("DEEPSEEK_API_KEY")?.configured ||
+            state.fields.get("DEEPSEEK_API_KEY")?.value,
+        );
+      const configured =
+        (credential
+          ? credential.configured
+          : baseUrlField
+            ? baseUrlField.configured
+            : true) || inferenceFallback;
       return {
         id: item.value,
         label: item.label,
@@ -24576,7 +24592,11 @@ function webSearchProviderMeta(provider, activeSelection, effectiveProvider) {
   }
   const manualOnly = webSearchManualOnly().has(provider.id);
   if (manualOnly) {
-    parts.push("Library docs · never picked by Auto");
+    parts.push(
+      provider.id === "context7"
+        ? "Library docs · never picked by Auto"
+        : "Manual only · never picked by Auto",
+    );
   }
   if (effectiveProvider === provider.id) {
     parts.push(activeSelection === "auto" ? "Effective via auto" : "Selected");

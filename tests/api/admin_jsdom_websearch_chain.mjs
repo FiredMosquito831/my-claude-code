@@ -134,9 +134,15 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     "#webSearchChainStatus",
     '[data-websearch-provider="context7"]',
     '.field[data-key="CONTEXT7_API_KEY"]',
+    '[data-websearch-provider="deepseek"]',
+    '.field[data-key="DEEPSEEK_SEARCH_API_KEY"]',
+    '.field[data-key="DEEPSEEK_SEARCH_USE_INFERENCE_KEY"]',
+    '.field[data-key="DEEPSEEK_SEARCH_NEED_CONTENT"]',
+    '.field[data-key="DEEPSEEK_SEARCH_LOCALIZATION"]',
     '.field[data-key="WEB_SEARCH_CHAIN"]',
     '.field[data-key="WEB_SEARCH_CHAIN_PAUSED"]',
     'option[value="context7"]',
+    'option[value="deepseek"]',
     // 7.119.0: the keyless DuckDuckGo hop's request spacing, additive.
     '.field[data-key="WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS"]',
     // 7.120.2: the older `strict` spelling the ddgs SafeSearch select now
@@ -394,6 +400,28 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
             const names = Array.from(body.querySelectorAll("button")).map(flat);
             closeDialog();
             return names;
+          })(),
+        }
+      : null;
+    const ds = card("deepseek");
+    out.deepseek = ds
+      ? {
+          label: flat(ds.querySelector(".provider-title-label strong")),
+          pill: flat(ds.querySelector(".status-pill")),
+          meta: flat(ds.querySelector(".provider-meta")),
+          buttons: Array.from(ds.querySelectorAll(".card-actions button")).map(flat),
+          gridSecretField: Boolean(
+            doc.querySelector('.field[data-key="DEEPSEEK_SEARCH_API_KEY"]'),
+          ),
+          dialog: (() => {
+            press(ds);
+            const body = doc.getElementById("providerDetailBody");
+            const keys = Array.from(body.querySelectorAll("[data-key]")).map(
+              (node) => node.dataset.key,
+            );
+            const hasKeyManager = Boolean(body.querySelector(".ws-key-manager"));
+            closeDialog();
+            return { keys, hasKeyManager };
           })(),
         }
       : null;

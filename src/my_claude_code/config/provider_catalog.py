@@ -1087,6 +1087,7 @@ _EXTRA_CREDENTIAL_ATTRS: tuple[str, ...] = (
     "serpapi_api_key",
     "ollama_search_api_key",
     "context7_api_key",
+    "deepseek_search_api_key",
 )
 
 
