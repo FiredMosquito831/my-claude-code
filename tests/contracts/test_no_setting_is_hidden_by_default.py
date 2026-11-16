@@ -291,7 +291,7 @@ def test_every_field_the_grid_skips_has_a_control_on_its_page() -> None:
         for field in skipped
         if field.section_id == "websearch" and field.key.endswith("_ROTATION")
     ]
-    assert len(web_search_rotations) == 13, "the scan no longer finds the 13"
+    assert len(web_search_rotations) == 14, "the scan no longer finds the 14"
     missing = sorted(
         field.key
         for field in skipped

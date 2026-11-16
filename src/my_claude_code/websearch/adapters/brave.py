@@ -231,7 +231,8 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
                     url=url,
                     snippet=text[:_SNIPPET_CHARS],
                     content=text or None,
-                    published=None,
+                    published=opt_str(row.get("published")),
+                    site_name=opt_str(row.get("site_name")),
                     highlights=opt_str_tuple(snippets),
                 )
             )

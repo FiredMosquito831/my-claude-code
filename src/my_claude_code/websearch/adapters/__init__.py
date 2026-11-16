@@ -4,6 +4,7 @@ from ..base import BaseWebSearchProvider
 from .brave import BraveWebSearchProvider
 from .context7 import Context7WebSearchProvider
 from .ddgs import DdgsWebSearchProvider
+from .deepseek import DeepSeekWebSearchProvider
 from .exa import ExaWebSearchProvider
 from .firecrawl import FirecrawlWebSearchProvider
 from .jina import JinaWebSearchProvider
@@ -34,6 +35,7 @@ ADAPTER_CLASSES: dict[str, type[BaseWebSearchProvider]] = {
     "searchapi": SearchApiWebSearchProvider,
     "serpapi": SerpApiWebSearchProvider,
     "context7": Context7WebSearchProvider,
+    "deepseek": DeepSeekWebSearchProvider,
 }
 
 __all__ = ["ADAPTER_CLASSES"]

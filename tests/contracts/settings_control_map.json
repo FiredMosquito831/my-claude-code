@@ -480,6 +480,26 @@
       "control": "field-DEEPSEEK_PROXY",
       "page": "providers"
     },
+    "DEEPSEEK_SEARCH_API_KEY": {
+      "control": "field-DEEPSEEK_SEARCH_API_KEY",
+      "page": "web_search"
+    },
+    "DEEPSEEK_SEARCH_API_KEY_ROTATION": {
+      "control": "field-DEEPSEEK_SEARCH_API_KEY_ROTATION",
+      "page": "web_search"
+    },
+    "DEEPSEEK_SEARCH_LOCALIZATION": {
+      "control": "field-DEEPSEEK_SEARCH_LOCALIZATION",
+      "page": "web_search"
+    },
+    "DEEPSEEK_SEARCH_NEED_CONTENT": {
+      "control": "field-DEEPSEEK_SEARCH_NEED_CONTENT",
+      "page": "web_search"
+    },
+    "DEEPSEEK_SEARCH_USE_INFERENCE_KEY": {
+      "control": "field-DEEPSEEK_SEARCH_USE_INFERENCE_KEY",
+      "page": "web_search"
+    },
     "DESCRIBE_CONCURRENCY": {
       "control": "field-DESCRIBE_CONCURRENCY",
       "page": "model_config"

@@ -23,6 +23,8 @@ SERPAPI_DEFAULT_BASE = "https://serpapi.com"
 #: (``@upstash/context7-mcp`` 4.4.4 ``dist/lib/constants.js`` and
 #: ``@upstash/context7-sdk`` 0.6.0 ``DEFAULT_BASE_URL``).
 CONTEXT7_DEFAULT_BASE = "https://context7.com/api"
+# DeepSeek standalone Web Search API root (POST /v1/tools/search).
+DEEPSEEK_SEARCH_DEFAULT_BASE = "https://api.deepseek.com"
 
 #: ``DDGS_SAFESEARCH`` spellings that are not the ``ddgs`` package's own, and
 #: the value each is read as (7.120.2, RESEARCH-DDG-WEBSEARCH.md R5). ``ddgs``
@@ -210,6 +212,7 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 default="",
                 options=(
                     ("", "auto (default)"),
+                    ("lite", "lite (~250-450 ms)"),
                     ("instant", "instant"),
                     ("fast", "fast"),
                     ("auto", "auto"),
@@ -813,7 +816,7 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
         requires_key=True,
         supports_domains=True,
         free_tier="Pay-per-use from $0.005 per 10 results",
-        notes="POST /v1beta/search with x-api-key + parallel-beta header (Search API beta).",
+        notes="POST /v1/search with x-api-key header (Search API).",
         advanced_options=(
             WebSearchOptionSpec(
                 env="PARALLEL_LOCATION",
@@ -1008,6 +1011,56 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
             "library's documentation snippets (Bearer auth; two calls per "
             "search). Never picked by Auto; choose it by name or put it in "
             "the Search Chain."
+        ),
+        auto_select=False,
+    ),
+    "deepseek": WebSearchDescriptor(
+        provider_id="deepseek",
+        display_name="DeepSeek",
+        credential_env="DEEPSEEK_SEARCH_API_KEY",
+        credential_url="https://platform.deepseek.com/api_keys",
+        settings_attr="deepseek_search_api_key",
+        default_base_url=DEEPSEEK_SEARCH_DEFAULT_BASE,
+        base_url_attr=None,
+        requires_key=True,
+        supports_domains=False,
+        free_tier="$0.75 per 1,000 successful calls (no free tier)",
+        notes=(
+            "POST /v1/tools/search with Bearer auth (dedicated "
+            "DEEPSEEK_SEARCH_API_KEY by default; never auto-selected)."
+        ),
+        advanced_options=(
+            WebSearchOptionSpec(
+                env="DEEPSEEK_SEARCH_USE_INFERENCE_KEY",
+                label="Allow DEEPSEEK_API_KEY fallback",
+                field_type="boolean",
+                default="false",
+                cost_note=(
+                    "Off by default. Allow DeepSeek Search to reuse your "
+                    "inference DEEPSEEK_API_KEY when DEEPSEEK_SEARCH_API_KEY "
+                    "is unset ($0.75/1k search calls will bill that balance)."
+                ),
+            ),
+            WebSearchOptionSpec(
+                env="DEEPSEEK_SEARCH_NEED_CONTENT",
+                label="Include full Markdown content",
+                field_type="boolean",
+                default="",
+                cost_note=(
+                    "Ask DeepSeek Search to return full extracted Markdown "
+                    "bodies in content (increases payload size; default off)."
+                ),
+            ),
+            WebSearchOptionSpec(
+                env="DEEPSEEK_SEARCH_LOCALIZATION",
+                label="Localization IP",
+                field_type="text",
+                default="",
+                cost_note=(
+                    "Optional client/region IPv4/IPv6 string for DeepSeek "
+                    "geo-localization. Empty = unset."
+                ),
+            ),
         ),
         auto_select=False,
     ),

@@ -1,6 +1,6 @@
 # Web search
 
-Claude Code's official `web_search` server tool, fulfilled at the proxy by 15 search providers (Context7's library documentation since 7.113.0). Moved out of the README in 6.57.0.
+Claude Code's official `web_search` server tool, fulfilled at the proxy by 16 search providers (including Context7's library documentation since 7.113.0 and DeepSeek's standalone Search API since 8.25.0). Moved out of the README in 6.57.0.
 
 Claude Code's `web_search` is an Anthropic **server tool**: normally Anthropic's servers execute the search and bill you for it. MCC fulfills that server tool at the proxy level instead — the client emits a `web_search` tool-use block, MCC runs the search against a provider you choose (or the keyless default), and streams the results back as a regular text block. No Anthropic search credits are used, and the whole flow works with any model provider.
 
@@ -11,7 +11,7 @@ Claude Code's `web_search` is an Anthropic **server tool**: normally Anthropic's
 
 ### Search Providers
 
-MCC supports 15 search backends, resolved by `WEB_SEARCH_PROVIDER`:
+MCC supports 16 search backends, resolved by `WEB_SEARCH_PROVIDER`:
 
 | Provider | Env var | Free tier | Get a key |
 | --- | --- | --- | --- |
@@ -30,10 +30,11 @@ MCC supports 15 search backends, resolved by `WEB_SEARCH_PROVIDER`:
 | SearchAPI.io | `SEARCHAPI_API_KEY` | 100 free one-time requests | [searchapi.io](https://www.searchapi.io/) |
 | SerpAPI | `SERPAPI_API_KEY` | 250 free searches/month | [serpapi.com/manage-api-key](https://serpapi.com/manage-api-key) |
 | Context7 (library docs) | `CONTEXT7_API_KEY` | Free key from the dashboard; paid plans raise the limits | [context7.com/dashboard](https://context7.com/dashboard) |
+| DeepSeek (manual-only) | `DEEPSEEK_SEARCH_API_KEY` | $0.75 per 1,000 successful calls (no free tier) | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) |
 
-`WEB_SEARCH_PROVIDER` accepts `auto` (default), `off`, `disabled`, or one of the provider IDs `ddgs | ollama | exa | tavily | brave | searxng | jina | serper | firecrawl | linkup | perplexity | parallel | searchapi | serpapi | context7`:
+`WEB_SEARCH_PROVIDER` accepts `auto` (default), `off`, `disabled`, or one of the provider IDs `ddgs | ollama | exa | tavily | brave | searxng | jina | serper | firecrawl | linkup | perplexity | parallel | searchapi | serpapi | context7 | deepseek`:
 
-- **`auto`** picks the first configured provider in catalog order — never `context7`, which answers with library documentation rather than web pages; with no keys set it falls back to the keyless `ddgs` metasearch and then the keyless DuckDuckGo hop (both [below](#the-ddgs-provider-is-a-metasearch)), so search works **zero-config out of the box**.
+- **`auto`** picks the first configured provider in catalog order — never `context7` (library documentation) or `deepseek` (paid `$0.75/1k` standalone Search API); with no keys set it falls back to the keyless `ddgs` metasearch and then the keyless DuckDuckGo hop (both [below](#the-ddgs-provider-is-a-metasearch)), so search works **zero-config out of the box**.
 - **`off`** runs only the keyless DuckDuckGo hop, without the provider registry or `ddgs`.
 - **`disabled`** rejects web searches without making an outbound search request.
 - An explicit ID pins that provider and is strict by default: missing credentials or upstream failure are surfaced instead of silently changing providers.
@@ -108,6 +109,12 @@ One search is two calls with `Authorization: Bearer <key>`: `GET https://context
 
 The API was read from Context7's own clients (`@upstash/context7-mcp` and `@upstash/context7-sdk`); MCC's adapter has been proven against recorded responses of that shape, **not verified on a real key**.
 
+### DeepSeek: standalone Search API (8.25.0)
+
+DeepSeek exposes a dedicated standalone search endpoint (`POST` to `api.deepseek.com` tools search, Bearer auth) priced at **$0.75 per 1,000 successful calls** with no free tier (`cost_usd=0.00075` logged per call). By default it requires its own `DEEPSEEK_SEARCH_API_KEY` and keeps your inference `DEEPSEEK_API_KEY` balance strictly isolated; set `DEEPSEEK_SEARCH_USE_INFERENCE_KEY=true` only if you want `DEEPSEEK_API_KEY` used as a fallback when `DEEPSEEK_SEARCH_API_KEY` is unset.
+
+**`auto` never selects `deepseek`** (even when `DEEPSEEK_API_KEY` or `DEEPSEEK_SEARCH_API_KEY` is configured) so web searches cannot quietly charge your account: pin `WEB_SEARCH_PROVIDER=deepseek`, pass `provider="deepseek"` to `/v1/websearch`, or add `deepseek` explicitly to `WEB_SEARCH_CHAIN`. `DEEPSEEK_SEARCH_NEED_CONTENT` (or `include_content`) requests full Markdown page bodies in `content`; `DEEPSEEK_SEARCH_LOCALIZATION` takes an optional IPv4/IPv6 address string (`country` codes are never forwarded into `localization`). Verified against fake upstream payloads; not verified on a live DeepSeek key.
+
 ### The ddgs provider is a metasearch
 
 The keyless provider `auto` falls back to — **DuckDuckGo (ddgs)** on the Web Search page — is the `ddgs` package (MIT), a **metasearch**, not DuckDuckGo itself. With **Backend engine** (`DDGS_BACKEND`) left empty, one search asks Wikipedia and Grokipedia first, then the package's other engines in a random order until it has enough results, and merges what comes back. DuckDuckGo is one of those engines and may not be asked at all; whichever engines answered, the results are labelled `ddgs`. To ask DuckDuckGo and nothing else, pin it:
@@ -146,19 +153,20 @@ Each provider exposes dotenv-only knobs (never in pydantic Settings); empty/unse
 
 | Provider | Notable options |
 | --- | --- |
-| Exa | `EXA_SEARCH_TYPE` (`deep*` = $0.015/query vs $0.005), `EXA_CONTENTS` modes incl. `full` (+$0.001/page per content type), `EXA_CATEGORY` verticals (company/people disable date+exclude filters), `EXA_MAX_AGE_HOURS`, published-date bounds, `EXA_USER_LOCATION` |
-| Brave | `BRAVE_SEARCH_MODE=llm-context` ($5/1k, returns pre-extracted page text), `BRAVE_LLM_MAX_TOKENS` (1024–32768, llm-context only), `BRAVE_FRESHNESS`, country/language, plan-gated `BRAVE_EXTRA_SNIPPETS`, `BRAVE_SAFESEARCH` |
-| Tavily | `TAVILY_SEARCH_DEPTH=advanced` (2 credits/query), `TAVILY_TOPIC`, `TAVILY_TIME_RANGE`, `TAVILY_INCLUDE_ANSWER` (basic/advanced LLM answer lead), `TAVILY_INCLUDE_RAW_CONTENT` (free full page text, may add latency), `TAVILY_CHUNKS_PER_SOURCE` (1–3, more text per result), `TAVILY_COUNTRY`, `TAVILY_START_DATE`/`TAVILY_END_DATE` |
+| Exa | `EXA_SEARCH_TYPE` (`lite`, `instant`, `fast`, `auto`, `deep*` = $0.015/query vs $0.005), `EXA_CONTENTS` modes incl. `full` (+$0.001/page per content type), `EXA_CATEGORY` verticals (company/people disable date+exclude filters), `EXA_MAX_AGE_HOURS`, published-date bounds, `EXA_USER_LOCATION` |
+| Brave | `BRAVE_SEARCH_MODE=llm-context` ($5/1k, returns pre-extracted page text, `published`, and `site_name`), `BRAVE_LLM_MAX_TOKENS` (1024–32768, llm-context only), `BRAVE_FRESHNESS`, country/language, plan-gated `BRAVE_EXTRA_SNIPPETS`, `BRAVE_SAFESEARCH` |
+| Tavily | `TAVILY_SEARCH_DEPTH=advanced` (2 credits/query), `TAVILY_TOPIC`, `TAVILY_TIME_RANGE`, `TAVILY_INCLUDE_ANSWER` (basic/advanced LLM answer lead), `TAVILY_INCLUDE_RAW_CONTENT` (free full page text, may add latency), `TAVILY_CHUNKS_PER_SOURCE` (1–3, more text per result), `TAVILY_COUNTRY`, `TAVILY_START_DATE`/`TAVILY_END_DATE` (`published_date` preserved; HTTP `432`/`433` mapped to quota) |
 | Serper | `SERPER_GL`/`SERPER_HL`/`SERPER_TBS`, `SERPER_RICH_BLOCKS` (default on: answerBox/knowledgeGraph/peopleAlsoAsk feed the answer lead) |
 | Linkup | `LINKUP_DEPTH=deep` (10x cost, $0.05/query), `LINKUP_OUTPUT_TYPE=sourcedAnswer` (+$0.001, returns answer+sources), `LINKUP_FROM_DATE`/`LINKUP_TO_DATE` |
 | Perplexity | `PERPLEXITY_SEARCH_RECENCY`, `PERPLEXITY_CONTEXT_SIZE` (omitted when `PERPLEXITY_MAX_TOKENS_PER_PAGE` is set) |
-| Parallel | `PARALLEL_MODE` (turbo cheapest → advanced highest quality), `PARALLEL_EXCERPT_CHARS`, `PARALLEL_TOTAL_CHARS`, `PARALLEL_LOCATION` |
+| Parallel | `PARALLEL_MODE` (turbo cheapest → advanced highest quality), `PARALLEL_EXCERPT_CHARS`, `PARALLEL_TOTAL_CHARS`, `PARALLEL_LOCATION` (Search API with `x-api-key`) |
 | Firecrawl | `FIRECRAWL_SOURCES` (web/news/images), `FIRECRAWL_SCRAPE_FORMAT` summary/markdown (multiplies credits per result), `FIRECRAWL_TBS`, `FIRECRAWL_LOCATION`, `FIRECRAWL_COUNTRY` (provider defaults to US), `FIRECRAWL_CATEGORIES` (github/research/pdf) |
 | Jina | `JINA_MAX_TOKENS` (token-billed; best cost guardrail), `JINA_SITE`, `JINA_GL` |
 | SearXNG | `SEARXNG_ENGINES`, `SEARXNG_CATEGORIES`, `SEARXNG_TIME_RANGE`, `SEARXNG_LANGUAGE`, `SEARXNG_SAFESEARCH` |
 | ddgs | `DDGS_BACKEND` (pin one free engine to dodge per-engine rate limits; Bing, Google and Yandex are off in `ddgs` 9.16.1 and run `auto`), `DDGS_REGION` and `DDGS_TIMELIMIT` (also the DuckDuckGo hop's `kl` and `df`), `DDGS_SAFESEARCH` (`on`, `moderate` or `off`; DuckDuckGo's own engine ignores it) |
 | SerpAPI | `SERPAPI_ENGINE` (`google_light` is cheaper, `num=100` works), `SERPAPI_TBS`, `SERPAPI_GL`, `SERPAPI_HL`, `SERPAPI_SAFE` |
 | SearchAPI.io | `SEARCHAPI_ENGINE` (google/news/scholar/bing), `SEARCHAPI_TIME_PERIOD`, `SEARCHAPI_GL`, `SEARCHAPI_HL`, `SEARCHAPI_SAFE` |
+| DeepSeek | `DEEPSEEK_SEARCH_USE_INFERENCE_KEY` (`false` default: keeps inference `DEEPSEEK_API_KEY` separate), `DEEPSEEK_SEARCH_NEED_CONTENT` (full Markdown `content`), `DEEPSEEK_SEARCH_LOCALIZATION` (optional IP string) |
 
 Every option's drawer states what leaving it blank does, so an empty field always reproduces the provider's own default. See the **Web Search Advanced Options** block in [.env.example](../.env.example) for the full list with inline cost notes.
 

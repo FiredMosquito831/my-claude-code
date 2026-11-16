@@ -338,6 +338,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "searchapi_api_key",
     "serpapi_api_key",
     "context7_api_key",
+    "deepseek_search_api_key",
     "searxng_base_url",
 )
 
@@ -2200,6 +2201,11 @@ class Settings(BaseSettings):
     # start with ``ctx7sk``. Never chosen by Auto (see the catalogue entry).
     context7_api_key: str | None = Field(
         default=None, validation_alias="CONTEXT7_API_KEY"
+    )
+    # DeepSeek standalone Web Search (8.25.0): separate from DEEPSEEK_API_KEY
+    # by default ($0.75/1k calls; never chosen by Auto).
+    deepseek_search_api_key: str | None = Field(
+        default=None, validation_alias="DEEPSEEK_SEARCH_API_KEY"
     )
     # Base URL of a self-hosted SearXNG instance (format=json must be enabled).
     searxng_base_url: str | None = Field(

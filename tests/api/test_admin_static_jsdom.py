@@ -12439,6 +12439,7 @@ WS_CHOICES = [
     "searchapi",
     "serpapi",
     "context7",
+    "deepseek",
     "legacy",
 ]
 
@@ -12698,9 +12699,29 @@ def test_jsdom_context7_has_a_card_and_auto_never_picks_it(websearch_chain) -> N
     assert card["buttons"] == ["Use provider"]
     assert "Test provider" in card["dialogButtons"]
     assert "Hide keys" in card["dialogButtons"]
-    assert websearch_chain["cardOrder"][-1] == "context7"
+    assert len(websearch_chain["cardOrder"]) == 16
+    assert websearch_chain["cardOrder"][-2:] == ["context7", "deepseek"]
     # Auto with Exa, Tavily and Context7 keyed: Exa, as the server resolves it.
     assert websearch_chain["autoActive"] == ["exa"]
+
+
+def test_jsdom_deepseek_has_a_manual_only_card_and_auto_never_picks_it(
+    websearch_chain,
+) -> None:
+    card = websearch_chain["deepseek"]
+    assert card is not None
+    assert card["label"] == "DeepSeek"
+    assert card["pill"] == "Missing key"
+    assert (
+        card["meta"] == "Manual only · never picked by Auto · DEEPSEEK_SEARCH_API_KEY"
+    )
+    assert card["buttons"] == ["Use provider"]
+    assert card["gridSecretField"] is True
+    assert card["dialog"]["hasKeyManager"] is True
+    assert "DEEPSEEK_SEARCH_API_KEY_ROTATION" in card["dialog"]["keys"]
+    assert "DEEPSEEK_SEARCH_USE_INFERENCE_KEY" in card["dialog"]["keys"]
+    assert "DEEPSEEK_SEARCH_NEED_CONTENT" in card["dialog"]["keys"]
+    assert "DEEPSEEK_SEARCH_LOCALIZATION" in card["dialog"]["keys"]
 
 
 def test_jsdom_analytics_shows_position_key_tries_and_failure_kind(
@@ -13868,6 +13889,10 @@ TAVILY_ROTATION = "TAVILY_API_KEY_ROTATION"
 #: control for. Their 7.121.0 control is None (there was none).
 WEBSEARCH_ROTATIONS = websearch_rotation_keys()
 
+#: 8.25.0 (PR 1C): ``EXA_SEARCH_TYPE`` gains ``"lite"`` and ``WEB_SEARCH_PROVIDER``
+#: gains ``"deepseek"``, moving those two selects relative to the 7.121.x baselines.
+_PR1C_MOVED_SELECTS = ("EXA_SEARCH_TYPE", "WEB_SEARCH_PROVIDER")
+
 #: 7.122.3 (U27): the one field declared as a `select` whose options are
 #: exactly false/true. It now reads Off/On like every other switch; its value
 #: is untouched, so only the option text moves.
@@ -14142,11 +14167,24 @@ def test_jsdom_the_page_is_the_base_page_with_the_additions_taken_out(
     # 7.122.3 (U27): a select whose options are exactly false/true now wears
     # the On/Off labels every other switch uses. Its value is untouched; the
     # option text is the whole of the change.
-    assert moved == sorted([SAVED_NUMBER_KEY, *WEBSEARCH_ROTATIONS, BOOLEAN_SELECT_KEY])
-    for key in WEBSEARCH_ROTATIONS:
+    base_rotations = [
+        key for key in WEBSEARCH_ROTATIONS if key != "DEEPSEEK_SEARCH_API_KEY_ROTATION"
+    ]
+    assert moved == sorted(
+        [SAVED_NUMBER_KEY, *base_rotations, BOOLEAN_SELECT_KEY, *_PR1C_MOVED_SELECTS]
+    )
+    for key in base_rotations:
         assert base["controls"][key] is None, key
         assert select_blank["controls"][key].startswith("<select"), key
         assert f'id="field-{key}"' in select_blank["controls"][key], key
+    assert "DEEPSEEK_SEARCH_API_KEY_ROTATION" not in base["controls"]
+    assert select_blank["controls"]["DEEPSEEK_SEARCH_API_KEY_ROTATION"].startswith(
+        "<select"
+    )
+    assert (
+        'id="field-DEEPSEEK_SEARCH_API_KEY_ROTATION"'
+        in select_blank["controls"]["DEEPSEEK_SEARCH_API_KEY_ROTATION"]
+    )
 
     before = base["controls"][SAVED_NUMBER_KEY]
     after = select_blank["controls"][SAVED_NUMBER_KEY]
@@ -14251,7 +14289,7 @@ def test_jsdom_every_setting_without_a_form_control_is_named_and_hosted(
     without = set(select_blank["coverage"]["withoutControl"])
 
     assert without == PAUSE_LIST_FIELDS | OAUTH_ACTION_FIELDS
-    assert len(WEBSEARCH_ROTATIONS) == 13
+    assert len(WEBSEARCH_ROTATIONS) == 14
     assert without.isdisjoint(WEBSEARCH_ROTATIONS)
 
     # Each pause list is exactly one the route-pause endpoint writes.
@@ -14313,7 +14351,7 @@ def test_jsdom_every_websearch_rotation_is_a_control_on_its_providers_card(
     rotation = select_blank["rotation"]
 
     assert rotation["keys"] == list(WEBSEARCH_ROTATIONS)
-    assert rotation["present"] == len(WEBSEARCH_ROTATIONS) == 13
+    assert rotation["present"] == len(WEBSEARCH_ROTATIONS) == 14
     for key, cell in rotation["before"].items():
         assert cell is not None, key
         assert cell["view"] == "web_search", key
@@ -14347,7 +14385,7 @@ def test_jsdom_the_rotation_controls_round_trip_a_save(select_blank) -> None:
             assert cell["marked"] is False, key
     assert rotation["footerBeforeEdits"] == "No changes"
 
-    assert rotation["footerAfterEdits"] == "13 unsaved changes"
+    assert rotation["footerAfterEdits"] == "14 unsaved changes"
     assert rotation["submitted"] == expected
     assert rotation["apply"]["body"] == {"values": expected}
 
@@ -14430,13 +14468,16 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
     )
     # 7.122.3 (U27): the one select stored as false/true wears On/Off now; its
     # value and every other control's markup are untouched.
-    assert moved == sorted([*WEBSEARCH_ROTATIONS, BOOLEAN_SELECT_KEY])
-    assert record["controls"] == list(WEBSEARCH_ROTATIONS)
-    for key in WEBSEARCH_ROTATIONS:
+    base_rotations = [
+        key for key in WEBSEARCH_ROTATIONS if key != "DEEPSEEK_SEARCH_API_KEY_ROTATION"
+    ]
+    assert moved == sorted([*base_rotations, BOOLEAN_SELECT_KEY, *_PR1C_MOVED_SELECTS])
+    assert record["controls"] == base_rotations
+    for key in base_rotations:
         assert base["controls_sha256"][key] is None, key
-    # 7.122.3 (U27) moved one more control's markup (its option labels), so
-    # 533 of the 547 keep their exact bytes; the fourteen movers are named.
-    assert len(base["controls_sha256"]) - len(moved) == 533
+    # 7.122.3 (U27) moved BOOLEAN_SELECT_KEY and 8.25.0 added options to
+    # EXA_SEARCH_TYPE and WEB_SEARCH_PROVIDER, so 531 of 547 keep exact bytes.
+    assert len(base["controls_sha256"]) - len(moved) == 531
 
     moved_fields = sorted(
         key
@@ -14455,13 +14496,17 @@ def test_jsdom_7_121_2_adds_the_rotation_fields_and_moves_nothing_else(
         for key, entry in base["controlMap"].items()
         if select_blank["controlMap"].get(key) != entry
     )
-    assert moved_map == list(WEBSEARCH_ROTATIONS) == sorted(record["controlMap"])
-    for key in WEBSEARCH_ROTATIONS:
+    assert moved_map == base_rotations == sorted(record["controlMap"])
+    for key in base_rotations:
         assert base["controlMap"][key] == {"page": "web_search", "control": None}
         assert select_blank["controlMap"][key] == {
             "page": "web_search",
             "control": f"field-{key}",
         }
+    assert select_blank["controlMap"]["DEEPSEEK_SEARCH_API_KEY_ROTATION"] == {
+        "page": "web_search",
+        "control": "field-DEEPSEEK_SEARCH_API_KEY_ROTATION",
+    }
 
     assert base["rotation"]["present"] == 0
     # 7.121.1's behaviour is untouched: clean on load, nothing posted untouched.

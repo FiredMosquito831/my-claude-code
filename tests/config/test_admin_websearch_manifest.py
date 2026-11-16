@@ -116,8 +116,8 @@ def test_secret_fields_generated_for_every_keyed_catalog_provider() -> None:
         for descriptor in WEBSEARCH_CATALOG.values()
         if descriptor.credential_env is not None
     ]
-    # 7.113.0: Context7 is the 13th.
-    assert len(keyed) == 13
+    # 7.113.0: Context7 is the 13th; 8.25.0: DeepSeek is the 14th.
+    assert len(keyed) == 14
     for descriptor in keyed:
         field = FIELD_BY_KEY.get(descriptor.credential_env)
         assert field is not None, f"{descriptor.credential_env} missing from manifest"

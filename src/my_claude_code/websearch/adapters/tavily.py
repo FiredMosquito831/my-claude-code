@@ -29,7 +29,10 @@ from ._common import (
 )
 from .http import build_async_client, request_json
 
-_EXTRA_STATUS_ERRORS: dict[int, type[WebSearchError]] = {432: WebSearchQuotaError}
+_EXTRA_STATUS_ERRORS: dict[int, type[WebSearchError]] = {
+    432: WebSearchQuotaError,
+    433: WebSearchQuotaError,
+}
 # Tavily documents max_results as 0-20; sending more is rejected upstream.
 _MAX_RESULTS_CAP = 20
 
@@ -167,7 +170,7 @@ class TavilyWebSearchProvider(BaseWebSearchProvider):
                     url=url,
                     snippet=text_str(row.get("content")),
                     content=text_str(row.get("raw_content")) or None,
-                    published=None,
+                    published=opt_str(row.get("published_date")),
                     score=opt_float(row.get("score")),
                     favicon=opt_str(row.get("favicon")),
                 )
