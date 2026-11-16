@@ -451,19 +451,21 @@ search step in `websearch.db` and writes **one** model-billed row (`is_local=0`,
 
 <a id="multi-door-and-http-mcp"></a>
 
-## Multi-door agent search & HTTP MCP (`8.26.0`)
+## Multi-door agent search & HTTP MCP (`8.26.0` / `8.27.0`)
 
-Beyond Claude Code's single-tool `/v1/messages` fast path, MCC supports web search and fetch across three additional surfaces, all sharing the same configured **Web Search** provider/chain (`WEB_SEARCH_PROVIDER`, `WEB_SEARCH_FALLBACK_POLICY`, `WEB_SEARCH_CHAIN`, `WEB_SEARCH_CHAIN_PAUSED`), **Web Fetch** extractor/SSRF policy (`WEB_FETCH_*`), `WEBSEARCH_PROXY`, and `/v1/messages` formatting (`format_search_digest`, `WEBSEARCH_DIGEST_*`):
+Beyond Claude Code's single-tool `/v1/messages` fast path, MCC supports web search and fetch across all four model doors plus Streamable HTTP MCP, sharing the same configured **Web Search** provider/chain (`WEB_SEARCH_PROVIDER`, `WEB_SEARCH_FALLBACK_POLICY`, `WEB_SEARCH_CHAIN`, `WEB_SEARCH_CHAIN_PAUSED`), **Web Fetch** extractor/SSRF policy (`WEB_FETCH_*`), `WEBSEARCH_PROXY`, and `/v1/messages` formatting (`format_search_digest`, `WEBSEARCH_DIGEST_*`):
 
 | Control | Default | Meaning |
 | --- | --- | --- |
 | `WEB_SEARCH_RESPONSES_ENABLED` | `true` | Enables built-in `web_search`, `web_search_2025_08_26`, `web_search_preview`, and `web_search_preview_2025_03_11` on `POST /v1/responses` (streaming SSE `web_search_call.*` + `response.output_text.annotation.added`, and non-streaming `stream: false` JSON with `url_citation` annotations). Set `false` for legacy passive-drop behavior. |
 | `WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED` | `true` | Enables mixed custom client tools alongside `web_search*` / `web_fetch*` on `POST /v1/messages`. Single-tool `web_search`/`web_fetch` requests always keep their fast intercept path unchanged. Set `false` to reject mixed requests with `400`. |
-| `WEB_SEARCH_DOOR_MODE` | `local` | `local` (default) executes MCC's bounded local tool loop (`__mcc_web_search` / `__mcc_web_fetch` appended at the end of `tools[]`) over any provider. `passthrough` forwards native server tools directly on `/v1/messages` when every attempt targets `anthropic` or `anthropic_oauth` (returns `400` on non-Anthropic routes or `/v1/responses`). `auto` passes through when all `/v1/messages` attempts are native Anthropic, otherwise runs `local`. |
+| `WEB_SEARCH_GEMINI_ENABLED` | `true` | Enables `googleSearch`, `google_search`, `googleSearchRetrieval`, `google_search_retrieval`, `urlContext`, and `url_context` on `/v1beta/models/{model}:generateContent` and `:streamGenerateContent?alt=sse`, running MCC's local loop and returning honest `groundingMetadata` (`webSearchQueries`, `groundingChunks`, `groundingSupports`) and `urlContextMetadata` (no fabricated `confidenceScores` or `searchEntryPoint`). Set `false` for legacy passive-drop behavior. |
+| `WEB_SEARCH_CHAT_ENABLED` | `true` | Enables top-level `web_search_options` (`search_context_size`, `user_location`, `filters.allowed_domains`) and `tools[]` `web_search*` tools on `POST /v1/chat/completions`, emitting OpenAI's nested `url_citation` annotations (`{"type": "url_citation", "url_citation": {...}}`) when grounded citations match. Set `false` for legacy behavior. |
+| `WEB_SEARCH_DOOR_MODE` | `local` | `local` (default) executes MCC's bounded local tool loop (`__mcc_web_search` / `__mcc_web_fetch` appended at the end of `tools[]`) over any provider. `passthrough` forwards native server tools directly on `/v1/messages` when every attempt targets `anthropic` or `anthropic_oauth` (returns `400` on non-Anthropic routes, `/v1/responses`, `/v1beta`, or `/v1/chat/completions`). `auto` passes through when all `/v1/messages` attempts are native Anthropic, otherwise runs `local`. |
 | `WEB_SEARCH_TOOL_LOOP_MAX_STEPS` | `5` | Maximum upstream model round-trips (`1..25`) executed by the local loop before running one final tool-free summarization call. |
 | `WEB_SEARCH_MCP_HTTP_ENABLED` | `true` | Serves MCC's Streamable HTTP MCP endpoint at `POST /v1/mcp/websearch` (`503` when `false`). |
 
-**Schema-on-error self-correction:** If an upstream model calls `__mcc_web_search` / `__mcc_web_fetch` with missing or invalid arguments, MCC returns `is_error: true` containing both the reason and the full JSON Schema so the model can self-correct on the next step (`error_code: "invalid_tool_input"` on terminal blocks). Similarly, invalid `web_search` / `web_fetch` tool definitions or undeclared `tool_choice` payloads return HTTP `400` quoting the expected shape.
+**Schema-on-error self-correction:** If an upstream model calls `__mcc_web_search` / `__mcc_web_fetch` with missing or invalid arguments, MCC returns `is_error: true` containing both the reason and the full JSON Schema so the model can self-correct on the next step (`error_code: "invalid_tool_input"` on terminal blocks). Similarly, malformed `web_search*`, `web_search_options`, `googleSearch`, `urlContext`, or undeclared `tool_choice` payloads return HTTP `400` quoting the expected JSON shape.
 
 ### Streamable HTTP MCP endpoint (`POST /v1/mcp/websearch`)
 

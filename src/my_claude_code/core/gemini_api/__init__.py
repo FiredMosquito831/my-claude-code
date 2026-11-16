@@ -58,6 +58,12 @@ from .paths import (
     parse_model_method_path,
     strip_models_prefix,
 )
+from .tools import GeminiWebSearchSpec, extract_gemini_web_search_spec
+from .web_search_response import (
+    build_gemini_payload_from_loop,
+    collect_gemini_final_text,
+    iter_gemini_sse_from_loop,
+)
 
 __all__ = [
     "COUNT_TOKENS",
@@ -73,9 +79,13 @@ __all__ = [
     "GeminiGenerateContentRequest",
     "GeminiMediaAsk",
     "GeminiModelPath",
+    "GeminiWebSearchSpec",
     "InlineMedia",
     "audio_part",
+    "build_gemini_payload_from_loop",
+    "collect_gemini_final_text",
     "encode_media_answer",
+    "extract_gemini_web_search_spec",
     "fetched_image_part",
     "file_id_for_job",
     "gemini_count_tokens_payload",
@@ -88,6 +98,7 @@ __all__ = [
     "gemini_status_for_failure",
     "generate_content_media_response",
     "image_ask",
+    "iter_gemini_sse_from_loop",
     "job_id_for_file",
     "media_output",
     "model_resource_name",

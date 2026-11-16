@@ -78,6 +78,8 @@ class GeminiConversion:
 
 def convert_request_to_anthropic_payload(
     request: GeminiGenerateContentRequest,
+    *,
+    allow_web_search: bool = False,
 ) -> GeminiConversion:
     """Convert a ``GenerateContentRequest`` into an Anthropic Messages payload.
 
@@ -121,7 +123,7 @@ def convert_request_to_anthropic_payload(
     _apply_generation_config(payload, generation)
     include_thoughts = _apply_thinking_config(payload, generation)
 
-    tools, hosted = convert_tools(request.tools)
+    tools, hosted = convert_tools(request.tools, allow_web_search=allow_web_search)
     dropped.extend(hosted)
     tool_names = {tool["name"] for tool in tools or ()}
     tool_choice, forbids = convert_tool_config(

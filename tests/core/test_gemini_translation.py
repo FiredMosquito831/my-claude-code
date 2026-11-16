@@ -14,11 +14,14 @@ from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.gemini_api import (
     GeminiConversionError,
     GeminiGenerateContentRequest,
+    build_gemini_payload_from_loop,
+    extract_gemini_web_search_spec,
     gemini_error_payload,
     gemini_failure_payload,
     gemini_model_entry,
     gemini_models_payload,
     gemini_status_for_failure,
+    iter_gemini_sse_from_loop,
     model_resource_name,
     parse_model_method_path,
     strip_models_prefix,
@@ -896,3 +899,183 @@ def test_the_listing_envelope_omits_an_empty_page_token() -> None:
     payload = gemini_models_payload([])
 
     assert payload == {"models": []}
+
+
+# ------------------------------------------- opt-in web search & urlContext
+
+
+def test_allow_web_search_keeps_non_web_hosted_tools_dropped_and_validates_schema() -> (
+    None
+):
+    req = _request(
+        contents="hi",
+        tools=[
+            {"googleSearch": {"excludeDomains": ["Example.COM", "spam.net"]}},
+            {"urlContext": {}},
+            {"codeExecution": {}},
+            {"functionDeclarations": [{"name": "echo"}]},
+        ],
+    )
+    conversion = convert_request_to_anthropic_payload(req, allow_web_search=True)
+    assert conversion.dropped == ["codeExecution"]
+    assert [t["name"] for t in conversion.payload["tools"]] == ["echo"]
+
+    spec = extract_gemini_web_search_spec(
+        req.tools, req.tool_config, allow_web_search=True
+    )
+    assert spec is not None
+    assert spec.enable_search is True
+    assert spec.enable_fetch is True
+    assert spec.blocked_domains == ("example.com", "spam.net")
+
+    # toolConfig mode NONE disables web tool execution cleanly.
+    none_req = _request(
+        contents="hi",
+        tools=[{"googleSearch": {}}],
+        toolConfig={"functionCallingConfig": {"mode": "NONE"}},
+    )
+    assert (
+        extract_gemini_web_search_spec(
+            none_req.tools, none_req.tool_config, allow_web_search=True
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_tools",
+    [
+        [{"googleSearch": "invalid"}],
+        [{"googleSearch": {"excludeDomains": "example.com"}}],
+        [
+            {
+                "googleSearchRetrieval": {
+                    "dynamicRetrievalConfig": {"dynamicThreshold": 1.5}
+                }
+            }
+        ],
+        [{"googleSearchRetrieval": {"dynamicRetrievalConfig": {"mode": "BOGUS"}}}],
+        [{"urlContext": ["not-an-object"]}],
+    ],
+)
+def test_malformed_gemini_web_tools_raise_schema_on_error(bad_tools) -> None:
+    req = _request(contents="hi", tools=bad_tools)
+    with pytest.raises(GeminiConversionError) as excinfo:
+        extract_gemini_web_search_spec(
+            req.tools, req.tool_config, allow_web_search=True
+        )
+    assert "Expected Gemini web tools" in str(excinfo.value)
+
+    with pytest.raises(GeminiConversionError) as conv_exc:
+        convert_request_to_anthropic_payload(req, allow_web_search=True)
+    assert "Expected Gemini web tools" in str(conv_exc.value)
+
+
+@pytest.mark.asyncio
+async def test_gemini_web_search_response_honest_nulls_and_no_done() -> None:
+    from types import SimpleNamespace
+
+    fetch_only = build_gemini_payload_from_loop(
+        model="m",
+        response_id="resp_1",
+        include_thoughts=False,
+        stop_reason="end_turn",
+        web_calls=[
+            SimpleNamespace(
+                tool_kind="web_fetch",
+                action={"type": "open_page", "url": "https://example.com/a"},
+                status="completed",
+                error_code=None,
+            ),
+            SimpleNamespace(
+                tool_kind="web_fetch",
+                action={"type": "open_page", "url": "http://127.0.0.1/secret"},
+                status="failed",
+                error_code="url_not_allowed",
+            ),
+            SimpleNamespace(
+                tool_kind="web_fetch",
+                action={"type": "open_page", "url": "https://down.example.com/"},
+                status="failed",
+                error_code="unavailable",
+            ),
+        ],
+        gathered_sources=[
+            SimpleNamespace(
+                url="https://example.com/a",
+                title="Page A",
+                source_kind="fetch",
+            )
+        ],
+        final_step_blocks=[{"type": "text", "text": "Summary without search."}],
+        grounded_citations=[],
+        loop_usage={"input_tokens": 10, "output_tokens": 5},
+    )
+    cand = fetch_only["candidates"][0]
+    assert "groundingMetadata" not in cand
+    assert cand["urlContextMetadata"] == {
+        "urlMetadata": [
+            {
+                "retrievedUrl": "https://example.com/a",
+                "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS",
+            },
+            {
+                "retrievedUrl": "http://127.0.0.1/secret",
+                "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_UNSAFE",
+            },
+            {
+                "retrievedUrl": "https://down.example.com/",
+                "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_ERROR",
+            },
+        ]
+    }
+
+    frames = [
+        frame
+        async for frame in iter_gemini_sse_from_loop(
+            model="m",
+            response_id="resp_2",
+            include_thoughts=False,
+            stop_reason="end_turn",
+            web_calls=[
+                SimpleNamespace(
+                    tool_kind="web_search",
+                    action={"type": "search", "query": "python 3.14"},
+                    status="completed",
+                    error_code=None,
+                )
+            ],
+            gathered_sources=[
+                SimpleNamespace(
+                    url="https://docs.python.org/3.14/",
+                    title="Python 3.14",
+                    source_kind="search",
+                )
+            ],
+            final_step_blocks=[
+                {
+                    "type": "text",
+                    "text": "See [Python 3.14](https://docs.python.org/3.14/).",
+                }
+            ],
+            grounded_citations=[
+                {
+                    "type": "url_citation",
+                    "url": "https://docs.python.org/3.14/",
+                    "title": "Python 3.14",
+                    "start_index": 4,
+                    "end_index": 47,
+                }
+            ],
+            loop_usage={"input_tokens": 20, "output_tokens": 8},
+        )
+    ]
+    joined = "".join(frames)
+    assert "[DONE]" not in joined
+    last = json.loads(frames[-1].removeprefix("data: ").strip())
+    gm = last["candidates"][0]["groundingMetadata"]
+    assert "confidenceScores" not in gm
+    assert "searchEntryPoint" not in gm
+    assert gm["webSearchQueries"] == ["python 3.14"]
+    assert gm["groundingSupports"][0]["groundingChunkIndices"] == [0]
+    assert "urlContextMetadata" not in last["candidates"][0]

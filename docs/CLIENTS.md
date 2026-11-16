@@ -345,7 +345,10 @@ Answers `candidates[0].content.parts[].text` with `usageMetadata`; the path is t
 model (here the Sonnet tier, by its Claude name; a tier alias works in the path
 too, slash and all). `GET /v1beta/models` lists the same models in Google's shape. Asking for
 `IMAGE` or `AUDIO` in `generationConfig.responseModalities` uses the media rails
-([Media routing](MEDIA.md#gemini-shaped-requests-7650)).
+([Media routing](MEDIA.md#gemini-shaped-requests-7650)). Passing `googleSearch`,
+`googleSearchRetrieval`, or `urlContext` in `tools[]` runs MCC's local web search/fetch
+loop (`WEB_SEARCH_GEMINI_ENABLED=true`) and returns `groundingMetadata` and
+`urlContextMetadata` on both `:generateContent` and `:streamGenerateContent?alt=sse`.
 
 #### Models and health
 
@@ -437,11 +440,14 @@ answers `503`. See [Web search guide](WEB-SEARCH.md#standalone-rest-endpoints-po
 #### Streamable HTTP MCP (`POST /v1/mcp/websearch`) and native door web search
 
 Enabled by default (`WEB_SEARCH_MCP_HTTP_ENABLED=true`, `WEB_SEARCH_RESPONSES_ENABLED=true`,
-`WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED=true`, `WEB_SEARCH_DOOR_MODE=local`,
+`WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED=true`, `WEB_SEARCH_GEMINI_ENABLED=true`,
+`WEB_SEARCH_CHAT_ENABLED=true`, `WEB_SEARCH_DOOR_MODE=local`,
 `WEB_SEARCH_TOOL_LOOP_MAX_STEPS=5`), every door shares the exact `/v1/messages` search
 provider chain, fetch extractor/SSRF guards, and schema-on-error feedback:
 
-- **Antigravity (`agy` / `mcp_config.json`):** `{"mcpServers": {"mcc_websearch": {"serverUrl": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}`
+- **Antigravity (`agy` / `mcp_config.json`):** `{"mcpServers": {"mcc_websearch": {"serverUrl": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}` (while `/v1beta` `googleSearch` / `urlContext` requests also execute directly via `WEB_SEARCH_GEMINI_ENABLED=true`)
+- **Gemini CLI (`/v1beta`):** `tools: [{"googleSearch": {}}, {"urlContext": {}}]` runs MCC's local search and fetch loop and returns `groundingMetadata` / `urlContextMetadata` automatically.
+- **OpenAI Chat Completions (`/v1/chat/completions`):** `web_search_options` or `tools: [{"type": "web_search"}]` runs MCC's local search loop and returns nested `url_citation` annotations in `choices[].message.annotations` / streaming `delta.annotations`.
 - **Codex (`config.toml`):** `[mcp_servers.mcc_websearch]` with `url = "http://127.0.0.1:8082/v1/mcp/websearch"` and `bearer_token_env_var = "ANTHROPIC_AUTH_TOKEN"` (or use native `tools: [{"type": "web_search"}]` directly against `POST /v1/responses`!)
 - **OpenCode (`opencode.json`):** `{"mcp": {"mcc_websearch": {"type": "remote", "url": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}`
 - **Cline (`cline_mcp_settings.json`):** `{"mcpServers": {"mcc_websearch": {"type": "streamableHttp", "url": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}`

@@ -207,6 +207,36 @@ def _multi_door_and_mcp_field_specs() -> tuple[dict[str, Any], ...]:
             ),
         },
         {
+            "key": "WEB_SEARCH_GEMINI_ENABLED",
+            "label": "Gemini API Web Search",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "web_search_gemini_enabled",
+            "default": "true",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "Enable native googleSearch, googleSearchRetrieval, and urlContext "
+                "tools on /v1beta Gemini endpoints, running MCC's local search and "
+                "fetch loop and returning grounded metadata by default."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_CHAT_ENABLED",
+            "label": "Chat Completions Web Search",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "web_search_chat_enabled",
+            "default": "true",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "Enable web_search_options and native web_search tools on "
+                "POST /v1/chat/completions, running MCC's local search tool loop "
+                "and returning nested url_citation annotations by default."
+            ),
+        },
+        {
             "key": "WEB_SEARCH_DOOR_MODE",
             "label": "Multi-Door Execution Mode",
             "section_id": "websearch",

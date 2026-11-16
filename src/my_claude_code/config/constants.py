@@ -1571,7 +1571,9 @@ FRESH_INSTALL_ROUTE_KEYS = (
     "MODEL_SONNET",
 )
 
-# Multi-door web search orchestration, opt-in endpoint toggles, and HTTP MCP (8.26.0).
+# Multi-door web search orchestration, opt-in endpoint toggles, and HTTP MCP (8.26.0 / 8.27.0).
 WEB_SEARCH_DOOR_MODE_VALUES: tuple[str, ...] = ("local", "passthrough", "auto")
 WEB_SEARCH_DOOR_MODE_DEFAULT = "local"
 WEB_SEARCH_TOOL_LOOP_MAX_STEPS_DEFAULT = 5
+WEB_SEARCH_GEMINI_ENABLED_DEFAULT = True
+WEB_SEARCH_CHAT_ENABLED_DEFAULT = True

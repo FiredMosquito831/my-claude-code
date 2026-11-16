@@ -33,9 +33,12 @@ class OpenAIChatCompletionsAdapter:
         request: OpenAIChatCompletionRequest,
         *,
         carrier_surface: dict[str, int] | None = None,
+        allow_web_search: bool = False,
     ) -> dict[str, Any]:
         return convert_request_to_anthropic_payload(
-            request, carrier_surface=carrier_surface
+            request,
+            carrier_surface=carrier_surface,
+            allow_web_search=allow_web_search,
         )
 
     def iter_sse_from_anthropic(

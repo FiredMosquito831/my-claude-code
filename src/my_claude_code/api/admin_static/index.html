@@ -5478,10 +5478,16 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 </p>
                 <h4>Multi-door web search and HTTP MCP</h4>
                 <p>
-                  By default, native <code>web_search*</code> tools also work on
+                  By default, native <code>web_search*</code> tools work on
                   <code>POST /v1/responses</code> (<code>WEB_SEARCH_RESPONSES_ENABLED</code>),
                   mixed client and server tools work on <code>POST /v1/messages</code>
-                  (<code>WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED</code>), and external MCP
+                  (<code>WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED</code>),
+                  <code>googleSearch</code> / <code>urlContext</code> work on
+                  <code>/v1beta</code> (<code>WEB_SEARCH_GEMINI_ENABLED</code>) with honest
+                  <code>groundingMetadata</code> and <code>urlContextMetadata</code>,
+                  <code>web_search_options</code> / <code>web_search*</code> work on
+                  <code>POST /v1/chat/completions</code> (<code>WEB_SEARCH_CHAT_ENABLED</code>)
+                  with nested <code>url_citation</code> annotations, and external MCP
                   clients (Antigravity, Codex, OpenCode, Cline, Goose, Claude Code) can
                   connect to MCC&apos;s Streamable HTTP MCP endpoint at
                   <code>POST /v1/mcp/websearch</code>
