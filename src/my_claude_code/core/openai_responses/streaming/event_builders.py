@@ -87,7 +87,13 @@ def output_text_done(item_id: str, output_index: int, text: str) -> str:
     )
 
 
-def content_part_done(item_id: str, output_index: int, text: str) -> str:
+def content_part_done(
+    item_id: str,
+    output_index: int,
+    text: str,
+    *,
+    annotations: list[dict[str, Any]] | None = None,
+) -> str:
     return format_response_sse_event(
         "response.content_part.done",
         {
@@ -95,7 +101,65 @@ def content_part_done(item_id: str, output_index: int, text: str) -> str:
             "item_id": item_id,
             "output_index": output_index,
             "content_index": 0,
-            "part": {"type": "output_text", "text": text, "annotations": []},
+            "part": {
+                "type": "output_text",
+                "text": text,
+                "annotations": list(annotations) if annotations else [],
+            },
+        },
+    )
+
+
+def output_text_annotation_added(
+    item_id: str,
+    output_index: int,
+    annotation_index: int,
+    annotation: dict[str, Any],
+    *,
+    content_index: int = 0,
+) -> str:
+    return format_response_sse_event(
+        "response.output_text.annotation.added",
+        {
+            "type": "response.output_text.annotation.added",
+            "item_id": item_id,
+            "output_index": output_index,
+            "content_index": content_index,
+            "annotation_index": annotation_index,
+            "annotation": annotation,
+        },
+    )
+
+
+def web_search_call_in_progress(item_id: str, output_index: int) -> str:
+    return format_response_sse_event(
+        "response.web_search_call.in_progress",
+        {
+            "type": "response.web_search_call.in_progress",
+            "item_id": item_id,
+            "output_index": output_index,
+        },
+    )
+
+
+def web_search_call_searching(item_id: str, output_index: int) -> str:
+    return format_response_sse_event(
+        "response.web_search_call.searching",
+        {
+            "type": "response.web_search_call.searching",
+            "item_id": item_id,
+            "output_index": output_index,
+        },
+    )
+
+
+def web_search_call_completed(item_id: str, output_index: int) -> str:
+    return format_response_sse_event(
+        "response.web_search_call.completed",
+        {
+            "type": "response.web_search_call.completed",
+            "item_id": item_id,
+            "output_index": output_index,
         },
     )
 

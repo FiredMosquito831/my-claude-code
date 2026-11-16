@@ -22,6 +22,7 @@ from .tools import (
     convert_tool_choice,
     convert_tools,
     custom_tool_input_to_anthropic,
+    extract_responses_web_search_spec,
     optional_str,
     parse_arguments,
     required_str,
@@ -53,6 +54,8 @@ class _PendingReasoning:
 
 def convert_request_to_anthropic_payload(
     request: OpenAIResponsesRequest,
+    *,
+    allow_web_search: bool = False,
 ) -> dict[str, Any]:
     """Convert an OpenAI Responses request into an Anthropic Messages payload."""
 
@@ -70,6 +73,7 @@ def convert_request_to_anthropic_payload(
             system_parts=system_parts,
             pending=pending,
             quarantined_function_call_ids=quarantined_function_call_ids,
+            allow_web_search=allow_web_search,
         )
     _append_pending_reasoning(messages, pending)
 
@@ -95,11 +99,18 @@ def convert_request_to_anthropic_payload(
     if output_config := responses_reasoning_to_output_config(request.reasoning):
         payload["output_config"] = output_config
 
+    if allow_web_search:
+        extract_responses_web_search_spec(
+            request.tools, request.tool_choice, allow_web_search=True
+        )
+
     raw_tool_choice = request.tool_choice
-    tools = convert_tools(request.tools)
+    tools = convert_tools(request.tools, allow_web_search=allow_web_search)
     if tools and raw_tool_choice != "none":
         payload["tools"] = tools
-    tool_choice = convert_tool_choice(raw_tool_choice)
+    tool_choice = convert_tool_choice(
+        raw_tool_choice, allow_web_search=allow_web_search
+    )
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
 
@@ -113,6 +124,7 @@ def _append_input_item(
     system_parts: list[str],
     pending: _PendingReasoning,
     quarantined_function_call_ids: set[str],
+    allow_web_search: bool = False,
 ) -> _PendingReasoning:
     if isinstance(item, str):
         _append_pending_reasoning(messages, pending)
@@ -197,6 +209,29 @@ def _append_input_item(
     if item_type in {"input_text", "output_text", "text"}:
         _append_pending_reasoning(messages, pending)
         messages.append({"role": "user", "content": _text_from_part(item)})
+        return _PendingReasoning()
+    if allow_web_search and item_type == "web_search_call":
+        action = item.get("action")
+        action_summary = ""
+        if isinstance(action, dict):
+            atype = str(action.get("type") or "search")
+            target = (
+                action.get("query") or action.get("url") or action.get("pattern") or ""
+            )
+            action_summary = f"{atype}: {target}".strip()
+        note = (
+            f"[Prior web_search_call: {action_summary}]"
+            if action_summary
+            else "[Prior web_search_call]"
+        )
+        _append_message_item(
+            "assistant",
+            note,
+            messages,
+            system_parts,
+            reasoning_content=pending.text,
+            encrypted_reasoning=pending.items,
+        )
         return _PendingReasoning()
 
     raise ResponsesConversionError(

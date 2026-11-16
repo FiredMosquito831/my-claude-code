@@ -14,6 +14,7 @@ from my_claude_code.api.optimization_handlers import (
     try_optimizations,
 )
 from my_claude_code.api.request_capture import (
+    RequestCapture,
     build_capture,
 )
 from my_claude_code.api.request_errors import (
@@ -32,14 +33,19 @@ from my_claude_code.api.response_streams import (
     terminal_execution_error_response,
     trace_terminal_execution_error,
 )
+from my_claude_code.api.web_tools.constants import _MAX_FETCH_CHARS
 from my_claude_code.api.web_tools.egress import (
     WebFetchEgressPolicy,
     web_fetch_allowed_scheme_set,
 )
 from my_claude_code.api.web_tools.request import (
+    EXPECTED_ANTHROPIC_WEB_TOOLS_SHAPE,
+    has_listed_anthropic_server_tools,
     is_web_server_tool_request,
+    list_unsupported_non_web_server_tools,
     selected_server_tool_name,
     unsupported_server_tool_error,
+    validate_and_extract_multi_tool_spec,
 )
 from my_claude_code.application.errors import ApplicationError, InvalidRequestError
 from my_claude_code.application.execution import (
@@ -252,10 +258,19 @@ class MessagesHandler:
             # id on ``routed``; ``request_data`` is un-routed today, and this
             # stays correct if that ever stops being true.
             response_model = routed.resolved.original_model
-            self._reject_unsupported_server_tools(routed)
+            multi_tool_mode = self._resolve_multi_tool_mode(plan, routed)
             capture.set_routing(routed)
 
-            result = self._run_message_intercepts(plan)
+            if multi_tool_mode == "local":
+                result = await self._run_multi_tool_web_loop(
+                    request_data,
+                    response_model=response_model,
+                    request_id=request_id,
+                    harness=harness,
+                    capture=capture,
+                )
+            else:
+                result = self._run_message_intercepts(plan)
             if result is None:
                 logger.debug("No optimization matched, routing to provider")
                 result = _MessagesStreamResult(
@@ -477,6 +492,105 @@ class MessagesHandler:
         )
         if tool_err is not None:
             raise InvalidRequestError(tool_err)
+
+    def _resolve_multi_tool_mode(
+        self,
+        plan: RoutedMessagesPlan,
+        routed: RoutedMessagesRequest,
+    ) -> str | None:
+        """Validate server tools on ``/v1/messages`` and decide local loop vs passthrough."""
+        non_web = list_unsupported_non_web_server_tools(routed.request)
+        if non_web:
+            bad = ", ".join(repr(t.type or t.name) for t in non_web)
+            raise InvalidRequestError(
+                f"Unsupported Anthropic server tool(s) ({bad}) on /v1/messages. "
+                f"{EXPECTED_ANTHROPIC_WEB_TOOLS_SHAPE}"
+            )
+        # Single-tool fast path (IV.18) always takes precedence unchanged.
+        if is_web_server_tool_request(routed.request):
+            self._reject_unsupported_server_tools(routed)
+            return None
+        if not has_listed_anthropic_server_tools(routed.request):
+            return None
+        if not self._settings.web_search_anthropic_multi_tool_enabled:
+            self._reject_unsupported_server_tools(routed)
+            return None
+
+        # Validate web_search/web_fetch tool definitions and tool_choice early.
+        validate_and_extract_multi_tool_spec(routed.request)
+        door_mode = self._settings.web_search_door_mode
+        all_native = bool(plan.attempts) and all(
+            attempt.resolved.provider_id in ("anthropic", "anthropic_oauth")
+            for attempt in plan.attempts
+        )
+        if door_mode == "passthrough":
+            if not all_native:
+                raise InvalidRequestError(
+                    "WEB_SEARCH_DOOR_MODE='passthrough' requires every routed attempt to "
+                    "target native Anthropic ('anthropic' or 'anthropic_oauth')."
+                )
+            return "passthrough"
+        if door_mode == "auto" and all_native:
+            return "passthrough"
+        return "local"
+
+    async def _run_multi_tool_web_loop(
+        self,
+        request_data: MessagesRequest,
+        *,
+        response_model: str,
+        request_id: str,
+        harness: str | None,
+        capture: RequestCapture,
+    ) -> _MessagesStreamResult:
+        """Execute opt-in multi-tool web_search/web_fetch loop and emit Anthropic SSE."""
+        from my_claude_code.api.web_tools.tool_loop import (
+            WebToolLoopConfig,
+            iter_anthropic_sse_from_loop,
+            run_routed_web_tool_loop,
+        )
+
+        spec = validate_and_extract_multi_tool_spec(request_data)
+        fetch_max_chars = (
+            min(_MAX_FETCH_CHARS, spec.max_fetch_content_tokens * 4)
+            if spec.max_fetch_content_tokens is not None
+            else _MAX_FETCH_CHARS
+        )
+        config = WebToolLoopConfig(
+            enable_search=spec.has_web_search,
+            enable_fetch=spec.has_web_fetch,
+            search_options=spec.search_options,
+            fetch_options=spec.fetch_options,
+            search_external_web_access=spec.search_external_web_access,
+            fetch_external_web_access=spec.fetch_external_web_access,
+            fetch_max_chars=fetch_max_chars,
+            user_location=spec.user_location,
+            max_steps=self._settings.web_search_tool_loop_max_steps,
+            initial_force_search=spec.force_search,
+            initial_force_fetch=spec.force_fetch,
+            search_allowed_disjoint=spec.search_allowed_disjoint,
+            fetch_allowed_disjoint=spec.fetch_allowed_disjoint,
+        )
+        loop_result = await run_routed_web_tool_loop(
+            request_data,
+            config,
+            self._settings,
+            model_router=self._model_router,
+            provider_executor=self._provider_executor,
+            wire_api="messages",
+            request_id=request_id,
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload=request_data.model_dump(),
+            capture=capture,
+            harness=harness,
+            plan_postprocessor=self._apply_message_routing_policies,
+        )
+        return _MessagesStreamResult(
+            iter_anthropic_sse_from_loop(
+                loop_result,
+                response_model=response_model,
+            )
+        )
 
     def _apply_describe_outcome(
         self,

@@ -134,3 +134,63 @@ class TestWebSearchSettings:
 
         with pytest.raises(ValidationError, match="WEBSEARCH_LOG_CONTENT_MAX_CHARS"):
             Settings()
+
+    def test_multi_door_and_mcp_defaults_and_hot_flags(self, monkeypatch) -> None:
+        from my_claude_code.config.admin.manifest import (
+            FIELD_BY_KEY,
+            update_affects_providers,
+        )
+
+        defaults = _settings(monkeypatch)
+        assert defaults.web_search_responses_enabled is True
+        assert defaults.web_search_anthropic_multi_tool_enabled is True
+        assert defaults.web_search_door_mode == "local"
+        assert defaults.web_search_tool_loop_max_steps == 5
+        assert defaults.web_search_mcp_http_enabled is True
+
+        new_keys = (
+            "WEB_SEARCH_RESPONSES_ENABLED",
+            "WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED",
+            "WEB_SEARCH_DOOR_MODE",
+            "WEB_SEARCH_TOOL_LOOP_MAX_STEPS",
+            "WEB_SEARCH_MCP_HTTP_ENABLED",
+        )
+        assert update_affects_providers(new_keys) is False
+        for key in new_keys:
+            assert FIELD_BY_KEY[key].restart_required is False
+            assert FIELD_BY_KEY[key].affects_providers is False
+
+    @pytest.mark.parametrize(
+        "mode", ["local", "passthrough", "auto", " AUTO ", "Local"]
+    )
+    def test_web_search_door_mode_valid_values(self, monkeypatch, mode: str) -> None:
+        assert (
+            _settings(monkeypatch, WEB_SEARCH_DOOR_MODE=mode).web_search_door_mode
+            == mode.strip().lower()
+        )
+
+    def test_web_search_door_mode_invalid_rejected(self, monkeypatch) -> None:
+        monkeypatch.setitem(Settings.model_config, "env_file", ())
+        monkeypatch.setenv("WEB_SEARCH_DOOR_MODE", "hybrid")
+        with pytest.raises(ValidationError, match="web_search_door_mode"):
+            Settings()
+
+    def test_web_search_tool_loop_max_steps_clamped(self, monkeypatch) -> None:
+        assert (
+            _settings(
+                monkeypatch, WEB_SEARCH_TOOL_LOOP_MAX_STEPS="0"
+            ).web_search_tool_loop_max_steps
+            == 1
+        )
+        assert (
+            _settings(
+                monkeypatch, WEB_SEARCH_TOOL_LOOP_MAX_STEPS="99"
+            ).web_search_tool_loop_max_steps
+            == 25
+        )
+        assert (
+            _settings(
+                monkeypatch, WEB_SEARCH_TOOL_LOOP_MAX_STEPS=""
+            ).web_search_tool_loop_max_steps
+            == 5
+        )

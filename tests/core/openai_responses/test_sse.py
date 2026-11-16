@@ -1003,3 +1003,81 @@ async def test_message_start_seeds_input_tokens_when_final_delta_reports_zero() 
         "output_tokens": 9,
         "total_tokens": 21,
     }
+
+
+@pytest.mark.asyncio
+async def test_web_search_call_sse_lifecycle_and_json_payload() -> None:
+    from dataclasses import dataclass
+
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesRequest,
+        build_responses_payload_from_loop,
+        iter_responses_sse_from_loop,
+    )
+
+    @dataclass
+    class _FakeCall:
+        srv_id: str
+        status: str
+        action: dict[str, Any]
+
+    text = "See [Python Docs](https://docs.python.org/3/)."
+    annotations = [
+        {
+            "type": "url_citation",
+            "url": "https://docs.python.org/3/",
+            "title": "Python Docs",
+            "start_index": 4,
+            "end_index": len(text) - 1,
+        }
+    ]
+    req = OpenAIResponsesRequest(model="gpt-test", input="Hi", stream=True)
+    web_calls = [
+        _FakeCall(
+            "srvtoolu_abc123", "completed", {"type": "search", "query": "python 3"}
+        )
+    ]
+    final_blocks = [{"type": "text", "text": text}]
+    usage = {"input_tokens": 20, "output_tokens": 10}
+
+    raw_chunks = [
+        chunk
+        async for chunk in iter_responses_sse_from_loop(
+            req,
+            web_calls=web_calls,
+            final_step_blocks=final_blocks,
+            annotations=annotations,
+            loop_usage=usage,
+        )
+    ]
+    events = parse_sse_text("".join(raw_chunks))
+    event_names = [ev.event for ev in events]
+    assert "response.web_search_call.in_progress" in event_names
+    assert "response.web_search_call.searching" in event_names
+    assert "response.web_search_call.completed" in event_names
+    assert "response.output_text.annotation.added" in event_names
+
+    completed = events[-1].data["response"]
+    assert completed["output"][0] == {
+        "id": "ws_abc123",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {"type": "search", "query": "python 3"},
+    }
+    assert completed["output"][1]["content"][0]["annotations"] == annotations
+
+    non_stream = build_responses_payload_from_loop(
+        OpenAIResponsesRequest(model="gpt-test", input="Hi", stream=False),
+        web_calls=web_calls,
+        final_step_blocks=final_blocks,
+        annotations=annotations,
+        loop_usage=usage,
+    )
+    assert non_stream["status"] == "completed"
+    assert non_stream["output"][0]["type"] == "web_search_call"
+    assert non_stream["output"][1]["content"][0]["annotations"] == annotations
+    assert non_stream["usage"] == {
+        "input_tokens": 20,
+        "output_tokens": 10,
+        "total_tokens": 30,
+    }

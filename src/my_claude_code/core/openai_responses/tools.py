@@ -15,7 +15,199 @@ _NAMESPACE_TOOL_SEPARATOR = "__"
 _UNSUPPORTED_PASSIVE_TOOL_TYPES = frozenset(
     {"web_search", "image_generation", "tool_search"}
 )
+SUPPORTED_RESPONSES_WEB_SEARCH_TYPES: frozenset[str] = frozenset(
+    {
+        "web_search",
+        "web_search_2025_08_26",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+    }
+)
+EXPECTED_RESPONSES_WEB_SEARCH_SCHEMA = (
+    'Expected Responses web_search tool: {"type": "web_search" | "web_search_2025_08_26" | '
+    '"web_search_preview" | "web_search_preview_2025_03_11", '
+    '"filters"?: {"allowed_domains": string[]}, "external_web_access"?: boolean, '
+    '"search_context_size"?: "low" | "medium" | "high", "user_location"?: object}, '
+    'with tool_choice "auto" or {"type": "web_search"}.'
+)
+_VALID_SEARCH_CONTEXT_SIZES = frozenset({"low", "medium", "high"})
 _INVALID_TOOL_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+@dataclass(frozen=True, slots=True)
+class ResponsesWebSearchSpec:
+    """Validated Responses API built-in ``web_search*`` configuration."""
+
+    tool_type: str
+    allowed_domains: tuple[str, ...] = ()
+    external_web_access: bool = True
+    search_context_size: str | None = None
+    user_location: dict[str, Any] | None = None
+    forced: bool = False
+    allowed_disjoint: bool = False
+
+
+def _norm_domain(raw: str) -> str:
+    return raw.strip().lower().rstrip(".")
+
+
+def _domain_permits(candidate: str, allowed_rule: str) -> bool:
+    return candidate == allowed_rule or candidate.endswith("." + allowed_rule)
+
+
+def _intersect_domain_layers(
+    layers: list[tuple[str, ...]],
+) -> tuple[tuple[str, ...], bool]:
+    if not layers:
+        return (), False
+    current = list(dict.fromkeys(_norm_domain(d) for d in layers[0] if d.strip()))
+    if not current:
+        return (), False
+    for layer in layers[1:]:
+        nxt = list(dict.fromkeys(_norm_domain(d) for d in layer if d.strip()))
+        if not nxt:
+            continue
+        narrowed: list[str] = []
+        for left in current:
+            for right in nxt:
+                if _domain_permits(left, right) and left not in narrowed:
+                    narrowed.append(left)
+                elif _domain_permits(right, left) and right not in narrowed:
+                    narrowed.append(right)
+        if not narrowed:
+            return (), True
+        current = narrowed
+    return tuple(current), False
+
+
+def _validate_responses_web_search_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    tool_type = str(tool.get("type") or "")
+    allowed_domains: tuple[str, ...] = ()
+    filters = tool.get("filters")
+    if filters is not None:
+        if not isinstance(filters, dict):
+            raise ResponsesConversionError(
+                f"Invalid 'filters' on {tool_type!r} tool: expected an object. "
+                f"{EXPECTED_RESPONSES_WEB_SEARCH_SCHEMA}"
+            )
+        raw_domains = filters.get("allowed_domains")
+        if raw_domains is not None:
+            if not isinstance(raw_domains, list) or any(
+                not isinstance(d, str) or not d.strip() for d in raw_domains
+            ):
+                raise ResponsesConversionError(
+                    f"Invalid 'filters.allowed_domains' on {tool_type!r} tool: expected a list of "
+                    f"non-empty domain strings. {EXPECTED_RESPONSES_WEB_SEARCH_SCHEMA}"
+                )
+            allowed_domains = tuple(
+                dict.fromkeys(_norm_domain(d) for d in raw_domains if d.strip())
+            )
+
+    external_web_access = True
+    raw_external = tool.get("external_web_access")
+    if raw_external is not None:
+        if not isinstance(raw_external, bool):
+            raise ResponsesConversionError(
+                f"Invalid 'external_web_access' on {tool_type!r} tool: expected a boolean. "
+                f"{EXPECTED_RESPONSES_WEB_SEARCH_SCHEMA}"
+            )
+        external_web_access = raw_external
+
+    search_context_size: str | None = None
+    raw_size = tool.get("search_context_size")
+    if raw_size is not None:
+        if (
+            not isinstance(raw_size, str)
+            or raw_size.strip().lower() not in _VALID_SEARCH_CONTEXT_SIZES
+        ):
+            raise ResponsesConversionError(
+                f"Invalid 'search_context_size' on {tool_type!r} tool: expected 'low', 'medium', or 'high'. "
+                f"{EXPECTED_RESPONSES_WEB_SEARCH_SCHEMA}"
+            )
+        search_context_size = raw_size.strip().lower()
+
+    user_location: dict[str, Any] | None = None
+    raw_loc = tool.get("user_location")
+    if raw_loc is not None:
+        if not isinstance(raw_loc, dict):
+            raise ResponsesConversionError(
+                f"Invalid 'user_location' on {tool_type!r} tool: expected an object. "
+                f"{EXPECTED_RESPONSES_WEB_SEARCH_SCHEMA}"
+            )
+        user_location = dict(raw_loc)
+
+    return {
+        "tool_type": tool_type,
+        "allowed_domains": allowed_domains,
+        "external_web_access": external_web_access,
+        "search_context_size": search_context_size,
+        "user_location": user_location,
+    }
+
+
+def extract_responses_web_search_spec(
+    tools: Any,
+    tool_choice: Any,
+    *,
+    allow_web_search: bool,
+) -> ResponsesWebSearchSpec | None:
+    """Validate and extract Responses ``web_search*`` config when enabled, else ``None``."""
+    if not allow_web_search:
+        return None
+
+    tool_list = tools if isinstance(tools, list) else []
+    parsed_tools = [
+        _validate_responses_web_search_tool(tool)
+        for tool in tool_list
+        if isinstance(tool, dict)
+        and tool.get("type") in SUPPORTED_RESPONSES_WEB_SEARCH_TYPES
+    ]
+
+    forced = False
+    if (
+        isinstance(tool_choice, dict)
+        and tool_choice.get("type") in SUPPORTED_RESPONSES_WEB_SEARCH_TYPES
+    ):
+        if not parsed_tools:
+            raise ResponsesConversionError(
+                f"Invalid tool_choice {tool_choice!r}: web search tool must be declared in tools[]. "
+                f"{EXPECTED_RESPONSES_WEB_SEARCH_SCHEMA}"
+            )
+        forced = True
+
+    if not parsed_tools:
+        return None
+
+    domain_layers = [
+        entry["allowed_domains"] for entry in parsed_tools if entry["allowed_domains"]
+    ]
+    allowed_domains, allowed_disjoint = _intersect_domain_layers(domain_layers)
+    external_web_access = all(entry["external_web_access"] for entry in parsed_tools)
+    search_context_size = next(
+        (
+            entry["search_context_size"]
+            for entry in reversed(parsed_tools)
+            if entry["search_context_size"]
+        ),
+        None,
+    )
+    user_location = next(
+        (
+            entry["user_location"]
+            for entry in reversed(parsed_tools)
+            if entry["user_location"] is not None
+        ),
+        None,
+    )
+    return ResponsesWebSearchSpec(
+        tool_type=parsed_tools[0]["tool_type"],
+        allowed_domains=allowed_domains,
+        external_web_access=external_web_access,
+        search_context_size=search_context_size,
+        user_location=user_location,
+        forced=forced,
+        allowed_disjoint=allowed_disjoint,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +217,11 @@ class ResponsesToolIdentity:
     namespace: str | None = None
 
 
-def convert_tools(value: Any) -> list[dict[str, Any]] | None:
+def convert_tools(
+    value: Any,
+    *,
+    allow_web_search: bool = False,
+) -> list[dict[str, Any]] | None:
     if value is None:
         return None
     if not isinstance(value, list):
@@ -47,6 +243,9 @@ def convert_tools(value: Any) -> list[dict[str, Any]] | None:
         if tool_type == "namespace":
             tools.extend(_convert_namespace_tool(tool))
             continue
+        if allow_web_search and tool_type in SUPPORTED_RESPONSES_WEB_SEARCH_TYPES:
+            _validate_responses_web_search_tool(tool)
+            continue
         if tool_type in _UNSUPPORTED_PASSIVE_TOOL_TYPES:
             continue
         if tool_type != "function":
@@ -56,7 +255,11 @@ def convert_tools(value: Any) -> list[dict[str, Any]] | None:
     return tools
 
 
-def convert_tool_choice(value: Any) -> dict[str, Any] | None:
+def convert_tool_choice(
+    value: Any,
+    *,
+    allow_web_search: bool = False,
+) -> dict[str, Any] | None:
     if value is None or value == "auto":
         return None
     if value == "none":
@@ -99,6 +302,8 @@ def convert_tool_choice(value: Any) -> dict[str, Any] | None:
             return dict(value)
         if choice_type in {"auto", "any"}:
             return dict(value)
+        if allow_web_search and choice_type in SUPPORTED_RESPONSES_WEB_SEARCH_TYPES:
+            return {"type": "web_search"}
     raise ResponsesConversionError(f"Unsupported Responses tool_choice: {value!r}")
 
 

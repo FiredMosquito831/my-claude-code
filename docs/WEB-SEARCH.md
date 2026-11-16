@@ -449,5 +449,27 @@ local tool answer (`local:web_search` / `local:web_fetch` with `provider=NULL` a
 search step in `websearch.db` and writes **one** model-billed row (`is_local=0`,
 `optimization=NULL`) in `requests.db` with full token counts and cost estimation.
 
+<a id="multi-door-and-http-mcp"></a>
+
+## Multi-door agent search & HTTP MCP (`8.26.0`)
+
+Beyond Claude Code's single-tool `/v1/messages` fast path, MCC supports web search and fetch across three additional surfaces, all sharing the same configured **Web Search** provider/chain (`WEB_SEARCH_PROVIDER`, `WEB_SEARCH_FALLBACK_POLICY`, `WEB_SEARCH_CHAIN`, `WEB_SEARCH_CHAIN_PAUSED`), **Web Fetch** extractor/SSRF policy (`WEB_FETCH_*`), `WEBSEARCH_PROXY`, and `/v1/messages` formatting (`format_search_digest`, `WEBSEARCH_DIGEST_*`):
+
+| Control | Default | Meaning |
+| --- | --- | --- |
+| `WEB_SEARCH_RESPONSES_ENABLED` | `true` | Enables built-in `web_search`, `web_search_2025_08_26`, `web_search_preview`, and `web_search_preview_2025_03_11` on `POST /v1/responses` (streaming SSE `web_search_call.*` + `response.output_text.annotation.added`, and non-streaming `stream: false` JSON with `url_citation` annotations). Set `false` for legacy passive-drop behavior. |
+| `WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED` | `true` | Enables mixed custom client tools alongside `web_search*` / `web_fetch*` on `POST /v1/messages`. Single-tool `web_search`/`web_fetch` requests always keep their fast intercept path unchanged. Set `false` to reject mixed requests with `400`. |
+| `WEB_SEARCH_DOOR_MODE` | `local` | `local` (default) executes MCC's bounded local tool loop (`__mcc_web_search` / `__mcc_web_fetch` appended at the end of `tools[]`) over any provider. `passthrough` forwards native server tools directly on `/v1/messages` when every attempt targets `anthropic` or `anthropic_oauth` (returns `400` on non-Anthropic routes or `/v1/responses`). `auto` passes through when all `/v1/messages` attempts are native Anthropic, otherwise runs `local`. |
+| `WEB_SEARCH_TOOL_LOOP_MAX_STEPS` | `5` | Maximum upstream model round-trips (`1..25`) executed by the local loop before running one final tool-free summarization call. |
+| `WEB_SEARCH_MCP_HTTP_ENABLED` | `true` | Serves MCC's Streamable HTTP MCP endpoint at `POST /v1/mcp/websearch` (`503` when `false`). |
+
+**Schema-on-error self-correction:** If an upstream model calls `__mcc_web_search` / `__mcc_web_fetch` with missing or invalid arguments, MCC returns `is_error: true` containing both the reason and the full JSON Schema so the model can self-correct on the next step (`error_code: "invalid_tool_input"` on terminal blocks). Similarly, invalid `web_search` / `web_fetch` tool definitions or undeclared `tool_choice` payloads return HTTP `400` quoting the expected shape.
+
+### Streamable HTTP MCP endpoint (`POST /v1/mcp/websearch`)
+
+- **Protocol:** JSON-RPC 2.0 Streamable HTTP (`2025-03-26`), `HEAD` / `OPTIONS` returning `204 Allow: POST, HEAD, OPTIONS`, `notifications/*` returning `202 Accepted`, content negotiation (`application/json` or `text/event-stream`).
+- **Auth:** Protected by `require_proxy_auth` (`Bearer`, `x-api-key`, `x-goog-api-key`, `?key=`).
+- **Tools:** `web_search` (live Web Search route/chain), `web_fetch` (with `WebFetchEgressPolicy` SSRF guards and extractor options), and `search_docs` (routed to Context7). Invalid arguments return `CallToolResult` with `isError: true` and the tool's `inputSchema`; unknown tools return `-32602` with `error.data.available_tools`.
+
 <a id="admin-dashboard"></a>
 

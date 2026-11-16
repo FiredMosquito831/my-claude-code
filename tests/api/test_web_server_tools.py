@@ -1535,7 +1535,10 @@ async def test_run_web_search_builds_settings_when_not_passed(monkeypatch):
 async def test_service_rejects_listed_server_tools_for_every_provider(
     provider_id: str,
 ) -> None:
-    settings = Settings()
+    # Pinned opt-out (8.26.0): WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED=false rejects mixed/ambiguous server tools.
+    settings = Settings.model_validate(
+        {"WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED": False}
+    )
     service = MessagesHandler(
         settings,
         provider_resolver=lambda _: MagicMock(),

@@ -832,3 +832,99 @@ def test_an_image_outside_a_user_turn_is_still_refused(role: str) -> None:
             }
         )
     assert str(raised.value) == "Unsupported Responses content part type: 'input_image'"
+
+
+@pytest.mark.parametrize(
+    "tool_type",
+    [
+        "web_search",
+        "web_search_2025_08_26",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+    ],
+)
+def test_opt_in_web_search_tools_preserve_client_tool_prefix_and_spec(
+    tool_type: str,
+) -> None:
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesAdapter,
+        OpenAIResponsesRequest,
+        extract_responses_web_search_spec,
+    )
+
+    request_dict: dict[str, Any] = {
+        "model": "m",
+        "input": [
+            {
+                "type": "web_search_call",
+                "id": "ws_prev",
+                "status": "completed",
+                "action": {"type": "search", "query": "python 3.14"},
+            },
+            {"role": "user", "content": "Follow up"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": tool_type,
+                "filters": {"allowed_domains": ["docs.python.org", "python.org"]},
+                "external_web_access": False,
+                "search_context_size": "low",
+                "user_location": {"type": "approximate", "country": "US"},
+            },
+        ],
+        "tool_choice": {"type": tool_type},
+    }
+    req = OpenAIResponsesRequest(**request_dict)
+    adapter = OpenAIResponsesAdapter()
+
+    # Pure converter default stays untouched when allow_web_search=False.
+    with pytest.raises(_CONVERSION_ERROR):
+        adapter.to_anthropic_payload(req)
+
+    payload = adapter.to_anthropic_payload(req, allow_web_search=True)
+    assert [t["name"] for t in payload["tools"]] == ["get_weather"]
+    assert payload["tool_choice"] == {"type": "web_search"}
+    assert "python 3.14" in str(payload["messages"][0])
+
+    spec = extract_responses_web_search_spec(
+        req.tools, req.tool_choice, allow_web_search=True
+    )
+    assert spec is not None
+    assert spec.allowed_domains == ("docs.python.org", "python.org")
+    assert spec.external_web_access is False
+    assert spec.search_context_size == "low"
+    assert spec.forced is True
+
+
+def test_opt_in_web_search_rejects_bad_schema_or_undeclared_tool_choice() -> None:
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesAdapter,
+        OpenAIResponsesRequest,
+    )
+
+    adapter = OpenAIResponsesAdapter()
+    with pytest.raises(_CONVERSION_ERROR, match="Expected Responses web_search tool"):
+        adapter.to_anthropic_payload(
+            OpenAIResponsesRequest(
+                model="m",
+                input="q",
+                tools=[{"type": "web_search", "search_context_size": "huge"}],
+            ),
+            allow_web_search=True,
+        )
+
+    with pytest.raises(_CONVERSION_ERROR, match="must be declared in tools"):
+        adapter.to_anthropic_payload(
+            OpenAIResponsesRequest(
+                model="m",
+                input="q",
+                tools=[],
+                tool_choice={"type": "web_search"},
+            ),
+            allow_web_search=True,
+        )

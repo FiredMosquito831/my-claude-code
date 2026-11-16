@@ -37,6 +37,7 @@ def websearch_field_specs() -> tuple[dict[str, Any], ...]:
         _fallback_policy_spec(),
         *_search_chain_field_specs(),
         _legacy_interval_spec(),
+        *_multi_door_and_mcp_field_specs(),
         *_analytics_field_specs(),
         _searxng_base_url_spec(),
         *_credential_field_specs(),
@@ -169,6 +170,100 @@ def _provider_select_spec() -> dict[str, Any]:
             "disables)."
         ),
     }
+
+
+def _multi_door_and_mcp_field_specs() -> tuple[dict[str, Any], ...]:
+    """Return opt-in multi-door web search, tool-loop, and HTTP MCP specs."""
+
+    return (
+        {
+            "key": "WEB_SEARCH_RESPONSES_ENABLED",
+            "label": "Responses API Web Search",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "web_search_responses_enabled",
+            "default": "true",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "Enable native web_search tools on POST /v1/responses, running "
+                "MCC's local search tool loop and emitting web_search_call and "
+                "url_citation items by default."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED",
+            "label": "Messages Mixed Web Tools",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "web_search_anthropic_multi_tool_enabled",
+            "default": "true",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "Enable mixed client and web_search or web_fetch tools on "
+                "POST /v1/messages. Single-tool web server requests keep using "
+                "the fast intercept path regardless of this setting."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_DOOR_MODE",
+            "label": "Multi-Door Execution Mode",
+            "section_id": "websearch",
+            "field_type": "select",
+            "settings_attr": "web_search_door_mode",
+            "default": "local",
+            "restart_required": False,
+            "affects_providers": False,
+            "options": (
+                ConfigOptionSpec(
+                    "local",
+                    "Local tool loop (default: run search via configured Web Search chain)",
+                ),
+                ConfigOptionSpec(
+                    "passthrough",
+                    "Native upstream passthrough (/v1/messages Anthropic or OAuth only)",
+                ),
+                ConfigOptionSpec(
+                    "auto",
+                    "Auto (passthrough when all Anthropic/OAuth, otherwise local loop)",
+                ),
+            ),
+            "description": (
+                "Choose whether multi-door web_search and web_fetch requests run "
+                "through MCC's local search tool loop, pass native server tools "
+                "straight through to Anthropic, or switch automatically."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_TOOL_LOOP_MAX_STEPS",
+            "label": "Tool Loop Max Steps",
+            "section_id": "websearch",
+            "field_type": "number",
+            "settings_attr": "web_search_tool_loop_max_steps",
+            "default": "5",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "Maximum upstream model round-trips executed by the multi-door "
+                "local web search and web fetch tool loop for a single request."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_MCP_HTTP_ENABLED",
+            "label": "HTTP MCP Web Search Server",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "web_search_mcp_http_enabled",
+            "default": "true",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "Expose MCC's Streamable HTTP MCP web search endpoint at "
+                "/v1/mcp/websearch for MCP-capable coding agents and tools."
+            ),
+        },
+    )
 
 
 def _fallback_policy_spec() -> dict[str, Any]:

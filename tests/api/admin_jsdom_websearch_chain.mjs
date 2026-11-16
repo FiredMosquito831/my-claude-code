@@ -152,6 +152,12 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     // 7.121.2: each card's key-pool rotation field, additive -- the thirteen
     // web-search `_ROTATION` settings had no control anywhere before.
     '[data-websearch-provider] .field[data-key$="_ROTATION"]',
+    // 8.26.0: multi-door web search, tool loop, and HTTP MCP controls, additive.
+    '.field[data-key="WEB_SEARCH_RESPONSES_ENABLED"]',
+    '.field[data-key="WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED"]',
+    '.field[data-key="WEB_SEARCH_DOOR_MODE"]',
+    '.field[data-key="WEB_SEARCH_TOOL_LOOP_MAX_STEPS"]',
+    '.field[data-key="WEB_SEARCH_MCP_HTTP_ENABLED"]',
   ];
   const stripped = (node) => {
     if (!node) return null;

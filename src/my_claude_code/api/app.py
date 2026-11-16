@@ -67,6 +67,7 @@ from .request_ids import (
 )
 from .routes import router
 from .validation_log import summarize_request_validation_body
+from .websearch_mcp_routes import websearch_mcp_router
 from .websearch_routes import websearch_router
 from .wire_surfaces import (
     is_gemini_shaped,
@@ -189,6 +190,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(media_video_router)
     app.include_router(media_catalog_router)
     app.include_router(websearch_router)
+    app.include_router(websearch_mcp_router)
     app.include_router(router)
 
     @app.exception_handler(StarletteHTTPException)

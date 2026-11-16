@@ -434,6 +434,22 @@ Validation and SSRF refusals answer `400` in OpenAI's `{"error": {...}}`
 envelope; `WEB_SEARCH_PROVIDER=disabled` or `ENABLE_WEB_SERVER_TOOLS=false`
 answers `503`. See [Web search guide](WEB-SEARCH.md#standalone-rest-endpoints-post-v1websearch-post-v1webfetch).
 
+#### Streamable HTTP MCP (`POST /v1/mcp/websearch`) and native door web search
+
+Enabled by default (`WEB_SEARCH_MCP_HTTP_ENABLED=true`, `WEB_SEARCH_RESPONSES_ENABLED=true`,
+`WEB_SEARCH_ANTHROPIC_MULTI_TOOL_ENABLED=true`, `WEB_SEARCH_DOOR_MODE=local`,
+`WEB_SEARCH_TOOL_LOOP_MAX_STEPS=5`), every door shares the exact `/v1/messages` search
+provider chain, fetch extractor/SSRF guards, and schema-on-error feedback:
+
+- **Antigravity (`agy` / `mcp_config.json`):** `{"mcpServers": {"mcc_websearch": {"serverUrl": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}`
+- **Codex (`config.toml`):** `[mcp_servers.mcc_websearch]` with `url = "http://127.0.0.1:8082/v1/mcp/websearch"` and `bearer_token_env_var = "ANTHROPIC_AUTH_TOKEN"` (or use native `tools: [{"type": "web_search"}]` directly against `POST /v1/responses`!)
+- **OpenCode (`opencode.json`):** `{"mcp": {"mcc_websearch": {"type": "remote", "url": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}`
+- **Cline (`cline_mcp_settings.json`):** `{"mcpServers": {"mcc_websearch": {"type": "streamableHttp", "url": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}`
+- **Goose (`config.yaml`):** `extensions.mcc_websearch: {type: streamable_http, uri: "http://127.0.0.1:8082/v1/mcp/websearch", headers: {Authorization: "Bearer YOUR_TOKEN"}}`
+- **Claude Code (`.mcp.json`):** `{"mcpServers": {"mcc_websearch": {"type": "http", "url": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}` (while native single-tool and mixed client + `web_search` / `web_fetch` turns on `POST /v1/messages` work out of the box).
+
+See [Multi-door agent search & HTTP MCP](WEB-SEARCH.md#multi-door-and-http-mcp).
+
 ### Errors
 
 A routing or provider failure answers in the door's own vendor shape (OpenAI
