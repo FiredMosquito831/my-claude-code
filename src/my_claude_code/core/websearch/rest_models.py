@@ -74,7 +74,12 @@ class WebSearchRestRequest(BaseModel):
     include_answer: bool | None = None
     include_digest: bool = False
     raw_content_format: Literal["markdown", "text"] | None = None
-    format: Literal["mcc", "digest"] = "mcc"
+    synthesize: bool = False
+    model: str | None = None
+    synthesis_max_tokens: int | None = Field(default=None, ge=128, le=8192)
+    format: Literal[
+        "mcc", "digest", "tavily", "exa", "brave", "deepseek", "searxng"
+    ] = "mcc"
 
     @field_validator("query", mode="before")
     @classmethod
@@ -90,6 +95,7 @@ class WebSearchRestRequest(BaseModel):
         "language",
         "start_date",
         "end_date",
+        "model",
         mode="before",
     )
     @classmethod
@@ -101,7 +107,9 @@ class WebSearchRestRequest(BaseModel):
     def _lowercase_provider(cls, value: str | None) -> str | None:
         return value.lower() if value is not None else None
 
-    @field_validator("max_results", "fetch_top_n", mode="before")
+    @field_validator(
+        "max_results", "fetch_top_n", "synthesis_max_tokens", mode="before"
+    )
     @classmethod
     def _validate_int_fields(cls, value: Any) -> Any:
         return _reject_bool_for_int(value)
@@ -169,6 +177,23 @@ class WebSearchRestResult(BaseModel):
     favicon: str | None = None
     site_name: str | None = None
     highlights: list[str] | None = None
+    highlight_scores: list[float] | None = Field(default=None, exclude=True)
+
+
+class WebSearchSynthesisCitation(BaseModel):
+    """One grounded citation linking an inline ``[index]`` marker to a search hit."""
+
+    index: int
+    url: str
+    title: str
+
+
+class WebSearchRestSynthesis(BaseModel):
+    """Grounded LLM answer synthesized when ``synthesize=true`` is requested."""
+
+    model: str
+    answer: str
+    citations: list[WebSearchSynthesisCitation]
 
 
 class WebSearchRestUsage(BaseModel):
@@ -193,12 +218,13 @@ class WebSearchRestResponse(BaseModel):
     providers_tried: list[str]
     supports_domain_filters: bool
     answer: str | None = None
-    synthesis: dict[str, Any] | None = None
+    synthesis: WebSearchRestSynthesis | dict[str, Any] | None = None
     results: list[WebSearchRestResult]
     digest: str | None = None
     provider_response_time_ms: float | None = None
     request_id: str | None = None
     usage: WebSearchRestUsage
+    images: list[str | dict[str, Any]] | None = Field(default=None, exclude=True)
 
 
 class WebFetchRestRequest(BaseModel):

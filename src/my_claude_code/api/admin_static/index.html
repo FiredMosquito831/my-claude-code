@@ -5445,18 +5445,27 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 </p>
                 <h4>Call web search and fetch over HTTP</h4>
                 <p>
-                  Scripts and non-Anthropic clients can call <code>POST /v1/websearch</code>
-                  and <code>POST /v1/webfetch</code> directly with your proxy token
+                  Scripts and non-Anthropic clients can call <code>POST /v1/websearch</code>,
+                  <code>POST /v1/webfetch</code>, or drop-in dialect routes
+                  (<code>POST /v1/websearch/tavily</code>, <code>POST /v1/websearch/exa</code>,
+                  <code>GET /v1/websearch/brave</code>, <code>GET /res/v1/web/search</code>,
+                  <code>POST /v1/websearch/deepseek</code>, <code>GET /v1/websearch/searxng</code>,
+                  and <code>GET /search?format=json</code>) using your proxy token
                   (<code>Authorization: Bearer</code>, <code>x-api-key</code>,
-                  <code>x-goog-api-key</code>, or <code>?key=</code>). Both endpoints
-                  inherit this page&apos;s active provider/chain settings,
-                  <code>WEBSEARCH_PROXY</code>, <code>WEB_FETCH_EXTRACTOR</code>, and
-                  <code>ENABLE_WEB_SERVER_TOOLS</code>, apply per-request overrides without
-                  changing saved configuration, and record local telemetry in
-                  <code>websearch.db</code> and Analytics without consuming LLM tokens.
-                  When exposing MCC on a non-loopback <code>HOST</code> without proxy auth,
-                  private/localhost fetch targets remain blocked even if
-                  <code>WEB_FETCH_ALLOW_PRIVATE_NETWORKS</code> is enabled.
+                  <code>x-goog-api-key</code>, <code>?key=</code>,
+                  <code>X-Subscription-Token</code> on Brave, or JSON body
+                  <code>api_key</code> on Tavily). All routes inherit this page&apos;s
+                  active provider/chain settings, <code>WEBSEARCH_PROXY</code>,
+                  <code>WEB_FETCH_EXTRACTOR</code>, and <code>ENABLE_WEB_SERVER_TOOLS</code>,
+                  apply per-request overrides without changing saved configuration, and
+                  record local telemetry in <code>websearch.db</code> and Analytics without
+                  consuming LLM tokens by default. Passing <code>synthesize=true</code>
+                  (with optional <code>model</code>) on <code>POST /v1/websearch</code>
+                  runs one priced model turn with grounded inline citations and logs it
+                  as a normal model request. When exposing MCC on a non-loopback
+                  <code>HOST</code> without proxy auth, private/localhost fetch targets
+                  remain blocked even if <code>WEB_FETCH_ALLOW_PRIVATE_NETWORKS</code> is
+                  enabled.
                 </p>
 
                 <h3 id="guide-vpn-tor">Use a VPN, WARP or Tor</h3>

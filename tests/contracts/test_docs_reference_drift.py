@@ -366,7 +366,9 @@ def test_documented_routes_exist(doc_name: str) -> None:
 
     unknown: set[str] = set()
     for span in _code_voice(text):
-        for match in re.finditer(r"(/(?:v1|v1beta|admin)/[A-Za-z0-9_./{}:-]*)", span):
+        for match in re.finditer(
+            r"(/(?:res/v1|v1|v1beta|admin)/[A-Za-z0-9_./{}:-]*)", span
+        ):
             path = match.group(1).rstrip("./")
             if path in known or path in ALLOWLIST:
                 continue

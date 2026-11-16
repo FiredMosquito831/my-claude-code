@@ -335,6 +335,9 @@ zero extra environment variables:
   "include_answer": null,
   "include_digest": false,
   "raw_content_format": null,
+  "synthesize": false,
+  "model": null,
+  "synthesis_max_tokens": null,
   "format": "mcc"
 }
 ```
@@ -346,15 +349,55 @@ zero extra environment variables:
   `search_depth` (`"fast"|"basic"|"deep"`), `topic`, `country`, `language`,
   `include_content`, `include_answer`, and `raw_content_format` apply only to
   that single HTTP call and never mutate cached provider configuration.
-- **Canonical vs digest output:** Default `format: "mcc"` leaves `digest: null`
-  and returns structured `results[]` (`title`, `url`, `snippet`, `content`,
-  `published`, plus optional `score`, `author`, `favicon`, `site_name`,
+- **Canonical vs digest vs dialect output:** Default `format: "mcc"` leaves
+  `digest: null` and returns structured `results[]` (`title`, `url`, `snippet`,
+  `content`, `published`, plus optional `score`, `author`, `favicon`, `site_name`,
   `highlights`) alongside `usage` and provider telemetry (`provider_response_time_ms`,
   `request_id`). Send `format: "digest"` or `include_digest: true` to include
-  the exact MCC digest string built from `WEBSEARCH_DIGEST_*`.
+  the exact MCC digest string built from `WEBSEARCH_DIGEST_*`. Passing
+  `format` as `"tavily"`, `"exa"`, `"brave"`, `"deepseek"`, or `"searxng"`
+  returns that dialect's JSON payload directly.
 - **Content enrichment:** Set `fetch_missing_content: true` (bounded by `fetch_top_n`,
   `1..10`) to fill missing `content` on top results via MCC's SSRF-pinned fetch
   stack; failed per-URL fetches keep the search result intact with `content: null`.
+- **Opt-in grounded LLM synthesis (`synthesize: true`):** By default
+  (`synthesize: false`), search makes zero LLM calls and logs a free local row
+  (`is_local=1`, `local:web_search`). When `synthesize: true`, MCC runs search
+  first (`websearch.db`), then routes a non-streaming synthesis prompt through
+  `model` (or your configured default `MODEL`, bounded by `synthesis_max_tokens`,
+  `128..8192`), populates `synthesis: {"model", "answer", "citations": [{"index", "url", "title"}]}`
+  using only `[N]` indices actually cited in the answer, reports `model_tokens_in`,
+  `model_tokens_out`, and `model_cost_usd` in `usage`, and logs one priced model
+  row (`is_local=0`, `optimization=NULL`) in `requests.db`.
+
+### Drop-in dialect routes (Tavily, Exa, Brave, DeepSeek, SearXNG JSON)
+
+All dialect shims reuse MCC's live search route/chain, key pools, SSRF-pinned
+fetch stack, and `IV.16` nullability rules (missing `score`, `published`,
+`author`, `favicon`, `site_name`, and `costDollars` stay `null`/omitted and are
+never fabricated):
+
+| Client / SDK | Route(s) | Auth | Notes |
+|---|---|---|---|
+| **Tavily** | `POST /v1/websearch/tavily`, `POST /v1/websearch/tavily/search`, `POST /v1/websearch/tavily/extract` | `Bearer`, `x-api-key`, `?key=`, or JSON body `api_key` | `/extract` fetches 1..20 URLs with partial failure isolation into `failed_results[]` |
+| **Exa** | `POST /v1/websearch/exa`, `POST /v1/websearch/exa/search`, `POST /v1/websearch/exa/contents` | `x-api-key`, `Bearer`, `x-goog-api-key`, `?key=` | `/contents` accepts `urls` or `ids` (`1..20`) and reports per-URL `statuses[]` |
+| **Brave** | `GET /v1/websearch/brave`, `GET /res/v1/web/search` | `X-Subscription-Token`, `Bearer`, `x-api-key`, `?key=` | Maps `freshness` (`pd`/`pw`/`pm`/`py`/`YYYY-MM-DDtoYYYY-MM-DD`) and `extra_snippets` |
+| **DeepSeek wire dialect** | `POST /v1/websearch/deepseek`, `POST /v1/websearch/deepseek/tools/search`, `POST /v1/websearch/deepseek/v1/tools/search`, `POST /v1/websearch/deepseek/tools/fetch`, `POST /v1/websearch/deepseek/v1/tools/fetch` | `Bearer`, `x-api-key`, `x-goog-api-key`, `?key=` | Wire-format compatibility backed by your configured MCC search chain and fetch stack |
+| **SearXNG JSON** | `GET /v1/websearch/searxng`, `GET /search?format=json` | `?key=` (ideal for OpenClaw, Hermes, DSH), `Bearer`, `x-api-key` | Original MCC implementation; only `format=json` is supported (non-JSON returns `400`) |
+
+Example SearXNG JSON call (for OpenClaw, Hermes, or `dsh`):
+
+```sh
+curl "http://127.0.0.1:8082/search?q=python+3.14&format=json&key=$ANTHROPIC_AUTH_TOKEN"
+```
+
+Example Tavily extract call (one bad URL does not abort healthy URLs):
+
+```sh
+curl http://127.0.0.1:8082/v1/websearch/tavily/extract \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "'"$ANTHROPIC_AUTH_TOKEN"'", "urls": ["https://example.org/a", "https://example.org/b"]}'
+```
 
 ### `POST /v1/webfetch`
 
@@ -391,9 +434,12 @@ Honors `ENABLE_WEB_SERVER_TOOLS`, `WEB_FETCH_EXTRACTOR`, `WEB_FETCH_ALLOWED_SCHE
 | `502` | Upstream search/fetch HTTP error or network timeout (keys redacted) |
 | `503` | `ENABLE_WEB_SERVER_TOOLS=false`, `WEB_SEARCH_PROVIDER=disabled`, missing provider key, or upstream auth failure |
 
-Every REST call logs to `requests.db` as a local tool answer (`local:web_search` /
-`local:web_fetch` with `provider=NULL`, excluded from Token Optimizer savings)
-and to `websearch.db` (`provider="web_fetch"` for fetches).
+When `synthesize: false` (default), every REST call logs to `requests.db` as a
+local tool answer (`local:web_search` / `local:web_fetch` with `provider=NULL` and
+`is_local=1`, excluded from Token Optimizer savings) and to `websearch.db`
+(`provider="web_fetch"` for fetches). When `synthesize: true`, MCC logs the
+search step in `websearch.db` and writes **one** model-billed row (`is_local=0`,
+`optimization=NULL`) in `requests.db` with full token counts and cost estimation.
 
 <a id="admin-dashboard"></a>
 
