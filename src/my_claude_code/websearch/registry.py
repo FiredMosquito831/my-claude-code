@@ -23,7 +23,11 @@ from my_claude_code.config.websearch_catalog import (
     WEBSEARCH_CATALOG,
     WebSearchDescriptor,
 )
-from my_claude_code.core.websearch.models import WebSearchResponse
+from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
+    WebSearchResponse,
+    WebSearchResultItem,
+)
 
 from .adapters import ADAPTER_CLASSES
 from .base import BaseWebSearchProvider, KeyChargeJudge, WebSearchProviderConfig
@@ -49,6 +53,14 @@ class WebSearchRoute:
     provider_ids: tuple[str, ...]
     use_legacy_scrape: bool
     disabled: bool = False
+
+
+def resolve_websearch_proxy() -> str | None:
+    """Resolve optional ``WEBSEARCH_PROXY`` using env-first dotenv precedence."""
+
+    raw = _env_or_dotenv(WEBSEARCH_PROXY_ENV)
+    cleaned = raw.strip() if isinstance(raw, str) else ""
+    return cleaned or None
 
 
 def build_providers(settings: Settings) -> dict[str, BaseWebSearchProvider]:
@@ -80,7 +92,7 @@ def build_provider(settings: Settings, provider_id: str) -> BaseWebSearchProvide
         )
     base_url = _descriptor_base_url(descriptor, settings)
     rotation = _resolve_rotation_policy(descriptor, len(keys))
-    proxy = _env_or_dotenv(WEBSEARCH_PROXY_ENV)
+    proxy = resolve_websearch_proxy()
     options = read_websearch_options(provider_id, descriptor)
     adapter_cls = ADAPTER_CLASSES[provider_id]
     return adapter_cls(
@@ -88,7 +100,7 @@ def build_provider(settings: Settings, provider_id: str) -> BaseWebSearchProvide
             api_keys=keys,
             credential_rotation=rotation,
             base_url=base_url,
-            proxy=proxy or None,
+            proxy=proxy,
             http_timeout=DEFAULT_HTTP_TIMEOUT,
             options=options,
         )
@@ -239,6 +251,7 @@ async def search(
     attempt_number: int = 1,
     route_context: Mapping[str, object] | None = None,
     key_charge: KeyChargeJudge | None = None,
+    request_options: WebSearchRequestOptions | None = None,
 ) -> WebSearchResponse:
     """Run ``provider.search`` and optionally record the outcome via ``recorder``.
 
@@ -252,16 +265,27 @@ async def search(
         max_results=max_results,
         allowed_domains=allowed_domains,
         blocked_domains=blocked_domains,
+        request_options=request_options,
     )
     provider_config = _provider_config_snapshot(provider, route_context)
     try:
-        response = await provider.search(
-            query,
-            max_results=max_results,
-            allowed_domains=allowed_domains,
-            blocked_domains=blocked_domains,
-            key_charge=key_charge,
-        )
+        if request_options is None:
+            response = await provider.search(
+                query,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                key_charge=key_charge,
+            )
+        else:
+            response = await provider.search(
+                query,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                key_charge=key_charge,
+                request_options=request_options,
+            )
     except Exception as error:
         key_index = (
             error.key_index
@@ -330,20 +354,36 @@ async def search_with_logging(
     attempt_number: int = 1,
     route_context: Mapping[str, object] | None = None,
     key_charge: KeyChargeJudge | None = None,
+    request_options: WebSearchRequestOptions | None = None,
 ) -> WebSearchResponse:
     """Search with analytics recording; defaults to the shared attempt recorder."""
 
+    selected_recorder = recorder if recorder is not None else _default_recorder()
+    if request_options is None:
+        return await search(
+            provider,
+            query,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            recorder=selected_recorder,
+            route_id=route_id,
+            attempt_number=attempt_number,
+            route_context=route_context,
+            key_charge=key_charge,
+        )
     return await search(
         provider,
         query,
         max_results=max_results,
         allowed_domains=allowed_domains,
         blocked_domains=blocked_domains,
-        recorder=recorder if recorder is not None else _default_recorder(),
+        recorder=selected_recorder,
         route_id=route_id,
         attempt_number=attempt_number,
         route_context=route_context,
         key_charge=key_charge,
+        request_options=request_options,
     )
 
 
@@ -415,34 +455,63 @@ def _search_input_payload(
     max_results: int,
     allowed_domains: tuple[str, ...],
     blocked_domains: tuple[str, ...],
+    request_options: WebSearchRequestOptions | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "query": query,
         "max_results": max_results,
         "allowed_domains": list(allowed_domains),
         "blocked_domains": list(blocked_domains),
     }
+    if request_options is not None:
+        overrides = request_options.non_empty_dict()
+        if overrides:
+            payload["request_options"] = overrides
+    return payload
+
+
+def _result_output_dict(item: WebSearchResultItem) -> dict[str, object]:
+    row: dict[str, object] = {
+        "title": item.title,
+        "url": item.url,
+        "snippet": item.snippet,
+        "content": item.content,
+        "published": item.published,
+    }
+    if item.score is not None:
+        row["score"] = item.score
+    if item.author is not None:
+        row["author"] = item.author
+    if item.favicon is not None:
+        row["favicon"] = item.favicon
+    if item.site_name is not None:
+        row["site_name"] = item.site_name
+    if item.highlights is not None:
+        row["highlights"] = list(item.highlights)
+    if item.highlight_scores is not None:
+        row["highlight_scores"] = list(item.highlight_scores)
+    return row
 
 
 def _response_output_payload(response: WebSearchResponse) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "provider": response.provider,
         "query": response.query,
         "answer": response.answer,
-        "results": [
-            {
-                "title": item.title,
-                "url": item.url,
-                "snippet": item.snippet,
-                "content": item.content,
-                "published": item.published,
-            }
-            for item in response.results
-        ],
+        "results": [_result_output_dict(item) for item in response.results],
         "result_count": len(response.results),
         "key_index": response.key_index,
         "cost_usd": response.cost_usd,
     }
+    if response.request_id is not None:
+        payload["request_id"] = response.request_id
+    if response.provider_response_time_ms is not None:
+        payload["provider_response_time_ms"] = response.provider_response_time_ms
+    if response.usage_credits is not None:
+        payload["usage_credits"] = response.usage_credits
+    if response.images is not None:
+        payload["images"] = list(response.images)
+    return payload
 
 
 def _error_output_payload(error: BaseException) -> dict[str, object]:

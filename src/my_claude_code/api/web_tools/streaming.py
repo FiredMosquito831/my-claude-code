@@ -94,7 +94,7 @@ def _web_search_result_block(result: dict[str, str]) -> dict[str, str]:
     return block
 
 
-def _search_summary(
+def format_search_digest(
     query: str, results: list[dict[str, str]], settings: Settings
 ) -> str:
     """Rich per-result digest: optional provider answer lead, then numbered
@@ -130,6 +130,9 @@ def _search_summary(
             block += f"\n{excerpt}"
         lines.append(block)
     return "\n\n".join(lines)
+
+
+_search_summary = format_search_digest
 
 
 async def stream_web_server_tool_response(

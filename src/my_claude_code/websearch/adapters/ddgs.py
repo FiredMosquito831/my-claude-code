@@ -29,6 +29,7 @@ from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
 from my_claude_code.config.websearch_catalog import DDGS_SAFESEARCH_ALIASES
 from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
     WebSearchResponse,
     WebSearchResultItem,
 )
@@ -39,6 +40,7 @@ from ..errors import (
     WebSearchRateLimitError,
     WebSearchUpstreamError,
 )
+from ._common import TIME_RANGE_TO_DDGS
 
 
 class DdgsWebSearchProvider(BaseWebSearchProvider):
@@ -57,8 +59,41 @@ class DdgsWebSearchProvider(BaseWebSearchProvider):
         allowed_domains: tuple[str, ...],
         blocked_domains: tuple[str, ...],
     ) -> WebSearchResponse:
+        return await self._search_with_key_options(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            request_options=None,
+        )
+
+    async def _search_with_key_options(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int,
+        allowed_domains: tuple[str, ...],
+        blocked_domains: tuple[str, ...],
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> WebSearchResponse:
         try:
-            rows = await asyncio.to_thread(self._run_text_search, query, max_results)
+            if request_options is None:
+                rows = await asyncio.to_thread(
+                    self._run_text_search,
+                    query,
+                    max_results,
+                )
+            else:
+                rows = await asyncio.to_thread(
+                    self._run_text_search_options,
+                    query,
+                    max_results,
+                    request_options,
+                )
         except RatelimitException as exc:
             raise WebSearchRateLimitError(
                 self.provider_id, f"ddgs engine rate limit: {exc}"
@@ -83,13 +118,26 @@ class DdgsWebSearchProvider(BaseWebSearchProvider):
         )
 
     def _run_text_search(self, query: str, max_results: int) -> list[dict[str, Any]]:
+        return self._run_text_search_options(query, max_results, None)
+
+    def _run_text_search_options(
+        self,
+        query: str,
+        max_results: int,
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> list[dict[str, Any]]:
         options = self._config.options
         kwargs: dict[str, Any] = {"max_results": max_results}
         if backend := options.get("DDGS_BACKEND", ""):
             kwargs["backend"] = backend
         if region := options.get("DDGS_REGION", ""):
             kwargs["region"] = region
-        if timelimit := options.get("DDGS_TIMELIMIT", ""):
+        timelimit = (
+            TIME_RANGE_TO_DDGS.get(request_options.time_range, "")
+            if request_options is not None and request_options.time_range is not None
+            else ""
+        ) or options.get("DDGS_TIMELIMIT", "")
+        if timelimit:
             kwargs["timelimit"] = timelimit
         if safesearch := options.get("DDGS_SAFESEARCH", ""):
             kwargs["safesearch"] = DDGS_SAFESEARCH_ALIASES.get(

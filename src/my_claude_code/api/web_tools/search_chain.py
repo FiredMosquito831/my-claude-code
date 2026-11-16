@@ -69,7 +69,10 @@ from my_claude_code.core.upstream_ladder import (
     install_ladder_trace,
     paused_ladder,
 )
-from my_claude_code.core.websearch.models import WebSearchResponse
+from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
+    WebSearchResponse,
+)
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.websearch.base import BaseWebSearchProvider
 from my_claude_code.websearch.errors import (
@@ -170,10 +173,13 @@ async def run_search_chain(
     settings: Settings,
     trace: RouteTrace,
     *,
+    max_results: int = _MAX_SEARCH_RESULTS,
     allowed_domains: tuple[str, ...] = (),
     blocked_domains: tuple[str, ...] = (),
+    request_options: WebSearchRequestOptions | None = None,
     legacy_scrape: LegacyScrape,
     response_items: ResponseItems,
+    on_response: Callable[[WebSearchResponse | None], None] | None = None,
 ) -> list[dict[str, str]]:
     """Search along ``WEB_SEARCH_CHAIN``; the results, or the last failure raised."""
 
@@ -190,7 +196,7 @@ async def run_search_chain(
         )
         trace.fail(trace.terminal_provider, error)
         raise error
-    context = _route_context(settings, entries, paused)
+    context = _route_context(settings, entries, paused, max_results=max_results)
     health = search_route_health(settings)
     order = health.usable_indexes(
         refs,
@@ -293,8 +299,10 @@ async def run_search_chain(
                     books,
                     provider,
                     query,
+                    max_results=max_results,
                     allowed_domains=allowed_domains,
                     blocked_domains=blocked_domains,
+                    request_options=request_options,
                 ),
                 deadline,
                 entry,
@@ -318,6 +326,7 @@ async def run_search_chain(
             continue
         if result.ok:
             health.record_success(refs[position])
+            won_response: WebSearchResponse | None
             if provider is None:
                 raw = result.value if isinstance(result.value, list) else []
                 results = [
@@ -327,12 +336,16 @@ async def run_search_chain(
                     }
                     for item in raw
                     if isinstance(item, dict)
-                ]
+                ][:max_results]
                 cost = None
+                won_response = None
             else:
                 assert isinstance(result.value, WebSearchResponse)
                 results = response_items(result.value)
                 cost = result.value.cost_usd
+                won_response = result.value
+            if on_response is not None:
+                on_response(won_response)
             _emit_row(
                 trace,
                 entry=entry,
@@ -344,8 +357,10 @@ async def run_search_chain(
                 result=result,
                 query=query,
                 context=context,
+                max_results=max_results,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains,
+                request_options=request_options,
                 legacy_results=results if provider is None else None,
             )
             trace.succeed(entry, results_count=len(results), cost_usd=cost)
@@ -366,8 +381,10 @@ async def run_search_chain(
             result=result,
             query=query,
             context=context,
+            max_results=max_results,
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains,
+            request_options=request_options,
         )
         logger.warning(
             "web_search chain entry failed entry={} position={}/{} error={}",
@@ -407,17 +424,29 @@ async def _run_provider(
     provider: BaseWebSearchProvider,
     query: str,
     *,
+    max_results: int = _MAX_SEARCH_RESULTS,
     allowed_domains: tuple[str, ...],
     blocked_domains: tuple[str, ...],
+    request_options: WebSearchRequestOptions | None = None,
 ) -> EntryResult:
     async def one_try(index: int, key: str) -> WebSearchResponse:
+        if request_options is None:
+            return await provider.search_once(
+                query,
+                key,
+                index,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+            )
         return await provider.search_once(
             query,
             key,
             index,
-            max_results=_MAX_SEARCH_RESULTS,
+            max_results=max_results,
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains,
+            request_options=request_options,
         )
 
     return await drive_keys(books, one_try)
@@ -701,7 +730,11 @@ def _throttle_lookup(refs: tuple[str, ...]) -> Callable[[str], float | None]:
 
 
 def _route_context(
-    settings: Settings, entries: tuple[str, ...], paused: frozenset[str]
+    settings: Settings,
+    entries: tuple[str, ...],
+    paused: frozenset[str],
+    *,
+    max_results: int = _MAX_SEARCH_RESULTS,
 ) -> dict[str, object]:
     return {
         "selected_provider": settings.web_search_provider,
@@ -709,7 +742,7 @@ def _route_context(
         "resolved_provider_path": list(entries),
         "legacy_fallback": WEB_SEARCH_CHAIN_LEGACY_ENTRY in entries,
         "disabled": False,
-        "max_results": _MAX_SEARCH_RESULTS,
+        "max_results": max_results,
         "digest_chars": settings.websearch_digest_chars,
         "digest_answer": settings.websearch_digest_answer,
         "search_chain": list(entries),
@@ -778,8 +811,10 @@ def _emit_row(
     result: EntryResult,
     query: str,
     context: Mapping[str, object],
+    max_results: int = _MAX_SEARCH_RESULTS,
     allowed_domains: tuple[str, ...],
     blocked_domains: tuple[str, ...],
+    request_options: WebSearchRequestOptions | None = None,
     legacy_results: list[dict[str, str]] | None = None,
 ) -> None:
     """One attempt row for one tried entry, in today's shape plus the chain's."""
@@ -788,9 +823,10 @@ def _emit_row(
         blocked_domains = ()
     input_payload = _search_input_payload(
         query,
-        max_results=_MAX_SEARCH_RESULTS,
+        max_results=max_results,
         allowed_domains=allowed_domains,
         blocked_domains=blocked_domains,
+        request_options=request_options,
     )
     key_index = max(0, result.key_index)
     key_label = (

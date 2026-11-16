@@ -10,12 +10,14 @@ from typing import Any, ClassVar
 
 from my_claude_code.config.websearch_catalog import BRAVE_SEARCH_DEFAULT_BASE
 from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
     WebSearchResponse,
     WebSearchResultItem,
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..options import option_enabled, option_int
+from ._common import TIME_RANGE_TO_BRAVE, opt_str, opt_str_tuple, text_str
 from .http import build_async_client, request_json
 
 _MAX_COUNT = 20
@@ -44,22 +46,91 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
         allowed_domains: tuple[str, ...],
         blocked_domains: tuple[str, ...],
     ) -> WebSearchResponse:
+        return await self._search_with_key_options(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            request_options=None,
+        )
+
+    async def _search_with_key_options(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int,
+        allowed_domains: tuple[str, ...],
+        blocked_domains: tuple[str, ...],
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> WebSearchResponse:
         if self._config.options.get("BRAVE_SEARCH_MODE", "") == "llm-context":
-            return await self._search_llm_context(query, key, key_index, max_results)
-        return await self._search_web(query, key, key_index, max_results)
+            if request_options is None:
+                return await self._search_llm_context(
+                    query, key, key_index, max_results
+                )
+            return await self._search_llm_context(
+                query, key, key_index, max_results, request_options=request_options
+            )
+        if request_options is None:
+            return await self._search_web(query, key, key_index, max_results)
+        return await self._search_web(
+            query, key, key_index, max_results, request_options=request_options
+        )
 
     async def _search_web(
-        self, query: str, key: str, key_index: int, max_results: int
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        max_results: int,
+        *,
+        request_options: WebSearchRequestOptions | None = None,
     ) -> WebSearchResponse:
         options = self._config.options
         params: dict[str, Any] = {"q": query, "count": min(max_results, _MAX_COUNT)}
-        if option_enabled(options.get("BRAVE_EXTRA_SNIPPETS")):
+        extra_snippets = (
+            request_options.include_content
+            if request_options is not None
+            and request_options.include_content is not None
+            else option_enabled(options.get("BRAVE_EXTRA_SNIPPETS"))
+        )
+        if extra_snippets:
             params["extra_snippets"] = "true"
-        if freshness := options.get("BRAVE_FRESHNESS", ""):
+        freshness = (
+            (
+                TIME_RANGE_TO_BRAVE.get(request_options.time_range, "")
+                if request_options is not None
+                and request_options.time_range is not None
+                else ""
+            )
+            or (
+                f"{request_options.start_date[:10]}to{request_options.end_date[:10]}"
+                if request_options is not None
+                and request_options.start_date
+                and request_options.end_date
+                else ""
+            )
+            or options.get("BRAVE_FRESHNESS", "")
+        )
+        if freshness:
             params["freshness"] = freshness
-        if country := options.get("BRAVE_COUNTRY", ""):
+        country = (
+            request_options.country.upper()
+            if request_options is not None and request_options.country is not None
+            else ""
+        ) or options.get("BRAVE_COUNTRY", "")
+        if country:
             params["country"] = country
-        if search_lang := options.get("BRAVE_SEARCH_LANG", ""):
+        search_lang = (
+            request_options.language
+            if request_options is not None and request_options.language is not None
+            else ""
+        ) or options.get("BRAVE_SEARCH_LANG", "")
+        if search_lang:
             params["search_lang"] = search_lang
         if safesearch := options.get("BRAVE_SAFESEARCH", ""):
             params["safesearch"] = safesearch
@@ -77,7 +148,7 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            url = _text(row.get("url"))
+            url = text_str(row.get("url"))
             if not url:
                 continue
             extra = row.get("extra_snippets")
@@ -86,13 +157,18 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
                 if isinstance(extra, list)
                 else ""
             )
+            meta_url = row.get("meta_url")
             items.append(
                 WebSearchResultItem(
-                    title=_text(row.get("title")),
+                    title=text_str(row.get("title")),
                     url=url,
-                    snippet=_text(row.get("description")),
+                    snippet=text_str(row.get("description")),
                     content=extra_text or None,
-                    published=_text(row.get("page_age")) or None,
+                    published=text_str(row.get("page_age")) or None,
+                    favicon=opt_str(meta_url.get("favicon"))
+                    if isinstance(meta_url, dict)
+                    else None,
+                    highlights=opt_str_tuple(extra),
                 )
             )
         return WebSearchResponse(
@@ -104,7 +180,13 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
         )
 
     async def _search_llm_context(
-        self, query: str, key: str, key_index: int, max_results: int
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        max_results: int,
+        *,
+        request_options: WebSearchRequestOptions | None = None,
     ) -> WebSearchResponse:
         options = self._config.options
         payload: dict[str, Any] = {
@@ -113,7 +195,12 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
         }
         if (max_tokens := option_int(options.get("BRAVE_LLM_MAX_TOKENS"))) is not None:
             payload["maximum_number_of_tokens"] = max_tokens
-        if freshness := options.get("BRAVE_FRESHNESS", ""):
+        freshness = (
+            TIME_RANGE_TO_BRAVE.get(request_options.time_range, "")
+            if request_options is not None and request_options.time_range is not None
+            else ""
+        ) or options.get("BRAVE_FRESHNESS", "")
+        if freshness:
             payload["freshness"] = freshness
         data = await request_json(
             self._require_client(),
@@ -129,7 +216,7 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            url = _text(row.get("url"))
+            url = text_str(row.get("url"))
             if not url:
                 continue
             snippets = row.get("snippets")
@@ -140,11 +227,12 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
             )
             items.append(
                 WebSearchResultItem(
-                    title=_text(row.get("title")),
+                    title=text_str(row.get("title")),
                     url=url,
                     snippet=text[:_SNIPPET_CHARS],
                     content=text or None,
                     published=None,
+                    highlights=opt_str_tuple(snippets),
                 )
             )
         return WebSearchResponse(
@@ -154,7 +242,3 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
             key_index=key_index,
             cost_usd=None,
         )
-
-
-def _text(value: Any) -> str:
-    return value if isinstance(value, str) else ""

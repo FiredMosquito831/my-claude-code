@@ -1,5 +1,6 @@
 """Pure FastAPI application factory."""
 
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -66,11 +67,13 @@ from .request_ids import (
 )
 from .routes import router
 from .validation_log import summarize_request_validation_body
+from .websearch_routes import websearch_router
 from .wire_surfaces import (
     is_gemini_shaped,
     is_media_path,
     is_model_door,
     is_openai_shaped,
+    is_websearch_rest_path,
     wire_api_for_path,
 )
 
@@ -115,6 +118,35 @@ async def _model_door_validation_response(
     )
 
 
+def _websearch_rest_validation_response(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Convert Pydantic/JSON validation failures on REST websearch routes into HTTP 400."""
+
+    reasons = describe_validation_errors(exc.errors())
+    formatted = [
+        f"{item.path}: {item.reason}" if item.path else item.reason for item in reasons
+    ]
+    message = "; ".join(formatted) if formatted else "Invalid request body"
+    first_param = reasons[0].path or None if reasons else None
+    payload = openai_error_payload(
+        message=message,
+        error_type="invalid_request_error",
+        param=first_param,
+    )
+    payload["error"]["code"] = "invalid_request"
+    response = JSONResponse(
+        status_code=MODEL_DOOR_VALIDATION_STATUS,
+        content=payload,
+    )
+    attach_request_id_headers(
+        response,
+        request_id=get_request_id(request),
+        path=request.url.path,
+    )
+    return response
+
+
 def create_app(services: ApiServices) -> FastAPI:
     """Create the HTTP adapter around explicitly supplied runtime services."""
     app = FastAPI(title="Claude Code Proxy", version=package_version())
@@ -156,6 +188,7 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(media_router)
     app.include_router(media_video_router)
     app.include_router(media_catalog_router)
+    app.include_router(websearch_router)
     app.include_router(router)
 
     @app.exception_handler(StarletteHTTPException)
@@ -178,21 +211,28 @@ def create_app(services: ApiServices) -> FastAPI:
 
         path = request.url.path
         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        raw_headers = getattr(exc, "headers", None)
+        headers: dict[str, str] | None = (
+            dict(raw_headers) if isinstance(raw_headers, Mapping) else None
+        )
         if is_gemini_shaped(wire_api_for_path(path)):
             content = gemini_error_payload(message=detail, code=exc.status_code)
-        elif is_media_path(path):
+        elif is_media_path(path) or is_websearch_rest_path(path):
             content = openai_error_payload(
                 message=detail,
                 error_type=_OPENAI_HTTP_ERROR_TYPES.get(
                     exc.status_code, "invalid_request_error"
                 ),
             )
+            if is_websearch_rest_path(path) and exc.status_code == 401:
+                headers = dict(headers or {})
+                headers.setdefault("WWW-Authenticate", "Bearer")
         else:
             return await starlette_http_exception_handler(request, exc)
         response = JSONResponse(
             status_code=exc.status_code,
             content=content,
-            headers=getattr(exc, "headers", None),
+            headers=headers,
         )
         attach_request_id_headers(
             response,
@@ -223,6 +263,8 @@ def create_app(services: ApiServices) -> FastAPI:
             tool_names=tool_names,
         )
         path = request.url.path
+        if is_websearch_rest_path(path):
+            return _websearch_rest_validation_response(request, exc)
         if not is_model_door(path):
             # Admin and every other route keep FastAPI's answer byte for byte.
             return await request_validation_exception_handler(request, exc)

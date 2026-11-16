@@ -10,11 +10,13 @@ from typing import Any, ClassVar
 
 from my_claude_code.config.websearch_catalog import FIRECRAWL_DEFAULT_BASE
 from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
     WebSearchResponse,
     WebSearchResultItem,
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
+from ._common import TIME_RANGE_TO_TBS, text_str
 from .http import build_async_client, request_json
 
 _KNOWN_SOURCES = ("web", "news", "images")
@@ -41,6 +43,27 @@ class FirecrawlWebSearchProvider(BaseWebSearchProvider):
         allowed_domains: tuple[str, ...],
         blocked_domains: tuple[str, ...],
     ) -> WebSearchResponse:
+        return await self._search_with_key_options(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            request_options=None,
+        )
+
+    async def _search_with_key_options(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int,
+        allowed_domains: tuple[str, ...],
+        blocked_domains: tuple[str, ...],
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> WebSearchResponse:
         options = self._config.options
         sources = self._sources()
         payload: dict[str, Any] = {
@@ -51,15 +74,37 @@ class FirecrawlWebSearchProvider(BaseWebSearchProvider):
             "limit": max(1, -(-max_results // max(1, len(sources)))),
             "sources": sources,
         }
-        if country := options.get("FIRECRAWL_COUNTRY", ""):
+        country = (
+            request_options.country.upper()
+            if request_options is not None and request_options.country is not None
+            else ""
+        ) or options.get("FIRECRAWL_COUNTRY", "")
+        if country:
             payload["country"] = country
         if categories := options.get("FIRECRAWL_CATEGORIES", ""):
             payload["categories"] = [
                 entry.strip() for entry in categories.split(",") if entry.strip()
             ]
-        if scrape_format := options.get("FIRECRAWL_SCRAPE_FORMAT", ""):
+        scrape_format = options.get("FIRECRAWL_SCRAPE_FORMAT", "")
+        if request_options is not None:
+            if request_options.raw_content_format is not None:
+                scrape_format = (
+                    "markdown"
+                    if request_options.raw_content_format == "markdown"
+                    else scrape_format
+                )
+            elif request_options.include_content is True and not scrape_format:
+                scrape_format = "markdown"
+            elif request_options.include_content is False:
+                scrape_format = ""
+        if scrape_format:
             payload["scrapeOptions"] = {"formats": [{"type": scrape_format}]}
-        if tbs := options.get("FIRECRAWL_TBS", ""):
+        tbs = (
+            TIME_RANGE_TO_TBS.get(request_options.time_range, "")
+            if request_options is not None and request_options.time_range is not None
+            else ""
+        ) or options.get("FIRECRAWL_TBS", "")
+        if tbs:
             payload["tbs"] = tbs
         if location := options.get("FIRECRAWL_LOCATION", ""):
             payload["location"] = location
@@ -104,35 +149,32 @@ class FirecrawlWebSearchProvider(BaseWebSearchProvider):
     @staticmethod
     def _map_row(source: str, row: dict[str, Any]) -> WebSearchResultItem | None:
         if source == "images":
-            url = _text(row.get("imageUrl")) or _text(row.get("url"))
+            url = text_str(row.get("imageUrl")) or text_str(row.get("url"))
             if not url:
                 return None
             return WebSearchResultItem(
-                title=_text(row.get("title")),
+                title=text_str(row.get("title")),
                 url=url,
                 snippet="",
                 content=None,
                 published=None,
             )
-        url = _text(row.get("url"))
+        url = text_str(row.get("url"))
         if not url:
             return None
         if source == "news":
             return WebSearchResultItem(
-                title=_text(row.get("title")),
+                title=text_str(row.get("title")),
                 url=url,
-                snippet=_text(row.get("snippet")) or _text(row.get("description")),
-                content=_text(row.get("markdown")) or None,
-                published=_text(row.get("date")) or None,
+                snippet=text_str(row.get("snippet"))
+                or text_str(row.get("description")),
+                content=text_str(row.get("markdown")) or None,
+                published=text_str(row.get("date")) or None,
             )
         return WebSearchResultItem(
-            title=_text(row.get("title")),
+            title=text_str(row.get("title")),
             url=url,
-            snippet=_text(row.get("summary")) or _text(row.get("description")),
-            content=_text(row.get("markdown")) or None,
+            snippet=text_str(row.get("summary")) or text_str(row.get("description")),
+            content=text_str(row.get("markdown")) or None,
             published=None,
         )
-
-
-def _text(value: Any) -> str:
-    return value if isinstance(value, str) else ""

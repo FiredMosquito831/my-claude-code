@@ -300,5 +300,100 @@ WEBSEARCH_LOG_CONTENT_MAX_CHARS=2000000 # cap per input/output JSON payload
 
 Oversized payloads are stored as valid JSON truncation envelopes containing the original length, SHA-256, and a bounded preview. API keys are never copied into configuration snapshots, secret-looking object fields are redacted, and proxy/userinfo credentials are removed. Search content still commonly includes private queries, result URLs, and page text. `WEBSEARCH_LOG_CAPTURE_CONTENT=false` withholds the captured input/output payloads **and the query text itself**, keeping only lengths and SHA-256 hashes, so the switch covers everything a search reveals. Set `WEBSEARCH_LOG_ENABLED=false` to record nothing at all.
 
+## Standalone REST endpoints (POST /v1/websearch, POST /v1/webfetch)
+
+Scripts, SDKs, and custom tooling can invoke MCC's configured web search and fetch
+stack directly without making an LLM inference call. Both routes sit behind proxy
+token auth (`Authorization: Bearer`, `x-api-key`, `x-goog-api-key`, or `?key=`),
+support `HEAD`/`OPTIONS` probes (`204 No Content`), and return OpenAI-shaped JSON
+error envelopes (`{"error": {"message", "type", "param", "code"}}`).
+
+### `POST /v1/websearch`
+
+Defaults 1:1 to your live dashboard configuration (`ENABLE_WEB_SERVER_TOOLS`,
+`WEB_SEARCH_PROVIDER`, `WEB_SEARCH_CHAIN`, `WEB_SEARCH_CHAIN_PAUSED`,
+`WEB_SEARCH_FALLBACK_POLICY`, `WEBSEARCH_PROXY`, and `WEBSEARCH_DIGEST_*`) with
+zero extra environment variables:
+
+```json
+{
+  "query": "trafilatura python extraction",
+  "provider": null,
+  "max_results": 10,
+  "allowed_domains": [],
+  "blocked_domains": [],
+  "time_range": null,
+  "start_date": null,
+  "end_date": null,
+  "search_depth": null,
+  "topic": null,
+  "country": null,
+  "language": null,
+  "include_content": null,
+  "fetch_missing_content": false,
+  "fetch_top_n": 3,
+  "include_answer": null,
+  "include_digest": false,
+  "raw_content_format": null,
+  "format": "mcc"
+}
+```
+
+- **Non-mutating per-request overrides:** `provider` (`"auto"` or a catalog id /
+  `"legacy"`), `max_results` (`1..50`, defaulting to `10`), domain filters
+  (`allowed_domains`/`include_domains`, `blocked_domains`/`exclude_domains`),
+  `time_range` (`"day"|"week"|"month"|"year"`), `start_date`/`end_date`,
+  `search_depth` (`"fast"|"basic"|"deep"`), `topic`, `country`, `language`,
+  `include_content`, `include_answer`, and `raw_content_format` apply only to
+  that single HTTP call and never mutate cached provider configuration.
+- **Canonical vs digest output:** Default `format: "mcc"` leaves `digest: null`
+  and returns structured `results[]` (`title`, `url`, `snippet`, `content`,
+  `published`, plus optional `score`, `author`, `favicon`, `site_name`,
+  `highlights`) alongside `usage` and provider telemetry (`provider_response_time_ms`,
+  `request_id`). Send `format: "digest"` or `include_digest: true` to include
+  the exact MCC digest string built from `WEBSEARCH_DIGEST_*`.
+- **Content enrichment:** Set `fetch_missing_content: true` (bounded by `fetch_top_n`,
+  `1..10`) to fill missing `content` on top results via MCC's SSRF-pinned fetch
+  stack; failed per-URL fetches keep the search result intact with `content: null`.
+
+### `POST /v1/webfetch`
+
+```json
+{
+  "url": "https://example.com/article",
+  "extractor": null,
+  "max_chars": null,
+  "allow_private_networks": null
+}
+```
+
+Honors `ENABLE_WEB_SERVER_TOOLS`, `WEB_FETCH_EXTRACTOR`, `WEB_FETCH_ALLOWED_SCHEMES`,
+`WEB_FETCH_ALLOW_PRIVATE_NETWORKS`, and `WEBSEARCH_PROXY` (`max_chars` defaults to
+`24000`, `200..200000`), returning `url`, `title`, `media_type`, `extractor_used`
+(`trafilatura`, `basic`, or `plain`), `truncated`, and `content`.
+
+> **Security note on `WEB_FETCH_ALLOW_PRIVATE_NETWORKS`:** `WEB_FETCH_ALLOW_PRIVATE_NETWORKS`
+> defaults to `true`. On loopback requests and when proxy auth (`ANTHROPIC_AUTH_TOKEN`)
+> is configured, `/v1/webfetch` honors that setting 1:1. Non-loopback requests
+> without proxy auth configured cannot reach private or loopback targets (`400`),
+> and MCC logs a warning when `HOST` is non-loopback without proxy auth.
+> Request-level `allow_private_networks` may only tighten `true -> false`;
+> passing `allow_private_networks: true` while `WEB_FETCH_ALLOW_PRIVATE_NETWORKS=false`
+> is always refused with `400`.
+
+### HTTP status mapping & telemetry
+
+| Status | Meaning |
+|---|---|
+| `400` | Invalid JSON/fields, unknown explicit `provider`, invalid URL or blocked egress/SSRF target |
+| `401` | Missing or invalid proxy auth token (`WWW-Authenticate: Bearer`) |
+| `429` | Upstream rate limit or exhausted quota (`Retry-After` included when published) |
+| `502` | Upstream search/fetch HTTP error or network timeout (keys redacted) |
+| `503` | `ENABLE_WEB_SERVER_TOOLS=false`, `WEB_SEARCH_PROVIDER=disabled`, missing provider key, or upstream auth failure |
+
+Every REST call logs to `requests.db` as a local tool answer (`local:web_search` /
+`local:web_fetch` with `provider=NULL`, excluded from Token Optimizer savings)
+and to `websearch.db` (`provider="web_fetch"` for fetches).
+
 <a id="admin-dashboard"></a>
 
