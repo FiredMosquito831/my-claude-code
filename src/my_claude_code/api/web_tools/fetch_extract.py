@@ -50,6 +50,27 @@ def markdown(html: str) -> str | None:
     )
 
 
+def text_detail_for(
+    html: str,
+    basic_text: str,
+    *,
+    extractor: str,
+    max_chars: int = _MAX_FETCH_CHARS,
+) -> tuple[str, str, bool]:
+    """Extract HTML text and report ``(data, extractor_used, truncated)``."""
+
+    if extractor != EXTRACTOR_TRAFILATURA:
+        return basic_text[:max_chars], "basic", len(basic_text) > max_chars
+    extracted = markdown(html)
+    if extracted is None or len(extracted.strip()) < _WEB_FETCH_EXTRACTOR_MIN_CHARS:
+        return basic_text[:max_chars], "basic", len(basic_text) > max_chars
+    return (
+        capped(extracted, max_chars=max_chars),
+        EXTRACTOR_TRAFILATURA,
+        len(extracted) > max_chars,
+    )
+
+
 def text_for(html: str, basic_text: str, *, extractor: str) -> str:
     """The ``data`` string ``web_fetch`` returns for one HTML page.
 
@@ -58,27 +79,24 @@ def text_for(html: str, basic_text: str, *, extractor: str) -> str:
     for the page, so the fetch never returns less than it did before 7.120.0.
     """
 
-    if extractor != EXTRACTOR_TRAFILATURA:
-        return basic_text[:_MAX_FETCH_CHARS]
-    extracted = markdown(html)
-    if extracted is None or len(extracted.strip()) < _WEB_FETCH_EXTRACTOR_MIN_CHARS:
-        return basic_text[:_MAX_FETCH_CHARS]
-    return capped(extracted)
+    data, _used, _truncated = text_detail_for(html, basic_text, extractor=extractor)
+    return data
 
 
-def capped(text: str) -> str:
+def capped(text: str, *, max_chars: int = _MAX_FETCH_CHARS) -> str:
     """``text`` cut at the cap, with a one-line marker naming the total."""
 
-    if len(text) <= _MAX_FETCH_CHARS:
+    if len(text) <= max_chars:
         return text
-    marker = truncation_marker(len(text))
-    return text[: _MAX_FETCH_CHARS - len(marker)] + marker
+    marker = truncation_marker(len(text), max_chars=max_chars)
+    keep = max(0, max_chars - len(marker))
+    return text[:keep] + marker
 
 
-def truncation_marker(total_chars: int) -> str:
+def truncation_marker(total_chars: int, *, max_chars: int = _MAX_FETCH_CHARS) -> str:
     """The line a cut page ends with: the cap, then what was extracted."""
 
     return (
-        f"\n\n[web_fetch: truncated to {_MAX_FETCH_CHARS} of "
+        f"\n\n[web_fetch: truncated to {max_chars} of "
         f"{total_chars} characters extracted]"
     )

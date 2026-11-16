@@ -10,11 +10,13 @@ from typing import Any, ClassVar
 
 from my_claude_code.config.websearch_catalog import LINKUP_DEFAULT_BASE
 from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
     WebSearchResponse,
     WebSearchResultItem,
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
+from ._common import DEPTH_TO_LINKUP, opt_str, text_str, time_range_start_iso
 from .http import build_async_client, request_json
 
 _SNIPPET_CHARS = 1000
@@ -41,19 +43,70 @@ class LinkupWebSearchProvider(BaseWebSearchProvider):
         allowed_domains: tuple[str, ...],
         blocked_domains: tuple[str, ...],
     ) -> WebSearchResponse:
+        return await self._search_with_key_options(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            request_options=None,
+        )
+
+    async def _search_with_key_options(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int,
+        allowed_domains: tuple[str, ...],
+        blocked_domains: tuple[str, ...],
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> WebSearchResponse:
         options = self._config.options
-        output_type = options.get("LINKUP_OUTPUT_TYPE", "") or "searchResults"
+        if request_options is not None and request_options.include_answer is not None:
+            output_type = (
+                "sourcedAnswer" if request_options.include_answer else "searchResults"
+            )
+        else:
+            output_type = options.get("LINKUP_OUTPUT_TYPE", "") or "searchResults"
+        depth = (
+            DEPTH_TO_LINKUP.get(request_options.search_depth, "")
+            if request_options is not None and request_options.search_depth is not None
+            else ""
+        ) or (options.get("LINKUP_DEPTH", "") or "standard")
         payload: dict[str, Any] = {
             "q": query,
-            "depth": options.get("LINKUP_DEPTH", "") or "standard",
+            "depth": depth,
             "outputType": output_type,
             # Without this the API returns its own default set and we pay for
             # results only to discard them in the client-side slice below.
             "maxResults": max_results,
         }
-        if from_date := options.get("LINKUP_FROM_DATE", ""):
+        from_date = (
+            (
+                request_options.start_date[:10]
+                if request_options is not None
+                and request_options.start_date is not None
+                else ""
+            )
+            or (
+                time_range_start_iso(request_options.time_range)
+                if request_options is not None
+                and request_options.time_range is not None
+                else ""
+            )
+            or options.get("LINKUP_FROM_DATE", "")
+        )
+        if from_date:
             payload["fromDate"] = from_date
-        if to_date := options.get("LINKUP_TO_DATE", ""):
+        to_date = (
+            request_options.end_date[:10]
+            if request_options is not None and request_options.end_date is not None
+            else ""
+        ) or options.get("LINKUP_TO_DATE", "")
+        if to_date:
             payload["toDate"] = to_date
         if allowed_domains:
             payload["includeDomains"] = list(allowed_domains)
@@ -69,7 +122,7 @@ class LinkupWebSearchProvider(BaseWebSearchProvider):
         )
         answer = ""
         if isinstance(data, dict) and output_type == "sourcedAnswer":
-            answer = _text(data.get("answer"))
+            answer = text_str(data.get("answer"))
             rows = data.get("sources", [])
             snippet_field = "snippet"
         else:
@@ -79,13 +132,13 @@ class LinkupWebSearchProvider(BaseWebSearchProvider):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            url = _text(row.get("url"))
+            url = text_str(row.get("url"))
             if not url:
                 continue
-            text = _text(row.get(snippet_field))
+            text = text_str(row.get(snippet_field))
             items.append(
                 WebSearchResultItem(
-                    title=_text(row.get("name")),
+                    title=text_str(row.get("name")),
                     url=url,
                     snippet=text[:_SNIPPET_CHARS],
                     # searchResults returns the full extracted page text in
@@ -93,6 +146,7 @@ class LinkupWebSearchProvider(BaseWebSearchProvider):
                     # form rather than only the truncated snippet.
                     content=text if snippet_field == "content" and text else None,
                     published=None,
+                    favicon=opt_str(row.get("favicon")),
                 )
             )
         return WebSearchResponse(
@@ -103,7 +157,3 @@ class LinkupWebSearchProvider(BaseWebSearchProvider):
             cost_usd=None,
             answer=answer or None,
         )
-
-
-def _text(value: Any) -> str:
-    return value if isinstance(value, str) else ""

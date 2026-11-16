@@ -14,7 +14,10 @@ from typing import ClassVar
 
 import httpx
 
-from my_claude_code.core.websearch.models import WebSearchResponse
+from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
+    WebSearchResponse,
+)
 
 from .errors import (
     KIND_DETAIL_BENCHED,
@@ -97,6 +100,7 @@ class BaseWebSearchProvider(ABC):
         allowed_domains: tuple[str, ...] = (),
         blocked_domains: tuple[str, ...] = (),
         key_charge: KeyChargeJudge | None = None,
+        request_options: WebSearchRequestOptions | None = None,
     ) -> WebSearchResponse:
         """Run the search with key rotation; each key is tried at most once.
 
@@ -131,14 +135,25 @@ class BaseWebSearchProvider(ABC):
             key_index, key = acquired
             excluded.add(key_index)
             try:
-                response = await self._search_with_key(
-                    query,
-                    key,
-                    key_index,
-                    max_results=max_results,
-                    allowed_domains=allowed_domains,
-                    blocked_domains=blocked_domains,
-                )
+                if request_options is None:
+                    response = await self._search_with_key(
+                        query,
+                        key,
+                        key_index,
+                        max_results=max_results,
+                        allowed_domains=allowed_domains,
+                        blocked_domains=blocked_domains,
+                    )
+                else:
+                    response = await self._search_with_key_options(
+                        query,
+                        key,
+                        key_index,
+                        max_results=max_results,
+                        allowed_domains=allowed_domains,
+                        blocked_domains=blocked_domains,
+                        request_options=request_options,
+                    )
             except WebSearchInvalidRequestError, WebSearchConfigError:
                 # Caller/config faults: rotating keys cannot help.
                 raise
@@ -246,6 +261,7 @@ class BaseWebSearchProvider(ABC):
         max_results: int = 10,
         allowed_domains: tuple[str, ...] = (),
         blocked_domains: tuple[str, ...] = (),
+        request_options: WebSearchRequestOptions | None = None,
     ) -> WebSearchResponse:
         """One search with one named key: no pool, no rotation, no health.
 
@@ -260,6 +276,43 @@ class BaseWebSearchProvider(ABC):
         if not self.SUPPORTS_DOMAINS:
             allowed_domains = ()
             blocked_domains = ()
+        if request_options is None:
+            return await self._search_with_key(
+                query,
+                key,
+                key_index,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+            )
+        return await self._search_with_key_options(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            request_options=request_options,
+        )
+
+    async def _search_with_key_options(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int,
+        allowed_domains: tuple[str, ...],
+        blocked_domains: tuple[str, ...],
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> WebSearchResponse:
+        """Perform one search attempt with optional per-request overrides.
+
+        Subclasses override this method to honor ``request_options`` without
+        mutating shared configuration; default delegates to the legacy 6-arg
+        :meth:`_search_with_key` hook so minimal test doubles keep working.
+        """
+        _ = request_options
         return await self._search_with_key(
             query,
             key,

@@ -3,12 +3,14 @@
 from typing import Any, ClassVar
 
 from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
     WebSearchResponse,
     WebSearchResultItem,
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..errors import WebSearchAuthError, WebSearchConfigError
+from ._common import TIME_RANGE_TO_SEARXNG, opt_float, text_str
 from .http import build_async_client, request_json
 
 
@@ -39,15 +41,52 @@ class SearxngWebSearchProvider(BaseWebSearchProvider):
         allowed_domains: tuple[str, ...],
         blocked_domains: tuple[str, ...],
     ) -> WebSearchResponse:
+        return await self._search_with_key_options(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            request_options=None,
+        )
+
+    async def _search_with_key_options(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int,
+        allowed_domains: tuple[str, ...],
+        blocked_domains: tuple[str, ...],
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> WebSearchResponse:
         options = self._config.options
         params: dict[str, Any] = {"q": query, "format": "json"}
         if engines := options.get("SEARXNG_ENGINES", ""):
             params["engines"] = engines
-        if categories := options.get("SEARXNG_CATEGORIES", ""):
+        categories = (
+            request_options.topic
+            if request_options is not None
+            and request_options.topic in {"general", "news"}
+            else ""
+        ) or options.get("SEARXNG_CATEGORIES", "")
+        if categories:
             params["categories"] = categories
-        if time_range := options.get("SEARXNG_TIME_RANGE", ""):
+        time_range = (
+            TIME_RANGE_TO_SEARXNG.get(request_options.time_range, "")
+            if request_options is not None and request_options.time_range is not None
+            else ""
+        ) or options.get("SEARXNG_TIME_RANGE", "")
+        if time_range:
             params["time_range"] = time_range
-        if language := options.get("SEARXNG_LANGUAGE", ""):
+        language = (
+            request_options.language
+            if request_options is not None and request_options.language is not None
+            else ""
+        ) or options.get("SEARXNG_LANGUAGE", "")
+        if language:
             params["language"] = language
         if safesearch := options.get("SEARXNG_SAFESEARCH", ""):
             params["safesearch"] = safesearch
@@ -72,16 +111,17 @@ class SearxngWebSearchProvider(BaseWebSearchProvider):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            url = _text(row.get("url"))
+            url = text_str(row.get("url"))
             if not url:
                 continue
             items.append(
                 WebSearchResultItem(
-                    title=_text(row.get("title")),
+                    title=text_str(row.get("title")),
                     url=url,
-                    snippet=_text(row.get("content")),
+                    snippet=text_str(row.get("content")),
                     content=None,
-                    published=_text(row.get("publishedDate")) or None,
+                    published=text_str(row.get("publishedDate")) or None,
+                    score=opt_float(row.get("score")),
                 )
             )
         return WebSearchResponse(
@@ -91,7 +131,3 @@ class SearxngWebSearchProvider(BaseWebSearchProvider):
             key_index=key_index,
             cost_usd=None,
         )
-
-
-def _text(value: Any) -> str:
-    return value if isinstance(value, str) else ""

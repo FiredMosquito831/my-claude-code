@@ -261,6 +261,8 @@ publishes or pins. The media routes pick their rail by endpoint; a
 | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`; `GET /v1beta/models` | Google Gemini | [below](#gemini) |
 | `POST /v1/images/generations`, `/v1/images/edits`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/videos` (+ `GET`/`DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content`) | OpenAI media | [Media routing](MEDIA.md#every-rail-with-curl) |
 | `GET /v1/media/models` | the media rails' models and the request fields each takes (7.98.0) | [below](#media-models-and-their-request-fields) |
+| `POST /v1/websearch` | Standalone JSON web search over dashboard providers/chain | [below](#rest-web-search-and-fetch) |
+| `POST /v1/webfetch` | Standalone SSRF-pinned web page fetch and extraction | [below](#rest-web-search-and-fetch) |
 | `GET /health` | liveness | [below](#models-and-health) |
 
 #### Messages
@@ -396,12 +398,36 @@ provider answered with only a link is downloaded by MCC through that provider's 
 client and proxy, so the caller never fetches a provider's address itself. Without the
 header an answer is exactly what it was.
 
+#### REST web search and fetch
+
+```sh
+curl http://127.0.0.1:8082/v1/websearch \
+  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "python 3.14 release notes", "max_results": 5}'
+```
+
+```sh
+curl http://127.0.0.1:8082/v1/webfetch \
+  -H "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://docs.python.org/3/", "extractor": "trafilatura"}'
+```
+
+Both routes accept `Bearer`, `x-api-key`, `x-goog-api-key`, and `?key=`, answer
+`HEAD`/`OPTIONS` probes with `204` (`Allow: POST, HEAD, OPTIONS`), and default to
+the live **Web Search** and **Model Config → Web tools** dashboard configuration.
+Validation and SSRF refusals answer `400` in OpenAI's `{"error": {...}}`
+envelope; `WEB_SEARCH_PROVIDER=disabled` or `ENABLE_WEB_SERVER_TOOLS=false`
+answers `503`. See [Web search guide](WEB-SEARCH.md#standalone-rest-endpoints-post-v1websearch-post-v1webfetch).
+
 ### Errors
 
 A routing or provider failure answers in the door's own vendor shape (OpenAI
 `{"error": {...}}`, Anthropic `{"type": "error", "error": {...}}`, Google
 `{"error": {"code", "status", ...}}`). One answer does not: the `401` above on the
-chat doors (the OpenAI media routes answer it in OpenAI's envelope since 7.95.0).
+chat doors (the OpenAI media routes answer it in OpenAI's envelope since 7.95.0,
+and `/v1/websearch` and `/v1/webfetch` do the same).
 A body that does not parse as the door's request (a `messages` that is not a
 list, say, or a content block type MCC does not know) answers `400` on
 `/v1/messages`, `/v1/messages/count_tokens`, `/v1/chat/completions` and

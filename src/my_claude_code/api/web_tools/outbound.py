@@ -5,7 +5,7 @@ import codecs
 import math
 import socket
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import Message
@@ -20,7 +20,11 @@ from loguru import logger
 
 from my_claude_code.config.duckduckgo_profiles import DuckDuckGoRequest
 from my_claude_code.config.settings import Settings, get_settings
-from my_claude_code.core.websearch.models import WebSearchResponse
+from my_claude_code.config.websearch_catalog import WEBSEARCH_CATALOG
+from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
+    WebSearchResponse,
+)
 from my_claude_code.websearch.errors import (
     KIND_DETAIL_BAD_JSON,
     KIND_DETAIL_BENCHED,
@@ -30,6 +34,7 @@ from my_claude_code.websearch.errors import (
     KIND_DETAIL_UNREADABLE_PAGE,
     WebSearchConfigError,
     WebSearchError,
+    WebSearchInvalidRequestError,
     WebSearchRateLimitError,
 )
 from my_claude_code.websearch.registry import (
@@ -39,6 +44,7 @@ from my_claude_code.websearch.registry import (
     emit_route_outcome,
     emit_search_outcome,
     resolve_search_route,
+    resolve_websearch_proxy,
     search_with_logging,
 )
 
@@ -298,6 +304,29 @@ async def _drain_aiohttp_body_capped(
             break
 
 
+@dataclass(frozen=True, slots=True)
+class WebSearchRouteMeta:
+    """Route and provider metadata returned alongside search results."""
+
+    route_id: str
+    primary_provider: str
+    terminal_provider: str
+    providers_tried: tuple[str, ...]
+    fallback_used: bool
+    supports_domain_filters: bool
+
+
+def websearch_proxy_url() -> str | None:
+    """Resolve ``WEBSEARCH_PROXY`` using the single registry proxy resolver."""
+
+    return resolve_websearch_proxy()
+
+
+def _provider_supports_domains(provider_id: str) -> bool:
+    descriptor = WEBSEARCH_CATALOG.get(provider_id)
+    return bool(descriptor.supports_domains) if descriptor is not None else False
+
+
 async def _run_web_search(
     query: str,
     settings: Settings | None = None,
@@ -314,22 +343,105 @@ async def _run_web_search(
     """
 
     settings = settings if settings is not None else get_settings()
-    if settings.web_search_chain:
-        return await _chain_route_search(
+    _response, items, _meta = await _run_web_search_response(
+        query,
+        settings,
+        allowed_domains=allowed_domains,
+        blocked_domains=blocked_domains,
+        capture_meta=False,
+    )
+    return items[:_MAX_SEARCH_RESULTS]
+
+
+async def _run_web_search_response(
+    query: str,
+    settings: Settings | None = None,
+    *,
+    max_results: int = _MAX_SEARCH_RESULTS,
+    allowed_domains: tuple[str, ...] = (),
+    blocked_domains: tuple[str, ...] = (),
+    provider_override: str | None = None,
+    request_options: WebSearchRequestOptions | None = None,
+    capture_meta: bool = True,
+) -> tuple[WebSearchResponse | None, list[dict[str, str]], WebSearchRouteMeta]:
+    """Run web_search across all dashboard modes, returning response, items, and route meta."""
+
+    settings = settings if settings is not None else get_settings()
+    normalized_override = (
+        provider_override.strip().lower()
+        if isinstance(provider_override, str) and provider_override.strip()
+        else None
+    )
+    if normalized_override == "auto":
+        normalized_override = None
+
+    if settings.web_search_provider == "disabled":
+        trace = _SearchRouteTrace(
+            route_id=uuid4().hex,
+            ts_epoch=time.time(),
+            query=query,
+            started=time.perf_counter(),
+        )
+        route = resolve_search_route(settings)
+        if route.provider_ids:
+            trace.primary_provider = route.provider_ids[0]
+            trace.terminal_provider = route.provider_ids[0]
+        else:
+            trace.primary_provider = settings.web_search_provider
+            trace.terminal_provider = settings.web_search_provider
+        error = WebSearchConfigError(
+            "disabled",
+            "web search is disabled by WEB_SEARCH_PROVIDER=disabled",
+        )
+        try:
+            trace.fail(trace.terminal_provider, error)
+            raise error
+        finally:
+            emit_route_outcome(trace.outcome())
+
+    if normalized_override is not None:
+        if (
+            normalized_override != _LEGACY_PROVIDER_ID
+            and normalized_override not in WEBSEARCH_CATALOG
+        ):
+            raise WebSearchInvalidRequestError(
+                normalized_override,
+                f"unknown web search provider: {normalized_override!r}",
+            )
+    elif settings.web_search_chain:
+        return await _chain_route_search_detail(
             query,
             settings,
+            max_results=max_results,
             allowed_domains=allowed_domains,
             blocked_domains=blocked_domains,
+            request_options=request_options,
+            capture_meta=capture_meta,
         )
+
     trace = _SearchRouteTrace(
         route_id=uuid4().hex,
         ts_epoch=time.time(),
         query=query,
         started=time.perf_counter(),
     )
+    captured_response: list[WebSearchResponse] = []
     try:
-        route = resolve_search_route(settings)
-        route_context = _route_context_snapshot(settings, route)
+        if normalized_override is not None:
+            route = WebSearchRoute(
+                provider_ids=(
+                    ()
+                    if normalized_override == _LEGACY_PROVIDER_ID
+                    else (normalized_override,)
+                ),
+                use_legacy_scrape=(normalized_override == _LEGACY_PROVIDER_ID),
+                disabled=False,
+            )
+        else:
+            route = resolve_search_route(settings)
+        route_context = _route_context_snapshot(
+            settings, route, max_results=max_results
+        )
         if route.provider_ids:
             trace.primary_provider = route.provider_ids[0]
             trace.terminal_provider = route.provider_ids[0]
@@ -346,26 +458,50 @@ async def _run_web_search(
             )
             trace.fail(trace.terminal_provider, error)
             raise error
+        items: list[dict[str, str]] | None = None
         if route.provider_ids:
-            results = await _provider_web_search(
+            items = await _provider_web_search(
                 query,
                 settings,
                 route,
                 trace,
                 route_context,
+                max_results=max_results,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains,
+                request_options=request_options,
+                on_response=captured_response.append if capture_meta else None,
             )
-            if results is not None:
-                return results
-        if route.use_legacy_scrape:
-            return await _legacy_route_search(query, trace, route_context)
-        error = WebSearchConfigError(
-            settings.web_search_provider,
-            "web search has no configured route",
+        if items is None:
+            if route.use_legacy_scrape:
+                items = await _legacy_route_search(
+                    query, trace, route_context, max_results=max_results
+                )
+            else:
+                error = WebSearchConfigError(
+                    settings.web_search_provider,
+                    "web search has no configured route",
+                )
+                trace.fail(trace.terminal_provider, error)
+                raise error
+        response = captured_response[-1] if captured_response else None
+        terminal = (
+            response.provider if response is not None else trace.terminal_provider
         )
-        trace.fail(trace.terminal_provider, error)
-        raise error
+        providers_tried = (
+            tuple(trace.providers)
+            if trace.providers
+            else ((terminal,) if terminal not in {"", "unresolved"} else ())
+        )
+        meta = WebSearchRouteMeta(
+            route_id=trace.route_id,
+            primary_provider=trace.primary_provider,
+            terminal_provider=terminal,
+            providers_tried=providers_tried,
+            fallback_used=len(providers_tried) > 1,
+            supports_domain_filters=_provider_supports_domains(terminal),
+        )
+        return response, items, meta
     except asyncio.CancelledError as error:
         trace.fail(trace.terminal_provider, error)
         raise
@@ -453,24 +589,83 @@ async def _chain_route_search(
     route above uses; only the walk is the chain's (``search_chain.py``).
     """
 
+    _response, items, _meta = await _chain_route_search_detail(
+        query,
+        settings,
+        allowed_domains=allowed_domains,
+        blocked_domains=blocked_domains,
+        capture_meta=False,
+    )
+    return items
+
+
+async def _chain_route_search_detail(
+    query: str,
+    settings: Settings,
+    *,
+    max_results: int = _MAX_SEARCH_RESULTS,
+    allowed_domains: tuple[str, ...] = (),
+    blocked_domains: tuple[str, ...] = (),
+    request_options: WebSearchRequestOptions | None = None,
+    capture_meta: bool = True,
+) -> tuple[WebSearchResponse | None, list[dict[str, str]], WebSearchRouteMeta]:
     trace = _SearchRouteTrace(
         route_id=uuid4().hex,
         ts_epoch=time.time(),
         query=query,
         started=time.perf_counter(),
     )
+    captured: list[WebSearchResponse | None] = []
     try:
-        return await run_search_chain(
-            query,
-            settings,
-            trace,
-            allowed_domains=allowed_domains,
-            blocked_domains=blocked_domains,
-            # Looked up per call, so a test that replaces the scraper on this
-            # module replaces it for the chain too.
-            legacy_scrape=lambda text: _legacy_web_search_scrape(text),
-            response_items=_web_search_response_items,
+        if (
+            not capture_meta
+            and max_results == _MAX_SEARCH_RESULTS
+            and request_options is None
+        ):
+            items = await run_search_chain(
+                query,
+                settings,
+                trace,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                # Looked up per call, so a test that replaces the scraper on this
+                # module replaces it for the chain too.
+                legacy_scrape=lambda text: _legacy_web_search_scrape(text),
+                response_items=_web_search_response_items,
+            )
+        else:
+            items = await run_search_chain(
+                query,
+                settings,
+                trace,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                request_options=request_options,
+                legacy_scrape=lambda text: _legacy_web_search_scrape(text),
+                response_items=lambda resp: _web_search_response_items(
+                    resp, max_results=max_results
+                ),
+                on_response=captured.append,
+            )
+        response = captured[-1] if captured else None
+        terminal = (
+            response.provider if response is not None else trace.terminal_provider
         )
+        providers_tried = (
+            tuple(trace.providers)
+            if trace.providers
+            else ((terminal,) if terminal not in {"", "unresolved"} else ())
+        )
+        meta = WebSearchRouteMeta(
+            route_id=trace.route_id,
+            primary_provider=trace.primary_provider,
+            terminal_provider=terminal,
+            providers_tried=providers_tried,
+            fallback_used=len(providers_tried) > 1,
+            supports_domain_filters=_provider_supports_domains(terminal),
+        )
+        return response, items, meta
     except asyncio.CancelledError as error:
         trace.fail(trace.terminal_provider, error)
         raise
@@ -488,8 +683,11 @@ async def _provider_web_search(
     trace: _SearchRouteTrace,
     route_context: dict[str, object],
     *,
+    max_results: int = _MAX_SEARCH_RESULTS,
     allowed_domains: tuple[str, ...] = (),
     blocked_domains: tuple[str, ...] = (),
+    request_options: WebSearchRequestOptions | None = None,
+    on_response: Callable[[WebSearchResponse], None] | None = None,
 ) -> list[dict[str, str]] | None:
     """Try the provider route; None means its terminal legacy fallback may run."""
 
@@ -511,20 +709,35 @@ async def _provider_web_search(
                 status="error",
                 error=error,
                 route_context=route_context,
+                max_results=max_results,
             )
             raise
         try:
-            response = await search_with_logging(
-                provider,
-                query,
-                max_results=_MAX_SEARCH_RESULTS,
-                allowed_domains=allowed_domains,
-                blocked_domains=blocked_domains,
-                route_id=trace.route_id,
-                attempt_number=attempt_number,
-                route_context=route_context,
-                key_charge=no_chain_key_charge,
-            )
+            if request_options is None:
+                response = await search_with_logging(
+                    provider,
+                    query,
+                    max_results=max_results,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                    route_id=trace.route_id,
+                    attempt_number=attempt_number,
+                    route_context=route_context,
+                    key_charge=no_chain_key_charge,
+                )
+            else:
+                response = await search_with_logging(
+                    provider,
+                    query,
+                    max_results=max_results,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                    route_id=trace.route_id,
+                    attempt_number=attempt_number,
+                    route_context=route_context,
+                    key_charge=no_chain_key_charge,
+                    request_options=request_options,
+                )
         except WebSearchConfigError as error:
             # A selected provider missing credentials/base URL is an operator
             # error, not an upstream outage. Never hide it behind another search.
@@ -544,7 +757,12 @@ async def _provider_web_search(
             trace.fail(provider_id, error)
             raise
         else:
-            results = _web_search_response_items(response)
+            if max_results == _MAX_SEARCH_RESULTS:
+                results = _web_search_response_items(response)
+            else:
+                results = _web_search_response_items(response, max_results=max_results)
+            if on_response is not None:
+                on_response(response)
             trace.succeed(
                 provider_id,
                 results_count=len(results),
@@ -566,6 +784,8 @@ async def _legacy_route_search(
     query: str,
     trace: _SearchRouteTrace,
     route_context: dict[str, object],
+    *,
+    max_results: int = _MAX_SEARCH_RESULTS,
 ) -> list[dict[str, str]]:
     attempt_number = trace.begin_attempt(_LEGACY_PROVIDER_ID)
     ts_epoch = time.time()
@@ -583,9 +803,12 @@ async def _legacy_route_search(
             status="error",
             error=error,
             route_context=route_context,
+            max_results=max_results,
         )
         raise
-    results = [{**item, "provider": _LEGACY_PROVIDER_ID} for item in raw_results]
+    results = [
+        {**item, "provider": _LEGACY_PROVIDER_ID} for item in raw_results[:max_results]
+    ]
     _emit_manual_attempt(
         trace=trace,
         provider=_LEGACY_PROVIDER_ID,
@@ -596,6 +819,7 @@ async def _legacy_route_search(
         results_count=len(results),
         results=results,
         route_context=route_context,
+        max_results=max_results,
     )
     trace.succeed(
         _LEGACY_PROVIDER_ID,
@@ -617,12 +841,13 @@ def _emit_manual_attempt(
     results: list[dict[str, str]] | None = None,
     error: BaseException | None = None,
     route_context: dict[str, object] | None = None,
+    max_results: int = _MAX_SEARCH_RESULTS,
     allowed_domains: tuple[str, ...] = (),
     blocked_domains: tuple[str, ...] = (),
 ) -> None:
     input_payload: dict[str, object] = {
         "query": trace.query,
-        "max_results": _MAX_SEARCH_RESULTS,
+        "max_results": max_results,
         "allowed_domains": list(allowed_domains),
         "blocked_domains": list(blocked_domains),
     }
@@ -683,6 +908,8 @@ def _emit_manual_attempt(
 def _route_context_snapshot(
     settings: Settings,
     route: WebSearchRoute,
+    *,
+    max_results: int = _MAX_SEARCH_RESULTS,
 ) -> dict[str, object]:
     provider_path = list(route.provider_ids)
     if route.use_legacy_scrape:
@@ -693,7 +920,7 @@ def _route_context_snapshot(
         "resolved_provider_path": provider_path,
         "legacy_fallback": route.use_legacy_scrape,
         "disabled": route.disabled,
-        "max_results": _MAX_SEARCH_RESULTS,
+        "max_results": max_results,
         "digest_chars": settings.websearch_digest_chars,
         "digest_answer": settings.websearch_digest_answer,
     }
@@ -713,7 +940,11 @@ def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000.0, 3)
 
 
-def _web_search_response_items(response: WebSearchResponse) -> list[dict[str, str]]:
+def _web_search_response_items(
+    response: WebSearchResponse,
+    *,
+    max_results: int = _MAX_SEARCH_RESULTS,
+) -> list[dict[str, str]]:
     """Pass provider richness through to the streaming digest (title/url only
     was the v4.9.0 shape; snippet/content/published/answer/provider are additive).
 
@@ -733,7 +964,7 @@ def _web_search_response_items(response: WebSearchResponse) -> list[dict[str, st
             "answer": response.answer or "",
             "provider": response.provider,
         }
-        for item in response.results[:_MAX_SEARCH_RESULTS]
+        for item in response.results[:max_results]
     ]
 
 
@@ -839,15 +1070,81 @@ async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, st
     outright (DDG-1's pinned finding).
     """
 
+    payload, _extractor_used, _truncated = await _run_web_fetch_detail(
+        url,
+        egress,
+        proxy_url=None,
+    )
+    return payload
+
+
+async def _run_web_fetch_detail(
+    url: str,
+    egress: WebFetchEgressPolicy,
+    *,
+    extractor: str | None = None,
+    max_chars: int | None = None,
+    proxy_url: str | None = None,
+) -> tuple[dict[str, str], str, bool]:
+    """Fetch URL returning ``(payload_dict, extractor_used, truncated)``."""
+
+    effective_max_chars = max_chars if max_chars is not None else _MAX_FETCH_CHARS
+    effective_extractor = (
+        extractor if extractor is not None else get_settings().web_fetch_extractor
+    )
     current_url = url
     redirect_hops = 0
     challenge_retried = False
-    timeout = ClientTimeout(total=_REQUEST_TIMEOUT_S)
 
     while True:
         addr_infos = await asyncio.to_thread(
             get_validated_stream_addrinfos_for_egress, current_url, egress
         )
+        if proxy_url is not None:
+            async with (
+                httpx.AsyncClient(
+                    timeout=httpx.Timeout(_REQUEST_TIMEOUT_S),
+                    headers=_WEB_TOOL_HTTP_HEADERS,
+                    proxy=proxy_url,
+                    follow_redirects=False,
+                ) as client,
+                client.stream("GET", current_url) as response,
+            ):
+                if response.status_code in _WEB_FETCH_REDIRECT_STATUSES:
+                    await _drain_response_body_capped(
+                        response, _REDIRECT_RESPONSE_BODY_CAP_BYTES
+                    )
+                    if redirect_hops >= constants._MAX_WEB_FETCH_REDIRECTS:
+                        raise WebFetchEgressViolation(
+                            "web_fetch exceeded maximum redirects "
+                            f"({constants._MAX_WEB_FETCH_REDIRECTS})"
+                        )
+                    location = response.headers.get("location")
+                    if not location or not location.strip():
+                        raise WebFetchEgressViolation(
+                            "web_fetch redirect response missing Location header"
+                        )
+                    current_url = urljoin(str(response.url), location.strip())
+                    redirect_hops += 1
+                    continue
+                if not challenge_retried and _is_cloudflare_challenge_status(
+                    response.status_code, response.headers
+                ):
+                    challenge_retried = True
+                    await _drain_response_body_capped(
+                        response, _REDIRECT_RESPONSE_BODY_CAP_BYTES
+                    )
+                    continue
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "text/plain")
+                final_url = str(response.url)
+                body_bytes = await _read_response_body_capped(
+                    response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
+                )
+                encoding = _response_encoding(content_type)
+            break
+
+        timeout = ClientTimeout(total=_REQUEST_TIMEOUT_S)
         host = urlparse(current_url).hostname or ""
         results = getaddrinfo_rows_to_resolve_results(host, addr_infos)
         resolver = _PinnedEgressStaticResolver(results)
@@ -915,36 +1212,43 @@ async def _run_web_fetch(url: str, egress: WebFetchEgressPolicy) -> dict[str, st
 
     text = body_bytes.decode(encoding, errors="replace")
     title = final_url
-    # A non-HTML body is the text itself, cut at the cap exactly as before;
-    # an HTML page's data comes from ``fetch_extract``, which applies the same
-    # cap (with the marker) to the extractor's answer and the silent cut to
-    # today's parser's.
-    data = text[:_MAX_FETCH_CHARS]
     if "html" in content_type.lower():
         parser = HTMLTextParser()
         parser.feed(text)
         title = parser.title or final_url
-        data = fetch_extract.text_for(
+        data, extractor_used, truncated = fetch_extract.text_detail_for(
             text,
             "\n".join(parser.text_parts),
-            extractor=get_settings().web_fetch_extractor,
+            extractor=effective_extractor,
+            max_chars=effective_max_chars,
         )
-    return {
+    else:
+        extractor_used = "plain"
+        truncated = len(text) > effective_max_chars
+        data = text[:effective_max_chars]
+    payload = {
         "url": final_url,
         "title": title,
         "media_type": "text/plain",
         "data": data,
     }
+    return payload, extractor_used, truncated
+
+
+def _is_cloudflare_challenge_status(status: int, headers: Mapping[str, str]) -> bool:
+    """Is this the 403 Cloudflare sends to ask a client to prove itself?"""
+
+    return (
+        status == _CLOUDFLARE_CHALLENGE_STATUS
+        and headers.get(_CLOUDFLARE_CHALLENGE_HEADER, "").strip().lower()
+        == _CLOUDFLARE_CHALLENGE_VALUE
+    )
 
 
 def _is_cloudflare_challenge(response: aiohttp.ClientResponse) -> bool:
     """Is this the 403 Cloudflare sends to ask a client to prove itself?"""
 
-    return (
-        response.status == _CLOUDFLARE_CHALLENGE_STATUS
-        and response.headers.get(_CLOUDFLARE_CHALLENGE_HEADER, "").strip().lower()
-        == _CLOUDFLARE_CHALLENGE_VALUE
-    )
+    return _is_cloudflare_challenge_status(response.status, response.headers)
 
 
 def _response_encoding(content_type: str) -> str:

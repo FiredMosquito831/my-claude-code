@@ -5161,6 +5161,10 @@ WEB_SEARCH_CHAIN_PAUSED=            # optional: chain entries to skip
 
 A missing API key on an explicitly selected provider **fails visibly** rather than silently degrading — an unconfigured provider is an operator mistake, not an outage.
 
+### Standalone REST web search and fetch
+
+External tools and scripts can call `POST /v1/websearch` and `POST /v1/webfetch` directly behind proxy token auth (`Bearer`, `x-api-key`, `x-goog-api-key`, or `?key=`) with no model invocation. Both endpoints read your **Web Search** and **Model Config → Web tools** dashboard configuration (`WEB_SEARCH_PROVIDER`, `WEB_SEARCH_CHAIN`, `ENABLE_WEB_SERVER_TOOLS`, `WEBSEARCH_PROXY`, `WEBSEARCH_DIGEST_*`, `WEB_FETCH_*`, `WEBSEARCH_LOG_*`), accept non-mutating per-request overrides (`provider`, `max_results`, `time_range`, `search_depth`, `include_content`, `extractor`, `max_chars`), enforce SSRF/private-network guards, and log local answers (`local:web_search` / `local:web_fetch`) in `requests.db` alongside `websearch.db` telemetry. See [docs/WEB-SEARCH.md](WEB-SEARCH.md#standalone-rest-endpoints-post-v1websearch-post-v1webfetch).
+
 ### The provider cards (settings moved into a panel)
 
 Each search provider is a small card: its name, its status, the variable that

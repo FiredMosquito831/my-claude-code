@@ -58,6 +58,9 @@ VIDEOS_ENDPOINT = "/v1/videos"
 #: ``/v1/models``, and answered the way ``/v1/models`` is; deliberately not a
 #: member of the media paths above, whose refusals are OpenAI-shaped.
 MEDIA_MODELS_ENDPOINT = "/v1/media/models"
+#: Standalone REST web search & web fetch endpoints.
+WEBSEARCH_ENDPOINT = "/v1/websearch"
+WEBFETCH_ENDPOINT = "/v1/webfetch"
 
 WireApi = Literal["messages", "responses", "chat_completions", "gemini"]
 
@@ -70,6 +73,8 @@ _WIRE_API_BY_PATH: dict[str, WireApi] = {
     AUDIO_TRANSCRIPTIONS_ENDPOINT: "chat_completions",
     AUDIO_TRANSLATIONS_ENDPOINT: "chat_completions",
     VIDEOS_ENDPOINT: "chat_completions",
+    WEBSEARCH_ENDPOINT: "chat_completions",
+    WEBFETCH_ENDPOINT: "chat_completions",
 }
 
 #: The surfaces whose clients parse OpenAI's ``{"error": {...}}``. Membership
@@ -139,3 +144,13 @@ def is_media_path(path: str) -> bool:
     ``{"detail": ...}`` body its clients and tests have always read.
     """
     return path in _MEDIA_PATHS or path.startswith(VIDEOS_ENDPOINT + "/")
+
+
+_WEBSEARCH_REST_PATHS: frozenset[str] = frozenset(
+    {WEBSEARCH_ENDPOINT, WEBFETCH_ENDPOINT}
+)
+
+
+def is_websearch_rest_path(path: str) -> bool:
+    """Whether ``path`` is one of the standalone REST websearch/webfetch routes."""
+    return path in _WEBSEARCH_REST_PATHS

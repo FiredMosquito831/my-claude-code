@@ -37,6 +37,7 @@ from typing import Any, ClassVar
 
 from my_claude_code.config.websearch_catalog import CONTEXT7_DEFAULT_BASE
 from my_claude_code.core.websearch.models import (
+    WebSearchRequestOptions,
     WebSearchResponse,
     WebSearchResultItem,
 )
@@ -77,6 +78,28 @@ class Context7WebSearchProvider(BaseWebSearchProvider):
         allowed_domains: tuple[str, ...],
         blocked_domains: tuple[str, ...],
     ) -> WebSearchResponse:
+        return await self._search_with_key_options(
+            query,
+            key,
+            key_index,
+            max_results=max_results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+            request_options=None,
+        )
+
+    async def _search_with_key_options(
+        self,
+        query: str,
+        key: str,
+        key_index: int,
+        *,
+        max_results: int,
+        allowed_domains: tuple[str, ...],
+        blocked_domains: tuple[str, ...],
+        request_options: WebSearchRequestOptions | None = None,
+    ) -> WebSearchResponse:
+        _ = request_options
         headers = {"Authorization": f"Bearer {key}"}
         found = await self._get(
             "/v2/libs/search", headers, {"query": query, "libraryName": query}
