@@ -1,0 +1,62 @@
+{
+  "path": "/architecture/provider-routing/",
+  "title": "Provider routing | My Claude Code",
+  "description": "How a requested name becomes a real provider model, how the fallback chain is walked, and why the router never reads a model name to decide reasoning behaviour.",
+  "nav": "Provider routing",
+  "eyebrow": "Architecture · Routing",
+  "h1": "From a tier name to one real model",
+  "intro": "The router answers one question: which concrete provider model serves this request, with which reasoning preference, and what happens if it cannot. It is deliberately small, and the rules it follows are the product's contract. This page is the provider routing internals: the three ways to name a model, the tier map, and the order the fallback ladder is walked in.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Architecture", "href": "/architecture/"}, {"label": "Provider routing"}],
+  "blocks": [
+    {"type": "h2", "text": "Three ways to name a model"},
+    {"type": "p", "text": "Resolution takes three forms. A <strong>direct provider model ref</strong> names the provider and the exact model. A <strong>gateway model ID</strong> is decoded by the gateway-ID codec. The <strong>five tier aliases</strong> are intercepted ahead of both, and are pointers rather than models. If the incoming name is not direct, the router maps it by Claude tier: a name containing fable, opus, sonnet or haiku uses the matching tier override when set, and otherwise falls back to the default model."},
+    {"type": "p", "text": "The router also selects the reasoning preference. A direct ref uses the root policy; a Claude tier route uses a non-inherited tier override or the root fallback; the no-thinking gateway variant forces off. The application layer combines that preference with the concrete client request exactly once, and the resulting plan owns both the selected route and the final request-scoped policy."},
+    {"type": "diagram", "name": "routing-tiers", "caption": "The tier map, with a primary model and an ordered chain per route.", "alt": "A diagram of five tiers, each with a primary model and fallback rows, one paused."},
+
+    {"type": "h2", "text": "What the picker is told"},
+    {"type": "p", "text": "The model-listing route advertises configured provider refs, cached provider-discovered models, no-thinking variants where appropriate, and built-in Claude model IDs for compatibility. A discovered model's thinking support is used for presentation only; it never selects request behaviour. A per-client picker is shaped outside the route: the composition bridge builds catalogue records from the same ladder, using the same visibility filter and projection, so a model cannot appear in one surface and not the other, and it writes each harness's catalogue without making a loopback HTTP request."},
+    {"type": "p", "text": "One consequence is worth stating because it is visible: a catalogue is a snapshot. The Codex App reads its catalogue at startup, so it must restart to see a later publication, and the Codex launcher remains a launch-time synchroniser for the same reason. An existing last-known-good catalogue is preserved when a projection resolves no routable models."},
+
+    {"type": "h2", "text": "Aliases are pointers"},
+    {"type": "p", "text": "The protocol names <code>mcc/cyber</code>, <code>mcc/best</code>, <code>mcc/good</code>, <code>mcc/medium</code>, <code>mcc/cheap</code> and <code>mcc/vision</code> serve harnesses that have no Claude vocabulary of their own. Each names one of the router's global routes, together with that route's fallback chain and pause list, and an unset route collapses onto the default model exactly as the Claude tier does. The provider ID <code>mcc</code> is reserved so a custom provider cannot make an alias ambiguous."},
+    {"type": "p", "text": "The tier segment is matched exactly, not by substring. The router takes an optional harness name from the request header or the user-agent fingerprint; an unidentified request resolves against the global chain rather than failing. The resolved tier route is recorded on the plan, which is what lets the request log name the tier, its source and its harness without adding a column to the log."},
+
+    {"type": "h2", "text": "Walking the chain"},
+    {"type": "p", "text": "Each route has a model and an ordered chain of stand-ins. The executor attempts the route's model first, then each entry in order. A model listed twice is tried twice, and each listing is judged when it is reached. A paused entry keeps its place and is never tried: no attempt is spent, no deadline is consumed, and the log records the reason."},
+    {"type": "diagram", "name": "routing-fallback", "caption": "A walked chain: skipped, answered and never reached, each with its reason.", "alt": "A diagram of a four-model chain with a cooldown, a pause, an answer and an unreached model."},
+    {"type": "p", "text": "The chain's decision rules come from the failure, not from a general retry count. An auth rejection, a 429 and a transport fault can all be helped by a different key, so the pool rotates. A timeout, a 5xx, a 410 or a plain 400 cannot: every key talks to the same model and would hear the same answer, so those raise out of the rotating loop and the chain moves to the next model. A timeout is explicitly excluded from the transport-fault class, because a model that never answered is not a broken socket."},
+    {"type": "figure", "shot": "dashboard-request-attempts", "caption": "The chain as the request log shows it: each attempt with its key, timings and the reason it was or was not tried."},
+
+    {"type": "h2", "text": "Media rails are not chat tiers"},
+    {"type": "p", "text": "The image, speech, transcription and video rails walk their chains under the same rules through a separate copy of the engine, and a contract test holds the two copies to the same decisions. They keep their own key, model and proxy health, so a media failure never benches anything for chat. Nothing on a media rail is listed in the model catalogue or offered to a coding agent."},
+
+    {"type": "h2", "text": "Limits and behaviour"},
+    {"type": "ul", "items": [
+      "The router never inspects an upstream model name or version to choose reasoning behaviour.",
+      "A route whose every model is paused fails with an error naming the key rather than silently falling through.",
+      "A failure after the first streamed chunk is not retried; the response is already committed.",
+      "An unknown harness is served, not refused.",
+      "A catalogue write that resolves no routable models preserves the last good file."
+    ]},
+    {"type": "related", "links": [
+      {"href": "/features/routing/", "label": "Feature: routing and fallback chains"},
+      {"href": "/architecture/request-path/", "label": "Request path: where resolution sits"},
+      {"href": "/architecture/credential-health/", "label": "Credential health: what the chain asks the pool"},
+      {"href": "/configuration/environment/", "label": "Configuration: MODEL_* and the chain variables"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "Three naming forms: direct ref, gateway model ID, five tier aliases", "evidence": "ARCHITECTURE.md §Model Routing"},
+    {"claim": "A non-direct name maps by Claude tier and falls back to MODEL", "evidence": "ARCHITECTURE.md §Model Routing"},
+    {"claim": "The reasoning preference is selected per route and resolved once", "evidence": "ARCHITECTURE.md §Model Routing"},
+    {"claim": "support_thinking is presentation only and never selects request behaviour", "evidence": "ARCHITECTURE.md §Model Routing"},
+    {"claim": "The catalogue bridge uses the same filter and projection as /v1/models and writes without a loopback request", "evidence": "ARCHITECTURE.md §Model Routing"},
+    {"claim": "The Codex App reads its catalogue at startup and must restart", "evidence": "ARCHITECTURE.md §Model Routing"},
+    {"claim": "Aliases are pointers and an unset route collapses onto MODEL", "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"},
+    {"claim": "The mcc provider id is reserved", "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"},
+    {"claim": "The tier segment is matched exactly and an unidentified request resolves globally", "evidence": "ARCHITECTURE.md §Coding-Agent Tier Aliases"},
+    {"claim": "A timeout is not treated as a transport fault", "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"},
+    {"claim": "Media rails use a separate copy of the engine held to chat by a contract test", "evidence": "docs/ROUTING-REFERENCE.md §Fallback Chains"}
+  ]
+}

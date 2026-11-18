@@ -1,0 +1,184 @@
+{
+  "path": "/configuration/",
+  "title": "Configuration | My Claude Code",
+  "description": "How My Claude Code is configured: one .env in one configuration home, written by the dashboard or by hand, plus the few variables that resolve first.",
+  "nav": "Configuration",
+  "eyebrow": "Configuration",
+  "h1": "How settings are provided",
+  "intro": "MCC has one configuration home, one .env and one set of documents beside it. The dashboard writes the file, the server reads it, and the launchers resolve the same directory. There is no second configuration system to reconcile. This page is the LLM gateway configuration map: the home, the file, the documents beside it and the variables that are read before the file is.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Configuration"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "The configuration home"
+    },
+    {
+      "type": "p",
+      "text": "A new install keeps everything in <code>~/.mcc</code>. That directory holds the <code>.env</code>, the request log under <code>logs/</code>, the per-agent documents the launchers write, and the JSON documents that do not belong in a settings file: custom provider definitions, per-agent tier overrides, credential names, OAuth stores, model overrides, learned facts, proxy chains and marketplace profiles. An install from before 6.40.0 is migrated from its legacy directory on its first start by one atomic rename, nothing copied or merged, and the startup log always names the directory in use."
+    },
+    {
+      "type": "callout",
+      "kind": "warn",
+      "text": "<strong>One variable resolves before the file does.</strong> <code>MCC_CONFIG_DIR</code> pins the configuration home to an absolute path and overrides every default. It must be set in your shell, not written into the .env, because the directory has to be known before there is a file to read. Set it for the <code>mcc-*</code> launchers too, or they will read a different directory than the server."
+    },
+    {
+      "type": "h2",
+      "text": "The .env"
+    },
+    {
+      "type": "p",
+      "text": "The <code>.env</code> is the settings file. Every setting lives there with the same name it has in the documentation, and the dashboard writes the same file, so a value set on a page and a value set by hand are the same value. On a new install the server writes the file on first start and generates the proxy token for that machine."
+    },
+    {
+      "type": "p",
+      "text": "The repository ships an annotated example file, <code>.env.example</code>, with inline comments and cost notes. Its variable <em>names</em> are public; its values are not, and this site never publishes one. For a secret-like setting the configuration page on this site gives the name and the purpose only."
+    },
+    {
+      "type": "h2",
+      "text": "The documents beside the .env"
+    },
+    {
+      "type": "table",
+      "head": [
+        "Document",
+        "What it holds"
+      ],
+      "rows": [
+        [
+          "<code>custom_providers.json</code>",
+          "custom provider definitions, including their static credentials"
+        ],
+        [
+          "<code>harness_tiers.json</code>",
+          "per-agent tier overrides"
+        ],
+        [
+          "<code>credential_names.json</code>",
+          "display names for keys, keyed by a hash of the key"
+        ],
+        [
+          "<code>model_overrides.json</code>",
+          "operator overrides for a model's fields"
+        ],
+        [
+          "<code>learned_facts.json</code>",
+          "what this install learned about a provider, with expiry"
+        ],
+        [
+          "<code>proxy_chains.json</code>",
+          "named proxy chains and their exits"
+        ],
+        [
+          "<code>marketplace_profiles.json</code>",
+          "InferHub price-ceiling profiles"
+        ],
+        [
+          "<code>anthropic_oauth.json</code>",
+          "MCC's own OAuth credential store, owner-only"
+        ],
+        [
+          "<code>chatgpt-oauth.json</code>",
+          "the ChatGPT OAuth store"
+        ],
+        [
+          "<code>logs/requests.db</code>",
+          "the request log"
+        ]
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "Environment variables that are not settings"
+    },
+    {
+      "type": "p",
+      "text": "A settings save and a credential refresh write different files. That split is what lets a provider be re-keyed without rewriting the routing map, and a tier change without touching an OAuth store. It is also why the dashboard can show a key round-trip and a tier change as two independent actions rather than one save that rewrites everything."
+    },
+    {
+      "type": "p",
+      "text": "A few variables are read before or outside the settings file. <code>MCC_CONFIG_DIR</code> chooses the directory. <code>MCC_ENV_FILE</code> names an explicit dotenv file to load instead of the default one. The install scripts read <code>MCC_INSTALL_NO_START</code> and <code>MCC_INSTALL_NO_DESKTOP</code>, and the npm wrapper reads <code>MCC_NPM_INSTALL</code>. <code>HTTPS_PROXY</code>, <code>HTTP_PROXY</code> and <code>NO_PROXY</code> are honoured by the installers and by outbound requests."
+    },
+    {
+      "type": "h2",
+      "text": "Editing rules"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "A blank value means unset. Removing a value from the page writes a blank, and the default applies.",
+        "A restart-required setting is labelled on the page; Apply does not pretend it took effect.",
+        "A managed write backs the file up before it changes it.",
+        "A leftover setting from a removed feature is ignored at startup and dropped on the next save.",
+        "The launchers read the same directory as the server; a mismatch is the one configuration mistake the product cannot fix for you."
+      ]
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/configuration/environment/",
+          "label": "Environment reference: the variable names, grouped by area"
+        },
+        {
+          "href": "/features/dashboard/",
+          "label": "The dashboard: where most settings are edited"
+        },
+        {
+          "href": "/architecture/data-and-storage/",
+          "label": "Architecture: what is stored and where"
+        },
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: the first settings you will touch"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "A new install keeps everything in ~/.mcc",
+      "evidence": ".env.example header"
+    },
+    {
+      "claim": "The legacy home is migrated by one atomic rename on first start",
+      "evidence": ".env.example header; README.md §Four things that bite"
+    },
+    {
+      "claim": "MCC_CONFIG_DIR pins the directory and must be set in the shell, not the .env",
+      "evidence": ".env.example header"
+    },
+    {
+      "claim": "The dashboard writes the same .env the server reads",
+      "evidence": "README.md §Configuration reference"
+    },
+    {
+      "claim": "The server writes the .env and generates the proxy token on first start",
+      "evidence": "README.md §Platform capability table"
+    },
+    {
+      "claim": "The documents beside the .env are the list in the diagram",
+      "evidence": "src/my_claude_code/config/paths.py filename constants"
+    },
+    {
+      "claim": "MCC_ENV_FILE names an explicit dotenv file",
+      "evidence": "src/my_claude_code/config/env_files.py"
+    },
+    {
+      "claim": "Install scripts read MCC_INSTALL_NO_START and MCC_INSTALL_NO_DESKTOP",
+      "evidence": ".env.example header"
+    },
+    {
+      "claim": "A blank value means unset",
+      "evidence": "docs/ROUTING-REFERENCE.md §Saving Settings: Blank Means Unset"
+    }
+  ]
+}

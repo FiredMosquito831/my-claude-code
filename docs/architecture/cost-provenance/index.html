@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cost provenance: where every number comes from</title>
+<meta name="description" content="How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.">
+<meta name="keywords" content="cost provenance, llm cost attribution, token cost calculation, price per request, llm billing accuracy, pricing ladder, unpriced model, models.dev pricing">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/cost-provenance/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Cost provenance: where every number comes from">
+<meta property="og:description" content="How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/cost-provenance/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Cost provenance: where every number comes from">
+<meta name="twitter:description" content="How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Cost provenance: where every number comes from", "url": "https://myclaudecode.danubelabs.net/architecture/cost-provenance/", "description": "How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Cost provenance"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Cost provenance: where every number comes from", "description": "How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.", "url": "https://myclaudecode.danubelabs.net/architecture/cost-provenance/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/" aria-current="page">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li>Cost provenance</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>Where a price came from</h1>
+<p class="page-intro">A cost is only useful if you can tell how it was produced. MCC prices a request once, as it is logged, and stores the rung of the pricing ladder that answered each field beside the number. A figure no source states is shown as not priced, with the reason. That is what cost provenance means here: every number carries the source that stated it.</p>        <h2 id="the-ladder">The ladder</h2>
+
+        <p>Model metadata is resolved by a single ten-rung ladder, and cost is one of the fields it answers. The provider's own model list is the first rung; models.dev follows; the LiteLLM map is consulted when it is switched on; a cross-provider vote covers what remains; and a field no rung can answer is unpriced. The same resolver answers context, output limit, vision, tool support and the four cache prices, and the Models page and every generated agent catalogue read it, so they cannot disagree about a number or about where it came from.</p>
+
+        <figure class="figure figure--diagram" id="fig-cost-ladder">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t7 d7" font-family="ui-monospace, Consolas, monospace">
+<title id="t7">The pricing ladder: each field walks its rungs and the rung that answered is stored</title>
+<desc id="d7">A model's price fields walk a ladder: the provider's own model list first, then models.dev, then the optional LiteLLM map, then the cross-provider vote, and finally unpriced. Each field that a rung answers records that rung beside the number, so a request's cost carries its provenance. A request that no rung can price is stored as unpriced rather than guessed.</desc>
+<defs>
+<marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g font-size="12">
+<rect x="20" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="34" y="66" fill="#3FB950">1 · provider</text>
+<text x="34" y="86" fill="#A9B7C6" font-size="11">its own model list</text>
+<rect x="185" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="199" y="66" fill="#3FB950">2 · models.dev</text>
+<text x="199" y="86" fill="#A9B7C6" font-size="11">vendor catalogue</text>
+<rect x="350" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="364" y="66" fill="#58A6FF">3 · LiteLLM</text>
+<text x="364" y="86" fill="#A9B7C6" font-size="11">when switched on</text>
+<rect x="515" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="529" y="66" fill="#58A6FF">4 · vote</text>
+<text x="529" y="86" fill="#A9B7C6" font-size="11">same-name rows</text>
+<rect x="680" y="40" width="160" height="60" rx="8" fill="#111821" stroke="#7D8FA3"/>
+<text x="694" y="66" fill="#7D8FA3">5 · unpriced</text>
+<text x="694" y="86" fill="#A9B7C6" font-size="11">a dash, never a zero</text>
+<path d="M170 70 H183" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+<path d="M335 70 H348" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+<path d="M500 70 H513" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+<path d="M665 70 H678" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="140" width="820" height="132" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="166" fill="#E6EDF3" font-weight="700">The same ten-rung resolver answers context, output limit, vision, tools and the four cache prices.</text>
+<text x="36" y="190" fill="#A9B7C6">Where the routed deployment's own model list supplied a value, the badge reads provider /models</text>
+<text x="36" y="212" fill="#A9B7C6">or models.dev; where the ladder supplied it, the rung is exact. The Models page and every</text>
+<text x="36" y="234" fill="#A9B7C6">generated agent catalogue read the same resolver, so they cannot disagree about a number or its source.</text>
+<text x="36" y="256" fill="#A9B7C6">A price a source states is used; a price no source states is shown as not priced with the reason.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="296">Each request is priced once, as it is logged, and the rung that answered each price is stored beside the number.</text>
+<text x="20" y="318">Anthropic's 5-minute and 1-hour cache writes are recorded separately, and an hour write is priced only</text>
+<text x="20" y="340">at a rate a source states. A media request is priced the same way: provider figure, models.dev, LiteLLM</text>
+<text x="20" y="362">when on, else unpriced.</text>
+<rect x="20" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="404">a source states it</text>
+<rect x="180" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="202" y="404">optional rung</text>
+<rect x="330" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#7D8FA3"/><text x="352" y="404">no source states it</text>
+</g>
+</svg>
+</div>
+<figcaption>The pricing ladder: each field walks its rungs, and the rung that answered is stored.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of five rungs: provider list, models.dev, LiteLLM when on, cross-provider vote, and unpriced.</p>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-models-billed-est.webp" alt="The billed-versus-estimated row on a model, two figures kept separate rather than summed." width="1100" height="115" loading="lazy" decoding="async">
+<figcaption>A model&#39;s billed and estimated row: two figures kept apart, each with its own source.</figcaption>
+</figure>
+
+        <p>When the provider's own list states a value, the badge reads provider or models.dev with no rung, because the enrichment step that merged them keeps no record of which won. When the ladder supplied it, the rung is exact, down to a cross-provider vote over strangers who merely share a name, which is badged approximate. Nothing about a request is reconstructed after the fact.</p>
+
+        <h2 id="one-price-one-log-row">One price, one log row</h2>
+
+        <p>A request is priced at the moment it is logged, and the rung that answered each price is stored in the row. That is what makes a total traceable: a number on a card can be followed back to the requests that produced it, and each request names its source. The attempt-level export writes one row per model the chain tried, so a fallback that spent tokens is in the export even though it did not answer.</p>
+
+        <p>Anthropic's split of cache writes into five-minute and one-hour writes is recorded, and a one-hour write is priced at a rate a source states, or shown as not priced with the reason. Requests that predate the split keep their five-minute price; a historical row is not repriced by a later release.</p>
+
+        <h2 id="reported-estimated-unpriced">Reported, estimated, unpriced</h2>
+
+        <p>Reported and estimated are two figures and are never summed. A reported figure is one a source stated; an estimated figure is one the install computed. Both are shown with their own priced-of-total denominator, so a partial figure cannot read as a complete one. A request no source could price is a dash, not a zero, and a request with no price does not quietly enter a total as if it cost nothing.</p>
+
+        <figure class="figure figure--diagram" id="fig-cost-honest-totals">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t8 d8" font-family="ui-monospace, Consolas, monospace">
+<title id="t8">Reported and estimated cost are two figures, never summed, and every total names its denominator</title>
+<desc id="d8">A request priced by a stated source contributes to the reported figure. A request priced by an estimate contributes to the estimated figure. An unpriceable request is a dash, not a zero. Each total carries a priced-of-total denominator, so a partial figure cannot read as a complete one.</desc>
+<g font-size="12">
+<rect x="20" y="30" width="250" height="140" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="58" fill="#3FB950" font-weight="700">Reported</text>
+<text x="36" y="86" fill="#E6EDF3" font-size="22">$A</text>
+<text x="36" y="112" fill="#A9B7C6" font-size="11">a source stated the price</text>
+<text x="36" y="132" fill="#A9B7C6" font-size="11">reported × of N priced</text>
+<text x="36" y="152" fill="#7D8FA3" font-size="11">stored beside the rung</text>
+<rect x="305" y="30" width="250" height="140" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="321" y="58" fill="#58A6FF" font-weight="700">Estimated</text>
+<text x="321" y="86" fill="#E6EDF3" font-size="22">$B</text>
+<text x="321" y="112" fill="#A9B7C6" font-size="11">a figure the install computed</text>
+<text x="321" y="132" fill="#A9B7C6" font-size="11">estimated × of N priced</text>
+<text x="321" y="152" fill="#7D8FA3" font-size="11">never added to reported</text>
+<rect x="590" y="30" width="250" height="140" rx="8" fill="#111821" stroke="#7D8FA3"/>
+<text x="606" y="58" fill="#7D8FA3" font-weight="700">Unpriced</text>
+<text x="606" y="86" fill="#E6EDF3" font-size="22">—</text>
+<text x="606" y="112" fill="#A9B7C6" font-size="11">no source stated a price</text>
+<text x="606" y="132" fill="#A9B7C6" font-size="11">shown as not priced</text>
+<text x="606" y="152" fill="#7D8FA3" font-size="11">never a fabricated zero</text>
+</g>
+<g font-size="12">
+<rect x="20" y="200" width="820" height="90" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="228" fill="#E6EDF3" font-weight="700">A partial figure must not read as a complete one</text>
+<text x="36" y="252" fill="#A9B7C6">Every total carries an "N of M priced" denominator. A request no source could price is a dash in its row.</text>
+<text x="36" y="274" fill="#A9B7C6">Totals stop rising at the retention cap; the all-time strip below the cards keeps counting after stored rows roll over.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="330">A subscription window and a cash balance are two blocks and never one total.</text>
+<text x="20" y="354">A provider's own money figure is shown verbatim; a percentage is shown as a percentage, with no currency sign beside it.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="404">stated</text>
+<rect x="110" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="132" y="404">computed</text>
+<rect x="220" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#7D8FA3"/><text x="242" y="404">not available</text>
+</g>
+</svg>
+</div>
+<figcaption>Reported, estimated and unpriced, with denominators that stop a partial figure reading as complete.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of three cost states, reported, estimated and unpriced, each with its own denominator and no summing.</p>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/readme-analytics-cost.webp" alt="A requests-over-time chart and a tokens-by-model chart above a Cost panel with reported and estimated totals kept separate." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Cost panel: reported and estimated kept apart, each total carrying its priced-of-total denominator.</figcaption>
+</figure>
+
+        <p>The all-time strip below the stat cards is never pruned, so it keeps counting after stored rows roll over at the retention cap. <em>All time</em> in a range control means all time still stored, and the two figures are labelled so they cannot be confused.</p>
+
+        <h2 id="usage-is-not-cost">Usage is not cost</h2>
+
+        <p>What a provider says is left is a different figure from what a request cost. The Usage page shows the Claude and ChatGPT subscription windows with their reset times, the credits and rate-limit figures that Nous Portal, DeepSeek, OpenRouter, Kimi and Command Code send on responses you already get, and a Read now button that asks seven providers for their own figure. A window and a cash balance are two blocks and never one total. A provider that publishes a percentage is shown as a percentage, with no currency sign beside it.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-request-contradiction.webp" alt="The cost panel&#39;s honesty note: reported and estimated figures never summed, with a priced denominator." width="938" height="310" loading="lazy" decoding="async">
+<figcaption>The honesty note on a cost panel: an unpriceable request is a dash, and every total names its denominator.</figcaption>
+</figure>
+
+        <p>A read can never charge a key or bench a provider. The page refreshes on its own only while it is open, at an interval you set, once per provider, and a hidden tab reads nothing. A 429 skips only the provider that sent it, and a repeatedly failing provider backs off on its own.</p>
+
+        <h2 id="media-and-the-marketplace">Media and the marketplace</h2>
+
+        <p>Media requests are priced like chat ones: a provider figure, then models.dev, then LiteLLM when on, else unpriced. A Mistral image is recorded unpriced because no source publishes a per-image rate for it, and MCC never invents one. InferHub is a marketplace rather than an ordinary provider: a profile sets a price ceiling, and MCC sends that ceiling on every attempt so a request is never charged above it.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>A price is never invented, rounded up to a plausible number or copied from an old README.</li><li>A total with no denominator is not published.</li><li>A request whose cost came from an estimate is marked as estimated, not reported.</li><li>The all-time figure and the stored-window figure are separate and labelled.</li><li>A media model that a provider declares no price for stays unpriced.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/observability-and-cost/">Feature: analytics and cost with provenance</a></li><li><a href="/architecture/data-and-storage/">Data: where the priced row lives</a></li><li><a href="/architecture/provider-routing/">Routing: which model the price belongs to</a></li><li><a href="/glossary/">Glossary: rung, provenance, denominator</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-ladder">The ladder</a></li>
+          <li><a href="#one-price-one-log-row">One price, one log row</a></li>
+          <li><a href="#reported-estimated-unpriced">Reported, estimated, unpriced</a></li>
+          <li><a href="#usage-is-not-cost">Usage is not cost</a></li>
+          <li><a href="#media-and-the-marketplace">Media and the marketplace</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

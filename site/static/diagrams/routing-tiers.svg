@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t3 d3" font-family="ui-monospace, Consolas, monospace">
+<title id="t3">Tier map: five coding-agent tiers, each with a primary model and a fallback chain</title>
+<desc id="d3">Mythos, Fable, Opus, Sonnet and Haiku are protocol names. Each resolves to a primary model and an ordered fallback chain. A blank Haiku follows the default model. A paused row keeps its place and is never tried, and the same model paused on Opus still serves Sonnet.</desc>
+<g font-size="12">
+<g>
+<rect x="20" y="40" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="66" fill="#3FB950" font-size="13">mcc/cyber · Mythos</text>
+<text x="36" y="88" fill="#A9B7C6" font-size="11">primary → fallback 1 → fallback 2</text>
+<rect x="470" y="54" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="72" fill="#E6EDF3">primary model</text>
+<rect x="620" y="54" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="634" y="72" fill="#A9B7C6">1 · stand-in</text>
+</g>
+<g>
+<rect x="20" y="118" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="144" fill="#3FB950" font-size="13">mcc/best · Fable</text>
+<text x="36" y="166" fill="#A9B7C6" font-size="11">primary → fallback 1 → fallback 2 → fallback 3</text>
+<rect x="470" y="132" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="150" fill="#E6EDF3">primary model</text>
+<rect x="620" y="132" width="140" height="26" rx="5" fill="#18212C" stroke="#D29922"/><text x="634" y="150" fill="#D29922">paused</text>
+</g>
+<g>
+<rect x="20" y="196" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="222" fill="#3FB950" font-size="13">mcc/good · Opus</text>
+<text x="36" y="244" fill="#A9B7C6" font-size="11">primary → fallback 1 → fallback 2</text>
+<rect x="470" y="210" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="228" fill="#E6EDF3">primary model</text>
+<rect x="620" y="210" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="634" y="228" fill="#A9B7C6">2 · stand-in</text>
+</g>
+<g>
+<rect x="20" y="274" width="760" height="66" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="300" fill="#3FB950" font-size="13">mcc/medium · Sonnet</text>
+<text x="36" y="322" fill="#A9B7C6" font-size="11">primary → fallback 1</text>
+<rect x="470" y="288" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="484" y="306" fill="#E6EDF3">primary model</text>
+<rect x="620" y="288" width="140" height="26" rx="5" fill="#18212C" stroke="#5D6E84"/><text x="634" y="306" fill="#A9B7C6">1 · stand-in</text>
+</g>
+<g>
+<rect x="20" y="352" width="760" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="380" fill="#3FB950" font-size="13">mcc/cheap · Haiku</text>
+<text x="220" y="380" fill="#A9B7C6" font-size="11">blank follows the default model</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="420">A model listed twice is tried twice; each listing is judged when it is reached.</text>
+</g>
+</g>
+</svg>

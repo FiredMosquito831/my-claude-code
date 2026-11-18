@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "blocks.html" as helpers %}
+{% block content %}
+<div class="page">
+  <div class="wrap">
+    {% if breadcrumbs %}
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        {% for crumb in breadcrumbs %}
+        <li>{% if crumb.href %}<a href="{{ crumb.href }}">{{ crumb.label }}</a>{% else %}{{ crumb.label }}{% endif %}</li>
+        {% endfor %}
+      </ol>
+    </nav>
+    {% endif %}
+    {% if page_grid %}
+    <div class="page-grid">
+      <div>
+        <h1>{{ h1 }}</h1>
+        {% if intro %}<p class="page-intro">{{ intro | safe }}</p>{% endif %}
+        {% for b in blocks %}
+        {{ helpers.render_block(b, shots) }}
+        {% endfor %}
+      </div>
+      {% if toc %}
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          {% for item in toc %}
+          <li><a href="#{{ item.id }}"{% if item.level == 3 %} class="toc--h3"{% endif %}>{{ item.text }}</a></li>
+          {% endfor %}
+        </ol>
+      </aside>
+      {% endif %}
+    </div>
+    {% else %}
+    <h1>{{ h1 }}</h1>
+    {% if intro %}<p class="page-intro">{{ intro | safe }}</p>{% endif %}
+    {% for b in blocks %}
+    {{ helpers.render_block(b, shots) }}
+    {% endfor %}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

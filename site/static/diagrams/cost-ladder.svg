@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t7 d7" font-family="ui-monospace, Consolas, monospace">
+<title id="t7">The pricing ladder: each field walks its rungs and the rung that answered is stored</title>
+<desc id="d7">A model's price fields walk a ladder: the provider's own model list first, then models.dev, then the optional LiteLLM map, then the cross-provider vote, and finally unpriced. Each field that a rung answers records that rung beside the number, so a request's cost carries its provenance. A request that no rung can price is stored as unpriced rather than guessed.</desc>
+<defs>
+<marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g font-size="12">
+<rect x="20" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="34" y="66" fill="#3FB950">1 · provider</text>
+<text x="34" y="86" fill="#A9B7C6" font-size="11">its own model list</text>
+<rect x="185" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="199" y="66" fill="#3FB950">2 · models.dev</text>
+<text x="199" y="86" fill="#A9B7C6" font-size="11">vendor catalogue</text>
+<rect x="350" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="364" y="66" fill="#58A6FF">3 · LiteLLM</text>
+<text x="364" y="86" fill="#A9B7C6" font-size="11">when switched on</text>
+<rect x="515" y="40" width="150" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="529" y="66" fill="#58A6FF">4 · vote</text>
+<text x="529" y="86" fill="#A9B7C6" font-size="11">same-name rows</text>
+<rect x="680" y="40" width="160" height="60" rx="8" fill="#111821" stroke="#7D8FA3"/>
+<text x="694" y="66" fill="#7D8FA3">5 · unpriced</text>
+<text x="694" y="86" fill="#A9B7C6" font-size="11">a dash, never a zero</text>
+<path d="M170 70 H183" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+<path d="M335 70 H348" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+<path d="M500 70 H513" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+<path d="M665 70 H678" stroke="#5D6E84" stroke-width="1.5" fill="none" marker-end="url(#a7)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="140" width="820" height="132" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="166" fill="#E6EDF3" font-weight="700">The same ten-rung resolver answers context, output limit, vision, tools and the four cache prices.</text>
+<text x="36" y="190" fill="#A9B7C6">Where the routed deployment's own model list supplied a value, the badge reads provider /models</text>
+<text x="36" y="212" fill="#A9B7C6">or models.dev; where the ladder supplied it, the rung is exact. The Models page and every</text>
+<text x="36" y="234" fill="#A9B7C6">generated agent catalogue read the same resolver, so they cannot disagree about a number or its source.</text>
+<text x="36" y="256" fill="#A9B7C6">A price a source states is used; a price no source states is shown as not priced with the reason.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="296">Each request is priced once, as it is logged, and the rung that answered each price is stored beside the number.</text>
+<text x="20" y="318">Anthropic's 5-minute and 1-hour cache writes are recorded separately, and an hour write is priced only</text>
+<text x="20" y="340">at a rate a source states. A media request is priced the same way: provider figure, models.dev, LiteLLM</text>
+<text x="20" y="362">when on, else unpriced.</text>
+<rect x="20" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="404">a source states it</text>
+<rect x="180" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="202" y="404">optional rung</text>
+<rect x="330" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#7D8FA3"/><text x="352" y="404">no source states it</text>
+</g>
+</svg>

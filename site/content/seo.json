@@ -1,0 +1,500 @@
+{
+  "site": {
+    "title": "My Claude Code: local LLM gateway for coding agents",
+    "description": "A local multi-provider LLM proxy and router for Claude Code, Codex, OpenCode and Gemini CLI: 60 providers, fallback routing, credential health and cost.",
+    "keywords": [
+      "claude code proxy",
+      "llm gateway",
+      "local llm proxy",
+      "model router",
+      "claude code router",
+      "ai coding agent gateway",
+      "multi provider llm proxy",
+      "llm control plane",
+      "codex proxy",
+      "opencode proxy",
+      "gemini cli proxy",
+      "llm cost tracking",
+      "self hosted llm gateway",
+      "anthropic api proxy"
+    ]
+  },
+  "pages": {
+    "features": {
+      "title": "Features: every capability of the local LLM gateway",
+      "description": "Routing and fallback, reasoning budgets, 60 providers with credential health, agent support, observability with cost provenance, web search and the dashboard.",
+      "keywords": [
+        "llm gateway features",
+        "claude code proxy features",
+        "model routing features",
+        "llm proxy capabilities",
+        "ai gateway features",
+        "coding agent proxy",
+        "local llm gateway features",
+        "llm gateway overview",
+        "ai proxy features",
+        "llm gateway feature list"
+      ]
+    },
+    "features/routing": {
+      "title": "Model routing and fallback chains for coding agents",
+      "description": "Turn the model name an agent asks for into a real provider model, then walk an ordered chain of stand-ins when it cannot serve, with a logged reason per step.",
+      "keywords": [
+        "llm model routing",
+        "fallback chain llm",
+        "claude code model routing",
+        "model tier routing",
+        "provider fallback",
+        "llm router",
+        "route model requests",
+        "failover llm provider",
+        "claude code fallback model"
+      ]
+    },
+    "features/reasoning-and-budgets": {
+      "title": "Reasoning control and output budgets per request",
+      "description": "Set reasoning effort and output budgets per model and per agent, and keep them across providers that spell the same control differently.",
+      "keywords": [
+        "llm reasoning control",
+        "output token budget",
+        "reasoning effort claude",
+        "llm budget per request",
+        "token budget llm",
+        "reasoning replay",
+        "claude code reasoning",
+        "adaptive reasoning",
+        "prompt cache lifetime",
+        "reasoning dialect translation"
+      ]
+    },
+    "features/providers-and-credentials": {
+      "title": "60 providers, keys and credential health",
+      "description": "Sixty providers behind one address, each with its own keys, rotation and credential health: see which key served a request and which needs rotating.",
+      "keywords": [
+        "llm providers",
+        "multi provider proxy",
+        "api key rotation llm",
+        "credential health",
+        "llm api keys",
+        "provider accounts llm",
+        "anthropic openai gemini proxy",
+        "llm key management",
+        "60 providers"
+      ]
+    },
+    "features/agents": {
+      "title": "Agent support: Claude Code, Codex, OpenCode, Gemini CLI",
+      "description": "Launch the CLI agents, configure the desktop apps MCC cannot launch, generate a model catalogue for each, and name the agent behind every request.",
+      "keywords": [
+        "claude code agent",
+        "codex agent support",
+        "opencode integration",
+        "gemini cli support",
+        "ai coding agents",
+        "agent model catalogue",
+        "cli agent launcher",
+        "coding agent proxy"
+      ]
+    },
+    "features/observability-and-cost": {
+      "title": "Request log, analytics and cost with provenance",
+      "description": "Every request logged with the model that served it, the tokens it used and what it cost, with provenance: which provider, key and price produced the number.",
+      "keywords": [
+        "llm observability",
+        "llm cost tracking",
+        "token usage analytics",
+        "api cost provenance",
+        "claude code analytics",
+        "llm request log",
+        "ai spend tracking",
+        "llm dashboard",
+        "cost per request llm"
+      ]
+    },
+    "features/web-search": {
+      "title": "Native web search and fetch proxy for any model",
+      "description": "Fulfil Claude Code's web_search and web_fetch at the proxy against a provider you choose or a keyless fallback: no Anthropic search credits, any model provider.",
+      "keywords": [
+        "web search proxy",
+        "web fetch proxy",
+        "claude code web search",
+        "llm web search",
+        "native web search",
+        "search without anthropic credits",
+        "keyless web search",
+        "agent web search"
+      ]
+    },
+    "features/messaging": {
+      "title": "Messaging surfaces for the local gateway",
+      "description": "The messaging surface MCC exposes beside the proxy, with the same routing, logging and cost accounting as every other request that passes through the gateway.",
+      "keywords": [
+        "llm messaging",
+        "gateway messaging",
+        "claude code messaging",
+        "llm chat surface",
+        "local llm messaging",
+        "discord bot coding agent",
+        "telegram bot coding agent",
+        "voice note transcription",
+        "coding agent over chat"
+      ]
+    },
+    "features/media": {
+      "title": "Media handling in the local LLM gateway",
+      "description": "How MCC handles media requests and media tool responses through the same proxy path, with the same logging, routing and cost accounting as text requests.",
+      "keywords": [
+        "llm media",
+        "image request proxy",
+        "llm multimodal proxy",
+        "media tool response",
+        "gateway media",
+        "image generation proxy",
+        "text to speech proxy",
+        "transcription proxy",
+        "video generation proxy"
+      ]
+    },
+    "features/platform": {
+      "title": "Platform support: Windows, macOS and Linux",
+      "description": "Where MCC runs, what the installer does on each platform, and what it deliberately does not touch: the supported platforms, verified from the build and CI.",
+      "keywords": [
+        "llm gateway update path",
+        "llm gateway windows",
+        "llm proxy macos",
+        "llm proxy linux",
+        "claude code windows",
+        "local llm windows",
+        "install llm gateway",
+        "desktop app llm gateway",
+        "llm gateway wsl"
+      ]
+    },
+    "features/cli": {
+      "title": "The MCC command line",
+      "description": "The command line that starts the gateway, manages providers and keys, checks credential health and prints the state of every configured agent.",
+      "keywords": [
+        "llm gateway cli",
+        "claude code cli proxy",
+        "mcc command line",
+        "llm proxy command",
+        "gateway cli commands",
+        "mcc-server",
+        "agent launcher command",
+        "headless llm gateway"
+      ]
+    },
+    "features/dashboard": {
+      "title": "The local control-plane dashboard",
+      "description": "The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.",
+      "keywords": [
+        "llm dashboard",
+        "local llm dashboard",
+        "claude code dashboard",
+        "llm control plane",
+        "gateway dashboard",
+        "llm admin ui",
+        "local admin ui",
+        "llm gateway web ui",
+        "dashboard configuration"
+      ]
+    },
+    "quick-start": {
+      "title": "Quick start: install and run the LLM gateway",
+      "description": "Install MCC, point your first agent at it, add a provider key and see the first request in the log: the shortest path from nothing to a working local gateway.",
+      "keywords": [
+        "llm proxy quick start",
+        "install llm gateway",
+        "claude code proxy setup",
+        "set up claude code proxy",
+        "mcc install",
+        "claude code proxy install",
+        "llm gateway first run",
+        "mcc quick start",
+        "local llm proxy setup"
+      ]
+    },
+    "architecture": {
+      "title": "Architecture: how the local LLM gateway works",
+      "description": "The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.",
+      "keywords": [
+        "llm gateway architecture",
+        "proxy architecture",
+        "llm router architecture",
+        "claude code proxy design",
+        "request lifecycle llm",
+        "protocol doors",
+        "four protocol doors",
+        "fastapi llm proxy",
+        "llm proxy internals"
+      ]
+    },
+    "architecture/request-path": {
+      "title": "Request path: from a door to a committed reply",
+      "description": "What happens between an agent sending a request and the reply being committed: the door, model resolution, the routing ladder, the provider call and the log.",
+      "keywords": [
+        "llm request path",
+        "proxy request lifecycle",
+        "protocol door",
+        "request routing llm",
+        "llm proxy internals",
+        "commit boundary streaming",
+        "anthropic messages route",
+        "streaming proxy failure"
+      ]
+    },
+    "architecture/provider-routing": {
+      "title": "Provider routing and the fallback ladder",
+      "description": "How MCC resolves a model name to a provider model, orders the fallback ladder, and decides when to move to the next rung: verified against the code.",
+      "keywords": [
+        "provider routing internals",
+        "fallback ladder",
+        "model resolution llm",
+        "routing internals",
+        "llm failover design",
+        "model tier alias",
+        "gateway model id",
+        "media rail routing"
+      ]
+    },
+    "architecture/credential-health": {
+      "title": "Credential health and key rotation",
+      "description": "How keys are stored, checked, rotated and attributed to requests: the credential layer behind the providers page, and what happens when a key starts failing.",
+      "keywords": [
+        "credential health internals",
+        "api key rotation design",
+        "llm key storage",
+        "key health check",
+        "credential layer",
+        "key rotation policy",
+        "per key attribution",
+        "429 bench"
+      ]
+    },
+    "architecture/cost-provenance": {
+      "title": "Cost provenance: where every number comes from",
+      "description": "How MCC attributes a cost to a request: which provider, which key, which price and which token count produced it, and what it does when a price is unknown.",
+      "keywords": [
+        "cost provenance",
+        "llm cost attribution",
+        "token cost calculation",
+        "price per request",
+        "llm billing accuracy",
+        "pricing ladder",
+        "unpriced model",
+        "models.dev pricing"
+      ]
+    },
+    "architecture/data-and-storage": {
+      "title": "Data and storage: what MCC keeps and where",
+      "description": "What the gateway writes to disk, where the request log and the configuration live, and what is never stored: the data layout at product level.",
+      "keywords": [
+        "llm gateway storage",
+        "request log storage",
+        "local llm data",
+        "gateway data layout",
+        "where claude code proxy stores data",
+        "mcc config directory",
+        "request log sqlite",
+        "local first storage"
+      ]
+    },
+    "architecture/security-model": {
+      "title": "Security model: keys, boundaries and local-first",
+      "description": "The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.",
+      "keywords": [
+        "llm gateway security",
+        "local first llm",
+        "api key security",
+        "proxy security model",
+        "self hosted llm security",
+        "loopback only admin",
+        "credential redaction",
+        "proxy bearer token"
+      ]
+    },
+    "configuration": {
+      "title": "Configuration: how MCC settings are provided",
+      "description": "Where MCC reads its settings, which ones apply per agent and which per provider, and how a change takes effect without restarting every client.",
+      "keywords": [
+        "llm gateway configuration",
+        "claude code proxy config",
+        "mcc settings",
+        "proxy configuration",
+        "gateway config file",
+        "mcc config dir",
+        "dotenv configuration",
+        "configuration home"
+      ]
+    },
+    "configuration/environment": {
+      "title": "Environment variables and settings reference",
+      "description": "Every environment variable MCC reads, what each one controls, whether it is required, and where in the code it is read: names and purposes, never values.",
+      "keywords": [
+        "llm gateway environment variables",
+        "claude code proxy env",
+        "mcc environment",
+        "proxy env vars",
+        "gateway settings reference",
+        "mcc env file",
+        "request log environment variables",
+        "media environment variables"
+      ]
+    },
+    "gallery": {
+      "title": "Gallery: the MCC dashboard and screens",
+      "description": "The real screens of the local gateway: routing, providers, credentials, the request log, cost analytics and the agent pages, captured from the running product.",
+      "keywords": [
+        "llm dashboard screenshots",
+        "claude code proxy screenshots",
+        "llm gateway gallery",
+        "mcc screenshots",
+        "llm control plane ui",
+        "product screenshots",
+        "admin ui screenshots",
+        "routing dashboard screenshots"
+      ]
+    },
+    "glossary": {
+      "title": "Glossary of gateway and routing terms",
+      "description": "Door, tier, rung, ladder, credential health, cost provenance: every term MCC uses, defined once, with the behaviour it names.",
+      "keywords": [
+        "llm gateway glossary",
+        "routing terms",
+        "proxy terminology",
+        "llm terms",
+        "gateway glossary",
+        "bench definition",
+        "fallback chain definition",
+        "reasoning budget definition"
+      ]
+    },
+    "faq": {
+      "title": "Frequently asked questions about the gateway",
+      "description": "Answers to the questions people actually ask about MCC: which providers work, what happens when a key fails, where data is stored, and what it does not do.",
+      "keywords": [
+        "llm gateway faq",
+        "claude code proxy faq",
+        "mcc questions",
+        "proxy faq",
+        "llm routing questions",
+        "claude code proxy questions",
+        "llm gateway answers",
+        "local llm proxy faq"
+      ]
+    },
+    "troubleshooting": {
+      "title": "Troubleshooting the local gateway",
+      "description": "Verified fixes for the problems people hit: a provider that will not answer, a key that stopped working, a request never logged, an agent that cannot connect.",
+      "keywords": [
+        "llm gateway troubleshooting",
+        "claude code proxy errors",
+        "provider not working",
+        "key failing",
+        "proxy connection problem",
+        "mcc-server not found",
+        "smartscreen installer blocked",
+        "macos quarantine app"
+      ]
+    },
+    "about": {
+      "title": "About My Claude Code",
+      "description": "Who builds MCC, what state the project is in, how it is built and what it is not: an independent local-first project, not affiliated with Anthropic.",
+      "keywords": [
+        "about my claude code",
+        "mcc project",
+        "llm gateway author",
+        "local first llm project",
+        "mcc history",
+        "open source llm gateway project",
+        "mcc maintainer",
+        "claude code proxy project"
+      ]
+    },
+    "license": {
+      "title": "Licence: AGPL and the commercial option",
+      "description": "The AGPL-3.0 licence MCC ships under, the commercial option beside it, the third-party attributions, and the non-affiliation notice for Anthropic.",
+      "keywords": [
+        "agpl-3.0",
+        "mcc license",
+        "agpl llm gateway",
+        "commercial license",
+        "open source llm proxy license",
+        "dual license",
+        "commercial licence terms",
+        "mit portion"
+      ]
+    },
+    "404.html": {
+      "title": "Page not found | My Claude Code",
+      "description": "That address is not on this site. The front door links to every capability, the architecture and the gallery, so start there and follow the route you meant.",
+      "keywords": [
+        "page not found",
+        "404",
+        "my claude code",
+        "site navigation",
+        "missing page",
+        "llm gateway site",
+        "claude code proxy site",
+        "documentation index"
+      ]
+    },
+    "for/claude-code": {
+      "title": "Claude Code through a local LLM proxy",
+      "description": "Point Claude Code at My Claude Code with mcc-claude: one address, your own providers and keys, fallback chains, reasoning control and a priced request log.",
+      "keywords": [
+        "claude code proxy",
+        "mcc-claude",
+        "claude code local proxy",
+        "claude code model picker",
+        "claude code gateway",
+        "claude code custom endpoint",
+        "claude code with openai models",
+        "claude code fallback model",
+        "claude code reasoning effort"
+      ]
+    },
+    "for/codex": {
+      "title": "Codex CLI through a local LLM proxy",
+      "description": "Point Codex CLI at My Claude Code with mcc-codex over the OpenAI Responses API, with one provider set, fallback chains and a priced request log behind it.",
+      "keywords": [
+        "codex cli proxy",
+        "mcc-codex",
+        "codex custom provider",
+        "codex openai responses proxy",
+        "codex local gateway",
+        "codex model catalog",
+        "codex with any model",
+        "codex cli configuration"
+      ]
+    },
+    "for/opencode": {
+      "title": "OpenCode through a local LLM proxy",
+      "description": "Point OpenCode at My Claude Code with mcc-opencode: an MCC-owned config file, your own providers, keys and fallback chains, and a priced request log.",
+      "keywords": [
+        "opencode proxy",
+        "mcc-opencode",
+        "opencode custom provider",
+        "opencode config file",
+        "opencode local gateway",
+        "opencode anthropic messages",
+        "opencode model list",
+        "opencode with any model"
+      ]
+    },
+    "for/gemini-cli": {
+      "title": "Gemini CLI through a local LLM proxy",
+      "description": "Point Gemini CLI at My Claude Code with mcc-gemini over the Gemini API surface, with one provider set, fallback chains and a priced request log behind it.",
+      "keywords": [
+        "gemini cli proxy",
+        "mcc-gemini",
+        "gemini cli custom endpoint",
+        "gemini cli base url",
+        "gemini cli local gateway",
+        "gemini cli with any model",
+        "gemini cli configuration",
+        "gemini cli model picker"
+      ]
+    }
+  }
+}

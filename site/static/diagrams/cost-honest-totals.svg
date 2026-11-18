@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t8 d8" font-family="ui-monospace, Consolas, monospace">
+<title id="t8">Reported and estimated cost are two figures, never summed, and every total names its denominator</title>
+<desc id="d8">A request priced by a stated source contributes to the reported figure. A request priced by an estimate contributes to the estimated figure. An unpriceable request is a dash, not a zero. Each total carries a priced-of-total denominator, so a partial figure cannot read as a complete one.</desc>
+<g font-size="12">
+<rect x="20" y="30" width="250" height="140" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="58" fill="#3FB950" font-weight="700">Reported</text>
+<text x="36" y="86" fill="#E6EDF3" font-size="22">$A</text>
+<text x="36" y="112" fill="#A9B7C6" font-size="11">a source stated the price</text>
+<text x="36" y="132" fill="#A9B7C6" font-size="11">reported × of N priced</text>
+<text x="36" y="152" fill="#7D8FA3" font-size="11">stored beside the rung</text>
+<rect x="305" y="30" width="250" height="140" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="321" y="58" fill="#58A6FF" font-weight="700">Estimated</text>
+<text x="321" y="86" fill="#E6EDF3" font-size="22">$B</text>
+<text x="321" y="112" fill="#A9B7C6" font-size="11">a figure the install computed</text>
+<text x="321" y="132" fill="#A9B7C6" font-size="11">estimated × of N priced</text>
+<text x="321" y="152" fill="#7D8FA3" font-size="11">never added to reported</text>
+<rect x="590" y="30" width="250" height="140" rx="8" fill="#111821" stroke="#7D8FA3"/>
+<text x="606" y="58" fill="#7D8FA3" font-weight="700">Unpriced</text>
+<text x="606" y="86" fill="#E6EDF3" font-size="22">—</text>
+<text x="606" y="112" fill="#A9B7C6" font-size="11">no source stated a price</text>
+<text x="606" y="132" fill="#A9B7C6" font-size="11">shown as not priced</text>
+<text x="606" y="152" fill="#7D8FA3" font-size="11">never a fabricated zero</text>
+</g>
+<g font-size="12">
+<rect x="20" y="200" width="820" height="90" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="228" fill="#E6EDF3" font-weight="700">A partial figure must not read as a complete one</text>
+<text x="36" y="252" fill="#A9B7C6">Every total carries an "N of M priced" denominator. A request no source could price is a dash in its row.</text>
+<text x="36" y="274" fill="#A9B7C6">Totals stop rising at the retention cap; the all-time strip below the cards keeps counting after stored rows roll over.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="330">A subscription window and a cash balance are two blocks and never one total.</text>
+<text x="20" y="354">A provider's own money figure is shown verbatim; a percentage is shown as a percentage, with no currency sign beside it.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="404">stated</text>
+<rect x="110" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="132" y="404">computed</text>
+<rect x="220" y="392" width="14" height="14" rx="3" fill="#111821" stroke="#7D8FA3"/><text x="242" y="404">not available</text>
+</g>
+</svg>

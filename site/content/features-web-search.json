@@ -1,0 +1,72 @@
+{
+  "path": "/features/web-search/",
+  "title": "Web search and fetch | My Claude Code",
+  "description": "Claude Code's web_search and web_fetch tools fulfilled at the proxy by fifteen search backends, a keyless fallback, per-key rotation and full-page extraction.",
+  "nav": "Web search",
+  "eyebrow": "Feature · Web search",
+  "h1": "The native web-search and web-fetch proxy",
+  "intro": "Claude Code's web_search and web_fetch are Anthropic server tools: normally Anthropic runs the search and bills you for it. MCC fulfils them at the proxy instead, against a provider you choose or a keyless fallback, and streams the result back as ordinary text. No Anthropic search credits are used, and it works with any model provider. It is a web search proxy and a web fetch proxy, in front of fifteen search backends.",
+  "page_grid": true,
+  "breadcrumbs": [{"label": "Home", "href": "/"}, {"label": "Features", "href": "/features/"}, {"label": "Web search"}],
+  "blocks": [
+    {"type": "p", "text": "A client emits a <code>web_search</code> tool-use block. MCC runs the search against the configured chain and returns the results as a regular text block, so a model that has never heard of the tool still receives useful text. The same shape covers <code>web_fetch</code>, which retrieves a page and returns its main content."},
+    {"type": "figure", "shot": "dashboard-websearch", "caption": "The Web Search page: route policy, provider cards with key health, the chain editor and advanced options."},
+
+    {"type": "h2", "text": "Fifteen search backends"},
+    {"type": "p", "text": "The search backends are DuckDuckGo (keyless), Ollama Web Search, Exa, Tavily, Brave Search, SearXNG, Jina Search, Serper, Firecrawl, Linkup, Perplexity Search, Parallel, SearchAPI.io, SerpAPI and Context7 for library documentation. <code>WEB_SEARCH_PROVIDER</code> accepts <code>auto</code>, <code>off</code>, <code>disabled</code> or one of those provider IDs."},
+    {"type": "table", "head": ["Setting", "Behaviour"], "rows": [
+      ["<code>auto</code>", "the first configured provider in catalogue order, never Context7; with no keys set it falls back to the keyless hops, so search works zero-config"],
+      ["<code>off</code>", "only the keyless DuckDuckGo hop, without the provider registry"],
+      ["<code>disabled</code>", "reject web searches without making an outbound search request"],
+      ["an explicit ID", "pin that provider; missing credentials or an upstream failure are surfaced instead of silently changing providers"]
+    ]},
+    {"type": "p", "text": "<code>WEB_SEARCH_FALLBACK_POLICY</code> controls how far the chain may move after the selected provider: <code>auto</code>, <code>none</code>, <code>ddgs</code> or <code>legacy</code>. Configuration failures such as a missing API key always fail visibly, DDGS is never attempted twice, and the rich digest names the provider that ultimately produced the results."},
+    {"type": "diagram", "name": "websearch-chain", "caption": "The search chain: a selected provider, then the keyless hops, with the provider named in the digest.", "alt": "A diagram showing the selected search provider, the keyless ddgs metasearch and the keyless DuckDuckGo page hop, with fallback policies and zero-config behaviour."},
+
+    {"type": "h2", "text": "The keyless DuckDuckGo hop"},
+    {"type": "p", "text": "The last hop reads DuckDuckGo's HTML page first and its lite page only as a second try, with declared parser profiles and headers. Snippets are kept, ads are skipped, and your region and time window are respected through the <code>DDGS_REGION</code> and <code>DDGS_TIMELIMIT</code> settings. A bot check is reported as a rate limit rather than as no results, and optional spacing between requests is available, off by default."},
+
+    {"type": "h2", "text": "Keys rotate like model keys"},
+    {"type": "p", "text": "Every search service's keys follow the same rules as a model provider's keys: comma-separated pools, the same rotation policies, and the same health engine. The bench is shown in plain words with a Reset, and every key try is a row in Analytics. The chain itself is an ordered list of services with repeats, pause and drag, edited on the Search chain card."},
+    {"type": "figure", "shot": "dashboard-websearch-chain", "caption": "The chain editor: an ordered list of search services with pause and reorder controls."},
+
+    {"type": "h2", "text": "Web fetch"},
+    {"type": "p", "text": "Web fetch returns the page's main content as markdown with links and tables: menus and footers are dropped. The extractor is loaded on the first fetch of a process, the output is capped at 24,000 characters and the marker names the extracted total, markdown is asked for in the Accept header, a Cloudflare challenge gets one honest retry, and a page served without a charset is read rather than refused. <code>WEB_FETCH_EXTRACTOR=basic</code> restores every earlier release's bytes."},
+
+    {"type": "h2", "text": "Analytics"},
+    {"type": "p", "text": "Web search has its own route and attempt analytics, with the captured input and output, separate from the chat log. That split matters because a search attempt is a different kind of call: it can fail on a key, on the query or on the search host, and the analytics keeps those apart from the model request that asked for it."},
+    {"type": "figure", "shot": "dashboard-websearch-analytics", "caption": "Web-search analytics: separate route and attempt analytics with the captured input and output."},
+
+    {"type": "h2", "text": "Configuration"},
+    {"type": "p", "text": "The route is <code>WEB_SEARCH_PROVIDER</code> and <code>WEB_SEARCH_FALLBACK_POLICY</code>. Each backend has its own key variable, named on its card. The keyless hop uses <code>DDGS_REGION</code> and <code>DDGS_TIMELIMIT</code>, and optional request spacing uses <code>WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS</code>. Web fetch uses <code>WEB_FETCH_EXTRACTOR</code>. Variable names only; no values are published."},
+
+    {"type": "h2", "text": "Limits and behaviour"},
+    {"type": "ul", "items": [
+      "Context7 is never picked by auto: it answers with library documentation rather than web pages.",
+      "An explicit provider is strict by default; a missing key fails visibly instead of silently swapping to another backend.",
+      "The keyless hop is an unofficial metasearch and its engines may rate-limit an address. That is reported as a rate limit, not as an empty result.",
+      "Advanced options allow the model to receive full page text rather than snippets, restrict searches to specific sites, and set safe search, locale and freshness.",
+      "This is a server-tool proxy: a client that does not use the Anthropic server-tool shape is not affected."
+    ]},
+    {"type": "related", "links": [
+      {"href": "/features/providers-and-credentials/", "label": "Providers: the key pools and rotation this shares"},
+      {"href": "/features/observability-and-cost/", "label": "Observability: where search requests are logged"},
+      {"href": "/configuration/environment/", "label": "Configuration: the search variables, names only"},
+      {"href": "/glossary/", "label": "Glossary: server tool, chain, keyless hop"}
+    ]}
+  ],
+  "claims": [
+    {"claim": "web_search is fulfilled at the proxy and uses no Anthropic search credits", "evidence": "docs/WEB-SEARCH.md §Web search"},
+    {"claim": "15 search backends", "evidence": "docs/WEB-SEARCH.md §Search Providers (15 rows)"},
+    {"claim": "WEB_SEARCH_PROVIDER accepts auto, off, disabled or a provider ID", "evidence": "docs/WEB-SEARCH.md §Search Providers"},
+    {"claim": "With no keys set, auto falls back to the keyless hops", "evidence": "docs/WEB-SEARCH.md §Search Providers"},
+    {"claim": "Context7 is never picked by auto", "evidence": "docs/WEB-SEARCH.md §Search Providers"},
+    {"claim": "WEB_SEARCH_FALLBACK_POLICY is auto, none, ddgs or legacy", "evidence": "docs/WEB-SEARCH.md §Search Providers"},
+    {"claim": "The keyless hop reads the html page first and the lite page second", "evidence": "README.md §Platform capability table"},
+    {"claim": "DDGS_REGION and DDGS_TIMELIMIT set region and time", "evidence": "README.md §Platform capability table"},
+    {"claim": "A bot check is reported as a rate limit", "evidence": "README.md §Platform capability table"},
+    {"claim": "Web fetch caps at 24,000 characters and names the extracted total", "evidence": "README.md §Platform capability table"},
+    {"claim": "WEB_FETCH_EXTRACTOR=basic restores earlier bytes", "evidence": "README.md §Platform capability table"},
+    {"claim": "Web search has separate route and attempt analytics", "evidence": "README.md §Observability and cost capability table"}
+  ]
+}

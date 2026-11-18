@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture: how the local LLM gateway works</title>
+<meta name="description" content="The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.">
+<meta name="keywords" content="llm gateway architecture, proxy architecture, llm router architecture, claude code proxy design, request lifecycle llm, protocol doors, four protocol doors, fastapi llm proxy, llm proxy internals">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Architecture: how the local LLM gateway works">
+<meta property="og:description" content="The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Architecture: how the local LLM gateway works">
+<meta name="twitter:description" content="The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Architecture: how the local LLM gateway works", "url": "https://myclaudecode.danubelabs.net/architecture/", "description": "The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Architecture: how the local LLM gateway works", "description": "The doors, the routing ladder, the credential layer, the request log and the cost model: the system map, and the lifecycle of one request from door to reply.", "url": "https://myclaudecode.danubelabs.net/architecture/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/" aria-current="page">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li>Architecture</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>How the system is put together</h1>
+<p class="page-intro">MCC is a local proxy, a set of launchers and an optional messaging bridge, built from eight packages with one dependency rule. This page is the map; the six pages after it go into the machinery a request actually touches. Read together, they are the LLM gateway architecture: the doors, the routing ladder, the credential layer, the request log and the cost model.</p>        <p>The repository documents its own architecture in a long, maintained file. This page condenses the parts that explain the behaviour you can see: why one address can serve four protocols, why a credential can be judged without judging the model, and why a request is priced once rather than reconstructed later.</p>
+
+        <h2 id="three-runtime-surfaces">Three runtime surfaces</h2>
+
+        <ul><li><strong>The HTTP proxy.</strong> A FastAPI application exposes the Anthropic Messages, OpenAI Responses, Chat Completions and Gemini routes, the health and model-listing routes, and the admin surface.</li><li><strong>The CLI launchers.</strong> Wrapper entrypoints prepare a coding agent, or a managed session, to target the local proxy.</li><li><strong>The messaging bridge.</strong> Optional Discord or Telegram adapters turn chat messages into managed client sessions.</li></ul>
+
+        <figure class="figure figure--diagram" id="fig-request-path-doors">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t1 d1" font-family="ui-monospace, Consolas, monospace">
+<title id="t1">Four protocol doors reach one router and one provider executor</title>
+<desc id="d1">Claude Code, Pi, OpenCode, Crush, Kimi and Qwen enter the Anthropic Messages door; Codex enters the Responses door; Cline, Goose and Aider enter the Chat Completions door; Gemini CLI and Antigravity enter the Gemini door. All four doors meet the same router, which resolves a tier to a model, then the provider executor walks the fallback chain and returns a reply in the protocol the client asked in.</desc>
+<defs>
+<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M200 60 H360" marker-end="url(#a1)"/>
+<path d="M200 140 H360" marker-end="url(#a1)"/>
+<path d="M200 220 H360" marker-end="url(#a1)"/>
+<path d="M200 300 H360" marker-end="url(#a1)"/>
+<path d="M600 180 H700" marker-end="url(#a1)"/>
+</g>
+<g font-size="13" fill="#E6EDF3">
+<rect x="20" y="40" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="65">Claude Code · Pi</text>
+<rect x="20" y="120" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="145">Codex</text>
+<rect x="20" y="200" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="225">Cline · Goose · Aider</text>
+<rect x="20" y="280" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="305">Gemini CLI · Antigravity</text>
+</g>
+<g font-size="12" fill="#3FB950">
+<rect x="380" y="40" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="58">POST /v1/messages</text>
+<text x="394" y="73" fill="#A9B7C6">Anthropic Messages</text>
+<rect x="380" y="120" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="138">POST /v1/responses</text>
+<text x="394" y="153" fill="#A9B7C6">OpenAI Responses</text>
+<rect x="380" y="200" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="218">POST /v1/chat/completions</text>
+<text x="394" y="233" fill="#A9B7C6">Chat Completions</text>
+<rect x="380" y="280" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="298">POST /v1beta/models/{model}</text>
+<text x="394" y="313" fill="#A9B7C6">Google Gemini</text>
+</g>
+<rect x="620" y="120" width="220" height="120" rx="8" fill="#111821" stroke="#58A6FF" stroke-width="2"/>
+<g font-size="13" fill="#E6EDF3">
+<text x="636" y="146" font-weight="700">Router + executor</text>
+<text x="636" y="168" fill="#A9B7C6">resolve tier → model</text>
+<text x="636" y="188" fill="#A9B7C6">reasoning · budget</text>
+<text x="636" y="208" fill="#A9B7C6">credential · fallback</text>
+<text x="636" y="228" fill="#A9B7C6">price · log once</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="370" width="14" height="14" rx="3" fill="#18212C" stroke="#5D6E84"/><text x="42" y="382">client</text>
+<rect x="130" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="152" y="382">protocol door</text>
+<rect x="280" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="302" y="382">shared router</text>
+<text x="430" y="382">The reply is translated back into the client's protocol.</text>
+</g>
+</svg>
+</div>
+<figcaption>Four protocol doors, one router and one executor.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of the four client protocols meeting one shared router and executor.</p>
+</figure>
+
+        <p>All three surfaces end at the same proxy. A chat-driven request and a terminal-driven one are the same kind of request once they reach the router, which is why routing, keys, cost and health behave identically whichever surface sent them.</p>
+
+        <h2 id="eight-packages-one-dependency-rule">Eight packages, one dependency rule</h2>
+
+        <p>The installable wheel is eight packages. <code>config</code> and <code>core</code> are dependency leaves and import nothing first-party. <code>application</code> depends on those two. <code>messaging</code> depends on <code>core</code>. <code>providers</code> depends on <code>application</code>, <code>config</code> and <code>core</code>. The <code>api</code> depends on the same three. The <code>cli</code> depends on <code>config</code> and <code>core</code>. The <code>runtime</code> is the composition root and depends on everything else. There is one deliberate exception: the CLI delegates server construction to the runtime's bootstrap.</p>
+
+        <figure class="figure figure--diagram" id="fig-subsystem-map">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t9 d9" font-family="ui-monospace, Consolas, monospace">
+<title id="t9">Subsystem map: the packages and their allowed dependency edges</title>
+<desc id="d9">Eight packages. Config and core are leaves with no dependencies. Application depends on config and core. Messaging depends on core. Providers depends on application, config and core. The API depends on application, config and core. The CLI depends on config and core. The runtime is the composition root and depends on every other package.</desc>
+<defs>
+<marker id="a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g font-size="12">
+<rect x="350" y="26" width="160" height="46" rx="8" fill="#111821" stroke="#3FB950" stroke-width="2"/>
+<text x="368" y="54" fill="#3FB950">runtime</text>
+<text x="526" y="54" fill="#7D8FA3" font-size="11">composition root</text>
+<g stroke="#5D6E84" stroke-width="1.2" fill="none">
+<path d="M390 72 V118" marker-end="url(#a9)"/>
+<path d="M470 72 V118" marker-end="url(#a9)"/>
+<path d="M410 72 L250 118" marker-end="url(#a9)"/>
+<path d="M430 72 L610 118" marker-end="url(#a9)"/>
+</g>
+<rect x="120" y="120" width="150" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="138" y="148" fill="#58A6FF">api</text>
+<rect x="350" y="120" width="160" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="368" y="148" fill="#58A6FF">application</text>
+<rect x="600" y="120" width="150" height="46" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="618" y="148" fill="#58A6FF">cli</text>
+<g stroke="#5D6E84" stroke-width="1.2" fill="none">
+<path d="M190 166 V222" marker-end="url(#a9)"/>
+<path d="M430 166 V222" marker-end="url(#a9)"/>
+<path d="M675 166 V222" marker-end="url(#a9)"/>
+<path d="M430 166 L320 222" marker-end="url(#a9)"/>
+</g>
+<rect x="80" y="224" width="180" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="98" y="252" fill="#E6EDF3">providers</text>
+<rect x="320" y="224" width="170" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="338" y="252" fill="#E6EDF3">messaging</text>
+<rect x="600" y="224" width="160" height="46" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="618" y="252" fill="#E6EDF3">config</text>
+<g stroke="#5D6E84" stroke-width="1.2" fill="none">
+<path d="M170 270 V320" marker-end="url(#a9)"/>
+<path d="M400 270 V320" marker-end="url(#a9)"/>
+<path d="M680 270 V320" marker-end="url(#a9)"/>
+<path d="M250 270 L330 320" marker-end="url(#a9)"/>
+</g>
+<rect x="340" y="322" width="180" height="46" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="358" y="350" fill="#3FB950">core</text>
+<text x="530" y="350" fill="#7D8FA3" font-size="11">protocol-neutral</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="402">Least-privilege edges, checked by an import-boundary test. The graph is acyclic; config and core import nothing.</text>
+<text x="20" y="422">One deliberate exception: the CLI delegates server construction to the runtime composition root.</text>
+</g>
+</svg>
+</div>
+<figcaption>The package graph and its allowed edges. An import-boundary test derives and checks it.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of eight packages: config and core as leaves, application, messaging, providers, api and cli above them, and runtime as the composition root.</p>
+</figure>
+
+        <p>An import-boundary contract derives every static production edge with one AST scanner and checks the package matrix, the exact exception, facade ownership and lazy optional imports. The resulting graph must stay acyclic. The same contract rejects untyped provider collaborators and private provider access from helper modules. This is the structural reason the boundaries hold: they are tested, not merely documented.</p>
+
+        <h2 id="one-request-from-door-to-log">One request, from door to log</h2>
+
+        <p>A request enters a route, passes proxy authentication, acquires the current provider generation, is validated and routed, is shaped by reasoning and budget settings, and is executed against one provider at a time. The reply is translated back into the client's protocol. The whole exchange is priced and logged once. The next pages take that apart.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-request-detail.webp" alt="A single request&#39;s detail view: its route attempts and the reasoning fields the router sent." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>What the pipeline produces: one request&#39;s route attempts, the reasoning it sent and the fallback that answered.</figcaption>
+</figure>
+
+        <h2 id="where-the-state-lives">Where the state lives</h2>
+
+        <p>One configuration directory holds one <code>.env</code> and the documents beside it. The request log is a local SQLite database, with a search index and a prompt chunk store beside it. Catalogue snapshots, OAuth stores, proxy chains and learned facts are separate documents, so a settings save does not rewrite a credential and a credential refresh does not rewrite a setting.</p>
+
+        <figure class="figure figure--diagram" id="fig-verification-loop">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t13 d13" font-family="ui-monospace, Consolas, monospace">
+<title id="t13">The verification loop: every request is logged, priced and inspectable, and the next change is checked against it</title>
+<desc id="d13">A request is served and logged once with its attempts, tokens, cost and provenance. Analytics and the request detail let an operator verify what actually happened. A change to a tier, a chain or a key is applied, and the next requests are measured against the same log. The loop is what makes a routing decision checkable rather than assumed.</desc>
+<defs>
+<marker id="a13" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M210 90 H300" marker-end="url(#a13)"/>
+<path d="M510 90 H590" marker-end="url(#a13)"/>
+<path d="M680 130 V190" marker-end="url(#a13)"/>
+<path d="M590 220 H510" marker-end="url(#a13)"/>
+<path d="M300 220 H210" marker-end="url(#a13)"/>
+<path d="M120 190 V130" marker-end="url(#a13)"/>
+</g>
+<g font-size="12">
+<rect x="20" y="50" width="190" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="76" fill="#3FB950">1 · request served</text>
+<text x="36" y="98" fill="#A9B7C6" font-size="11">the chain walked</text>
+<text x="36" y="118" fill="#A9B7C6" font-size="11">the key that answered</text>
+<rect x="300" y="50" width="210" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="316" y="76" fill="#58A6FF">2 · logged once</text>
+<text x="316" y="98" fill="#A9B7C6" font-size="11">attempts, tokens, cost</text>
+<text x="316" y="118" fill="#A9B7C6" font-size="11">the rung that priced it</text>
+<rect x="590" y="50" width="250" height="80" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="606" y="76" fill="#58A6FF">3 · inspect</text>
+<text x="606" y="98" fill="#A9B7C6" font-size="11">analytics, request detail</text>
+<text x="606" y="118" fill="#A9B7C6" font-size="11">raw diagnostics on demand</text>
+<rect x="590" y="190" width="250" height="80" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="606" y="216" fill="#3FB950">4 · change</text>
+<text x="606" y="238" fill="#A9B7C6" font-size="11">a tier, a chain, a key,</text>
+<text x="606" y="258" fill="#A9B7C6" font-size="11">a reasoning or budget setting</text>
+<rect x="300" y="190" width="210" height="80" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="316" y="216" fill="#D29922">5 · re-measure</text>
+<text x="316" y="238" fill="#A9B7C6" font-size="11">the same log, the next</text>
+<text x="316" y="258" fill="#A9B7C6" font-size="11">window of requests</text>
+<rect x="20" y="190" width="190" height="80" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="36" y="216" fill="#D29922">6 · correct</text>
+<text x="36" y="238" fill="#A9B7C6" font-size="11">pause a row, reorder</text>
+<text x="36" y="258" fill="#A9B7C6" font-size="11">a chain, fix a key</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<text x="20" y="320">A dashboard number that cannot be traced to a row is not a measurement. Every total carries its denominator.</text>
+<text x="20" y="344">A skipped model is still a row with its reason, so a working chain can be told from a lucky one.</text>
+<text x="20" y="368">The site you are reading is built by the same discipline: a deterministic builder, a gate per claim, and a proof for each gate.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="400" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="412">action</text>
+<rect x="110" y="400" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="132" y="412">evidence</text>
+<rect x="220" y="400" width="14" height="14" rx="3" fill="#111821" stroke="#D29922"/><text x="242" y="412">correction</text>
+</g>
+</svg>
+</div>
+<figcaption>The loop the architecture is built to support: serve, log, inspect, change, re-measure.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A six-step loop from a served request through the log and analytics to a change and a re-measurement.</p>
+</figure>
+
+        <h2 id="the-six-deep-pages">The six deep pages</h2>
+
+        <div class="card-grid">
+<a class="card" href="/architecture/request-path/">
+<span class="card__kicker">Request path</span><span class="card__title">The request path</span>
+<span class="card__text">Ingress, auth, routing, the provider lease and the commit boundary of a streamed reply.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/architecture/provider-routing/">
+<span class="card__kicker">Routing</span><span class="card__title">Provider routing</span>
+<span class="card__text">How a tier becomes a model, how the chain is walked, and how a platform narrows what a stream can say.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/architecture/credential-health/">
+<span class="card__kicker">Credentials</span><span class="card__title">Credential health</span>
+<span class="card__text">The rotation engine, the three health signals and the two ladders that can bench a key.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/architecture/cost-provenance/">
+<span class="card__kicker">Cost</span><span class="card__title">Cost provenance</span>
+<span class="card__text">The pricing ladder, the rung stored beside each number, and why reported and estimated never merge.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/architecture/data-and-storage/">
+<span class="card__kicker">Data</span><span class="card__title">Data and storage</span>
+<span class="card__text">The configuration home, the request log, the search index and the chunk store.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+<a class="card" href="/architecture/security-model/">
+<span class="card__kicker">Security</span><span class="card__title">Security model</span>
+<span class="card__text">The principles the boundary is built on: local by default, a token once it leaves, narrow egress.</span>
+<span class="card__more">Open &rarr;</span>
+</a>
+</div>
+
+        <h2 id="testing-and-ci">Testing and CI</h2>
+
+        <p>Deterministic tests cover API routes, configuration, provider conversion, upstream adapters, streaming contracts, messaging, CLI adapters, import boundaries and provider-catalogue contracts. Local and live smoke tests live apart, so a test that launches a subprocess or touches a real service cannot be mistaken for a unit test. The repository holds 905 test files, and the CI workflows name the checks that must pass before a change lands.</p>
+
+        <h2 id="what-this-architecture-does-not-claim">What this architecture does not claim</h2>
+
+        <ul><li>It does not claim a provider is available. Availability is the provider's, and the chain exists because it varies.</li><li>It does not claim a price is correct. It records the source that stated it and says when none did.</li><li>It does not claim a model can reason. It records the fields the host parses and sends only what both sides can express.</li><li>It does not claim the proxy is an authenticator. The subscription client gate reads an attribution field; it does not verify a claim.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/architecture/request-path/">Request path</a></li><li><a href="/architecture/provider-routing/">Provider routing</a></li><li><a href="/architecture/credential-health/">Credential health</a></li><li><a href="/architecture/cost-provenance/">Cost provenance</a></li><li><a href="/architecture/data-and-storage/">Data and storage</a></li><li><a href="/architecture/security-model/">Security model</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#three-runtime-surfaces">Three runtime surfaces</a></li>
+          <li><a href="#eight-packages-one-dependency-rule">Eight packages, one dependency rule</a></li>
+          <li><a href="#one-request-from-door-to-log">One request, from door to log</a></li>
+          <li><a href="#where-the-state-lives">Where the state lives</a></li>
+          <li><a href="#the-six-deep-pages">The six deep pages</a></li>
+          <li><a href="#testing-and-ci">Testing and CI</a></li>
+          <li><a href="#what-this-architecture-does-not-claim">What this architecture does not claim</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

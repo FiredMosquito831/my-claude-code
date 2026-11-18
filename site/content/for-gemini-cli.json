@@ -1,0 +1,136 @@
+{
+  "path": "/for/gemini-cli/",
+  "title": "Gemini CLI through a local LLM proxy",
+  "description": "Point Gemini CLI at My Claude Code with mcc-gemini over the Gemini API surface, with one provider set, fallback chains and a priced request log behind it.",
+  "nav": "Gemini CLI",
+  "eyebrow": "For your agent · Gemini CLI",
+  "h1": "Gemini CLI through one local address",
+  "intro": "Gemini CLI is Google's terminal agent, and it speaks the Gemini API. <code>mcc-gemini</code> points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the Gemini CLI proxy setup in one command.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "For your agent",
+      "href": "/features/agents/"
+    },
+    {
+      "label": "Gemini CLI"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "The command"
+    },
+    {
+      "type": "p",
+      "text": "Install Gemini CLI yourself, because MCC never installs an agent, then launch it through the proxy with one command:"
+    },
+    {
+      "type": "code",
+      "label": "Launch Gemini CLI against the local proxy",
+      "text": "mcc-gemini"
+    },
+    {
+      "type": "p",
+      "text": "Gemini CLI publishes one variable for the endpoint, <code>GOOGLE_GEMINI_BASE_URL</code>, and it takes the proxy root with no <code>/v1</code> and no <code>/v1beta</code>, because the SDK appends the model path itself. Setting that variable alone is not enough: Gemini CLI's own auth check refuses its <code>gateway</code> mode in a non-interactive run, so the launcher also writes one settings key into a document MCC owns and points Gemini CLI at it through its own <code>GEMINI_CLI_SYSTEM_SETTINGS_PATH</code>, in the child process only."
+    },
+    {
+      "type": "p",
+      "text": "That document is merged as the system scope, so MCC's keys win while your own <code>~/.gemini/settings.json</code> still supplies everything MCC does not name: your theme, your MCP servers, your memory. It is never written, never backed up and never read for authentication. The proxy token is not on disk either: <code>GEMINI_API_KEY</code> is read from the environment, and the launcher sets it for the child process only."
+    },
+    {
+      "type": "p",
+      "text": "A single prompt runs with Gemini CLI's own flag: <code>mcc-gemini -p \"summarise this diff\"</code>, and <code>-o json</code> makes the same run machine-readable. Gemini CLI's own model picker lists Google's models only, so <code>-m anthropic/&lt;provider&gt;/&lt;model&gt;</code> is how MCC's routed models are reached."
+    },
+    {
+      "type": "h2",
+      "text": "What Gemini CLI gets"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "One address for every provider, over the Gemini API surface that Gemini CLI already speaks.",
+        "Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.",
+        "MCC's routed models at <code>-m</code>, beside the Google models Gemini CLI lists itself.",
+        "Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.",
+        "A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.",
+        "Per-agent attribution. The launcher marks the request as Gemini CLI's, so the log can name the agent behind it."
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "What the launcher does not change"
+    },
+    {
+      "type": "p",
+      "text": "Your own <code>~/.gemini/settings.json</code> and the OAuth tokens under <code>~/.gemini</code> are untouched, because the launcher writes a separate document and the API-key path returns before the OAuth path is reached. If Gemini CLI is not installed, the launcher prints Google's own install line and exits rather than installing anything on your behalf."
+    },
+    {
+      "type": "h2",
+      "text": "Where to go next"
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/agents/",
+          "label": "Every agent MCC can launch or configure"
+        },
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: install, run, and the first five minutes"
+        },
+        {
+          "href": "/features/routing/",
+          "label": "Routing: tiers and fallback chains"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers and credentials: what the request is routed to"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "mcc-gemini launches Gemini CLI through the local proxy",
+      "evidence": "pyproject.toml [project.scripts] mcc-gemini; src/my_claude_code/cli/launchers/gemini.py launch()"
+    },
+    {
+      "claim": "GOOGLE_GEMINI_BASE_URL takes the proxy root with no /v1 and no /v1beta",
+      "evidence": "src/my_claude_code/cli/launchers/gemini.py module docstring, Base URL shape"
+    },
+    {
+      "claim": "The launcher writes one settings key into an MCC-owned document pointed at by GEMINI_CLI_SYSTEM_SETTINGS_PATH, in the child process only",
+      "evidence": "src/my_claude_code/cli/launchers/gemini.py module docstring, The lever"
+    },
+    {
+      "claim": "The document is merged as the system scope so the user's own ~/.gemini/settings.json still supplies what MCC does not name",
+      "evidence": "src/my_claude_code/cli/launchers/gemini.py module docstring, mergeSettings"
+    },
+    {
+      "claim": "GEMINI_API_KEY is read from the environment and set for the child process only",
+      "evidence": "src/my_claude_code/cli/launchers/gemini.py module docstring, The proxy token is not on disk"
+    },
+    {
+      "claim": "mcc-gemini -p runs one prompt, -o json makes it machine-readable, and -m anthropic/<provider>/<model> starts on an MCC-routed model",
+      "evidence": "src/my_claude_code/config/harnesses.py HarnessSpec gemini_cli HarnessInvocation entries"
+    },
+    {
+      "claim": "Gemini CLI's own model picker lists Google's models only",
+      "evidence": "src/my_claude_code/config/harnesses.py HarnessSpec gemini_cli -m help_text"
+    },
+    {
+      "claim": "A launcher whose agent is missing prints that agent's install line and exits",
+      "evidence": "src/my_claude_code/cli/launchers/common.py run_client_process; README.md §What the installer does"
+    },
+    {
+      "claim": "Gemini CLI speaks the Gemini API to the proxy",
+      "evidence": "README.md §Coding agents table; src/my_claude_code/config/harnesses.py HarnessProtocol.GEMINI"
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# My Claude Code
+
+> A local multi-provider LLM proxy, model router and control plane for AI coding agents.
+
+My Claude Code (MCC) is a local LLM gateway: a proxy, a model router and a control plane that sits in front of the coding agents you already use. It is licensed AGPL-3.0-or-later, or under a commercial licence by negotiation, and this site documents release 8.17.0. It runs entirely on your machine, with your keys: there is no telemetry, no account and no hosted dashboard.
+
+## Docs
+
+- [/features/](https://myclaudecode.danubelabs.net/features/): Every capability area, with a deep page for each.
+- [/architecture/](https://myclaudecode.danubelabs.net/architecture/): How the proxy, the router and the credential layer are built.
+- [/quick-start/](https://myclaudecode.danubelabs.net/quick-start/): Install, run, and the first five minutes with a coding agent.
+- [/configuration/](https://myclaudecode.danubelabs.net/configuration/): Where the settings live and how a change takes effect.
+- [/gallery/](https://myclaudecode.danubelabs.net/gallery/): The product's own screens, reviewed and captioned.
+- [/faq/](https://myclaudecode.danubelabs.net/faq/): The questions this site is asked most, answered.
+- [/glossary/](https://myclaudecode.danubelabs.net/glossary/): Every term the product uses, defined once.
+- [/license/](https://myclaudecode.danubelabs.net/license/): The AGPL terms, the commercial option and trademarks.
+
+## For your agent
+
+- [/for/claude-code/](https://myclaudecode.danubelabs.net/for/claude-code/): Point Claude Code at My Claude Code with mcc-claude: one address, your own providers and keys, fallback chains, reasoning control and a priced request log.
+- [/for/codex/](https://myclaudecode.danubelabs.net/for/codex/): Point Codex CLI at My Claude Code with mcc-codex over the OpenAI Responses API, with one provider set, fallback chains and a priced request log behind it.
+- [/for/opencode/](https://myclaudecode.danubelabs.net/for/opencode/): Point OpenCode at My Claude Code with mcc-opencode: an MCC-owned config file, your own providers, keys and fallback chains, and a priced request log.
+- [/for/gemini-cli/](https://myclaudecode.danubelabs.net/for/gemini-cli/): Point Gemini CLI at My Claude Code with mcc-gemini over the Gemini API surface, with one provider set, fallback chains and a priced request log behind it.
+
+## Optional
+
+- [llms-full.txt](https://myclaudecode.danubelabs.net/llms-full.txt): the prose of every page in one plain-text file.
+- [security.txt](https://myclaudecode.danubelabs.net/.well-known/security.txt): how to report a vulnerability, per RFC 9116.

@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gallery: the MCC dashboard and screens</title>
+<meta name="description" content="The real screens of the local gateway: routing, providers, credentials, the request log, cost analytics and the agent pages, captured from the running product.">
+<meta name="keywords" content="llm dashboard screenshots, claude code proxy screenshots, llm gateway gallery, mcc screenshots, llm control plane ui, product screenshots, admin ui screenshots, routing dashboard screenshots">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/gallery/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Gallery: the MCC dashboard and screens">
+<meta property="og:description" content="The real screens of the local gateway: routing, providers, credentials, the request log, cost analytics and the agent pages, captured from the running product.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/gallery/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Gallery: the MCC dashboard and screens">
+<meta name="twitter:description" content="The real screens of the local gateway: routing, providers, credentials, the request log, cost analytics and the agent pages, captured from the running product.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Gallery: the MCC dashboard and screens", "url": "https://myclaudecode.danubelabs.net/gallery/", "description": "The real screens of the local gateway: routing, providers, credentials, the request log, cost analytics and the agent pages, captured from the running product."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Gallery"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "ImageGallery", "image": [{"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/agent-session.webp", "description": "A Claude Code session in a terminal, showing the prompt and a model routing line."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/cc-model-picker.webp", "description": "The Claude Code model picker in a terminal, listing the tiers routed through My Claude Code."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/claude-desktop-developer-menu.webp", "description": "Claude Desktop's Developer menu: the path to Manage third-party inference providers."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/claude-desktop-gateway.webp", "description": "Claude Desktop's connection dialog: a base URL and a gateway API key field, with the key value redacted."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics-cost.webp", "description": "The Analytics Cost panel: reported and estimated totals, each with a priced-of-total denominator."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics-exit-detail.webp", "description": "A route-attempt panel: each proxy dial MCC tried in order, with its error and the switch decision, above the full text of the exit's refusal."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics-exit.webp", "description": "The Exit column in the request log, showing which proxy exit answered each request and a filter by exit name."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics-failover.webp", "description": "The Analytics failover panel showing how many requests each fallback provider served."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics-harness.webp", "description": "The provider-performance table on Analytics: requests, success and errors attributed to the coding agent harness that sent each one."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics-latency.webp", "description": "The model latency panel: p50 and p95 latency bars per model."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics-storage.webp", "description": "The request-log storage panel: current database size and a pruning note, with a Build search index button."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-analytics.webp", "description": "The Analytics page: rows of stat cards over the stored request log, with a time range picker and a search box."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-catalogue-refresh.webp", "description": "The Models page after a Refresh model list: per-provider status with last and next refresh times."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-claude-settings.webp", "description": "The Claude Code settings view in the dashboard, showing the env block MCC writes and an Apply and restart button."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-coding-agent-card.webp", "description": "A single agent card, OpenCode, with its install line, protocol and generated catalogue."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-coding-agents.webp", "description": "The Coding agents page: a grid of agent cards, each with an Install or Configure button, protocol and catalogue."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-credential-health.webp", "description": "The credential-health table: per-key health and rotation policy across multiple key pools."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-custom-provider.webp", "description": "Two custom provider cards, B.AI and Agnes, each with a base URL, masked key and a model count."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-desktop-apps.webp", "description": "The Desktop apps page: cards for apps MCC does not launch, each with a Configure button and a backup note."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-get-started.webp", "description": "The Get Started checklist: connect a provider, set a fallback model, point Claude Code at MCC, then optional steps for messaging, analytics and limits."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-inferhub.webp", "description": "The InferHub page header: a price marketplace where a profile sets the ceiling each model is charged at."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-key-performance.webp", "description": "The key-performance table with per-key request counts, and a Top errors panel listing provider diagnostics."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-launchers.webp", "description": "The launchers list: every installed mcc-* command with its state and a copy button."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-limits-calculator.webp", "description": "The deadline calculator on the Limits page, showing a per-model table of budget, cap, first-token and total values."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-limits-retries.webp", "description": "The Limits and Resilience page scrolled to retries and credential health, with rotation policies and bench settings."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-limits.webp", "description": "The Limits and Resilience page: output budgets, a reasoning control, credential rotation policies, proxy chains and diagnostics controls."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-media-analytics.webp", "description": "The media analytics panel: image, speech and video rows with their own cost figures."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-media-image-rail.webp", "description": "The image rail on Model Config, with the media endpoints it serves and their labels."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-messaging.webp", "description": "The Messaging page: Discord and Telegram bot settings, a token field and voice-note transcription toggles."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-model-config-reasoning.webp", "description": "The Model Config page's reasoning section: an adaptive reasoning control, a prompt-cache-lifetime picker and learned-provider toggle, with Validate and Apply buttons."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-model-config.webp", "description": "The Model Config page with tier rails side by side, each carrying a primary model and numbered fallback rows with drag handles and pause controls."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-models-billed-est.webp", "description": "The billed-versus-estimated row on a model, two figures kept separate rather than summed."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-models-bulk.webp", "description": "The Models page's bulk controls: show, hide and invert visibility for a whole provider with an undoable report."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-models-learned.webp", "description": "The learned-facts panel listing provider negatives this install taught the router, each with its evidence and an expiry clock."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-models-visibility.webp", "description": "The Models page with a single provider expanded and visibility filter chips selected."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-models.webp", "description": "The Models page: a provider tree with filter chips, one provider expanded, each model row carrying chips naming where its entry came from."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-page.webp", "description": "The Providers page in a fresh state with two cards and a search box, above a grid of empty provider rows."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-providers.webp", "description": "The Providers page: a two-column grid of provider cards, each badged Configured or Missing key, with a Refresh model list button and custom providers on the left rail."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-request-attempts.webp", "description": "The attempt-level view of one request: each model the chain tried, its status, tokens and cost, one row per attempt."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-request-contradiction.webp", "description": "The cost panel's honesty note: reported and estimated figures never summed, with a priced denominator."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-request-detail.webp", "description": "A single request's detail view: its route attempts and the reasoning fields the router sent."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-requests.webp", "description": "The request-log table: provider, model, key, harness, tokens, reasoning, cost and latency for a range of requests."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-token-optimizer.webp", "description": "The Token Optimizer page: tokens saved, rule fire counts and prompt-cache effectiveness."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-update-banner.webp", "description": "The update banner in the dashboard: a newer release is available, with its changelog, an Update now button and a dismiss control."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-version.webp", "description": "The version panel in the dashboard sidebar showing the running My Claude Code version and a running status dot."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-vision-adapter-mode.webp", "description": "The vision-adapter section of Model Config showing a describe-mode control and the vision rail."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-websearch-analytics.webp", "description": "The web-search analytics panel: separate route and attempt analytics with captured input and output."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-websearch-chain.webp", "description": "The web-search chain editor: an ordered list of search services with pause and reorder controls."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/dashboard-websearch.webp", "description": "The Web Search page: a route policy control, provider cards with key health and a chain editor, plus advanced options."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/proxy-chain-card.webp", "description": "A proxy chain card listing named exits with per-exit keep-alive and recency controls."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/proxy-direct-not-sent.webp", "description": "The note on a chain that the Direct exit is not sent through the chain."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/proxy-runner.webp", "description": "A WireGuard runner card: a VPN profile's exported WireGuard file run as a local SOCKS5 exit, with Start and Stop controls."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/proxy-tor.webp", "description": "The bring-your-own-Tor card: SOCKS ports as named identities, with Check Tor and a New identity control."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/proxy-vpn-account.webp", "description": "A VPN account's SOCKS5 exit card with a service login and a local SOCKS5 address."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/readme-analytics-cost.webp", "description": "A requests-over-time chart and a tokens-by-model chart above a Cost panel with reported and estimated totals kept separate."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/readme-analytics-overview.webp", "description": "Rows of stat cards counting stored requests, success rate, fallback share and token totals, above an all-time strip and a per-model table."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/readme-model-config.webp", "description": "Six tier rails side by side, each with a primary model and numbered fallback rows, one row struck through and badged Paused."}, {"@type": "ImageObject", "contentUrl": "https://myclaudecode.danubelabs.net/assets/shots/readme-models.webp", "description": "The Models page tree with thousands of models across many providers, each row badged with its source and visibility state."}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/" aria-current="page">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li>Gallery</li>
+      </ol>
+    </nav>
+    <h1>Every reviewed screen, grouped</h1>
+<p class="page-intro">These are the product's own captures, reviewed one by one before publication. Each was checked for keys, tokens, account names, file paths and real prompt text; where a capture carried something that did not belong on a public page, it was redacted on a copy and the original was left untouched. Every image below has a caption, and every caption describes the state the screen is actually in. Together they are the LLM dashboard screenshots: the control plane, the request log and the agent pages, as they actually look.</p>    <p>The screens are grouped by the area of the product they belong to, in the same order as the features: the dashboard itself, providers and credentials, routing, reasoning and limits, observability and cost, web search, agents, media and messaging. A capture appears once, in the group where it is most useful.</p>
+
+    <ul><li><a href="#area-dashboard">The dashboard</a></li><li><a href="#area-providers">Providers and credentials</a></li><li><a href="#area-routing">Routing and limits</a></li><li><a href="#area-reasoning">Reasoning and budgets</a></li><li><a href="#area-observability">Observability and cost</a></li><li><a href="#area-websearch">Web search</a></li><li><a href="#area-agents">Agents</a></li><li><a href="#area-media">Media</a></li><li><a href="#area-messaging">Messaging</a></li></ul>
+
+    <div class="callout">A capture shows the version that was running when it was taken. The version panel in each screen is the honest record; the current release is on the home page.</div>
+
+    <section class="gallery-area" id="area-dashboard">
+<h2>The dashboard</h2>
+<p>The first-run checklist, the Providers page, the version panel and an announced update.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-get-started">
+<a href="/assets/shots/dashboard-get-started.webp"><img src="/assets/shots/dashboard-get-started-thumb.webp" alt="The Get Started checklist: connect a provider, set a fallback model, point Claude Code at MCC, then optional steps for messaging, analytics and limits." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The first-run checklist that guides a new install from a provider key to a running agent.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-page">
+<a href="/assets/shots/dashboard-page.webp"><img src="/assets/shots/dashboard-page-thumb.webp" alt="The Providers page in a fresh state with two cards and a search box, above a grid of empty provider rows." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The dashboard&#39;s Providers page, where keys are configured for each provider.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-update-banner">
+<a href="/assets/shots/dashboard-update-banner.webp"><img src="/assets/shots/dashboard-update-banner-thumb.webp" alt="The update banner in the dashboard: a newer release is available, with its changelog, an Update now button and a dismiss control." width="640" height="60" loading="lazy" decoding="async"></a>
+<figcaption>A newer release is announced in the dashboard and installed with one click.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-version">
+<a href="/assets/shots/dashboard-version.webp"><img src="/assets/shots/dashboard-version-thumb.webp" alt="The version panel in the dashboard sidebar showing the running My Claude Code version and a running status dot." width="640" height="96" loading="lazy" decoding="async"></a>
+<figcaption>The version panel: the running release number and live status, in the sidebar.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-providers">
+<h2>Providers and credentials</h2>
+<p>The provider grid, the model catalogue, custom providers, credential health and per-key performance, plus the proxy and marketplace cards.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-catalogue-refresh">
+<a href="/assets/shots/dashboard-catalogue-refresh.webp"><img src="/assets/shots/dashboard-catalogue-refresh-thumb.webp" alt="The Models page after a Refresh model list: per-provider status with last and next refresh times." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The hourly background catalogue refresh, with last and next times per provider.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-credential-health">
+<a href="/assets/shots/dashboard-credential-health.webp"><img src="/assets/shots/dashboard-credential-health-thumb.webp" alt="The credential-health table: per-key health and rotation policy across multiple key pools." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Keys marked unhealthy only by the provider&#39;s own auth and rate-limit signals.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-custom-provider">
+<a href="/assets/shots/dashboard-custom-provider.webp"><img src="/assets/shots/dashboard-custom-provider-thumb.webp" alt="Two custom provider cards, B.AI and Agnes, each with a base URL, masked key and a model count." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Any other OpenAI-compatible endpoint, added as a card from the UI.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-inferhub">
+<a href="/assets/shots/dashboard-inferhub.webp"><img src="/assets/shots/dashboard-inferhub-thumb.webp" alt="The InferHub page header: a price marketplace where a profile sets the ceiling each model is charged at." width="640" height="273" loading="lazy" decoding="async"></a>
+<figcaption>A marketplace is not an ordinary provider: the profile&#39;s ceiling is sent on every attempt.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-key-performance">
+<a href="/assets/shots/dashboard-key-performance.webp"><img src="/assets/shots/dashboard-key-performance-thumb.webp" alt="The key-performance table with per-key request counts, and a Top errors panel listing provider diagnostics." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Per-key request performance and the most recent provider errors.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-models">
+<a href="/assets/shots/dashboard-models.webp"><img src="/assets/shots/dashboard-models-thumb.webp" alt="The Models page: a provider tree with filter chips, one provider expanded, each model row carrying chips naming where its entry came from." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Every model every configured provider publishes, each row naming its source.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-models-bulk">
+<a href="/assets/shots/dashboard-models-bulk.webp"><img src="/assets/shots/dashboard-models-bulk-thumb.webp" alt="The Models page&#39;s bulk controls: show, hide and invert visibility for a whole provider with an undoable report." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Bulk model visibility, with one undoable report per action.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-models-learned">
+<a href="/assets/shots/dashboard-models-learned.webp"><img src="/assets/shots/dashboard-models-learned-thumb.webp" alt="The learned-facts panel listing provider negatives this install taught the router, each with its evidence and an expiry clock." width="640" height="188" loading="lazy" decoding="async"></a>
+<figcaption>Every negative this install learned, shown with its evidence and expiring on a clock.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-models-visibility">
+<a href="/assets/shots/dashboard-models-visibility.webp"><img src="/assets/shots/dashboard-models-visibility-thumb.webp" alt="The Models page with a single provider expanded and visibility filter chips selected." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Hiding one model changes what is listed, never what is routed.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-providers">
+<a href="/assets/shots/dashboard-providers.webp"><img src="/assets/shots/dashboard-providers-thumb.webp" alt="The Providers page: a two-column grid of provider cards, each badged Configured or Missing key, with a Refresh model list button and custom providers on the left rail." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Every provider behind one address, each card naming the setting that holds its key.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-proxy-chain-card">
+<a href="/assets/shots/proxy-chain-card.webp"><img src="/assets/shots/proxy-chain-card-thumb.webp" alt="A proxy chain card listing named exits with per-exit keep-alive and recency controls." width="640" height="684" loading="lazy" decoding="async"></a>
+<figcaption>A proxy chain: named exits a request can move between on the same model.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-proxy-runner">
+<a href="/assets/shots/proxy-runner.webp"><img src="/assets/shots/proxy-runner-thumb.webp" alt="A WireGuard runner card: a VPN profile&#39;s exported WireGuard file run as a local SOCKS5 exit, with Start and Stop controls." width="640" height="256" loading="lazy" decoding="async"></a>
+<figcaption>A VPN account&#39;s WireGuard file, run by MCC as a named loopback exit.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-proxy-tor">
+<a href="/assets/shots/proxy-tor.webp"><img src="/assets/shots/proxy-tor-thumb.webp" alt="The bring-your-own-Tor card: SOCKS ports as named identities, with Check Tor and a New identity control." width="640" height="457" loading="lazy" decoding="async"></a>
+<figcaption>Each tor SOCKS port becomes one named chain identity; MCC never starts tor itself.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-proxy-vpn-account">
+<a href="/assets/shots/proxy-vpn-account.webp"><img src="/assets/shots/proxy-vpn-account-thumb.webp" alt="A VPN account&#39;s SOCKS5 exit card with a service login and a local SOCKS5 address." width="640" height="273" loading="lazy" decoding="async"></a>
+<figcaption>A VPN&#39;s SOCKS5 hosts with its service login, stored owner-only and never shown again.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-readme-models">
+<a href="/assets/shots/readme-models.webp"><img src="/assets/shots/readme-models-thumb.webp" alt="The Models page tree with thousands of models across many providers, each row badged with its source and visibility state." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The full model catalogue across every configured provider.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-routing">
+<h2>Routing and limits</h2>
+<p>The tier rails, a walked fallback chain, the vision adapter and the resilience controls.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-analytics-exit-detail">
+<a href="/assets/shots/dashboard-analytics-exit-detail.webp"><img src="/assets/shots/dashboard-analytics-exit-detail-thumb.webp" alt="A route-attempt panel: each proxy dial MCC tried in order, with its error and the switch decision, above the full text of the exit&#39;s refusal." width="640" height="193" loading="lazy" decoding="async"></a>
+<figcaption>Every exit a request tried, in order, with the provider&#39;s own words for each refusal.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-limits-retries">
+<a href="/assets/shots/dashboard-limits-retries.webp"><img src="/assets/shots/dashboard-limits-retries-thumb.webp" alt="The Limits and Resilience page scrolled to retries and credential health, with rotation policies and bench settings." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Retries, credential health and rotation policies on the Limits and Resilience page.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-model-config">
+<a href="/assets/shots/dashboard-model-config.webp"><img src="/assets/shots/dashboard-model-config-thumb.webp" alt="The Model Config page with tier rails side by side, each carrying a primary model and numbered fallback rows with drag handles and pause controls." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>One rail per tier, each with its primary model and its ordered fallback chain.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-request-attempts">
+<a href="/assets/shots/dashboard-request-attempts.webp"><img src="/assets/shots/dashboard-request-attempts-thumb.webp" alt="The attempt-level view of one request: each model the chain tried, its status, tokens and cost, one row per attempt." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Attempt-level detail: the fallbacks that spent the time are in the view too.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-request-detail">
+<a href="/assets/shots/dashboard-request-detail.webp"><img src="/assets/shots/dashboard-request-detail-thumb.webp" alt="A single request&#39;s detail view: its route attempts and the reasoning fields the router sent." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>One request, expanded: the attempts the router walked and the reasoning fields it sent.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-vision-adapter-mode">
+<a href="/assets/shots/dashboard-vision-adapter-mode.webp"><img src="/assets/shots/dashboard-vision-adapter-mode-thumb.webp" alt="The vision-adapter section of Model Config showing a describe-mode control and the vision rail." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The vision adapter: image requests diverted to a model that can see, with its own chain.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-proxy-direct-not-sent">
+<a href="/assets/shots/proxy-direct-not-sent.webp"><img src="/assets/shots/proxy-direct-not-sent-thumb.webp" alt="The note on a chain that the Direct exit is not sent through the chain." width="640" height="35" loading="lazy" decoding="async"></a>
+<figcaption>A reminder that the direct route is left out of the proxy chain.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-readme-model-config">
+<a href="/assets/shots/readme-model-config.webp"><img src="/assets/shots/readme-model-config-thumb.webp" alt="Six tier rails side by side, each with a primary model and numbered fallback rows, one row struck through and badged Paused." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The tier map with real fallback chains; a paused row keeps its place and is never tried.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-reasoning">
+<h2>Reasoning and budgets</h2>
+<p>Reasoning policy and overrides, the limits page and the deadline calculator.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-limits">
+<a href="/assets/shots/dashboard-limits.webp"><img src="/assets/shots/dashboard-limits-thumb.webp" alt="The Limits and Resilience page: output budgets, a reasoning control, credential rotation policies, proxy chains and diagnostics controls." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The Limits and Resilience page, where budgets, deadlines and rotation live.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-limits-calculator">
+<a href="/assets/shots/dashboard-limits-calculator.webp"><img src="/assets/shots/dashboard-limits-calculator-thumb.webp" alt="The deadline calculator on the Limits page, showing a per-model table of budget, cap, first-token and total values." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The deadline calculator: what each model on your chains actually gets.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-model-config-reasoning">
+<a href="/assets/shots/dashboard-model-config-reasoning.webp"><img src="/assets/shots/dashboard-model-config-reasoning-thumb.webp" alt="The Model Config page&#39;s reasoning section: an adaptive reasoning control, a prompt-cache-lifetime picker and learned-provider toggle, with Validate and Apply buttons." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The reasoning controls: adaptive reasoning and prompt-cache lifetime per tier.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-observability">
+<h2>Observability and cost</h2>
+<p>The request log, analytics panels, latency, failover, storage and the token optimizer.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-analytics">
+<a href="/assets/shots/dashboard-analytics.webp"><img src="/assets/shots/dashboard-analytics-thumb.webp" alt="The Analytics page: rows of stat cards over the stored request log, with a time range picker and a search box." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The request log and everything computed from it, searchable across prompt, reply, reasoning and tools.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-analytics-cost">
+<a href="/assets/shots/dashboard-analytics-cost.webp"><img src="/assets/shots/dashboard-analytics-cost-thumb.webp" alt="The Analytics Cost panel: reported and estimated totals, each with a priced-of-total denominator." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Two cost figures, never one, and every total carries its priced denominator.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-analytics-exit">
+<a href="/assets/shots/dashboard-analytics-exit.webp"><img src="/assets/shots/dashboard-analytics-exit-thumb.webp" alt="The Exit column in the request log, showing which proxy exit answered each request and a filter by exit name." width="640" height="105" loading="lazy" decoding="async"></a>
+<figcaption>Which proxy exit answered each request, with a filter by exit name.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-analytics-failover">
+<a href="/assets/shots/dashboard-analytics-failover.webp"><img src="/assets/shots/dashboard-analytics-failover-thumb.webp" alt="The Analytics failover panel showing how many requests each fallback provider served." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Which fallbacks actually carried the load, per provider.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-analytics-harness">
+<a href="/assets/shots/dashboard-analytics-harness.webp"><img src="/assets/shots/dashboard-analytics-harness-thumb.webp" alt="The provider-performance table on Analytics: requests, success and errors attributed to the coding agent harness that sent each one." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Request attribution: the coding agent behind every request, named in Analytics.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-analytics-latency">
+<a href="/assets/shots/dashboard-analytics-latency.webp"><img src="/assets/shots/dashboard-analytics-latency-thumb.webp" alt="The model latency panel: p50 and p95 latency bars per model." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Model latency, p50 and p95, per model.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-analytics-storage">
+<a href="/assets/shots/dashboard-analytics-storage.webp"><img src="/assets/shots/dashboard-analytics-storage-thumb.webp" alt="The request-log storage panel: current database size and a pruning note, with a Build search index button." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>How big the request log is, and when it next prunes its oldest rows.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-models-billed-est">
+<a href="/assets/shots/dashboard-models-billed-est.webp"><img src="/assets/shots/dashboard-models-billed-est-thumb.webp" alt="The billed-versus-estimated row on a model, two figures kept separate rather than summed." width="640" height="66" loading="lazy" decoding="async"></a>
+<figcaption>Reported and estimated cost stay two numbers, never one.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-request-contradiction">
+<a href="/assets/shots/dashboard-request-contradiction.webp"><img src="/assets/shots/dashboard-request-contradiction-thumb.webp" alt="The cost panel&#39;s honesty note: reported and estimated figures never summed, with a priced denominator." width="640" height="211" loading="lazy" decoding="async"></a>
+<figcaption>Honest totals: an unpriceable request shows a dash, every total names its denominator.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-requests">
+<a href="/assets/shots/dashboard-requests.webp"><img src="/assets/shots/dashboard-requests-thumb.webp" alt="The request-log table: provider, model, key, harness, tokens, reasoning, cost and latency for a range of requests." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The request log, one row per completed request with its tokens, cost and latency.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-token-optimizer">
+<a href="/assets/shots/dashboard-token-optimizer.webp"><img src="/assets/shots/dashboard-token-optimizer-thumb.webp" alt="The Token Optimizer page: tokens saved, rule fire counts and prompt-cache effectiveness." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>What never reached a provider: tokens saved and prompt-cache effectiveness.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-readme-analytics-cost">
+<a href="/assets/shots/readme-analytics-cost.webp"><img src="/assets/shots/readme-analytics-cost-thumb.webp" alt="A requests-over-time chart and a tokens-by-model chart above a Cost panel with reported and estimated totals kept separate." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Cost with provenance: reported and estimated are two figures, never summed.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-readme-analytics-overview">
+<a href="/assets/shots/readme-analytics-overview.webp"><img src="/assets/shots/readme-analytics-overview-thumb.webp" alt="Rows of stat cards counting stored requests, success rate, fallback share and token totals, above an all-time strip and a per-model table." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The Analytics overview: totals that keep counting even as stored rows roll over.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-websearch">
+<h2>Web search</h2>
+<p>The search route, the chain editor and web-search analytics.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-websearch">
+<a href="/assets/shots/dashboard-websearch.webp"><img src="/assets/shots/dashboard-websearch-thumb.webp" alt="The Web Search page: a route policy control, provider cards with key health and a chain editor, plus advanced options." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The native web-search tool proxy: route policy, the chain and advanced options.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-websearch-analytics">
+<a href="/assets/shots/dashboard-websearch-analytics.webp"><img src="/assets/shots/dashboard-websearch-analytics-thumb.webp" alt="The web-search analytics panel: separate route and attempt analytics with captured input and output." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Web-search analytics: the attempts and their captured input and output.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-websearch-chain">
+<a href="/assets/shots/dashboard-websearch-chain.webp"><img src="/assets/shots/dashboard-websearch-chain-thumb.webp" alt="The web-search chain editor: an ordered list of search services with pause and reorder controls." width="640" height="321" loading="lazy" decoding="async"></a>
+<figcaption>An ordered list of search services, edited on the Search chain card.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-agents">
+<h2>Agents</h2>
+<p>The coding-agent cards, the launchers list, desktop-app configuration and two live agent sessions.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-agent-session">
+<a href="/assets/shots/agent-session.webp"><img src="/assets/shots/agent-session-thumb.webp" alt="A Claude Code session in a terminal, showing the prompt and a model routing line." width="640" height="339" loading="lazy" decoding="async"></a>
+<figcaption>A live Claude Code session running through the proxy.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-cc-model-picker">
+<a href="/assets/shots/cc-model-picker.webp"><img src="/assets/shots/cc-model-picker-thumb.webp" alt="The Claude Code model picker in a terminal, listing the tiers routed through My Claude Code." width="640" height="339" loading="lazy" decoding="async"></a>
+<figcaption>The native model picker in Claude Code, driven by MCC&#39;s tier map.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-claude-desktop-developer-menu">
+<a href="/assets/shots/claude-desktop-developer-menu.webp"><img src="/assets/shots/claude-desktop-developer-menu-thumb.webp" alt="Claude Desktop&#39;s Developer menu: the path to Manage third-party inference providers." width="268" height="523" loading="lazy" decoding="async"></a>
+<figcaption>The Developer menu where Claude Desktop points at a custom gateway.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-claude-desktop-gateway">
+<a href="/assets/shots/claude-desktop-gateway.webp"><img src="/assets/shots/claude-desktop-gateway-thumb.webp" alt="Claude Desktop&#39;s connection dialog: a base URL and a gateway API key field, with the key value redacted." width="640" height="491" loading="lazy" decoding="async"></a>
+<figcaption>The one file MCC edits to point Claude Desktop here; the key stays private.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-claude-settings">
+<a href="/assets/shots/dashboard-claude-settings.webp"><img src="/assets/shots/dashboard-claude-settings-thumb.webp" alt="The Claude Code settings view in the dashboard, showing the env block MCC writes and an Apply and restart button." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Pointing Claude Code at this proxy, per session or permanently.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-coding-agent-card">
+<a href="/assets/shots/dashboard-coding-agent-card.webp"><img src="/assets/shots/dashboard-coding-agent-card-thumb.webp" alt="A single agent card, OpenCode, with its install line, protocol and generated catalogue." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>One agent card: the install command, its protocol and its model catalogue.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-coding-agents">
+<a href="/assets/shots/dashboard-coding-agents.webp"><img src="/assets/shots/dashboard-coding-agents-thumb.webp" alt="The Coding agents page: a grid of agent cards, each with an Install or Configure button, protocol and catalogue." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Every agent MCC can launch, each card showing its install state, protocol and catalogue.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-desktop-apps">
+<a href="/assets/shots/dashboard-desktop-apps.webp"><img src="/assets/shots/dashboard-desktop-apps-thumb.webp" alt="The Desktop apps page: cards for apps MCC does not launch, each with a Configure button and a backup note." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Apps MCC cannot start get a Configure button that edits the one file each reads.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-launchers">
+<a href="/assets/shots/dashboard-launchers.webp"><img src="/assets/shots/dashboard-launchers-thumb.webp" alt="The launchers list: every installed mcc-* command with its state and a copy button." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>The fifteen launcher commands MCC puts on your PATH, each with its install state.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-media">
+<h2>Media</h2>
+<p>The media rails and media analytics.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-media-analytics">
+<a href="/assets/shots/dashboard-media-analytics.webp"><img src="/assets/shots/dashboard-media-analytics-thumb.webp" alt="The media analytics panel: image, speech and video rows with their own cost figures." width="640" height="296" loading="lazy" decoding="async"></a>
+<figcaption>Media routing, priced from provider figures or models.dev, else unpriced.</figcaption>
+</figure>
+<figure class="gallery-item" id="shot-dashboard-media-image-rail">
+<a href="/assets/shots/dashboard-media-image-rail.webp"><img src="/assets/shots/dashboard-media-image-rail-thumb.webp" alt="The image rail on Model Config, with the media endpoints it serves and their labels." width="640" height="163" loading="lazy" decoding="async"></a>
+<figcaption>The media rails: image, speech, transcription and video endpoints.</figcaption>
+</figure>
+</div>
+</section>
+
+    <section class="gallery-area" id="area-messaging">
+<h2>Messaging</h2>
+<p>The Discord and Telegram settings with the voice controls.</p><div class="gallery-grid">
+<figure class="gallery-item" id="shot-dashboard-messaging">
+<a href="/assets/shots/dashboard-messaging.webp"><img src="/assets/shots/dashboard-messaging-thumb.webp" alt="The Messaging page: Discord and Telegram bot settings, a token field and voice-note transcription toggles." width="640" height="404" loading="lazy" decoding="async"></a>
+<figcaption>Claude Code sessions over Discord or Telegram, with voice-note transcription.</figcaption>
+</figure>
+</div>
+</section>
+
+    <h2 id="how-the-screens-were-reviewed">How the screens were reviewed</h2>
+
+    <p>Every tracked image in the repository was inventoried, hashed and de-duplicated first. The survivors were reviewed on contact sheets and, where a leak was plausible, at full resolution. The verdicts were include, redact or exclude with a reason. Redactions are solid rectangles applied to a copy, and each rectangle is recorded with its coordinates. The excluded captures are the ones that were not product screens, or that could not be cleaned without destroying what they showed.</p>
+
+    <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/">Features: the pages these screens illustrate</a></li><li><a href="/features/dashboard/">The dashboard in depth</a></li><li><a href="/architecture/">Architecture: what the screens are showing</a></li></ul>
+</nav>
+
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

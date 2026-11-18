@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The local control-plane dashboard</title>
+<meta name="description" content="The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.">
+<meta name="keywords" content="llm dashboard, local llm dashboard, claude code dashboard, llm control plane, gateway dashboard, llm admin ui, local admin ui, llm gateway web ui, dashboard configuration">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/features/dashboard/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="The local control-plane dashboard">
+<meta property="og:description" content="The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/features/dashboard/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="The local control-plane dashboard">
+<meta name="twitter:description" content="The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "The local control-plane dashboard", "url": "https://myclaudecode.danubelabs.net/features/dashboard/", "description": "The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Features", "item": "https://myclaudecode.danubelabs.net/features/"}, {"@type": "ListItem", "position": 4, "name": "Dashboard"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "The local control-plane dashboard", "description": "The dashboard that shows routing, providers, credentials, requests and cost in one place, running locally beside the gateway and reading the same request log.", "url": "https://myclaudecode.danubelabs.net/features/dashboard/", "about": {"@type": "Thing", "name": "My Claude Code features"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/" aria-current="page">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/">Features</a></li>
+        <li>Dashboard</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>The local control panel</h1>
+<p class="page-intro">The Admin UI is local-only and is where everything is configured. It opens on a Get Started checklist and gets out of the way once dismissed. It reads and writes the same .env the server reads, so the page and the file never disagree. It is the LLM dashboard: the local control panel, and the one place every setting can be changed.</p>        <p>The dashboard is served by the server it configures, on loopback, at <code>http://127.0.0.1:8082/admin</code>. It has no login because it is not reachable from another machine. A change is collected on the page and written only when you press Apply, at the foot of the page, which validates first.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-get-started.webp" alt="The Get Started checklist: connect a provider, set a fallback model, point Claude Code at MCC, then optional steps for messaging, analytics and limits." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Get Started: the first-run checklist, from a provider key to a running agent.</figcaption>
+</figure>
+
+        <h2 id="the-pages">The pages</h2>
+
+        <div class="table-wrap"><table>
+<thead><tr><th scope="col">Page</th><th scope="col">What it is for</th></tr></thead>
+<tbody><tr><td>Get Started</td><td>the first-run checklist: provider, tiers, an agent, optionally web search and analytics</td></tr><tr><td>Providers</td><td>one searchable card per provider: keys, key pools, rotation, per-key health and Refresh models</td></tr><tr><td>Configure Claude Code</td><td>pointing Claude Code at the proxy, per session or permanently</td></tr><tr><td>Coding agents</td><td>each launcher's installed state and flags, Install, and Configure and Undo for desktop apps</td></tr><tr><td>Model Config</td><td>the tier map, fallback chains, the vision adapter, reasoning control and the media rails</td></tr><tr><td>Models</td><td>every model every provider publishes, with bulk visibility, capability probes and learned facts</td></tr><tr><td>Web Search</td><td>route policy, the search chain, provider cards, key health and search analytics</td></tr><tr><td>Limits & Resilience</td><td>output budgets, deadlines and their calculator, chain benching, retries, credential health, diagnostics</td></tr><tr><td>Analytics</td><td>the request log and everything computed from it, plus storage settings</td></tr><tr><td>Token Optimizer</td><td>what never reached a provider, and the opt-in trimming and RTK controls</td></tr><tr><td>Messaging</td><td>the Discord or Telegram bot, its allowed scope and voice settings</td></tr><tr><td>Usage</td><td>what each provider says is left, in five layouts over one payload</td></tr><tr><td>Proxying</td><td>proxy chains, the local scan, Tor, VPN accounts and WireGuard runners</td></tr><tr><td>InferHub</td><td>the marketplace page: profile, balance read-only, offers and the market snapshot</td></tr><tr><td>Guide and Docs</td><td>the task-oriented guide, and these documents rendered in the app</td></tr></tbody>
+</table></div>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-page.webp" alt="The Providers page in a fresh state with two cards and a search box, above a grid of empty provider rows." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>The Providers page in a fresh state, with its search box and the provider grid below.</figcaption>
+</figure>
+
+        <h2 id="appearance">Appearance</h2>
+
+        <p>A page is a view over configuration, not a separate store. The Analytics page reads the request log; Model Config reads and writes the tier variables; the Providers page reads the key pools and the credential stores. Closing the browser changes nothing, and reopening it shows the server's current state rather than a cached copy.</p>
+
+        <p>The dashboard's own look is a feature. There are two designs, Today and Hybrid, the latter with a masthead, a numbered rail and a right-hand drawer; seven colour families, each in light and dark; and three densities. They are chosen per browser on Get Started, or machine-wide with <code>ADMIN_DESIGN</code>, <code>ADMIN_THEME</code>, <code>ADMIN_MODE</code> and <code>ADMIN_DENSITY</code>. A browser choice always wins, and a shell that cannot start falls back to Today with a one-line note.</p>
+
+        <h2 id="validate-and-apply">Validate and Apply</h2>
+
+        <p>The footer of a settings page validates before it writes. A setting the server can only read at startup is marked restart-required, so Apply cannot report success while a running server keeps using the old value. A managed write backs the file up first. The dashboard and the file are one source of truth: a value set by hand is shown on the page, and a value set on the page is in the file.</p>
+
+        <h2 id="updates">Updates</h2>
+
+        <p>The sidebar shows the running version and live status. A newer release is announced with its changelog, and the Update button runs the same installer path as the command line: checksum verified, built beside the running version, run once, swapped in, and the previous version restored if the health check never answers.</p>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-update-banner.webp" alt="The update banner in the dashboard: a newer release is available, with its changelog, an Update now button and a dismiss control." width="1260" height="120" loading="lazy" decoding="async">
+<figcaption>The update banner: a newer release, its changelog and a one-click update that uses the same verified path as the CLI.</figcaption>
+</figure>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-version.webp" alt="The version panel in the dashboard sidebar showing the running My Claude Code version and a running status dot." width="1144" height="173" loading="lazy" decoding="async">
+<figcaption>The version panel in the sidebar: the running release and a live status dot.</figcaption>
+</figure>
+
+        <h2 id="local-only-by-construction">Local only, by construction</h2>
+
+        <ul><li>The admin UI and admin APIs are loopback-only.</li><li>The dashboard has no third-party analytics, no remote fonts and no embedded widgets.</li><li>A hidden tab reads nothing; the Usage page refreshes only while it is open.</li><li>The Docs page renders the documentation bundled with the installed version, so it works offline.</li><li>The page loads no remote font, script or image; its stylesheet and its one small script are served by the server itself.</li></ul>
+
+        <h2 id="configuration">Configuration</h2>
+
+        <p>Most settings are written to the managed <code>.env</code>. The appearance settings are <code>ADMIN_DESIGN</code>, <code>ADMIN_THEME</code>, <code>ADMIN_MODE</code> and <code>ADMIN_DENSITY</code>; the log retention settings are on the Analytics page; and the usage auto-refresh interval is <code>USAGE_AUTO_REFRESH_SECONDS</code>. The configuration home itself is <code>MCC_CONFIG_DIR</code>, which is environment-only and cannot be set from the dashboard.</p>
+
+        <h2 id="limits-and-behaviour">Limits and behaviour</h2>
+
+        <ul><li>A restart-required change is labelled, not silently deferred.</li><li>A setting the page cannot validate is not written.</li><li>The dashboard never opens a port beyond the server's own address.</li><li>A browser-level appearance choice overrides a machine-wide one without changing it.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/observability-and-cost/">Observability: the Analytics page in depth</a></li><li><a href="/features/web-search/">Web search: the Web Search page in depth</a></li><li><a href="/configuration/">Configuration: how settings are provided</a></li><li><a href="/gallery/">Gallery: every reviewed dashboard screen</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-pages">The pages</a></li>
+          <li><a href="#appearance">Appearance</a></li>
+          <li><a href="#validate-and-apply">Validate and Apply</a></li>
+          <li><a href="#updates">Updates</a></li>
+          <li><a href="#local-only-by-construction">Local only, by construction</a></li>
+          <li><a href="#configuration">Configuration</a></li>
+          <li><a href="#limits-and-behaviour">Limits and behaviour</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

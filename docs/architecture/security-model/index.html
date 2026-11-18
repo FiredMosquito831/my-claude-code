@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security model: keys, boundaries and local-first</title>
+<meta name="description" content="The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.">
+<meta name="keywords" content="llm gateway security, local first llm, api key security, proxy security model, self hosted llm security, loopback only admin, credential redaction, proxy bearer token">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/architecture/security-model/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="Security model: keys, boundaries and local-first">
+<meta property="og:description" content="The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/architecture/security-model/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Security model: keys, boundaries and local-first">
+<meta name="twitter:description" content="The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "Security model: keys, boundaries and local-first", "url": "https://myclaudecode.danubelabs.net/architecture/security-model/", "description": "The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "Architecture", "item": "https://myclaudecode.danubelabs.net/architecture/"}, {"@type": "ListItem", "position": 4, "name": "Security model"}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "TechArticle", "headline": "Security model: keys, boundaries and local-first", "description": "The security principles of a local gateway: keys stay on the machine, requests go only where you point them, and the boundary between agent and provider.", "url": "https://myclaudecode.danubelabs.net/architecture/security-model/", "about": {"@type": "Thing", "name": "My Claude Code architecture"}, "proficiencyLevel": "Expert", "inLanguage": "en", "author": {"@type": "Person", "name": "FiredMosquito831", "url": "https://github.com/FiredMosquito831"}}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/" aria-current="page">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li>Security model</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>The principles the boundary is built on</h1>
+<p class="page-intro">This page states what MCC does to keep a local proxy local, and what it refuses to do. It is a description of the design, not a security audit, and it makes no claim that a deployment is safe without the operator's own choices. It is the LLM gateway security model: local by default, a token once it leaves the machine, owner-only stores, redacted logs and narrow egress.</p>        <p>The threat model starts from one fact: the proxy holds the keys to providers that bill. A local service with those keys has to be reachable by the tools that need it and by nothing else. The principles below are how the code enforces that, and each one has a visible consequence.</p>
+
+        <figure class="figure figure--diagram" id="fig-security-principles">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t15 d15" font-family="ui-monospace, Consolas, monospace">
+<title id="t15">Security principles: local by default, a token for the proxy, owner-only stores, narrow egress</title>
+<desc id="d15">Five principles. The admin surface is loopback only. The proxy requires a bearer token once it is reachable from another machine, and refuses to start if the host is open and the token is empty. Credentials live in one configuration home with owner-only files. Logs redact key-like values and do not store payloads raw by default. Outbound traffic goes only to configured providers, and web fetch blocks private-network targets.</desc>
+<g font-size="12">
+<g>
+<rect x="20" y="30" width="820" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="56" fill="#3FB950" font-weight="700">1 · Local by default</text>
+<text x="36" y="78" fill="#A9B7C6" font-size="11">the admin UI and admin APIs are loopback-only; the proxy listens where you tell it to</text>
+</g>
+<g>
+<rect x="20" y="104" width="820" height="60" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="130" fill="#3FB950" font-weight="700">2 · A token once it leaves this machine</text>
+<text x="36" y="152" fill="#A9B7C6" font-size="11">the bearer token is compared in constant time; with the host open and the token empty, the server refuses to start</text>
+</g>
+<g>
+<rect x="20" y="178" width="820" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="36" y="204" fill="#58A6FF" font-weight="700">3 · Credentials in one owner-only home</text>
+<text x="36" y="226" fill="#A9B7C6" font-size="11">one .env you own; OAuth stores are owner-only and never shown again after they are saved</text>
+</g>
+<g>
+<rect x="20" y="252" width="820" height="60" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="36" y="278" fill="#58A6FF" font-weight="700">4 · Redacted by default in logs</text>
+<text x="36" y="300" fill="#A9B7C6" font-size="11">key-like, token-like and secret-like values are redacted; payloads and streamed events are not raw unless enabled</text>
+</g>
+<g>
+<rect x="20" y="326" width="820" height="60" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="36" y="352" fill="#D29922" font-weight="700">5 · Narrow egress</text>
+<text x="36" y="374" fill="#A9B7C6" font-size="11">outbound traffic goes to the providers you configured; web fetch blocks private-network targets unless allowed</text>
+</g>
+</g>
+</svg>
+</div>
+<figcaption>Five principles: local by default, a token once it leaves, owner-only stores, redacted logs and narrow egress.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram listing five security principles with a one-line consequence for each.</p>
+</figure>
+
+        <h2 id="local-by-default">Local by default</h2>
+
+        <p>The admin UI and the admin APIs are loopback-only. They have no login because they are not reachable from another machine, and the proxy's own listen address is a setting the operator chooses. The dashboard does not open a second port and does not embed a remote widget.</p>
+
+        <h2 id="a-token-once-it-leaves-this-machine">A token once it leaves this machine</h2>
+
+        <p>Proxy authentication is a bearer token. When it is set, the proxy accepts exactly that token, compares it in constant time, and ignores other credential headers so a stale provider key cannot mask valid proxy authorization. When the host is opened to other machines and the token is empty, the server refuses to start rather than serving an unauthenticated proxy. The token is generated for the machine on first start and lives in the configuration home.</p>
+
+        <h2 id="owner-only-stores">Owner-only stores</h2>
+
+        <p>OAuth credentials live in owner-only files, and a login a proxy listener asks for is stored owner-only and never shown again. A credential read from another application's file is read-only to MCC. The configuration home is one directory, so an operator can see and protect everything in one place rather than hunting for scattered state.</p>
+
+        <figure class="figure figure--diagram" id="fig-security-boundary">
+<div class="diagram-body"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t12 d12" font-family="ui-monospace, Consolas, monospace">
+<title id="t12">The security boundary: loopback admin, an optional proxy token, and outbound traffic only to configured providers</title>
+<desc id="d12">The dashboard and admin API listen on loopback only. The proxy accepts a bearer token when ANTHROPIC_AUTH_TOKEN is set; with HOST open to other machines and the token empty, the server refuses to start. The only outbound traffic goes to providers the operator configured. Web fetch blocks private-network targets unless explicitly allowed. Values under key-like, token-like and secret-like names are redacted where structured traces are emitted.</desc>
+<g font-size="12">
+<rect x="20" y="30" width="820" height="120" rx="8" fill="#111821" stroke="#3FB950"/>
+<text x="36" y="58" fill="#3FB950" font-weight="700">Inside the machine</text>
+<rect x="40" y="76" width="240" height="56" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="54" y="100" fill="#E6EDF3">dashboard + admin API</text>
+<text x="54" y="120" fill="#A9B7C6" font-size="11">loopback only</text>
+<rect x="300" y="76" width="240" height="56" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="314" y="100" fill="#E6EDF3">proxy endpoints</text>
+<text x="314" y="120" fill="#A9B7C6" font-size="11">bearer token when set</text>
+<rect x="560" y="76" width="260" height="56" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="574" y="100" fill="#E6EDF3">configuration home</text>
+<text x="574" y="120" fill="#A9B7C6" font-size="11">one .env, owner-only files</text>
+</g>
+<g font-size="12">
+<rect x="20" y="170" width="390" height="110" rx="8" fill="#111821" stroke="#D29922"/>
+<text x="36" y="196" fill="#D29922" font-weight="700">The refusal that protects the proxy</text>
+<text x="36" y="222" fill="#A9B7C6" font-size="11">HOST open to other machines</text>
+<text x="36" y="242" fill="#A9B7C6" font-size="11">+ ANTHROPIC_AUTH_TOKEN empty</text>
+<text x="36" y="262" fill="#E6EDF3" font-size="11">→ the server refuses to start</text>
+<rect x="430" y="170" width="410" height="110" rx="8" fill="#111821" stroke="#58A6FF"/>
+<text x="446" y="196" fill="#58A6FF" font-weight="700">The only outbound traffic</text>
+<text x="446" y="222" fill="#A9B7C6" font-size="11">the providers you configured, nothing else</text>
+<text x="446" y="242" fill="#A9B7C6" font-size="11">no telemetry, no call home</text>
+<text x="446" y="262" fill="#A9B7C6" font-size="11">web fetch blocks private-network targets</text>
+</g>
+<g font-size="12">
+<rect x="20" y="300" width="820" height="70" rx="8" fill="#111821" stroke="#5D6E84"/>
+<text x="36" y="326" fill="#E6EDF3">Trace helpers redact values under keys that look like an API key, an authorization, a token or a secret.</text>
+<text x="36" y="350" fill="#A9B7C6" font-size="11">API payloads and streamed events are not logged raw unless explicitly enabled, and the server log is bounded and rotated.</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="396" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="42" y="408">local surface</text>
+<rect x="160" y="396" width="14" height="14" rx="3" fill="#111821" stroke="#D29922"/><text x="182" y="408">guard</text>
+<rect x="250" y="396" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="272" y="408">outbound path</text>
+</g>
+</svg>
+</div>
+<figcaption>The boundary: local surfaces, the token guard and the single outbound path.</figcaption>
+<p class="diagram-alt"><strong>Text alternative:</strong> A diagram of the local dashboard and proxy, the token guard and the only outbound path to configured providers.</p>
+</figure>
+
+        <h2 id="redacted-by-default">Redacted by default</h2>
+
+        <p>Values under keys that look like an API key, an authorization, a token or a secret are redacted where structured traces are emitted. API payloads and streamed events are not logged raw unless explicitly enabled. The provider's own bytes are kept only behind an opt-in flag. Messaging text, transcription previews and CLI diagnostics each have their own flag, so a normal install does not record a conversation by accident.</p>
+
+        <h2 id="narrow-egress">Narrow egress</h2>
+
+        <p>The only outbound traffic is a request to a provider the operator configured, a search service the operator enabled, or a web page a client asked to fetch. There is no telemetry and no call home. Web fetch enforces its allowed URL schemes and blocks private-network targets unless the operator explicitly allows them. Local provider status checks are exposed only through the local admin API.</p>
+
+        <h2 id="evidence-over-assertion">Evidence over assertion</h2>
+
+        <p>A price is recorded with the source that stated it. A skipped model is a row with its reason. A key's health is decided from the provider's own signals, and a bench duration is never invented. The same discipline is applied to this site: every claim is recorded against a path or a command in the repository, and a figure that cannot be traced is not published.</p>
+
+        <h2 id="what-this-page-does-not-claim">What this page does not claim</h2>
+
+        <ul><li>It does not claim the software is free of defects. No such claim is made anywhere on this site.</li><li>It does not claim a deployment is safe regardless of how it is configured. Opening the proxy without a token is refused, but the operator still chooses the address, the network and the keys.</li><li>It does not describe an audit, a penetration test or a certification, and none is implied.</li><li>It does not repeat a known issue as a public roadmap. Issues are handled in the repository's own channel.</li></ul>
+
+        <figure class="figure">
+<img src="/assets/shots/dashboard-credential-health.webp" alt="The credential-health table: per-key health and rotation policy across multiple key pools." width="1500" height="949" loading="lazy" decoding="async">
+<figcaption>Credential health is one of the visible controls: a key is judged only on the provider&#39;s own signals.</figcaption>
+</figure>
+
+        <h2 id="operating-principles-for-the-reader">Operating principles for the reader</h2>
+
+        <ul><li>Keep the proxy on loopback unless a client on another machine genuinely needs it; if it needs it, set the token and put the proxy behind a network you control.</li><li>Use a separate key per machine or per purpose, so a key can be revoked without taking everything down.</li><li>Read a provider's own terms before routing a subscription credential through any proxy. MCC documents the Anthropic subscription position rather than hiding it.</li><li>Treat the configuration home as a secret. It holds the keys, the stores and the log.</li><li>Prefer a short retention window and raw logging off unless you are actively diagnosing a request.</li></ul>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/architecture/data-and-storage/">Data and storage: what the configuration home holds</a></li><li><a href="/architecture/credential-health/">Credential health: the provider&#39;s own signals</a></li><li><a href="/license/">Licence: AGPL-3.0-or-later or commercial</a></li><li><a href="/configuration/environment/">Configuration: HOST, PORT and the token variable</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#local-by-default">Local by default</a></li>
+          <li><a href="#a-token-once-it-leaves-this-machine">A token once it leaves this machine</a></li>
+          <li><a href="#owner-only-stores">Owner-only stores</a></li>
+          <li><a href="#redacted-by-default">Redacted by default</a></li>
+          <li><a href="#narrow-egress">Narrow egress</a></li>
+          <li><a href="#evidence-over-assertion">Evidence over assertion</a></li>
+          <li><a href="#what-this-page-does-not-claim">What this page does not claim</a></li>
+          <li><a href="#operating-principles-for-the-reader">Operating principles for the reader</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

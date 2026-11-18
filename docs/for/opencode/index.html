@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenCode through a local LLM proxy</title>
+<meta name="description" content="Point OpenCode at My Claude Code with mcc-opencode: an MCC-owned config file, your own providers, keys and fallback chains, and a priced request log.">
+<meta name="keywords" content="opencode proxy, mcc-opencode, opencode custom provider, opencode config file, opencode local gateway, opencode anthropic messages, opencode model list, opencode with any model">
+<link rel="canonical" href="https://myclaudecode.danubelabs.net/for/opencode/"><meta property="og:type" content="website">
+<meta property="og:site_name" content="My Claude Code">
+<meta property="og:title" content="OpenCode through a local LLM proxy">
+<meta property="og:description" content="Point OpenCode at My Claude Code with mcc-opencode: an MCC-owned config file, your own providers, keys and fallback chains, and a priced request log.">
+<meta property="og:url" content="https://myclaudecode.danubelabs.net/for/opencode/">
+<meta property="og:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta property="og:image:alt" content="My Claude Code: a local multi-provider LLM proxy, model router and control plane for AI coding agents.">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="OpenCode through a local LLM proxy">
+<meta name="twitter:description" content="Point OpenCode at My Claude Code with mcc-opencode: an MCC-owned config file, your own providers, keys and fallback chains, and a priced request log.">
+<meta name="twitter:image" content="https://myclaudecode.danubelabs.net/og.png">
+<meta name="theme-color" content="#0B0F14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "WebPage", "name": "OpenCode through a local LLM proxy", "url": "https://myclaudecode.danubelabs.net/for/opencode/", "description": "Point OpenCode at My Claude Code with mcc-opencode: an MCC-owned config file, your own providers, keys and fallback chains, and a priced request log."}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 2, "name": "Home", "item": "https://myclaudecode.danubelabs.net/"}, {"@type": "ListItem", "position": 3, "name": "For your agent", "item": "https://myclaudecode.danubelabs.net/features/agents/"}, {"@type": "ListItem", "position": 4, "name": "OpenCode"}]}</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+      <span>My Claude Code<span class="brand-sub">Local LLM gateway</span></span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+    <nav class="site-nav" id="site-nav" aria-label="Primary">
+      <ul>
+        <li><a href="/features/">Features</a></li>
+        <li><a href="/architecture/">Architecture</a></li>
+        <li><a href="/quick-start/">Quick start</a></li>
+        <li><a href="/gallery/">Gallery</a></li>
+        <li><a href="/faq/">FAQ</a></li>
+        <li><a href="/glossary/">Glossary</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="page">
+  <div class="wrap">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="/">Home</a></li>
+        <li><a href="/features/agents/">For your agent</a></li>
+        <li>OpenCode</li>
+      </ol>
+    </nav>
+    <div class="page-grid">
+      <div>
+        <h1>OpenCode through one local address</h1>
+<p class="page-intro">OpenCode is an open-source terminal agent that reads its providers from a config file. <code>mcc-opencode</code> points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the OpenCode proxy setup in one command.</p>        <h2 id="the-command">The command</h2>
+
+        <p>Install OpenCode yourself, because MCC never installs an agent, then launch it through the proxy with one command:</p>
+
+        <span class="code-label">Launch OpenCode against the local proxy</span><pre><code>mcc-opencode</code></pre>
+
+        <p>OpenCode reads its provider configuration from files rather than from arguments, so the launcher writes a config document of its own under the MCC configuration home and points the launched process at it through OpenCode's own <code>OPENCODE_CONFIG</code> variable. That variable names an extra config file that is merged into the precedence chain, so your <code>opencode.json</code> is never read, never written and never backed up.</p>
+
+        <p>The generated document names two environment variables rather than the token itself, and the launcher sets them in the child process only, so the proxy token is never on disk. A single prompt runs with OpenCode's own subcommand: <code>mcc-opencode run "summarise this diff"</code>.</p>
+
+        <p><code>mcc-opencode models mcc</code> lists the models MCC published, with the limits and prices the metadata ladder resolved. <code>mcc-opencode -m mcc/&lt;provider&gt;/&lt;model&gt;</code> starts on one specific MCC-routed model. OpenCode 2, which installs beside v1 under its own binary, has its own launcher: <code>mcc-opencode2</code>.</p>
+
+        <h2 id="what-opencode-gets">What OpenCode gets</h2>
+
+        <ul><li>One address for every provider, over the Anthropic Messages surface OpenCode already speaks.</li><li>Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.</li><li>A generated model list with the limits and prices the metadata ladder resolved, reachable with <code>models mcc</code>.</li><li>Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.</li><li>A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.</li><li>Per-agent attribution. The launcher marks the request as OpenCode's, so the log can name the agent behind it.</li></ul>
+
+        <h2 id="what-the-launcher-does-not-change">What the launcher does not change</h2>
+
+        <p>Your own <code>opencode.json</code> is untouched, because MCC writes a separate document and points one process at it. Stop launching through MCC and the file you wrote is the file you have. If OpenCode is not installed, the launcher prints its own install line and exits rather than installing anything on your behalf.</p>
+
+        <h2 id="where-to-go-next">Where to go next</h2>
+
+        <nav class="related" aria-label="Related pages">
+<h2>Related</h2>
+<ul><li><a href="/features/agents/">Every agent MCC can launch or configure</a></li><li><a href="/quick-start/">Quick start: install, run, and the first five minutes</a></li><li><a href="/features/routing/">Routing: tiers and fallback chains</a></li><li><a href="/features/providers-and-credentials/">Providers and credentials: what the request is routed to</a></li></ul>
+</nav>
+
+      </div>
+      <aside class="toc" aria-label="On this page">
+        <h2>On this page</h2>
+        <ol>
+          <li><a href="#the-command">The command</a></li>
+          <li><a href="#what-opencode-gets">What OpenCode gets</a></li>
+          <li><a href="#what-the-launcher-does-not-change">What the launcher does not change</a></li>
+          <li><a href="#where-to-go-next">Where to go next</a></li>
+        </ol>
+      </aside>
+    </div>
+  </div>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="brand" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+  <path d="M32 6 54 19v26L32 58 10 45V19z" fill="none" stroke="#3FB950" stroke-width="3.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="32" r="7" fill="#3FB950"/>
+  <circle cx="32" cy="15" r="2.8" fill="#58A6FF"/>
+  <circle cx="47" cy="41" r="2.8" fill="#58A6FF"/>
+  <circle cx="17" cy="41" r="2.8" fill="#58A6FF"/>
+</svg>
+          <span>My Claude Code</span>
+        </a>
+        <p class="small" style="margin-top: var(--space-3); max-width: 42ch;">A local multi-provider LLM proxy, model router and control plane for AI coding agents. Your models, your keys, your machine.</p>
+      </div>
+      <div>
+        <h2>Explore</h2>
+        <ul>
+          <li><a href="/features/">Features</a></li>
+          <li><a href="/architecture/">Architecture</a></li>
+          <li><a href="/quick-start/">Quick start</a></li>
+          <li><a href="/gallery/">Gallery</a></li>
+          <li><a href="/faq/">FAQ</a></li>
+          <li><a href="/glossary/">Glossary</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>For your agent</h2>
+        <ul>
+          <li><a href="/for/claude-code/">Claude Code</a></li>
+          <li><a href="/for/codex/">Codex</a></li>
+          <li><a href="/for/opencode/">OpenCode</a></li>
+          <li><a href="/for/gemini-cli/">Gemini CLI</a></li>
+          <li><a href="/features/agents/">All agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Project</h2>
+        <ul>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code">Repository</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/releases/latest">Releases</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/tree/main/docs">Documentation</a></li>
+          <li><a href="https://github.com/FiredMosquito831/my-claude-code/issues">Issues</a></li>
+          <li><a href="/about/">About</a></li>
+          <li><a href="/license/">Licence</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legal">
+      <p class="licence-line">Licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later), or a commercial licence by negotiation.</p>
+      <p>My Claude Code is an independent open-source project. It is not affiliated with, endorsed by, or sponsored by Anthropic, OpenAI, Google or OpenCode. Claude is a trademark of Anthropic; Codex and ChatGPT are trademarks of OpenAI; Gemini is a trademark of Google.</p>
+      <p>Model prices, availability and provider terms are set by each provider, not by this project. Nothing on this site is financial or legal advice.</p>
+      <p>&copy; 2026 My Claude Code contributors. Site content is documentation of the software; the software is licensed as above.</p>
+    </div>
+  </div>
+</footer>
+<script src="/assets/site.js" defer></script>
+</body>
+</html>

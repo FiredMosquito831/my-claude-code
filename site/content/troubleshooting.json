@@ -1,0 +1,208 @@
+{
+  "path": "/troubleshooting/",
+  "title": "Troubleshooting | My Claude Code",
+  "description": "Verified symptoms and fixes: a command not found after install, a blocked port, an all-benched pool, a missing model and a dashboard that will not open.",
+  "nav": "Troubleshooting",
+  "eyebrow": "Troubleshooting",
+  "h1": "When a step does not work",
+  "intro": "Each entry below is a symptom the product's own documentation names, its verified cause, and the fix it gives. If your case is not here, the repository's issue tracker is the right channel. It is the LLM gateway troubleshooting page: the failures this site can verify, with the fix for each.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "Troubleshooting"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "mcc-server is not found after a successful install"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> the installer finished, but <code>mcc-server</code> is not recognised. <strong>Cause:</strong> the installer added <code>~/.local/bin</code> to your PATH, and a terminal that was already open cannot see the change. <strong>Fix:</strong> close and reopen the terminal, then check <code>mcc-server --version</code>."
+    },
+    {
+      "type": "h2",
+      "text": "Windows SmartScreen refuses the desktop installer"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> Windows blocks the unsigned installer. <strong>Cause:</strong> the desktop installer is unsigned. <strong>Fix:</strong> choose More info, then Run anyway. On a machine with Smart App Control on, the app cannot run at all; use the PowerShell server one-liner instead."
+    },
+    {
+      "type": "h2",
+      "text": "macOS will not open the app"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> the app is blocked after it is dragged across. <strong>Cause:</strong> the disk image is unsigned and macOS quarantines it. <strong>Fix:</strong> clear the quarantine once with the <code>xattr</code> command the documentation gives, or take the server one-liner and let the desktop command fetch the same binary, which is never quarantined."
+    },
+    {
+      "type": "h2",
+      "text": "The tray is missing in WSL"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> the desktop app refuses to start in WSL. <strong>Cause:</strong> WSL has no tray. <strong>Fix:</strong> run the server in WSL and reach the dashboard in a Windows browser. The app says so and refuses rather than pretending."
+    },
+    {
+      "type": "h2",
+      "text": "The dashboard will not open"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> the admin address does not answer. <strong>Cause:</strong> one of three things: the server is not running, it is on a different port, or a launcher and the server resolved different configuration directories. <strong>Fix:</strong> start the server and read the startup log, which names the directory in use; check <code>PORT</code>; and if you set <code>MCC_CONFIG_DIR</code>, set it for the launchers too."
+    },
+    {
+      "type": "h2",
+      "text": "The install reports a port it will not touch"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> the installer says the port is held by something that is not MCC. <strong>Cause:</strong> another program owns the port. <strong>Fix:</strong> MCC reports it and leaves it alone rather than killing an unknown process. Choose another <code>PORT</code> or stop the other program yourself."
+    },
+    {
+      "type": "h2",
+      "text": "Every key is benched"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> a provider card says every key is benched until a time. <strong>Cause:</strong> the provider rate-limited the keys or refused the balance. <strong>Fix:</strong> wait for the bench to expire, or read the credential-health card to see which signal caused it. A 429 bench lasts the wait the provider published; an exhausted balance benches the whole key for the cooldown window."
+    },
+    {
+      "type": "h2",
+      "text": "A request fails with a readiness error"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> a request returns an error before any provider is called. <strong>Cause:</strong> a missing provider configuration or a request runtime that is shutting down. This is an application-readiness error, not a provider failure. <strong>Fix:</strong> open Providers, confirm the card is configured, and Validate and Apply. A request that never reached a provider is not a credential problem."
+    },
+    {
+      "type": "h2",
+      "text": "Web fetch refuses a page"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> a fetch to a local or private address is refused. <strong>Cause:</strong> web-fetch egress enforces its allowed URL schemes and blocks private-network targets by default. <strong>Fix:</strong> this is the intended boundary. If the target is genuinely intended, the operator can allow private networks explicitly; do not widen it to make one page load."
+    },
+    {
+      "type": "h2",
+      "text": "A model is missing from the picker"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> a model a provider publishes does not appear in <code>/v1/models</code> or an agent's picker. <strong>Cause:</strong> the model is hidden, or its stated kind is not chat, or a catalogue snapshot predates the latest refresh. <strong>Fix:</strong> check visibility on the Models page, check the model's kind, and restart the client that reads a startup catalogue. Hiding changes listings and never routing."
+    },
+    {
+      "type": "h2",
+      "text": "A media request is skipped as unsupported"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> an image or speech request moves past a model without trying it. <strong>Cause:</strong> the provider declares no endpoint for that operation. MCC never guesses from a model name. <strong>Fix:</strong> put a model whose provider declares the endpoint on that rail. The skipped model is not charged a failure."
+    },
+    {
+      "type": "h2",
+      "text": "An update does not finish"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> an update runs but the new version never answers the health check. <strong>Cause:</strong> the new build failed to start. <strong>Fix:</strong> the previous version is put back and started automatically. Read the install log and the progress document in the configuration home to see where it stopped, then re-run the update."
+    },
+    {
+      "type": "h2",
+      "text": "A setting does not take effect"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> a saved setting appears to be ignored. <strong>Cause:</strong> the setting is restart-required, so the running process still holds the value it read at startup. <strong>Fix:</strong> the dashboard marks these settings for exactly this reason. Restart the server, or use the update's restart, after saving."
+    },
+    {
+      "type": "h2",
+      "text": "A launcher will not start its agent"
+    },
+    {
+      "type": "p",
+      "text": "<strong>Symptom:</strong> a launcher exits instead of starting the agent. <strong>Cause:</strong> the agent is not installed. <strong>Fix:</strong> the launcher prints that agent's own install command and exits, and the Coding agents page has an Install button for the same job. MCC does not install agents on its own."
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: the install and first-run steps"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers: key health and rotation"
+        },
+        {
+          "href": "/configuration/environment/",
+          "label": "Configuration: HOST, PORT, MCC_CONFIG_DIR"
+        },
+        {
+          "href": "/faq/",
+          "label": "FAQ: the broader questions"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "A terminal opened before the install cannot see ~/.local/bin",
+      "evidence": "README.md §Install"
+    },
+    {
+      "claim": "The Windows desktop installer is unsigned and SmartScreen asks for More info then Run anyway",
+      "evidence": "README.md §Four things that bite"
+    },
+    {
+      "claim": "The macOS disk image is quarantined and needs one xattr command",
+      "evidence": "README.md §Four things that bite"
+    },
+    {
+      "claim": "WSL has no tray and the app refuses",
+      "evidence": "README.md §Four things that bite"
+    },
+    {
+      "claim": "A port held by a non-MCC process is reported rather than touched",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "A 429 bench lasts the published wait; an exhausted balance benches the whole key",
+      "evidence": "docs/ROUTING-REFERENCE.md §Multi-Key Rotation"
+    },
+    {
+      "claim": "Missing provider configuration is an application-readiness error",
+      "evidence": "ARCHITECTURE.md §HTTP Request Flow"
+    },
+    {
+      "claim": "web_fetch blocks private-network targets by default",
+      "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety"
+    },
+    {
+      "claim": "Hiding a model changes what is listed, never what is routed",
+      "evidence": "README.md §Dashboard caption"
+    },
+    {
+      "claim": "A provider that declares no media endpoint is skipped and not charged",
+      "evidence": "docs/MEDIA.md §Which providers can serve it"
+    },
+    {
+      "claim": "An update restores the previous version if health never answers",
+      "evidence": "README.md §What the installer does"
+    },
+    {
+      "claim": "Restart-required settings are marked on the dashboard",
+      "evidence": "ARCHITECTURE.md §Observability, Diagnostics, And Safety"
+    },
+    {
+      "claim": "A launcher prints the agent's install command and exits",
+      "evidence": "README.md §What the installer does"
+    }
+  ]
+}

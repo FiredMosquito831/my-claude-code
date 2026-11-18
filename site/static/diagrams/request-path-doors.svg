@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" role="img" aria-labelledby="t1 d1" font-family="ui-monospace, Consolas, monospace">
+<title id="t1">Four protocol doors reach one router and one provider executor</title>
+<desc id="d1">Claude Code, Pi, OpenCode, Crush, Kimi and Qwen enter the Anthropic Messages door; Codex enters the Responses door; Cline, Goose and Aider enter the Chat Completions door; Gemini CLI and Antigravity enter the Gemini door. All four doors meet the same router, which resolves a tier to a model, then the provider executor walks the fallback chain and returns a reply in the protocol the client asked in.</desc>
+<defs>
+<marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5D6E84"/></marker>
+</defs>
+<g stroke="#5D6E84" stroke-width="1.5" fill="none">
+<path d="M200 60 H360" marker-end="url(#a1)"/>
+<path d="M200 140 H360" marker-end="url(#a1)"/>
+<path d="M200 220 H360" marker-end="url(#a1)"/>
+<path d="M200 300 H360" marker-end="url(#a1)"/>
+<path d="M600 180 H700" marker-end="url(#a1)"/>
+</g>
+<g font-size="13" fill="#E6EDF3">
+<rect x="20" y="40" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="65">Claude Code · Pi</text>
+<rect x="20" y="120" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="145">Codex</text>
+<rect x="20" y="200" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="225">Cline · Goose · Aider</text>
+<rect x="20" y="280" width="180" height="40" rx="6" fill="#18212C" stroke="#5D6E84"/>
+<text x="34" y="305">Gemini CLI · Antigravity</text>
+</g>
+<g font-size="12" fill="#3FB950">
+<rect x="380" y="40" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="58">POST /v1/messages</text>
+<text x="394" y="73" fill="#A9B7C6">Anthropic Messages</text>
+<rect x="380" y="120" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="138">POST /v1/responses</text>
+<text x="394" y="153" fill="#A9B7C6">OpenAI Responses</text>
+<rect x="380" y="200" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="218">POST /v1/chat/completions</text>
+<text x="394" y="233" fill="#A9B7C6">Chat Completions</text>
+<rect x="380" y="280" width="220" height="40" rx="6" fill="#111821" stroke="#3FB950"/>
+<text x="394" y="298">POST /v1beta/models/{model}</text>
+<text x="394" y="313" fill="#A9B7C6">Google Gemini</text>
+</g>
+<rect x="620" y="120" width="220" height="120" rx="8" fill="#111821" stroke="#58A6FF" stroke-width="2"/>
+<g font-size="13" fill="#E6EDF3">
+<text x="636" y="146" font-weight="700">Router + executor</text>
+<text x="636" y="168" fill="#A9B7C6">resolve tier → model</text>
+<text x="636" y="188" fill="#A9B7C6">reasoning · budget</text>
+<text x="636" y="208" fill="#A9B7C6">credential · fallback</text>
+<text x="636" y="228" fill="#A9B7C6">price · log once</text>
+</g>
+<g font-size="12" fill="#A9B7C6">
+<rect x="20" y="370" width="14" height="14" rx="3" fill="#18212C" stroke="#5D6E84"/><text x="42" y="382">client</text>
+<rect x="130" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#3FB950"/><text x="152" y="382">protocol door</text>
+<rect x="280" y="370" width="14" height="14" rx="3" fill="#111821" stroke="#58A6FF"/><text x="302" y="382">shared router</text>
+<text x="430" y="382">The reply is translated back into the client's protocol.</text>
+</g>
+</svg>

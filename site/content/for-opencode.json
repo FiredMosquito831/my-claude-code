@@ -1,0 +1,136 @@
+{
+  "path": "/for/opencode/",
+  "title": "OpenCode through a local LLM proxy",
+  "description": "Point OpenCode at My Claude Code with mcc-opencode: an MCC-owned config file, your own providers, keys and fallback chains, and a priced request log.",
+  "nav": "OpenCode",
+  "eyebrow": "For your agent · OpenCode",
+  "h1": "OpenCode through one local address",
+  "intro": "OpenCode is an open-source terminal agent that reads its providers from a config file. <code>mcc-opencode</code> points it at My Claude Code on your machine, so the model behind its next request can be any provider you have configured, with a fallback chain and a priced log entry behind it. It is the OpenCode proxy setup in one command.",
+  "page_grid": true,
+  "breadcrumbs": [
+    {
+      "label": "Home",
+      "href": "/"
+    },
+    {
+      "label": "For your agent",
+      "href": "/features/agents/"
+    },
+    {
+      "label": "OpenCode"
+    }
+  ],
+  "blocks": [
+    {
+      "type": "h2",
+      "text": "The command"
+    },
+    {
+      "type": "p",
+      "text": "Install OpenCode yourself, because MCC never installs an agent, then launch it through the proxy with one command:"
+    },
+    {
+      "type": "code",
+      "label": "Launch OpenCode against the local proxy",
+      "text": "mcc-opencode"
+    },
+    {
+      "type": "p",
+      "text": "OpenCode reads its provider configuration from files rather than from arguments, so the launcher writes a config document of its own under the MCC configuration home and points the launched process at it through OpenCode's own <code>OPENCODE_CONFIG</code> variable. That variable names an extra config file that is merged into the precedence chain, so your <code>opencode.json</code> is never read, never written and never backed up."
+    },
+    {
+      "type": "p",
+      "text": "The generated document names two environment variables rather than the token itself, and the launcher sets them in the child process only, so the proxy token is never on disk. A single prompt runs with OpenCode's own subcommand: <code>mcc-opencode run \"summarise this diff\"</code>."
+    },
+    {
+      "type": "p",
+      "text": "<code>mcc-opencode models mcc</code> lists the models MCC published, with the limits and prices the metadata ladder resolved. <code>mcc-opencode -m mcc/&lt;provider&gt;/&lt;model&gt;</code> starts on one specific MCC-routed model. OpenCode 2, which installs beside v1 under its own binary, has its own launcher: <code>mcc-opencode2</code>."
+    },
+    {
+      "type": "h2",
+      "text": "What OpenCode gets"
+    },
+    {
+      "type": "ul",
+      "items": [
+        "One address for every provider, over the Anthropic Messages surface OpenCode already speaks.",
+        "Fallback chains. When the first model cannot serve a request, the next rung is tried before the agent sees a failure, and each step is recorded.",
+        "A generated model list with the limits and prices the metadata ladder resolved, reachable with <code>models mcc</code>.",
+        "Credential rotation and health, so a rate-limited key is benched and another key in the pool is tried for the same request.",
+        "A priced request log: which model answered, which key it used, how many tokens it spent and where the price came from.",
+        "Per-agent attribution. The launcher marks the request as OpenCode's, so the log can name the agent behind it."
+      ]
+    },
+    {
+      "type": "h2",
+      "text": "What the launcher does not change"
+    },
+    {
+      "type": "p",
+      "text": "Your own <code>opencode.json</code> is untouched, because MCC writes a separate document and points one process at it. Stop launching through MCC and the file you wrote is the file you have. If OpenCode is not installed, the launcher prints its own install line and exits rather than installing anything on your behalf."
+    },
+    {
+      "type": "h2",
+      "text": "Where to go next"
+    },
+    {
+      "type": "related",
+      "links": [
+        {
+          "href": "/features/agents/",
+          "label": "Every agent MCC can launch or configure"
+        },
+        {
+          "href": "/quick-start/",
+          "label": "Quick start: install, run, and the first five minutes"
+        },
+        {
+          "href": "/features/routing/",
+          "label": "Routing: tiers and fallback chains"
+        },
+        {
+          "href": "/features/providers-and-credentials/",
+          "label": "Providers and credentials: what the request is routed to"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "claim": "mcc-opencode launches OpenCode through the local proxy",
+      "evidence": "pyproject.toml [project.scripts] mcc-opencode; src/my_claude_code/cli/launchers/opencode.py launch()"
+    },
+    {
+      "claim": "The launcher writes an MCC-owned config document and points the process at it with OPENCODE_CONFIG",
+      "evidence": "src/my_claude_code/cli/launchers/opencode.py module docstring; src/my_claude_code/config/harnesses.py HarnessCatalogue config_env_var OPENCODE_CONFIG"
+    },
+    {
+      "claim": "OPENCODE_CONFIG names an extra config file merged into the precedence chain, so the user's opencode.json is never read, written or backed up",
+      "evidence": "src/my_claude_code/cli/launchers/opencode.py module docstring"
+    },
+    {
+      "claim": "The generated document names environment variables rather than the token, set in the child process only",
+      "evidence": "src/my_claude_code/cli/launchers/opencode.py module docstring"
+    },
+    {
+      "claim": "mcc-opencode run runs one prompt and mcc-opencode models mcc lists the models MCC published",
+      "evidence": "src/my_claude_code/config/harnesses.py HarnessSpec opencode HarnessInvocation run / models mcc"
+    },
+    {
+      "claim": "mcc-opencode -m mcc/<provider>/<model> starts on one specific MCC-routed model",
+      "evidence": "src/my_claude_code/config/harnesses.py HarnessSpec opencode HarnessInvocation -m"
+    },
+    {
+      "claim": "OpenCode 2 installs beside v1 under its own binary and has its own launcher, mcc-opencode2",
+      "evidence": "pyproject.toml [project.scripts] mcc-opencode2; src/my_claude_code/config/harnesses.py HarnessSpec opencode2"
+    },
+    {
+      "claim": "A launcher whose agent is missing prints that agent's install line and exits",
+      "evidence": "src/my_claude_code/cli/launchers/common.py run_client_process; README.md §What the installer does"
+    },
+    {
+      "claim": "OpenCode speaks Anthropic Messages to the proxy",
+      "evidence": "README.md §Coding agents table; src/my_claude_code/config/harnesses.py HarnessProtocol.ANTHROPIC_MESSAGES"
+    }
+  ]
+}
