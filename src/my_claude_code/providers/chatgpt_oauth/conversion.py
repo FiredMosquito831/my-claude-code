@@ -63,6 +63,7 @@ def build_chatgpt_oauth_request_body(
     tool_name_max_length: int | None = None,
     origin: ReplayOrigin | None = None,
     plaintext_replay: bool = False,
+    prompt_cache_key: str | None = None,
 ) -> dict[str, Any]:
     """Build a ChatGPT Responses API request body from an Anthropic request.
 
@@ -86,6 +87,10 @@ def build_chatgpt_oauth_request_body(
     readable reasoning is replayed as summary-only ``reasoning`` items. It is
     a **separate** switch from ``origin`` on purpose: an operator whose host
     refuses a summary item can turn this off and keep carriers.
+
+    ``prompt_cache_key`` is the bounded (``<= 64`` char) per-conversation cache
+    key derived when ``CHATGPT_OAUTH_SESSION_AFFINITY`` is enabled (8.28.0),
+    or ``None`` -- omitted so v8.27.0 request bodies stay byte-identical.
     """
     if request.extra_body:
         raise InvalidRequestError(
@@ -105,7 +110,7 @@ def build_chatgpt_oauth_request_body(
         # reaches the next request. Before it, this line hard-coded ``False``.
         parallel_tool_calls=configured_responses_parallel_tool_calls(),
         max_output_tokens=None,
-        prompt_cache_key=None,
+        prompt_cache_key=prompt_cache_key,
         include_encrypted_reasoning=True,
         tool_name_max_length=tool_name_max_length,
         tool_schema_dialect=tool_schema_dialect,

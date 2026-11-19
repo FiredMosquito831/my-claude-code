@@ -630,6 +630,18 @@ def _isolate_client_fingerprint():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_chatgpt_turn_state_cache():
+    """Cached ``x-codex-turn-state`` values must not leak between tests."""
+    from my_claude_code.providers.chatgpt_oauth.affinity import (
+        clear_chatgpt_turn_state_cache,
+    )
+
+    clear_chatgpt_turn_state_cache()
+    yield
+    clear_chatgpt_turn_state_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_route_health():
     """Benches must not survive from one test into the next.
 

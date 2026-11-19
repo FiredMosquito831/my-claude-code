@@ -89,6 +89,29 @@ _SESSION_HEADERS = (
 #: :attr:`ClientFingerprint.opencode_session_ids`.
 _OPENCODE_SESSION_HEADER = "x-opencode-session"
 
+#: Bound on inbound session identifiers used for ChatGPT OAuth cache affinity
+#: derivation so huge garbage headers never bloat memory before hashing.
+MAX_CHATGPT_SESSION_CHARS = 256
+
+#: Ordered inbound session headers checked (case-insensitively) for ChatGPT
+#: OAuth per-conversation cache affinity (8.28.0). Kept completely separate
+#: from :data:`_SESSION_HEADERS` and :class:`ClientFingerprint` so OpenCode,
+#: Anthropic OAuth, ``ResponsesTransport``, and ``TestNothingNewLeavesTheMachine``
+#: remain 100% untouched.
+_CHATGPT_SESSION_HEADERS: tuple[str, ...] = (
+    "x-claude-code-session-id",
+    "x-session-affinity",
+    "x-session-id",
+    "session-id",
+    "session_id",
+    "thread-id",
+    "anthropic-session-id",
+    "x-anthropic-session-id",
+    "claude-session-id",
+    "x-claude-session-id",
+    "x-opencode-session",
+)
+
 #: The harness ids whose user-agent marks the caller as OpenCode itself.
 _OPENCODE_HARNESSES = frozenset({"opencode", "opencode2"})
 
@@ -170,6 +193,32 @@ EMPTY_FINGERPRINT = ClientFingerprint()
 _CURRENT: ContextVar[ClientFingerprint] = ContextVar(
     "fcc_client_fingerprint", default=EMPTY_FINGERPRINT
 )
+_CHATGPT_SESSION: ContextVar[str | None] = ContextVar(
+    "fcc_chatgpt_session_id", default=None
+)
+
+
+def chatgpt_session_id_from_headers(
+    headers: Mapping[str, str] | None,
+) -> str | None:
+    """Extract the highest-precedence session id for ChatGPT OAuth affinity."""
+    if not headers:
+        return None
+    candidates: dict[str, str] = {}
+    for raw_name, raw_value in headers.items():
+        name = str(raw_name).strip().lower()
+        if name not in _CHATGPT_SESSION_HEADERS or name in candidates:
+            continue
+        if not isinstance(raw_value, str):
+            continue
+        stripped = raw_value.strip()
+        if not stripped:
+            continue
+        candidates[name] = stripped[:MAX_CHATGPT_SESSION_CHARS]
+    for header_name in _CHATGPT_SESSION_HEADERS:
+        if header_name in candidates:
+            return candidates[header_name]
+    return None
 
 
 def fingerprint_from_headers(
@@ -207,12 +256,18 @@ def install_fingerprint(headers: Mapping[str, str] | None) -> ClientFingerprint:
     """Record the inbound client's headers for the current request."""
     fingerprint = fingerprint_from_headers(headers)
     _CURRENT.set(fingerprint)
+    _CHATGPT_SESSION.set(chatgpt_session_id_from_headers(headers))
     return fingerprint
 
 
 def current_fingerprint() -> ClientFingerprint:
     """The inbound client in flight right now; empty outside a request."""
     return _CURRENT.get()
+
+
+def current_chatgpt_session_id() -> str | None:
+    """The inbound session id for ChatGPT OAuth cache affinity, or ``None``."""
+    return _CHATGPT_SESSION.get()
 
 
 # ----------------------------------------------------------- harness id --
@@ -450,6 +505,7 @@ __all__ = [
     "HARNESS_SOURCE_NONE",
     "HARNESS_SOURCE_USER_AGENT",
     "HARNESS_VERSION_HEADER",
+    "MAX_CHATGPT_SESSION_CHARS",
     "MAX_HARNESS_CHARS",
     "MAX_MIRRORED_CHARS",
     "NON_REGISTRY_HARNESS_IDS",
@@ -458,7 +514,9 @@ __all__ = [
     "UNKNOWN_HARNESS",
     "ClientFingerprint",
     "HarnessAttribution",
+    "chatgpt_session_id_from_headers",
     "classify_user_agent",
+    "current_chatgpt_session_id",
     "current_fingerprint",
     "fingerprint_from_headers",
     "harness_from_headers",

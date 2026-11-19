@@ -21,6 +21,7 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
 from my_claude_code.config.settings import (
+    configured_chatgpt_oauth_session_affinity,
     configured_responses_carrier_replay,
     configured_responses_plaintext_replay,
 )
@@ -115,6 +116,12 @@ from my_claude_code.providers.recovery import (
 from my_claude_code.providers.runtime.served_models import resolve_served_models
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
+from .affinity import (
+    derive_conversation_affinity,
+    get_chatgpt_turn_state_cache,
+    new_client_request_id,
+    turn_state_cache_key,
+)
 from .codex_catalogue import (
     catalogue_evidence,
     listing_vetoes,
@@ -443,7 +450,14 @@ def chatgpt_oauth_served_models() -> dict[str, ModelListingEvidence]:
     }
 
 
-def _build_headers(credentials: Any, session_id: str) -> dict[str, str]:
+def _build_headers(
+    credentials: Any,
+    session_id: str,
+    *,
+    thread_id: str | None = None,
+    client_request_id: str | None = None,
+    turn_state: str | None = None,
+) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {credentials.access_token}",
         "Content-Type": "application/json",
@@ -453,6 +467,12 @@ def _build_headers(credentials: Any, session_id: str) -> dict[str, str]:
         "User-Agent": _user_agent(),
         "session-id": session_id,
     }
+    if thread_id is not None:
+        headers["thread-id"] = thread_id
+    if client_request_id is not None:
+        headers["x-client-request-id"] = client_request_id
+    if turn_state is not None:
+        headers["x-codex-turn-state"] = turn_state
     if credentials.account_id:
         headers["ChatGPT-Account-ID"] = credentials.account_id
     return headers
@@ -838,6 +858,8 @@ class ChatGPTOAuthProvider(BaseProvider):
         url: str,
         headers: dict[str, str],
         body: dict[str, Any],
+        *,
+        turn_state_key: tuple[str, str, str] | None = None,
     ) -> httpx.Response:
         """Build and send a streaming POST, preserving 401 for one refresh.
 
@@ -847,8 +869,23 @@ class ChatGPTOAuthProvider(BaseProvider):
         which returns an awaitable ``Response`` while still keeping the body
         stream open until we explicitly close it.
         """
-        request = self._client.build_request("POST", url, headers=headers, json=body)
-        response = await self._client.send(request, stream=True)
+        send_headers = headers
+        if turn_state_key is not None:
+            send_headers = dict(headers)
+            live_turn_state = get_chatgpt_turn_state_cache().get(turn_state_key)
+            if live_turn_state is None:
+                send_headers.pop("x-codex-turn-state", None)
+            else:
+                send_headers["x-codex-turn-state"] = live_turn_state
+        request = self._client.build_request(
+            "POST", url, headers=send_headers, json=body
+        )
+        try:
+            response = await self._client.send(request, stream=True)
+        except Exception:
+            if turn_state_key is not None:
+                get_chatgpt_turn_state_cache().delete(turn_state_key)
+            raise
         # Every response, success or refusal: the quota windows and the credits
         # balance ride on both, and until now this provider threw all of them
         # away. Allow-listed, stored verbatim, never computed.
@@ -857,6 +894,14 @@ class ChatGPTOAuthProvider(BaseProvider):
             status_code=response.status_code,
             account_id=self._pinned_account_id,
         )
+        if turn_state_key is not None:
+            turn_state_cache = get_chatgpt_turn_state_cache()
+            if 200 <= response.status_code < 300:
+                turn_state_cache.set(
+                    turn_state_key, response.headers.get("x-codex-turn-state")
+                )
+            elif response.status_code >= 400:
+                turn_state_cache.delete(turn_state_key)
         if response.status_code >= 400 and response.status_code != 401:
             # Read raw and decoded afterwards, so a body whose
             # ``Content-Encoding`` lies cannot take the status with it. See
@@ -948,6 +993,19 @@ class ChatGPTOAuthProvider(BaseProvider):
         # Built here rather than inside the builder because the account is what
         # this layer knows and the protocol layer must not.
         origin = self._replay_origin(credentials, request.model)
+        affinity_enabled = configured_chatgpt_oauth_session_affinity()
+        if affinity_enabled:
+            affinity = derive_conversation_affinity(
+                request, fallback_session_id=self._session_id
+            )
+            prompt_cache_key: str | None = affinity.prompt_cache_key
+            session_id = affinity.session_id
+            thread_id: str | None = affinity.thread_id
+        else:
+            prompt_cache_key = None
+            session_id = self._session_id
+            thread_id = None
+
         body = build_chatgpt_oauth_request_body(
             request,
             reasoning=reasoning,
@@ -960,9 +1018,31 @@ class ChatGPTOAuthProvider(BaseProvider):
             # carrier's: an operator whose host rejects a summary item can turn
             # this off and keep carriers.
             plaintext_replay=self._plaintext_replay(request.model),
+            **(
+                {"prompt_cache_key": prompt_cache_key}
+                if prompt_cache_key is not None
+                else {}
+            ),
         )
         url = f"{self._base_url}/codex/responses"
-        headers = _build_headers(credentials, self._session_id)
+
+        def _build_attempt_headers(
+            creds: Any,
+        ) -> tuple[dict[str, str], tuple[str, str, str] | None]:
+            if not affinity_enabled:
+                return _build_headers(creds, session_id), None
+            cache_key = turn_state_cache_key(self._base_url, creds, session_id)
+            turn_state = get_chatgpt_turn_state_cache().get(cache_key)
+            built = _build_headers(
+                creds,
+                session_id,
+                thread_id=thread_id,
+                client_request_id=new_client_request_id(),
+                turn_state=turn_state,
+            )
+            return built, cache_key
+
+        headers, initial_turn_state_key = _build_attempt_headers(credentials)
 
         trace_event(
             stage="provider",
@@ -995,6 +1075,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                 try:
                     active_credentials = credentials
                     active_headers = headers
+                    active_turn_state_key = initial_turn_state_key
                     refreshed_after_unauthorized = False
                     # Per attempt chain: a rung fires at most once, and the
                     # refusal is only written down once the retry is accepted.
@@ -1061,19 +1142,28 @@ class ChatGPTOAuthProvider(BaseProvider):
                             **history_plaintext_marker(declared_marker),
                         )
                         try:
+                            send_kwargs: dict[str, Any] = {
+                                "url": url,
+                                "headers": active_headers,
+                                "body": attempt_body,
+                            }
+                            if active_turn_state_key is not None:
+                                send_kwargs["turn_state_key"] = active_turn_state_key
                             response = await self._rate_limiter.execute_with_retry(
                                 self._send_stream_request,
                                 provider_failure_override=(
                                     self._provider_failure_override
                                 ),
-                                url=url,
-                                headers=active_headers,
-                                body=attempt_body,
+                                **send_kwargs,
                             )
                             if (
                                 response.status_code == 401
                                 and active_credentials.source_name == "fcc-managed"
                             ):
+                                if active_turn_state_key is not None:
+                                    get_chatgpt_turn_state_cache().delete(
+                                        active_turn_state_key
+                                    )
                                 await response.aclose()
                                 try:
                                     # Per slot: the 401 refreshes the account
@@ -1093,22 +1183,37 @@ class ChatGPTOAuthProvider(BaseProvider):
                                         )
                                 except ChatGPTOAuthError as exc:
                                     raise ApplicationUnavailableError(str(exc)) from exc
-                                active_headers = _build_headers(
-                                    active_credentials, self._session_id
+                                active_headers, active_turn_state_key = (
+                                    _build_attempt_headers(active_credentials)
                                 )
                                 refreshed_after_unauthorized = True
+                                retry_kwargs: dict[str, Any] = {
+                                    "url": url,
+                                    "headers": active_headers,
+                                    "body": attempt_body,
+                                }
+                                if active_turn_state_key is not None:
+                                    retry_kwargs["turn_state_key"] = (
+                                        active_turn_state_key
+                                    )
                                 response = await self._rate_limiter.execute_with_retry(
                                     self._send_stream_request,
                                     provider_failure_override=(
                                         self._provider_failure_override
                                     ),
-                                    url=url,
-                                    headers=active_headers,
-                                    body=attempt_body,
+                                    **retry_kwargs,
                                 )
                         except ApplicationUnavailableError:
+                            if active_turn_state_key is not None:
+                                get_chatgpt_turn_state_cache().delete(
+                                    active_turn_state_key
+                                )
                             raise
                         except Exception as error:
+                            if active_turn_state_key is not None:
+                                get_chatgpt_turn_state_cache().delete(
+                                    active_turn_state_key
+                                )
                             # 8.16.0: before the ladder, so it can neither add
                             # a retry nor change one -- what it writes changes
                             # the NEXT request's input, which is the only place
@@ -1163,6 +1268,9 @@ class ChatGPTOAuthProvider(BaseProvider):
                                 stripped_evidence = recovered.evidence
                                 stripped_values = recovered.rejected_effort_values
                             attempt_body = recovered.body
+                            active_headers, active_turn_state_key = (
+                                _build_attempt_headers(active_credentials)
+                            )
                             continue
                         break
                     if pending_schema is not None:
@@ -1184,6 +1292,10 @@ class ChatGPTOAuthProvider(BaseProvider):
                         )
                     try:
                         if response.status_code >= 400:
+                            if active_turn_state_key is not None:
+                                get_chatgpt_turn_state_cache().delete(
+                                    active_turn_state_key
+                                )
                             self._log_error(tag, req_tag, None, request_id)
                             if (
                                 response.status_code == 401
@@ -1271,8 +1383,12 @@ class ChatGPTOAuthProvider(BaseProvider):
                         await response.aclose()
 
                 except ApplicationUnavailableError:
+                    if active_turn_state_key is not None:
+                        get_chatgpt_turn_state_cache().delete(active_turn_state_key)
                     raise
                 except Exception as error:
+                    if active_turn_state_key is not None:
+                        get_chatgpt_turn_state_cache().delete(active_turn_state_key)
                     self._log_error(tag, req_tag, error, request_id)
                     failure = classify_provider_failure(
                         error,
