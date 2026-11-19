@@ -387,6 +387,21 @@
                     Which OpenAI media endpoints this host serves, at their standard paths under the base URL. Tick only what your gateway documents: a media rail (Image, Speech, Transcription, Video on Model Config) skips a provider that declares nothing for it, without charging it a failure. None ticked is a chat-only provider.
                   </div>
                 </div>
+                <div class="field" id="cpCacheAffinityField">
+                  <label for="cpCacheAffinity"><span>Cache affinity</span></label>
+                  <select id="cpCacheAffinity" aria-describedby="desc-cpCacheAffinity">
+                    <option value="off">Off (default)</option>
+                    <option value="body">Body only (prompt_cache_key)</option>
+                    <option value="header">Header only (x-affinity)</option>
+                    <option value="both">Both (prompt_cache_key + x-affinity)</option>
+                  </select>
+                  <div class="field-description" id="desc-cpCacheAffinity">
+                    Optional worker cache affinity across Chat Completions and Responses. Off leaves headers and JSON bodies unchanged; Both sends an opaque restart-stable session digest in prompt_cache_key and x-affinity.
+                  </div>
+                  <div class="field-description cp-note" id="cpCacheAffinityHint" hidden>
+                    Mistral host detected: consider selecting &ldquo;Both (prompt_cache_key + x-affinity)&rdquo; for multi-replica prompt cache stickiness. Your selection is never changed automatically.
+                  </div>
+                </div>
                 <div class="cp-form-actions">
                   <button id="cpSubmitButton" class="primary-button" type="submit">Add provider</button>
                   <button id="cpCancelButton" class="secondary-button" type="button">Cancel</button>
@@ -3413,6 +3428,16 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     Models page reads <em>withheld: 1 of the required 3 rows reported
                     one</em> rather than borrowing the Studio card&rsquo;s prices,
                     which the Vibe pool may not be billed at.
+                  </p>
+                  <p>
+                    <strong>Prompt cache worker affinity (8.29.0, opt-in).</strong>
+                    Enable <code>MISTRAL_PROMPT_CACHE_AFFINITY</code> on the Mistral
+                    Studio card to send an opaque restart-stable session digest in
+                    <code>prompt_cache_key</code> and <code>x-affinity</code> for
+                    Mistral Studio and Mistral Vibe (Codestral stays OFF). Custom
+                    provider cards expose a per-card <strong>Cache affinity</strong>
+                    selector (<code>off</code>, <code>body</code>,
+                    <code>header</code>, or <code>both</code>).
                   </p>
                 </div>
 

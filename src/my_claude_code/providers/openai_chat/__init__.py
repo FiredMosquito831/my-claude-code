@@ -4,6 +4,14 @@ from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .base_url import openai_v1_base_url
+from .cache_affinity import (
+    CACHE_AFFINITY_HEADER_NAME,
+    CacheAffinitySpec,
+    apply_cache_affinity_body,
+    cache_affinity_headers,
+    cache_affinity_spec_for_mode,
+    resolve_affinity_digest,
+)
 from .client_identity import ClientIdentity, identity_headers_for_body
 from .complaint import (
     complaint_evidence_snippet,
@@ -38,6 +46,7 @@ from .profiles import (
     OPENAI_CHAT_PROFILES,
     OPENAI_STANDARD_REASONING,
     OpenAIChatProfile,
+    profile_with_cache_affinity,
 )
 from .provider import OpenAIAsyncCredentialProvider, OpenAIChatProvider
 from .reasoning import (
@@ -88,6 +97,7 @@ def create_openai_chat_provider(
 
 
 __all__ = [
+    "CACHE_AFFINITY_HEADER_NAME",
     "CLIENT_FAMILY_ORDER",
     "GENERIC_OPENAI_PROFILE",
     "NO_REASONING",
@@ -97,6 +107,7 @@ __all__ = [
     "OPENCODE_CLIENT_IDENTITY",
     "OPENCODE_FREE_TIER_CATALOGUE",
     "STAND_IN_INPUT_SCHEMA",
+    "CacheAffinitySpec",
     "ChatTemplateReasoning",
     "ClientIdentity",
     "NamedEffortReasoning",
@@ -106,7 +117,10 @@ __all__ = [
     "OpenAIChatRequestPolicy",
     "ReasoningObject",
     "ResolvedSurfaceLadder",
+    "apply_cache_affinity_body",
     "build_openai_chat_request_body",
+    "cache_affinity_headers",
+    "cache_affinity_spec_for_mode",
     "catalogue_surface",
     "complaint_evidence_snippet",
     "create_openai_chat_provider",
@@ -123,9 +137,11 @@ __all__ = [
     "model_is_zero_cost",
     "observe_identity_enforcement",
     "openai_v1_base_url",
+    "profile_with_cache_affinity",
     "profile_with_declared_surfaces",
     "profile_with_learned_dialect",
     "remember_response_surfaces",
+    "resolve_affinity_digest",
     "resolve_response_surface",
     "resolve_surface_ladder",
     "sampling_parameter_evidence",

@@ -588,6 +588,17 @@ async def test_chatgpt_oauth_session_affinity_is_hot_without_restart(hot) -> Non
 
 
 @pytest.mark.asyncio
+async def test_mistral_prompt_cache_affinity_is_hot_without_restart(hot) -> None:
+    from my_claude_code.config.settings import configured_mistral_prompt_cache_affinity
+
+    assert configured_mistral_prompt_cache_affinity() is False
+    await hot.apply_hot({"MISTRAL_PROMPT_CACHE_AFFINITY": "true"})
+    assert configured_mistral_prompt_cache_affinity() is True
+    await hot.apply_hot({"MISTRAL_PROMPT_CACHE_AFFINITY": "false"})
+    assert configured_mistral_prompt_cache_affinity() is False
+
+
+@pytest.mark.asyncio
 async def test_the_probe_switch_is_read_off_the_live_settings(hot) -> None:
     assert hot.runtime.settings.model_probe_new_models is False
     await hot.apply_hot({"MODEL_PROBE_NEW_MODELS": "true"})

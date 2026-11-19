@@ -282,6 +282,10 @@ class ProviderDescriptor:
     # media operation without charging it a failure. Filled only from the
     # host's own API reference, never inferred from a model name.
     media_surfaces: tuple[MediaSurface, ...] = ()
+    # Opt-in per-custom-provider worker cache affinity mode (``"off"`` |
+    # ``"body"`` | ``"header"`` | ``"both"``). ``"off"`` keeps every existing
+    # custom card byte-identical.
+    cache_affinity: str = "off"
 
     def configuration_attrs(self) -> tuple[str, ...]:
         """Return settings fields whose non-empty values configure this provider."""

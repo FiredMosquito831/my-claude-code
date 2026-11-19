@@ -124,6 +124,17 @@ CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-oauth"
 # per ``(base_url, account, conversation)`` with a 2-hour TTL.
 CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT = False
 
+# Whether built-in Mistral Studio (``mistral``) and Mistral Vibe
+# (``mistral_vibe``) requests on ``api.mistral.ai`` send an opaque,
+# restart-stable root-session digest in body ``prompt_cache_key`` and header
+# ``x-affinity`` (8.29.0, M-Q1/M-Q9). ``mistral_codestral`` stays OFF per M-Q2.
+#
+# ``False`` by default per IV.7 / M-Q1 / M-Q9 (no Mistral API key was
+# present on this machine to run the bounded schema check before shipping, so
+# default-OFF preserves 100% byte-identical v8.28.0 wire bytes until opted in);
+# hot-toggleable without restart.
+MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT = False
+
 # Non-secret marker stored in Settings when FCC owns a renewable Claude
 # subscription OAuth credential (imported from Claude Code, or from signing in
 # directly). See docs/ANTHROPIC-SUBSCRIPTION.md.

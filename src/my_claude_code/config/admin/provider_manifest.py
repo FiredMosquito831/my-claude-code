@@ -7,6 +7,7 @@ from my_claude_code.config.constants import (
     ANTIGRAVITY_CLIENT_IDENTITY_DEFAULT,
     ANTIGRAVITY_CLIENT_PROFILE_DEFAULT,
     MARKETPLACE_PUBLIC_MARKET_DEFAULT,
+    MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT,
     OPENCODE_CLIENT_AI_SDK_VERSION_DEFAULT,
     OPENCODE_CLIENT_IDENTITY_DEFAULT,
     OPENCODE_CLIENT_RUNTIME_DEFAULT,
@@ -500,6 +501,7 @@ def provider_field_specs() -> tuple[dict[str, Any], ...]:
     return (
         *_credential_field_specs(),
         *_rotation_field_specs(),
+        *_mistral_cache_affinity_field_specs(),
         *_opencode_identity_field_specs(),
         *_chatgpt_oauth_login_field_specs(),
         *_chatgpt_oauth_account_field_specs(),
@@ -510,6 +512,29 @@ def provider_field_specs() -> tuple[dict[str, Any], ...]:
         *_inferhub_market_field_specs(),
         *_base_url_field_specs(),
         *_proxy_field_specs(),
+    )
+
+
+def _mistral_cache_affinity_field_specs() -> tuple[dict[str, Any], ...]:
+    """Prompt cache affinity toggle for built-in Mistral Studio and Vibe."""
+    return (
+        {
+            "key": "MISTRAL_PROMPT_CACHE_AFFINITY",
+            "label": "Prompt Cache Affinity (Mistral Studio & Vibe)",
+            "section_id": "providers",
+            "provider": "mistral",
+            "field_type": "boolean",
+            "default": "true" if MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT else "false",
+            "settings_attr": "mistral_prompt_cache_affinity",
+            "description": (
+                "Applies to built-in Mistral Studio (mistral) and Mistral Vibe "
+                "(mistral_vibe) on api.mistral.ai (leaving mistral_codestral "
+                "OFF), sending an opaque restart-stable root-session digest "
+                "in prompt_cache_key and x-affinity to improve cache pod "
+                "routing for multi-turn chats and Claude Code subagents. "
+                "Applies on the next request without restarting."
+            ),
+        },
     )
 
 

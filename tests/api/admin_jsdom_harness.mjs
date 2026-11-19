@@ -11595,6 +11595,38 @@ const customProviders = {};
     .filter((box) => box.checked)
     .map((box) => box.value);
   customProviders.mediaHelp = textOf(doc, "#desc-cpMediaOperations");
+  const affinitySelect = doc.getElementById("cpCacheAffinity");
+  const baseUrlInput = doc.getElementById("cpBaseUrl");
+  const affinityHint = doc.getElementById("cpCacheAffinityHint");
+  customProviders.cacheAffinityOptions = affinitySelect
+    ? Array.from(affinitySelect.options).map((o) => o.value)
+    : [];
+  customProviders.cacheAffinityInitialValue = affinitySelect
+    ? affinitySelect.value
+    : null;
+  customProviders.cacheAffinityHintProbes = {};
+  if (baseUrlInput && affinitySelect && affinityHint) {
+    const originalUrl = baseUrlInput.value;
+    const probeHosts = [
+      ["global", "https://api.mistral.ai/v1"],
+      ["euUpper", "https://API.EU.MISTRAL.AI/v1"],
+      ["us", "https://api.us.mistral.ai/v1"],
+      ["spoofSuffix", "https://api.mistral.ai.evil.example/v1"],
+      ["spoofPrefix", "https://evil-api.mistral.ai.attacker.com/v1"],
+      ["spoofQuery", "https://example.com/?next=https://api.mistral.ai"],
+    ];
+    for (const [label, probeUrl] of probeHosts) {
+      baseUrlInput.value = probeUrl;
+      baseUrlInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+      customProviders.cacheAffinityHintProbes[label] = {
+        hidden: affinityHint.hidden,
+        selectValue: affinitySelect.value,
+      };
+    }
+    baseUrlInput.value = originalUrl;
+    baseUrlInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+    affinitySelect.value = "both";
+  }
   const transcribeBox = doc.querySelector(
     '#cpMediaOperations input[data-cp-media-operation="transcribe"]',
   );
@@ -11627,6 +11659,14 @@ const customProviders = {};
     );
     return sent.length ? sent[sent.length - 1].body.media_operations : null;
   })();
+  customProviders.patchedCacheAffinity = (() => {
+    const sent = fetchBodies.filter(
+      (entry) =>
+        entry.path.startsWith("/admin/api/custom-providers/") &&
+        entry.method === "PATCH",
+    );
+    return sent.length ? sent[sent.length - 1].body.cache_affinity : null;
+  })();
   customProviders.createdMedia = (() => {
     const sent = fetchBodies.filter(
       (entry) =>
@@ -11634,6 +11674,35 @@ const customProviders = {};
     );
     return sent.length ? sent[sent.length - 1].body.media_operations : null;
   })();
+  customProviders.createdCacheAffinity = (() => {
+    const sent = fetchBodies.filter(
+      (entry) =>
+        entry.path === "/admin/api/custom-providers" && entry.method === "POST",
+    );
+    return sent.length ? sent[sent.length - 1].body.cache_affinity : null;
+  })();
+  customProviders.detailsWithAffinityOff =
+    typeof window.customProviderDetailsText === "function"
+      ? window.customProviderDetailsText({
+          key_count: 1,
+          credential_rotation: "failover",
+          model_count: 2,
+          surfaces: ["chat_completions"],
+          media_operations: [],
+          cache_affinity: "off",
+        })
+      : null;
+  customProviders.detailsWithAffinityBoth =
+    typeof window.customProviderDetailsText === "function"
+      ? window.customProviderDetailsText({
+          key_count: 1,
+          credential_rotation: "failover",
+          model_count: 2,
+          surfaces: ["chat_completions"],
+          media_operations: [],
+          cache_affinity: "both",
+        })
+      : null;
 }
 
 // ------------------------------------------------------------ coding agents

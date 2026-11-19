@@ -1120,6 +1120,10 @@
       "control": "field-MISTRAL_API_KEY_ROTATION",
       "page": "providers"
     },
+    "MISTRAL_PROMPT_CACHE_AFFINITY": {
+      "control": "field-MISTRAL_PROMPT_CACHE_AFFINITY",
+      "page": "providers"
+    },
     "MISTRAL_PROXY": {
       "control": "field-MISTRAL_PROXY",
       "page": "providers"

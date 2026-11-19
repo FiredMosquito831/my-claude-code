@@ -99,6 +99,7 @@ from .constants import (
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     MCP_MEDIA_APPS_DEFAULT,
     MEDIA_UPLOAD_MAX_MB_DEFAULT,
+    MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT,
     MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT,
     MODEL_METADATA_OPENROUTER_LIVE_DEFAULT,
     MODEL_PROBE_NEW_MODELS_DEFAULT,
@@ -530,6 +531,10 @@ class Settings(BaseSettings):
 
     # ==================== Mistral Vibe (subscription) ====================
     mistral_vibe_api_key: str = Field(default="", validation_alias="MISTRAL_VIBE_KEY")
+    mistral_prompt_cache_affinity: bool = Field(
+        default=MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT,
+        validation_alias="MISTRAL_PROMPT_CACHE_AFFINITY",
+    )
 
     # ==================== Mistral Codestral (codestral.mistral.ai) ====================
     codestral_api_key: str = Field(default="", validation_alias="CODESTRAL_API_KEY")
@@ -3696,6 +3701,26 @@ def configured_chatgpt_oauth_session_affinity() -> bool:
             settings,
             "chatgpt_oauth_session_affinity",
             CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
+        )
+    )
+
+
+def configured_mistral_prompt_cache_affinity() -> bool:
+    """Whether built-in Mistral Studio/Vibe derive prompt cache affinity (8.29.0).
+
+    Read per request so a dashboard toggle takes effect on the very next
+    request without restarting the server or rebuilding providers. Applies to
+    ``mistral`` and ``mistral_vibe`` on ``api.mistral.ai`` while keeping
+    ``mistral_codestral`` OFF. Defaults to ``False``
+    (``MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT``) so v8.28.0 wire headers and
+    bodies stay byte-identical until opted in.
+    """
+    settings = get_settings()
+    return bool(
+        getattr(
+            settings,
+            "mistral_prompt_cache_affinity",
+            MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT,
         )
     )
 

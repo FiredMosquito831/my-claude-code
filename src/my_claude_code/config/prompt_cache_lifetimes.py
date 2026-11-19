@@ -303,7 +303,11 @@ UPSTREAM_ALIAS_PREFIX = "~"
 #: Hosts that cache on their own and take no lifetime (the user's Q11), each
 #: on evidence (7.106.0): its documentation -- Gemini and Vertex (implicit
 #: caching, on by default, no lifetime field), DeepSeek (context caching, on
-#: by default, no parameter), OpenRouter for every upstream but Anthropic, the
+#: by default, no parameter), Mistral (``mistral``, ``mistral_vibe``, and
+#: ``mistral_codestral``: docs.mistral.ai documents automatic 64-token block
+#: prefix caching at a 90% discount with no lifetime field, and requests.db
+#: measured 94-96% cache-read share with 38,860/38,860 hits exact multiples of
+#: 64), OpenRouter for every upstream but Anthropic, the
 #: ChatGPT subscription and its ``openai`` alias (Codex 0.163.0 sends only
 #: ``prompt_cache_key``; GPT-5.6 and later take one lifetime, 30 min, the
 #: default) -- or cache reads in the request log on requests MCC sent no
@@ -320,6 +324,9 @@ AUTOMATIC_PROMPT_CACHE_PROVIDERS: frozenset[str] = frozenset(
         "deepseek",
         "gemini",
         "hypercharm",
+        "mistral",
+        "mistral_codestral",
+        "mistral_vibe",
         "nous_portal",
         "nvidia_nim",
         "open_router",

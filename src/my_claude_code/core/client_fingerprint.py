@@ -270,6 +270,11 @@ def current_chatgpt_session_id() -> str | None:
     return _CHATGPT_SESSION.get()
 
 
+def current_affinity_session_id() -> str | None:
+    """The inbound root session id for per-conversation cache affinity, or ``None``."""
+    return _CHATGPT_SESSION.get()
+
+
 # ----------------------------------------------------------- harness id --
 #
 # Two signals, explicit wins.
@@ -516,6 +521,7 @@ __all__ = [
     "HarnessAttribution",
     "chatgpt_session_id_from_headers",
     "classify_user_agent",
+    "current_affinity_session_id",
     "current_chatgpt_session_id",
     "current_fingerprint",
     "fingerprint_from_headers",

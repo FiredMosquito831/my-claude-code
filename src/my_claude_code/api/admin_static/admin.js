@@ -27003,6 +27003,7 @@ function customProviderDetailsText(provider) {
     // like the test that watches it -- follows it at the end of the line.
     customProviderSurfacesText(provider) +
     customProviderMediaText(provider) +
+    customProviderCacheAffinityText(provider) +
     ` · ${provider.model_count} models` +
     (provider.proxy ? ` · proxy ${provider.proxy}` : "")
   );
@@ -27126,6 +27127,79 @@ function customProviderMediaOperationsValue() {
   return Array.from(host.querySelectorAll("input[type=checkbox]"))
     .filter((box) => box.checked)
     .map((box) => box.value);
+}
+
+const MISTRAL_KNOWN_AFFINITY_HOSTS = new Set([
+  "api.mistral.ai",
+  "api.eu.mistral.ai",
+  "api.us.mistral.ai",
+]);
+
+const CUSTOM_PROVIDER_CACHE_AFFINITY_FALLBACK = [
+  { value: "off", label: "Off (default)" },
+  { value: "body", label: "Body only (prompt_cache_key)" },
+  { value: "header", label: "Header only (x-affinity)" },
+  { value: "both", label: "Both (prompt_cache_key + x-affinity)" },
+];
+
+function isKnownMistralAffinityHost(rawUrl) {
+  const trimmed = String(rawUrl || "").trim();
+  if (!trimmed) return false;
+  try {
+    const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    return MISTRAL_KNOWN_AFFINITY_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function updateCustomProviderCacheAffinityHint() {
+  const hint = byId("cpCacheAffinityHint");
+  const baseUrlInput = byId("cpBaseUrl");
+  if (!hint || !baseUrlInput) return;
+  hint.hidden = !isKnownMistralAffinityHost(baseUrlInput.value);
+}
+
+function customProviderCacheAffinityText(provider) {
+  const mode =
+    provider && typeof provider.cache_affinity === "string"
+      ? provider.cache_affinity.trim()
+      : "off";
+  if (!mode || mode === "off") return "";
+  return ` · cache affinity ${mode}`;
+}
+
+function renderCustomProviderCacheAffinity(provider) {
+  const select = byId("cpCacheAffinity");
+  if (!select) return;
+  const available =
+    (provider &&
+    Array.isArray(provider.available_cache_affinity_modes) &&
+    provider.available_cache_affinity_modes.length
+      ? provider.available_cache_affinity_modes
+      : null) || CUSTOM_PROVIDER_CACHE_AFFINITY_FALLBACK;
+  select.textContent = "";
+  available.forEach((mode) => {
+    const option = document.createElement("option");
+    option.value = mode.value;
+    option.textContent = mode.label;
+    select.appendChild(option);
+  });
+  const current =
+    provider && typeof provider.cache_affinity === "string" && provider.cache_affinity
+      ? provider.cache_affinity
+      : "off";
+  select.value = available.some((mode) => mode.value === current) ? current : "off";
+}
+
+function customProviderCacheAffinityValue() {
+  const select = byId("cpCacheAffinity");
+  if (!select) return "off";
+  return select.value || "off";
 }
 
 /* ---------------------------------------------- a custom provider is a FACE
@@ -27934,6 +28008,8 @@ function openCustomProviderForm(provider) {
   byId("cpProxy").value = provider && provider.proxy ? provider.proxy : "";
   renderCustomProviderSurfaces(provider);
   renderCustomProviderMediaOperations(provider);
+  renderCustomProviderCacheAffinity(provider);
+  updateCustomProviderCacheAffinityHint();
   byId("cpSubmitButton").textContent = provider ? "Save changes" : "Add provider";
   byId("customProviderForm").hidden = false;
   byId("cpDisplayName").focus();
@@ -27961,6 +28037,7 @@ async function submitCustomProviderForm(event) {
           proxy: byId("cpProxy").value,
           surfaces: customProviderSurfacesValue(),
           media_operations: customProviderMediaOperationsValue(),
+          cache_affinity: customProviderCacheAffinityValue(),
         }),
       });
       showMessage(`Updated ${editingId}.`, "ok");
@@ -27975,6 +28052,7 @@ async function submitCustomProviderForm(event) {
           proxy: byId("cpProxy").value,
           surfaces: customProviderSurfacesValue(),
           media_operations: customProviderMediaOperationsValue(),
+          cache_affinity: customProviderCacheAffinityValue(),
         }),
       });
       const discovery = result.discovery || {};
@@ -28030,6 +28108,7 @@ byId("addCustomProviderButton").addEventListener("click", () =>
   openCustomProviderForm(null),
 );
 byId("cpCancelButton").addEventListener("click", closeCustomProviderForm);
+byId("cpBaseUrl").addEventListener("input", updateCustomProviderCacheAffinityHint);
 byId("customProviderForm").addEventListener("submit", submitCustomProviderForm);
 
 /* --------------------------------------------------------------------- */

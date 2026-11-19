@@ -31,11 +31,13 @@ from my_claude_code.config.credential_names import (
 )
 from my_claude_code.config.media_surfaces import CUSTOM_MEDIA_OPERATIONS
 from my_claude_code.config.provider_registry import (
+    CUSTOM_CACHE_AFFINITY_MODES,
     CUSTOM_PROVIDER_SURFACES,
     CustomProviderEntry,
     ProviderRegistry,
     custom_provider_id,
     get_provider_registry,
+    normalize_custom_cache_affinity,
     normalize_custom_media_operations,
     normalize_custom_surfaces,
 )
@@ -63,6 +65,13 @@ CUSTOM_PROVIDER_SURFACE_LABELS: dict[str, str] = {
     "chat_completions": "Chat Completions (/chat/completions)",
     "responses": "Responses (/responses)",
     "messages": "Messages (/messages)",
+}
+
+CUSTOM_CACHE_AFFINITY_LABELS: dict[str, str] = {
+    "off": "Off (default)",
+    "body": "Body only (prompt_cache_key)",
+    "header": "Header only (x-affinity)",
+    "both": "Both (prompt_cache_key + x-affinity)",
 }
 
 #: The media endpoints the card offers (7.67.0), in the registry's order.
@@ -105,6 +114,9 @@ class CustomProviderCreatePayload(BaseModel):
     # The media endpoints this host serves (7.67.0). Absent or empty: none,
     # which is every custom provider before this field existed.
     media_operations: list[str] | None = None
+    # Opt-in per-card worker cache affinity (``"off"`` | ``"body"`` |
+    # ``"header"`` | ``"both"``). Absent or ``"off"`` keeps v8.28.0 bytes.
+    cache_affinity: str | None = None
 
 
 class CustomProviderUpdatePayload(BaseModel):
@@ -126,6 +138,8 @@ class CustomProviderUpdatePayload(BaseModel):
     # The media endpoints, the same way: absent leaves them, a list (empty
     # included) replaces them.
     media_operations: list[str] | None = None
+    # Absent leaves cache affinity unchanged; a valid mode replaces it.
+    cache_affinity: str | None = None
 
 
 class CustomProviderKeyPayload(BaseModel):
@@ -211,6 +225,14 @@ def _validated_media_operations(value: list[str] | None) -> tuple[str, ...]:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _validated_cache_affinity(value: str | None) -> str:
+    """Validate custom provider ``cache_affinity`` mode via the registry."""
+    try:
+        return normalize_custom_cache_affinity(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _registry_get_or_404(
     registry: ProviderRegistry, provider_id: str
 ) -> CustomProviderEntry:
@@ -271,6 +293,11 @@ def _serialize_entry(
         "available_media_operations": [
             {"value": value, "label": CUSTOM_MEDIA_OPERATION_LABELS[value]}
             for value in CUSTOM_MEDIA_OPERATIONS
+        ],
+        "cache_affinity": entry.cache_affinity,
+        "available_cache_affinity_modes": [
+            {"value": value, "label": CUSTOM_CACHE_AFFINITY_LABELS[value]}
+            for value in CUSTOM_CACHE_AFFINITY_MODES
         ],
     }
 
@@ -364,6 +391,7 @@ async def create_custom_provider(
     rotation = _validate_rotation(payload.credential_rotation)
     proxy = _normalize_proxy(payload.proxy)
     media_operations = _validated_media_operations(payload.media_operations)
+    cache_affinity = _validated_cache_affinity(payload.cache_affinity)
     # The registry would happily allocate ``custom_acme_2`` for a second
     # provider named "Acme"; two identically-named cards are indistinguishable
     # in the dashboard, so the name is claimed exclusively here instead.
@@ -382,6 +410,7 @@ async def create_custom_provider(
             proxy=proxy,
             surfaces=payload.surfaces,
             media_operations=media_operations,
+            cache_affinity=cache_affinity,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -456,6 +485,8 @@ async def update_custom_provider(
         changes["media_operations"] = _validated_media_operations(
             payload.media_operations
         )
+    if payload.cache_affinity is not None:
+        changes["cache_affinity"] = _validated_cache_affinity(payload.cache_affinity)
     if payload.reasoning_effort_enum is not None:
         words = normalize_effort_words(payload.reasoning_effort_enum)
         changes["reasoning_effort_enum"] = list(words) if words else None
