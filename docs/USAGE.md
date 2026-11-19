@@ -3227,6 +3227,22 @@ exit. Two consequences worth knowing before you spend:
 draws on is not published, so a `mistral_vibe` ref is skipped uncharged rather
 than spending an allowance nobody agreed to. Use a `mistral/…` ref.
 
+**Prompt cache worker affinity (8.29.0, opt-in).** Mistral (`mistral`,
+`mistral_vibe`, and `mistral_codestral`) caches prefixes automatically in
+64-token blocks without a lifetime parameter. `MISTRAL_PROMPT_CACHE_AFFINITY`
+defaults to `false` so outbound Mistral Studio and Vibe requests match v8.28.0
+byte for byte. Setting `MISTRAL_PROMPT_CACHE_AFFINITY=true` on the Mistral
+Studio card (hot-applied on the next request without restart) sends an opaque,
+restart-stable 40-character session digest (prefixed `mcc` + `-aff-`) in both body
+`prompt_cache_key` and HTTP header `x-affinity` for `mistral` and
+`mistral_vibe` (derived from `x-claude-code-session-id` and sibling session
+headers, `metadata.user_id`/`metadata.session_id`, or opening turns so Claude
+Code subagents share the parent session's cache pod). `mistral_codestral`
+stays OFF by default. Custom provider cards also expose a per-card **Cache
+affinity** selector (`off` default, `body`, `header`, or `both`) across Chat
+Completions and Responses, with a non-mutating UI hint when the Base URL
+targets `api.mistral.ai`, `api.eu.mistral.ai`, or `api.us.mistral.ai`.
+
 <a id="reading-a-failed-refresh-models"></a>
 
 ### Reading a failed Refresh models

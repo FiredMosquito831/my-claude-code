@@ -1586,3 +1586,90 @@ async def test_the_chatgpt_oauth_session_affinity_setting_reaches_the_wire(
     assert ("thread-id" in headers) is expected
     assert ("x-client-request-id" in headers) is expected
     assert (headers["session-id"] != provider._session_id) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", ["mistral", "mistral_vibe"])
+@pytest.mark.parametrize("value", [None, "true", "false"])
+async def test_the_mistral_prompt_cache_affinity_setting_reaches_the_wire(
+    provider_id: str, value: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """8.29.0's MISTRAL_PROMPT_CACHE_AFFINITY, from ``Settings`` to the wire."""
+    import json
+
+    import httpx
+
+    from my_claude_code.config import settings as config_settings
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.client_fingerprint import install_fingerprint
+    from my_claude_code.providers.base import ProviderConfig
+    from my_claude_code.providers.mistral import MistralProvider
+    from tests.providers.support import passthrough_rate_limiter
+
+    expected = value == "true"
+    if value is None:
+        monkeypatch.delenv("MISTRAL_PROMPT_CACHE_AFFINITY", raising=False)
+    else:
+        monkeypatch.setenv("MISTRAL_PROMPT_CACHE_AFFINITY", value)
+    config_settings.get_settings.cache_clear()
+    captured: list[tuple[dict[str, str], dict[str, object]]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            (
+                {k.lower(): v for k, v in request.headers.items()},
+                json.loads(request.content.decode("utf-8")),
+            )
+        )
+
+        async def _sse() -> Any:
+            yield (
+                b'data: {"id":"c1","object":"chat.completion.chunk",'
+                b'"created":0,"model":"devstral-small-latest",'
+                b'"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},'
+                b'"finish_reason":"stop"}]}\n\n'
+                b"data: [DONE]\n\n"
+            )
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(),
+        )
+
+    try:
+        provider = MistralProvider(
+            ProviderConfig(
+                api_key="test_mistral_key",
+                base_url="https://api.mistral.ai/v1",
+                rate_limit=10,
+                rate_window=60,
+                max_concurrency=5,
+            ),
+            rate_limiter=passthrough_rate_limiter(),
+            provider_id=provider_id,
+        )
+        provider._client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_handler)
+        )
+        install_fingerprint({"x-claude-code-session-id": "contract-mistral-root"})
+        request = MessagesRequest.model_validate(
+            {
+                "model": "devstral-small-latest",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        _ = [chunk async for chunk in provider.stream_response(request)]
+    finally:
+        install_fingerprint(None)
+        config_settings.get_settings.cache_clear()
+
+    assert len(captured) == 1
+    headers, body = captured[0]
+    assert ("prompt_cache_key" in body) is expected
+    assert ("x-affinity" in headers) is expected
+    if expected:
+        assert body["prompt_cache_key"] == headers["x-affinity"]
+        assert str(body["prompt_cache_key"]).startswith("mcc-aff-")
+        assert len(str(body["prompt_cache_key"])) == 40

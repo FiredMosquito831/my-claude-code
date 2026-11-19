@@ -114,6 +114,7 @@ from my_claude_code.providers.recovery import (
 )
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
+from .cache_affinity import CacheAffinitySpec, resolve_affinity_digest
 from .client_identity import ClientIdentity, identity_headers_for_body
 from .marketplace import (
     current_marketplace_attempt,
@@ -280,6 +281,7 @@ class ResponsesTransport:
         tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
         marketplace: MarketplaceDialect | None = None,
         provider_id: str = "",
+        cache_affinity: CacheAffinitySpec | None = None,
     ) -> None:
         self._config = config
         # The price marketplace this host is (7.109.0), or ``None`` -- every
@@ -324,6 +326,7 @@ class ResponsesTransport:
         # instance and therefore still a usable match key.
         self._provider_id = provider_id or provider_name
         self._identity = identity
+        self._cache_affinity = cache_affinity
         self._api_key = api_key
         self._api_key_provider = api_key_provider
         self._client = bound_socks_handshake(
@@ -621,6 +624,17 @@ class ResponsesTransport:
         cache_key = self._prompt_cache_key(headers)
         if cache_key:
             body["prompt_cache_key"] = cache_key
+        if (
+            self._identity is None
+            and self._cache_affinity is not None
+            and self._cache_affinity.is_active()
+        ):
+            aff_digest = resolve_affinity_digest(request)
+            if aff_digest:
+                if self._cache_affinity.send_body_key:
+                    body.setdefault("prompt_cache_key", aff_digest)
+                if self._cache_affinity.header_name:
+                    headers[self._cache_affinity.header_name] = aff_digest
         return body, headers
 
     def _learned_schema_refusals(self) -> tuple[SchemaKeywordRefusal, ...]:
@@ -873,6 +887,22 @@ class ResponsesTransport:
                 if self._tool_choice_refused(request)
                 else {}
             )
+            affinity_record = (
+                {
+                    "cache_affinity": {
+                        self._cache_affinity.header_name: headers[
+                            self._cache_affinity.header_name
+                        ]
+                    }
+                }
+                if (
+                    self._identity is None
+                    and self._cache_affinity is not None
+                    and self._cache_affinity.header_name
+                    and self._cache_affinity.header_name in headers
+                )
+                else {}
+            )
             # The commit boundary, the same one the Chat Completions path has:
             # the body is final once it is handed to the sender, and the
             # surface it was sent on is recorded beside it.
@@ -884,6 +914,7 @@ class ResponsesTransport:
                     if identity
                     else {}
                 ),
+                **affinity_record,
                 **marker,
                 **schema_marker,
                 **count_marker,

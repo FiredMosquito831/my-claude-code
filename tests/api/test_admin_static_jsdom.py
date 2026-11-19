@@ -1754,6 +1754,10 @@ MOVED_VIEWS = {
     # 8.20.3: the OpenClaw launcher card on the Claude page names the model
     # allowlist wildcard and the add-only default model. Prose only.
     "claude": "the OpenClaw launcher card names MCC's two additive keys",
+    # 8.29.0: the custom provider form on the Providers page adds the
+    # Cache affinity selector (#cpCacheAffinityField / #cpCacheAffinity /
+    # #cpCacheAffinityHint).
+    "providers": "the custom provider form adds the Cache affinity selector",
 }
 
 #: The base-written per-view digests. Recorded by running THIS harness against
@@ -9728,6 +9732,28 @@ def test_ticking_a_media_endpoint_submits_it_and_a_create_sends_none(
 
     assert card["patchedMedia"] == ["speech", "transcribe"]
     assert card["createdMedia"] == []
+
+
+def test_custom_card_cache_affinity_selector_and_non_mutating_mistral_hint(
+    rendered,
+) -> None:
+    card = rendered["customProviders"]
+
+    assert card["cacheAffinityOptions"] == ["off", "body", "header", "both"]
+    assert card["cacheAffinityInitialValue"] == "off"
+    assert "cache affinity" not in card["detailsBefore"]
+    assert card["createdCacheAffinity"] == "off"
+    assert card["patchedCacheAffinity"] == "both"
+
+    probes = card["cacheAffinityHintProbes"]
+    assert probes["global"] == {"hidden": False, "selectValue": "off"}
+    assert probes["euUpper"] == {"hidden": False, "selectValue": "off"}
+    assert probes["us"] == {"hidden": False, "selectValue": "off"}
+    assert probes["spoofSuffix"] == {"hidden": True, "selectValue": "off"}
+    assert probes["spoofPrefix"] == {"hidden": True, "selectValue": "off"}
+    assert probes["spoofQuery"] == {"hidden": True, "selectValue": "off"}
+    assert "cache affinity" not in (card["detailsWithAffinityOff"] or "")
+    assert " · cache affinity both" in (card["detailsWithAffinityBoth"] or "")
 
 
 # ------------------------------------- 7.69.4 pause buttons and the poll diet

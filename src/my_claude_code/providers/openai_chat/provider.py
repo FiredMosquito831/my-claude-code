@@ -129,6 +129,11 @@ from my_claude_code.providers.stream_recovery import (
     is_retryable_stream_error,
 )
 
+from .cache_affinity import (
+    apply_cache_affinity_body,
+    cache_affinity_headers,
+    resolve_affinity_digest,
+)
 from .chunks import adopt_chat_stream
 from .client_identity import identity_headers_for_body
 from .identity_enforcement import observe_identity_enforcement
@@ -490,6 +495,7 @@ class OpenAIChatProvider(BaseProvider):
                 # ``origin.provider`` records (8.16.0). ``_provider_name`` is a
                 # log label several profiles share.
                 provider_id=self._provider_id,
+                cache_affinity=self._profile.cache_affinity,
             )
             self._responses_transport = transport
         return transport
@@ -790,7 +796,7 @@ class OpenAIChatProvider(BaseProvider):
         caller that does not record, and every host with no such note --
         builds exactly the body it always did.
         """
-        return build_openai_chat_request_body(
+        body = build_openai_chat_request_body(
             request,
             reasoning=reasoning,
             policy=self._profile.request_policy,
@@ -799,6 +805,13 @@ class OpenAIChatProvider(BaseProvider):
             tool_catalogue=self.tool_catalogue_for_request(request),
             tool_schema_dialect=self._profile.chat_tool_schema_dialect,
         )
+        apply_cache_affinity_body(
+            body,
+            request,
+            self._profile.cache_affinity,
+            unsupported_body_keys=self._profile.request_policy.unsupported_body_keys,
+        )
+        return body
 
     def tool_schema_wire_note(self, request: MessagesRequest) -> dict[str, str]:
         """What :meth:`_build_request_body` sweeps out of this request's tools.
@@ -938,6 +951,7 @@ class OpenAIChatProvider(BaseProvider):
         surface_label: str = "",
         wire_notes: Mapping[str, Any] | None = None,
         marketplace: MarketplaceChoice | None = None,
+        affinity_digest: str | None = None,
     ) -> tuple[Any, dict]:
         """Create a streaming chat completion with bounded request fallbacks.
 
@@ -992,9 +1006,16 @@ class OpenAIChatProvider(BaseProvider):
                     inbound.session_id,
                     inbound_sessions=inbound.opencode_session_ids,
                 )
+                affinity = cache_affinity_headers(
+                    self._profile.cache_affinity,
+                    body,
+                    digest=affinity_digest,
+                )
                 sent_headers = identity
+                if affinity:
+                    sent_headers = {**affinity, **sent_headers}
                 if marketplace is not None and marketplace.headers:
-                    sent_headers = {**identity, **marketplace.headers}
+                    sent_headers = {**sent_headers, **marketplace.headers}
                 extra = {"extra_headers": sent_headers} if sent_headers else {}
                 record_wire_request(
                     create_body,
@@ -1005,6 +1026,7 @@ class OpenAIChatProvider(BaseProvider):
                         if identity
                         else {}
                     ),
+                    **({"cache_affinity": dict(affinity)} if affinity else {}),
                     **(wire_notes or {}),
                 )
                 stream = adopt_chat_stream(
@@ -1979,6 +2001,12 @@ class _OpenAIChatStreamRunner:
             body, self._prompt_cache, self._wire_notes
         )
         request_stream_usage(body)
+        affinity_spec = self._provider._profile.cache_affinity
+        affinity_digest = (
+            resolve_affinity_digest(self._request)
+            if affinity_spec is not None and affinity_spec.is_active()
+            else None
+        )
         output_reasoning = self._reasoning.output_enabled
         trace_event(
             stage="provider",
@@ -2014,6 +2042,11 @@ class _OpenAIChatStreamRunner:
                         surface_label=self._surface_label,
                         wire_notes=self._wire_notes,
                         **self._marketplace_kwargs(),
+                        **(
+                            {"affinity_digest": affinity_digest}
+                            if affinity_digest is not None
+                            else {}
+                        ),
                     )
                     stream_opened = True
                     # Opposite the wire body recorded at the commit boundary:

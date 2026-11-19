@@ -28,6 +28,7 @@ from my_claude_code.providers.openai_chat import (
     GENERIC_OPENAI_PROFILE,
     OPENAI_CHAT_PROFILES,
     create_openai_chat_provider,
+    profile_with_cache_affinity,
     profile_with_declared_surfaces,
     profile_with_learned_dialect,
 )
@@ -607,6 +608,7 @@ def _instantiate_leaf(
         # Chat Completions alone -- the default, and every entry written before
         # 7.33.0 -- leaves the profile exactly as it was.
         profile = profile_with_declared_surfaces(profile, descriptor.response_surfaces)
+        profile = profile_with_cache_affinity(profile, descriptor.cache_affinity)
         return create_openai_chat_provider(
             descriptor.provider_id, config, rate_limiter, profile=profile
         )

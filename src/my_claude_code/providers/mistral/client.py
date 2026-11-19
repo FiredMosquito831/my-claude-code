@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger
 
 from my_claude_code.application.marketplace import MarketplaceChoice
+from my_claude_code.config.settings import configured_mistral_prompt_cache_affinity
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
@@ -16,10 +17,13 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
+    CACHE_AFFINITY_HEADER_NAME,
     NO_REASONING,
+    CacheAffinitySpec,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
+    apply_cache_affinity_body,
     build_openai_chat_request_body,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
@@ -44,7 +48,16 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
 # PR F gave every profile-driven host the OpenAI standard dialect; this
 # one is excluded because the profile encoder is not the wire, and its
 # real dialect is declared alongside.
-_PROFILE = OpenAIChatProfile(_REQUEST_POLICY, NO_REASONING)
+_CACHE_AFFINITY = CacheAffinitySpec(
+    header_name=CACHE_AFFINITY_HEADER_NAME,
+    send_body_key=True,
+    enabled=configured_mistral_prompt_cache_affinity,
+)
+_PROFILE = OpenAIChatProfile(
+    _REQUEST_POLICY,
+    NO_REASONING,
+    cache_affinity=_CACHE_AFFINITY,
+)
 
 
 MISTRAL_REASONING_DIALECT = ReasoningDialect(
@@ -115,6 +128,12 @@ class MistralProvider(OpenAIChatProvider):
             provider_id=self._provider_id,
         )
         apply_mistral_reasoning_request_shape(body, reasoning=reasoning)
+        apply_cache_affinity_body(
+            body,
+            request,
+            _PROFILE.cache_affinity,
+            unsupported_body_keys=_REQUEST_POLICY.unsupported_body_keys,
+        )
         return body
 
     def _get_retry_request_body(self, error: Exception, body: dict) -> dict | None:
@@ -134,8 +153,9 @@ class MistralProvider(OpenAIChatProvider):
         body: dict,
         *,
         surface_label: str = "",
-        wire_notes: Mapping[str, str] | None = None,
+        wire_notes: Mapping[str, Any] | None = None,
         marketplace: MarketplaceChoice | None = None,
+        affinity_digest: str | None = None,
     ) -> tuple[Any, dict]:
         # ``marketplace`` is passed through untouched (7.109.0); Mistral
         # declares no marketplace, so it is always ``None`` here.
@@ -144,5 +164,6 @@ class MistralProvider(OpenAIChatProvider):
             surface_label=surface_label,
             wire_notes=wire_notes,
             marketplace=marketplace,
+            affinity_digest=affinity_digest,
         )
         return normalize_mistral_stream(stream), final_body

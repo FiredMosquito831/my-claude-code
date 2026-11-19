@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from my_claude_code.application.errors import InvalidRequestError
@@ -30,6 +30,7 @@ from my_claude_code.providers.openai_responses import (
 )
 
 from .base_url import openai_v1_base_url
+from .cache_affinity import CacheAffinitySpec, cache_affinity_spec_for_mode
 from .client_identity import ClientIdentity
 from .extra_body import validate_extra_body_does_not_override_canonical_fields
 from .opencode_catalogue import (
@@ -342,6 +343,11 @@ class OpenAIChatProfile:
     # nothing about Chat Completions or Responses, which have no signature
     # concept at all.
     messages_signs_thinking: bool = True
+    #: Declarative worker cache-affinity spec (``prompt_cache_key`` +
+    #: ``x-affinity``). ``None`` -- every profile in ``OPENAI_CHAT_PROFILES``,
+    #: including ``mistral_codestral``, ``opencode``, and
+    #: ``GENERIC_OPENAI_PROFILE`` -- emits neither header nor body key.
+    cache_affinity: CacheAffinitySpec | None = None
 
     @property
     def provider_name(self) -> str:
@@ -1238,3 +1244,13 @@ GENERIC_OPENAI_PROFILE = OpenAIChatProfile(
     ),
     OPENAI_STANDARD_REASONING,
 )
+
+
+def profile_with_cache_affinity(
+    profile: OpenAIChatProfile, mode: str
+) -> OpenAIChatProfile:
+    """Return ``profile`` with cache affinity for ``mode``, or ``profile`` unchanged."""
+    spec = cache_affinity_spec_for_mode(mode)
+    if spec is None:
+        return profile
+    return replace(profile, cache_affinity=spec)

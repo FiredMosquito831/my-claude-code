@@ -66,6 +66,13 @@ CUSTOM_PROVIDER_SURFACES: tuple[str, ...] = (
 #: same endpoint.
 DEFAULT_CUSTOM_PROVIDER_SURFACES: tuple[str, ...] = ("chat_completions",)
 
+#: Per-custom-provider worker cache affinity modes (8.29.0, M-Q3).
+#: ``"off"`` keeps existing custom cards 100% byte-identical; ``"body"`` sends
+#: ``prompt_cache_key``, ``"header"`` sends ``x-affinity``, and ``"both"``
+#: sends both across Chat Completions and Responses.
+CUSTOM_CACHE_AFFINITY_MODES: tuple[str, ...] = ("off", "body", "header", "both")
+DEFAULT_CUSTOM_CACHE_AFFINITY = "off"
+
 _UNSET: object = object()
 
 
@@ -117,6 +124,10 @@ class CustomProviderEntry:
     # card left unticked -- declares no media surface at all, so the entry is
     # skipped uncharged by every media rail exactly as before.
     media_operations: tuple[str, ...] = ()
+    # 8.29.0: per-custom-card prompt cache worker affinity mode (``"off"``,
+    # ``"body"``, ``"header"``, or ``"both"``). ``"off"`` omits the field on
+    # disk and preserves v8.28.0 headers and bodies byte for byte.
+    cache_affinity: str = DEFAULT_CUSTOM_CACHE_AFFINITY
 
 
 def _slug(display_name: str) -> str:
@@ -247,6 +258,35 @@ def normalize_custom_media_operations(value: object) -> tuple[str, ...]:
     )
 
 
+def _cache_affinity_from_payload(value: object) -> str:
+    """Read back a stored ``cache_affinity`` mode; unknown words downgrade to ``off``."""
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in CUSTOM_CACHE_AFFINITY_MODES:
+            return normalized
+    return DEFAULT_CUSTOM_CACHE_AFFINITY
+
+
+def normalize_custom_cache_affinity(value: object) -> str:
+    """Validate a custom provider ``cache_affinity`` value submitted by API/UI."""
+    if value is None:
+        return DEFAULT_CUSTOM_CACHE_AFFINITY
+    if not isinstance(value, str):
+        raise ValueError(
+            "Custom provider cache_affinity must be a string; "
+            f"valid: {list(CUSTOM_CACHE_AFFINITY_MODES)}"
+        )
+    normalized = value.strip().lower()
+    if not normalized:
+        return DEFAULT_CUSTOM_CACHE_AFFINITY
+    if normalized not in CUSTOM_CACHE_AFFINITY_MODES:
+        raise ValueError(
+            f"Unknown cache_affinity: {value!r}. "
+            f"Valid: {list(CUSTOM_CACHE_AFFINITY_MODES)}"
+        )
+    return normalized
+
+
 def _paused_pair(item: object) -> tuple[str, str] | None:
     if not isinstance(item, list) or len(item) != 2:
         return None
@@ -365,6 +405,7 @@ class ProviderRegistry:
             media_operations=_media_operations_from_payload(
                 item.get("media_operations")
             ),
+            cache_affinity=_cache_affinity_from_payload(item.get("cache_affinity")),
         )
 
     # ------------------------------------------------------------- persistence
@@ -404,6 +445,11 @@ class ProviderRegistry:
                     **(
                         {"media_operations": list(entry.media_operations)}
                         if entry.media_operations
+                        else {}
+                    ),
+                    **(
+                        {"cache_affinity": entry.cache_affinity}
+                        if entry.cache_affinity != DEFAULT_CUSTOM_CACHE_AFFINITY
                         else {}
                     ),
                 }
@@ -478,6 +524,7 @@ class ProviderRegistry:
             reasoning_effort_enum=entry.reasoning_effort_enum,
             response_surfaces=entry.surfaces,
             media_surfaces=custom_media_surfaces(entry.media_operations),
+            cache_affinity=entry.cache_affinity,
         )
 
     # ---------------------------------------------------------------- mutations
@@ -492,6 +539,7 @@ class ProviderRegistry:
         enabled: bool = True,
         surfaces: tuple[str, ...] | list[str] | None = None,
         media_operations: tuple[str, ...] | list[str] | None = None,
+        cache_affinity: str | None = None,
     ) -> CustomProviderEntry:
         """Register a new custom provider; the id is slugged from the name."""
         name = display_name.strip()
@@ -516,6 +564,7 @@ class ProviderRegistry:
             )
         declared = normalize_custom_surfaces(surfaces)
         declared_media = normalize_custom_media_operations(media_operations)
+        declared_affinity = normalize_custom_cache_affinity(cache_affinity)
         with self._lock:
             self._ensure_loaded()
             provider_id = self._unique_provider_id_locked(name)
@@ -532,6 +581,7 @@ class ProviderRegistry:
                 added_at=_utc_now_iso(),
                 surfaces=declared,
                 media_operations=declared_media,
+                cache_affinity=declared_affinity,
             )
             self._custom[provider_id] = entry
             self._persist_locked()
@@ -565,6 +615,7 @@ class ProviderRegistry:
         surfaces: tuple[str, ...] | list[str] | None = None,
         auto_paused_refs: tuple[tuple[str, str], ...] | None = None,
         media_operations: tuple[str, ...] | list[str] | None = None,
+        cache_affinity: str | None = None,
     ) -> CustomProviderEntry:
         """Update fields of one custom provider and return the new entry."""
         with self._lock:
@@ -646,6 +697,11 @@ class ProviderRegistry:
                     current.media_operations
                     if media_operations is None
                     else normalize_custom_media_operations(media_operations)
+                ),
+                cache_affinity=(
+                    current.cache_affinity
+                    if cache_affinity is None
+                    else normalize_custom_cache_affinity(cache_affinity)
                 ),
             )
             self._custom[provider_id] = updated
