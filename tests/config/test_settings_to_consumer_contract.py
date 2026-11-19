@@ -1514,3 +1514,75 @@ def test_the_tool_argument_bound_reaches_the_reply_tally(
     entry = shape.payload()["tool_calls"]["largest"][0]
     assert entry["class"] == "over_bound"
     assert entry["parsed"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [None, "true", "false"])
+async def test_the_chatgpt_oauth_session_affinity_setting_reaches_the_wire(
+    value: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """8.28.0's CHATGPT_OAUTH_SESSION_AFFINITY, from ``Settings`` to the wire."""
+    import json
+
+    import httpx
+
+    from my_claude_code.config import settings as config_settings
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.client_fingerprint import install_fingerprint
+    from my_claude_code.providers.base import ProviderConfig
+    from my_claude_code.providers.chatgpt_oauth.provider import ChatGPTOAuthProvider
+    from tests.providers.support import passthrough_rate_limiter
+
+    expected = value == "true"
+    if value is None:
+        monkeypatch.delenv("CHATGPT_OAUTH_SESSION_AFFINITY", raising=False)
+    else:
+        monkeypatch.setenv("CHATGPT_OAUTH_SESSION_AFFINITY", value)
+    config_settings.get_settings.cache_clear()
+    captured: list[tuple[dict[str, str], dict[str, object]]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            (dict(request.headers), json.loads(request.content.decode("utf-8")))
+        )
+
+        async def _sse() -> Any:
+            yield b'data: {"type":"response.completed","response":{}}\n\n'
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(),
+        )
+
+    try:
+        provider = ChatGPTOAuthProvider(
+            ProviderConfig(
+                api_key="test_token",
+                base_url="https://chatgpt.com/backend-api",
+                rate_limit=10,
+                rate_window=60,
+                max_concurrency=5,
+            ),
+            rate_limiter=passthrough_rate_limiter(),
+        )
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+        install_fingerprint({"x-claude-code-session-id": "contract-root-session"})
+        request = MessagesRequest.model_validate(
+            {
+                "model": "gpt-5.6-terra",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        _ = [chunk async for chunk in provider.stream_response(request)]
+    finally:
+        install_fingerprint(None)
+        config_settings.get_settings.cache_clear()
+
+    assert len(captured) == 1
+    headers, body = captured[0]
+    assert ("prompt_cache_key" in body) is expected
+    assert ("thread-id" in headers) is expected
+    assert ("x-client-request-id" in headers) is expected
+    assert (headers["session-id"] != provider._session_id) is expected

@@ -324,6 +324,10 @@
       "control": "field-CHATGPT_OAUTH_PROXY",
       "page": "providers"
     },
+    "CHATGPT_OAUTH_SESSION_AFFINITY": {
+      "control": "field-CHATGPT_OAUTH_SESSION_AFFINITY",
+      "page": "providers"
+    },
     "CHATGPT_OAUTH_WRITE_BACK": {
       "control": "field-CHATGPT_OAUTH_WRITE_BACK",
       "page": "providers"

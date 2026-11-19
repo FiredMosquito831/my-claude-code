@@ -32,6 +32,7 @@ from .constants import (
     CATALOGUE_FETCH_TIMEOUT_SECONDS,
     CHAT_STRUCTURED_REASONING_DEFAULT,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+    CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
     COST_ESTIMATION_MODE_DEFAULT,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
     CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
@@ -559,6 +560,14 @@ class Settings(BaseSettings):
     # the other client goes on managing its own.
     chatgpt_oauth_write_back: bool = Field(
         default=True, validation_alias="CHATGPT_OAUTH_WRITE_BACK"
+    )
+    # Whether ChatGPT OAuth / ``openai`` requests opt into per-conversation
+    # cache affinity (session-id / thread-id / x-client-request-id /
+    # prompt_cache_key <= 64 chars) and account-fenced x-codex-turn-state
+    # echo (8.28.0). Off by default so v8.27.0 bytes stay identical.
+    chatgpt_oauth_session_affinity: bool = Field(
+        default=CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
+        validation_alias="CHATGPT_OAUTH_SESSION_AFFINITY",
     )
     anthropic_oauth_write_back: bool = Field(
         default=True, validation_alias="ANTHROPIC_OAUTH_WRITE_BACK"
@@ -3669,6 +3678,24 @@ def configured_responses_parallel_tool_calls() -> bool:
             settings,
             "responses_parallel_tool_calls",
             RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT,
+        )
+    )
+
+
+def configured_chatgpt_oauth_session_affinity() -> bool:
+    """Whether ChatGPT OAuth derives per-conversation cache affinity (8.28.0).
+
+    Read per request so a dashboard toggle takes effect on the very next
+    request without restarting the server or rebuilding providers. Defaults to
+    ``False`` (``CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT``) so v8.27.0 wire
+    headers and bodies stay byte-identical until opted in.
+    """
+    settings = get_settings()
+    return bool(
+        getattr(
+            settings,
+            "chatgpt_oauth_session_affinity",
+            CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
         )
     )
 
