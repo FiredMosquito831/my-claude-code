@@ -253,6 +253,7 @@ class ProviderRecovery:
 
     kind: str
     rewrite: Callable[[Exception, dict[str, Any]], dict[str, Any] | None]
+    stripped_field: Callable[[Exception, dict[str, Any]], str | None] | None = None
 
     def rung(self) -> RecoveryRung:
         return RecoveryRung(kind=self.kind, apply=self)
@@ -261,4 +262,9 @@ class ProviderRecovery:
         retry_body = self.rewrite(error, body)
         if retry_body is None:
             return None
-        return retry_body, None
+        stripped = (
+            self.stripped_field(error, body)
+            if self.stripped_field is not None
+            else None
+        )
+        return retry_body, stripped

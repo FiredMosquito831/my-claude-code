@@ -5,7 +5,16 @@ from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
 
-from my_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
+from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.reasoning import (
+    EFFORT_RANK,
+    ReasoningControl,
+    ReasoningDialect,
+    ReasoningDialectOrigin,
+    ReasoningEffort,
+    ReasoningPolicy,
+    nearest_effort,
+)
 from my_claude_code.providers.http import maybe_await_aclose
 from my_claude_code.providers.recovery import (
     is_bad_request,
@@ -14,17 +23,15 @@ from my_claude_code.providers.recovery import (
     upstream_error_payload,
 )
 
-# Mistral's OpenAPI spec declares ``reasoning_effort`` as
-# ``enum: [high, none]`` and nothing else -- "high" enables comprehensive
-# reasoning traces, "none" disables reasoning effort
-# (https://github.com/mistralai/platform-docs-public/blob/main/openapi.yaml).
-# So there is exactly one on-value to send, and a minimal/low/medium
-# request has to become it: mapping those to "none" would disable the
-# thinking that was asked for, which WORKING-NOTES 54 forbids. The clamp
-# itself is performed and recorded one layer up, by capability gating
-# against ``MistralProvider.reasoning_dialect``, so it appears in the
-# request log instead of happening silently here.
+# Default fallback effort when reasoning is enabled without a named level.
 MISTRAL_REASONING_EFFORT = "high"
+
+_DEFAULT_MISTRAL_DIALECT = ReasoningDialect(
+    effort_values=frozenset(ReasoningEffort),
+    off=True,
+    effort_field="reasoning_effort",
+    origin=ReasoningDialectOrigin.DECLARED,
+)
 
 _REASONING_FIELD_NAMES = frozenset(
     {
@@ -37,13 +44,34 @@ _REJECTION_WORDS = ("unsupported", "unknown", "invalid", "forbidden", "extra")
 
 
 def apply_mistral_reasoning_request_shape(
-    body: dict[str, Any], *, reasoning: ReasoningPolicy
+    body: dict[str, Any],
+    *,
+    reasoning: ReasoningPolicy,
+    dialect: ReasoningDialect | None = None,
+    strip_history_thinking: bool = False,
 ) -> None:
     """Apply Mistral's native reasoning request shape in-place."""
+    active_dialect = dialect if dialect is not None else _DEFAULT_MISTRAL_DIALECT
     if reasoning.control is ReasoningControl.OFF:
-        body["reasoning_effort"] = "none"
+        if active_dialect.off:
+            body["reasoning_effort"] = "none"
+        else:
+            body.pop("reasoning_effort", None)
     elif reasoning.requests_reasoning:
-        body["reasoning_effort"] = MISTRAL_REASONING_EFFORT
+        if active_dialect.effort_values:
+            if reasoning.effort is not None:
+                body["reasoning_effort"] = nearest_effort(
+                    reasoning.effort, active_dialect.effort_values
+                ).value
+            elif ReasoningEffort.HIGH in active_dialect.effort_values:
+                body["reasoning_effort"] = MISTRAL_REASONING_EFFORT
+            else:
+                body["reasoning_effort"] = max(
+                    active_dialect.effort_values,
+                    key=lambda effort: EFFORT_RANK[effort],
+                ).value
+        else:
+            body.pop("reasoning_effort", None)
     else:
         body.pop("reasoning_effort", None)
 
@@ -55,10 +83,56 @@ def apply_mistral_reasoning_request_shape(
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         replayed_reasoning = _clean_text(message.pop("reasoning_content", None))
+        if strip_history_thinking:
+            stripped_content, removed = _strip_mistral_thinking_content(
+                message.get("content")
+            )
+            if removed:
+                message["content"] = stripped_content
+            continue
         if replayed_reasoning:
             message["content"] = _content_with_prepended_thinking(
                 message.get("content"), replayed_reasoning
             )
+
+
+def body_has_mistral_thinking(body: Mapping[str, Any]) -> bool:
+    """Return whether ``body`` carries Mistral thinking chunks or ``reasoning_content``."""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, Mapping):
+            continue
+        if message.get("reasoning_content") is not None:
+            return True
+        content = message.get("content")
+        if _is_sequence(content) and any(
+            _is_thinking_chunk_type(_chunk_type(chunk)) for chunk in content
+        ):
+            return True
+    return False
+
+
+def strip_top_p_on_greedy_temperature(
+    body: dict[str, Any],
+    request: MessagesRequest,
+    reasoning: ReasoningPolicy,
+) -> None:
+    """Drop ``top_p`` when greedy sampling (``temperature == 0``) is requested.
+
+    Mistral rejects ``top_p`` alongside ``temperature=0``. Running as a
+    postprocessor before ``apply_model_parameter_overrides`` keeps any
+    operator-pinned ``top_p`` in ``model_overrides.json`` authoritative.
+    """
+    del request, reasoning
+    temperature = body.get("temperature")
+    if (
+        isinstance(temperature, int | float)
+        and not isinstance(temperature, bool)
+        and temperature == 0
+    ):
+        body.pop("top_p", None)
 
 
 def clone_body_without_mistral_reasoning(
@@ -247,7 +321,7 @@ def _split_mistral_content(content: Any) -> tuple[str | None, str | None, bool]:
     return (
         "".join(text_parts) or None,
         "".join(reasoning_parts) or None,
-        bool(text_parts or reasoning_parts),
+        True,
     )
 
 

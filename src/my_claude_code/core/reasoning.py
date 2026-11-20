@@ -362,8 +362,18 @@ def narrow_dialect_by_rejections(
         if not refers_to(field, effort_field) or effort_values is None:
             coarse.setdefault(field, "")
             continue
+        remaining_refused = set(refused)
+        if (
+            "none" in remaining_refused
+            and off
+            and (not toggle_field or refers_to(field, toggle_field))
+        ):
+            off = False
+            remaining_refused.discard("none")
+        if not remaining_refused:
+            continue
         remaining = frozenset(
-            effort for effort in effort_values if effort.value not in refused
+            effort for effort in effort_values if effort.value not in remaining_refused
         )
         if not remaining:
             # Nothing left to send through this channel, so it is not a
@@ -371,6 +381,8 @@ def narrow_dialect_by_rejections(
             # the fine path rather than instead of it.
             effort_values = None
             effort_field = ""
+            if not toggle_field or refers_to(field, toggle_field):
+                off = False
         elif remaining == effort_values:
             # The host refused a word this vocabulary does not spell under
             # that name -- a gateway whose rungs are "brief"/"detailed", for
@@ -384,6 +396,8 @@ def narrow_dialect_by_rejections(
         if refers_to(field, effort_field):
             effort_values = None
             effort_field = ""
+            if not toggle_field or refers_to(field, toggle_field):
+                off = False
         if refers_to(field, toggle_field):
             toggle = False
             off = False
