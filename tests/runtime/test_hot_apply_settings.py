@@ -599,6 +599,65 @@ async def test_mistral_prompt_cache_affinity_is_hot_without_restart(hot) -> None
 
 
 @pytest.mark.asyncio
+async def test_mistral_base_urls_hot_apply_independently_without_restart(hot) -> None:
+    from my_claude_code.config.provider_catalog import (
+        MISTRAL_DEFAULT_BASE,
+        MISTRAL_EU_BASE,
+        MISTRAL_US_BASE,
+    )
+
+    assert FIELD_BY_KEY["MISTRAL_BASE_URL"].affects_providers is True
+    assert FIELD_BY_KEY["MISTRAL_BASE_URL"].restart_required is False
+    assert FIELD_BY_KEY["MISTRAL_VIBE_BASE_URL"].affects_providers is True
+    assert FIELD_BY_KEY["MISTRAL_VIBE_BASE_URL"].restart_required is False
+
+    await hot.apply_hot(
+        {
+            "MISTRAL_API_KEY": "sk-hot-studio-0001",
+            "MISTRAL_VIBE_KEY": "sk-hot-vibe-0002",
+            "MISTRAL_BASE_URL": MISTRAL_EU_BASE,
+            "MISTRAL_VIBE_BASE_URL": MISTRAL_US_BASE,
+        }
+    )
+    async with hot.leased() as fresh:
+        assert (
+            build_provider_config(PROVIDER_CATALOG["mistral"], fresh.settings).base_url
+            == MISTRAL_EU_BASE
+        )
+        assert (
+            build_provider_config(
+                PROVIDER_CATALOG["mistral_vibe"], fresh.settings
+            ).base_url
+            == MISTRAL_US_BASE
+        )
+
+    cleared_resp = await hot.client.post(
+        "/admin/api/config/apply",
+        json={
+            "values": {"MISTRAL_BASE_URL": "", "MISTRAL_VIBE_BASE_URL": ""},
+            "cleared": ["MISTRAL_BASE_URL", "MISTRAL_VIBE_BASE_URL"],
+        },
+    )
+    assert cleared_resp.status_code == 200, cleared_resp.text
+    assert cleared_resp.json()["applied"] is True
+    assert cleared_resp.json()["restart"]["required"] is False
+    hot.restart.assert_not_awaited()
+    async with hot.leased() as reset_fresh:
+        assert (
+            build_provider_config(
+                PROVIDER_CATALOG["mistral"], reset_fresh.settings
+            ).base_url
+            == MISTRAL_DEFAULT_BASE
+        )
+        assert (
+            build_provider_config(
+                PROVIDER_CATALOG["mistral_vibe"], reset_fresh.settings
+            ).base_url
+            == MISTRAL_DEFAULT_BASE
+        )
+
+
+@pytest.mark.asyncio
 async def test_the_probe_switch_is_read_off_the_live_settings(hot) -> None:
     assert hot.runtime.settings.model_probe_new_models is False
     await hot.apply_hot({"MODEL_PROBE_NEW_MODELS": "true"})

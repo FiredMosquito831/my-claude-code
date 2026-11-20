@@ -50,6 +50,9 @@ FIREWORKS_DEFAULT_BASE = "https://api.fireworks.ai/inference/v1"
 CLOUDFLARE_AI_REST_ROOT = "https://api.cloudflare.com/client/v4"
 OPENROUTER_DEFAULT_BASE = "https://openrouter.ai/api/v1"
 MISTRAL_DEFAULT_BASE = "https://api.mistral.ai/v1"
+# Official regional La Plateforme endpoints (1.1x regional pricing per docs.mistral.ai).
+MISTRAL_EU_BASE = "https://api.eu.mistral.ai/v1"
+MISTRAL_US_BASE = "https://api.us.mistral.ai/v1"
 # Codestral IDE/personal endpoint (distinct from La Plateforme ``api.mistral.ai`` keys).
 CODESTRAL_DEFAULT_BASE = "https://codestral.mistral.ai/v1"
 LMSTUDIO_DEFAULT_BASE = "http://localhost:1234/v1"
@@ -469,6 +472,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_url="https://console.mistral.ai/",
         credential_attr="mistral_api_key",
         default_base_url=MISTRAL_DEFAULT_BASE,
+        base_url_attr="mistral_base_url",
         proxy_attr="mistral_proxy",
         group="direct",
     ),
@@ -497,6 +501,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_url="https://chat.mistral.ai/code/extensions",
         credential_attr="mistral_vibe_api_key",
         default_base_url=MISTRAL_DEFAULT_BASE,
+        base_url_attr="mistral_vibe_base_url",
         proxy_attr="mistral_vibe_proxy",
         group="subscription",
     ),

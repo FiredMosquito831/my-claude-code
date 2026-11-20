@@ -635,9 +635,9 @@ def catalogue_surface(
     the registry.
     """
 
-    from .profiles import OPENAI_CHAT_PROFILES
+    from .profiles import surface_profile_for
 
-    profile = OPENAI_CHAT_PROFILES.get(provider_id)
+    profile = surface_profile_for(provider_id)
     if profile is None:
         declared = declared_surfaces_for(provider_id)
         if not declared:

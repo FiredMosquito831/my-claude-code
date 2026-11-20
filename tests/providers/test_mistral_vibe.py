@@ -125,13 +125,13 @@ def test_the_new_provider_is_in_the_subscription_group_and_studio_stays_direct()
     assert PROVIDER_CATALOG[VIBE].group == "subscription"
 
 
-def test_both_dial_the_same_host_and_the_constant_is_not_duplicated() -> None:
-    """§4.3: no new base-URL constant, and no ``*_BASE_URL`` setting either."""
+def test_both_dial_the_same_host_and_declare_independent_base_url_attrs() -> None:
+    """8.31.0 (M-Q7): both default to ``MISTRAL_DEFAULT_BASE`` with own ``*_BASE_URL``."""
 
     assert PROVIDER_CATALOG[STUDIO].default_base_url == MISTRAL_DEFAULT_BASE
     assert PROVIDER_CATALOG[VIBE].default_base_url == MISTRAL_DEFAULT_BASE
-    assert PROVIDER_CATALOG[STUDIO].base_url_attr is None
-    assert PROVIDER_CATALOG[VIBE].base_url_attr is None
+    assert PROVIDER_CATALOG[STUDIO].base_url_attr == "mistral_base_url"
+    assert PROVIDER_CATALOG[VIBE].base_url_attr == "mistral_vibe_base_url"
 
 
 def test_the_vibe_provider_declares_no_media_surface() -> None:

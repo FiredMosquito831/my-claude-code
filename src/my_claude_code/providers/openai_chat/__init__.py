@@ -43,10 +43,12 @@ from .opencode_identity import (
 )
 from .profiles import (
     GENERIC_OPENAI_PROFILE,
+    MISTRAL_CHAT_PROFILE,
     OPENAI_CHAT_PROFILES,
     OPENAI_STANDARD_REASONING,
     OpenAIChatProfile,
     profile_with_cache_affinity,
+    surface_profile_for,
 )
 from .provider import OpenAIAsyncCredentialProvider, OpenAIChatProvider
 from .reasoning import (
@@ -100,6 +102,7 @@ __all__ = [
     "CACHE_AFFINITY_HEADER_NAME",
     "CLIENT_FAMILY_ORDER",
     "GENERIC_OPENAI_PROFILE",
+    "MISTRAL_CHAT_PROFILE",
     "NO_REASONING",
     "NPM_SURFACES",
     "OPENAI_CHAT_PROFILES",
@@ -145,6 +148,7 @@ __all__ = [
     "resolve_response_surface",
     "resolve_surface_ladder",
     "sampling_parameter_evidence",
+    "surface_profile_for",
     "upstream_complaint",
     "usage_int",
     "validate_extra_body_does_not_override_canonical_fields",
