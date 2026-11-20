@@ -1081,3 +1081,255 @@ async def test_web_search_call_sse_lifecycle_and_json_payload() -> None:
         "output_tokens": 10,
         "total_tokens": 30,
     }
+
+
+@pytest.mark.asyncio
+async def test_signature_delta_populates_encrypted_content_and_preserves_summary() -> (
+    None
+):
+    """``C-Q3c``: ``signature_delta`` on a thinking block sets ``encrypted_content``."""
+
+    events_in = [
+        format_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {"id": "msg_sig", "usage": {"input_tokens": 5}},
+            },
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "step 1"},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "signature_delta",
+                    "signature": "mcc:reasoning:v1:sig_payload",
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": "done"},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 1},
+        ),
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 8},
+            },
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    response = await _completed_response_from_sse(
+        _aiter(events_in),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+
+    reasoning = response["output"][0]
+    assert reasoning["type"] == "reasoning"
+    assert reasoning["status"] == "completed"
+    assert reasoning["summary"] == [{"type": "summary_text", "text": "step 1"}]
+    assert reasoning["encrypted_content"] == "mcc:reasoning:v1:sig_payload"
+    assert "content" not in reasoning
+    assert response["output"][1]["content"][0]["text"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_split_signature_deltas_accumulate_on_reasoning_block() -> None:
+    events_in = [
+        format_sse_event(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_split"}},
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "part_a_"},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "part_b"},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    response = await _completed_response_from_sse(
+        _aiter(events_in),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+
+    reasoning = response["output"][0]
+    assert reasoning["type"] == "reasoning"
+    assert reasoning["summary"] == []
+    assert reasoning["encrypted_content"] == "part_a_part_b"
+
+
+@pytest.mark.asyncio
+async def test_turn1_sse_reasoning_item_round_trips_into_turn2_outbound_body() -> None:
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.openai_responses import (
+        ReplayOrigin,
+        connection_id,
+        encode_carrier,
+    )
+    from my_claude_code.core.openai_responses.input import (
+        convert_request_to_anthropic_payload,
+    )
+    from my_claude_code.core.reasoning import ReasoningPolicy
+    from my_claude_code.providers.openai_responses import build_responses_request_body
+
+    origin = ReplayOrigin(
+        provider="chatgpt_oauth",
+        protocol="responses",
+        endpoint="https://chatgpt.com/backend-api",
+        connection=connection_id("acct-1"),
+        model="gpt-5.6-terra",
+    )
+    native_item = {
+        "type": "reasoning",
+        "id": "rs_turn1",
+        "status": "completed",
+        "summary": [{"type": "summary_text", "text": "plan carefully"}],
+        "encrypted_content": "gAAAAABturn1Ciphertext",
+    }
+    carrier = encode_carrier(origin, native_item)
+    assert carrier is not None
+
+    turn1_events = [
+        format_sse_event(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_t1"}},
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "plan carefully"},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": carrier},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "text_delta", "text": "ready"},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 1},
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    turn1_resp = await _completed_response_from_sse(
+        _aiter(turn1_events),
+        {"model": "gpt-5.6-terra", "stream": True},
+    )
+
+    turn2_req = OpenAIResponsesRequest.model_validate(
+        {
+            "model": "gpt-5.6-terra",
+            "input": [
+                {"role": "user", "content": "start"},
+                *turn1_resp["output"],
+                {"role": "user", "content": "continue"},
+            ],
+            "stream": True,
+        }
+    )
+    anthropic_payload = convert_request_to_anthropic_payload(turn2_req)
+    turn2_body = build_responses_request_body(
+        MessagesRequest(**anthropic_payload),
+        reasoning=ReasoningPolicy.off(),
+        origin=origin,
+        plaintext_replay=True,
+    )
+    replayed = [i for i in turn2_body["input"] if i.get("type") == "reasoning"]
+    assert replayed == [native_item]

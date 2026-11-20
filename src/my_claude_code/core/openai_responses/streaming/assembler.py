@@ -208,6 +208,17 @@ class ResponsesStreamAssembler:
                 self._emit_reasoning_delta(state, _string_value(delta.get("thinking")))
             )
             return chunks
+        if delta_type == "signature_delta":
+            if index is None:
+                return []
+            state = self._ledger.active_block(index)
+            if isinstance(state, ReasoningBlockState):
+                signature = _string_value(delta.get("signature"))
+                if signature:
+                    state.encrypted_content = (
+                        state.encrypted_content or ""
+                    ) + signature
+            return []
         if delta_type == "input_json_delta":
             state = self._ledger.active_block(index) if index is not None else None
             if isinstance(state, ToolBlockState):

@@ -51,12 +51,19 @@ def reasoning_item(item_id: str, text: str, status: str) -> dict[str, Any]:
 
 
 def encrypted_reasoning_item(
-    item_id: str, encrypted_content: str, status: str
+    item_id: str,
+    encrypted_content: str,
+    status: str,
+    *,
+    summary_text: str | None = None,
 ) -> dict[str, Any]:
+    summary: list[dict[str, str]] = (
+        [{"type": "summary_text", "text": summary_text}] if summary_text else []
+    )
     return {
         "id": item_id,
         "type": "reasoning",
         "status": status,
-        "summary": [],
+        "summary": summary,
         "encrypted_content": encrypted_content,
     }

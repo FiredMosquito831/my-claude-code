@@ -114,6 +114,11 @@ HISTORY_PLAINTEXT_REPLAYED = "history_plaintext_replayed"
 #: ``(message index, block index)`` vocabulary every other block uses.
 _STRING_TURN_REASONING_INDEX = -1
 
+#: Sentinel block index for a turn's ``Message.encrypted_reasoning`` items.
+#: Negative so it can never collide with a real ``content`` block index
+#: (``>= 0``) or :data:`_STRING_TURN_REASONING_INDEX` (``-1``).
+_ENCRYPTED_REASONING_INDEX = -2
+
 #: The fifth carrier note (8.16.3), and the only one that is not a loss: a
 #: carrier **signature** was removed from a block whose readable text was kept,
 #: on a Messages host that declares it signs nothing. It is a sibling of
@@ -490,16 +495,14 @@ def _convert_tool_choice(
     tool_choice: Any,
     tool_names: OpenAIToolNameCodec | None = None,
 ) -> Any:
-    """Convert Anthropic tool_choice to ChatGPT Responses API tool_choice.
+    """Convert Anthropic tool_choice to OpenAI Responses API tool_choice.
 
-    A forced choice is spelled two ways. Without a codec it keeps the Chat
-    Completions nesting ``{"type": "function", "function": {"name": X}}`` that
-    ``chatgpt_oauth`` has always been sent -- left alone deliberately, because
-    that backend's bytes are not this fix's to change. With one (a host that
-    declared a tool-name limit) it uses the Responses API's own
-    ``ToolChoiceFunction`` shape, ``{"type": "function", "name": X}``, as
-    published in OpenAI's OpenAPI spec and the ``openai`` SDK's
-    ``types/responses/tool_choice_function.py``, carrying the wire alias.
+    A forced choice always uses the Responses API's ``ToolChoiceFunction``
+    shape, ``{"type": "function", "name": X}`` (as published in OpenAI's
+    OpenAPI spec and the ``openai`` SDK's
+    ``types/responses/tool_choice_function.py``), encoding ``X`` through
+    ``tool_names`` when a tool-name ceiling codec is active and passing
+    ``name`` verbatim otherwise.
     """
     if not isinstance(tool_choice, dict):
         return tool_choice
@@ -507,9 +510,8 @@ def _convert_tool_choice(
     if choice_type == "tool":
         name = tool_choice.get("name")
         if name:
-            if tool_names is not None:
-                return {"type": "function", "name": tool_names.encode(name)}
-            return {"type": "function", "function": {"name": name}}
+            wire_name = tool_names.encode(name) if tool_names is not None else name
+            return {"type": "function", "name": wire_name}
     if choice_type in {"auto", "none", "required"}:
         return choice_type
     if choice_type == "any":
@@ -611,6 +613,37 @@ def _carrier_blocks(messages: list[Any]) -> Iterator[tuple[int, int, str, str]]:
                 yield message_index, block_index, block_type, value
 
 
+def _decode_accepted_carrier(
+    value: str,
+    destination: ReplayOrigin | None,
+    counts: dict[str, int],
+) -> dict[str, Any] | None:
+    """Decode one ``mcc:reasoning:v1:`` carrier and check destination provenance."""
+
+    payload = decode_carrier(value)
+    if payload is None:
+        counts[HISTORY_CARRIER_MALFORMED] = counts.get(HISTORY_CARRIER_MALFORMED, 0) + 1
+        return None
+    if not accepts(destination, payload.origin):
+        counts[HISTORY_CARRIER_FOREIGN] = counts.get(HISTORY_CARRIER_FOREIGN, 0) + 1
+        return None
+    return dict(payload.native)
+
+
+def _append_unique_reasoning_item(
+    items: dict[int, list[dict[str, Any]]],
+    message_index: int,
+    item: dict[str, Any],
+) -> bool:
+    """Append ``item`` to ``items[message_index]`` unless already present."""
+
+    existing = items.get(message_index)
+    if existing is not None and item in existing:
+        return False
+    items.setdefault(message_index, []).append(item)
+    return True
+
+
 def _carrier_items(
     messages: list[Any],
     destination: ReplayOrigin | None,
@@ -624,6 +657,13 @@ def _carrier_items(
     ``reasoning`` items that turn contributes, ready for
     :meth:`~my_claude_code.core.anthropic.conversion.AnthropicToOpenAIConverter.
     convert_messages` to place at the head of that turn's ``input[]`` run.
+
+    Both ``Message.encrypted_reasoning`` (populated by the inbound Responses
+    door) and ``content``-block carriers (``thinking.signature`` /
+    ``redacted_thinking.data``) are walked in deterministic order. Inside
+    ``encrypted_reasoning``, ``mcc:reasoning:v1:`` carriers undergo the same
+    decode + provenance check, while raw opaque ``reasoning`` items with
+    non-empty ``encrypted_content`` are copied cleanly when active.
 
     ``replayed_blocks`` is the set of ``(message index, block index)`` whose
     carrier was accepted, so :func:`_earlier_thinking` counts exactly the
@@ -645,21 +685,42 @@ def _carrier_items(
 
     items: dict[int, list[dict[str, Any]]] = {}
     replayed: set[tuple[int, int]] = set()
+    for message_index, message in enumerate(messages):
+        if getattr(message, "role", None) != "assistant":
+            continue
+        encrypted_items = getattr(message, "encrypted_reasoning", None)
+        if not isinstance(encrypted_items, list):
+            continue
+        for raw_item in encrypted_items:
+            if not isinstance(raw_item, Mapping) or raw_item.get("type") != "reasoning":
+                continue
+            encrypted = raw_item.get("encrypted_content")
+            if not isinstance(encrypted, str) or not encrypted:
+                continue
+            if is_carrier(encrypted):
+                native = _decode_accepted_carrier(encrypted, destination, counts)
+                if native is None:
+                    continue
+                candidate = native
+            else:
+                candidate = {str(k): v for k, v in raw_item.items()}
+            if _append_unique_reasoning_item(items, message_index, candidate):
+                counts[HISTORY_CARRIER_REPLAYED] = (
+                    counts.get(HISTORY_CARRIER_REPLAYED, 0) + 1
+                )
+            replayed.add((message_index, _ENCRYPTED_REASONING_INDEX))
+
     for message_index, block_index, _kind, value in _carrier_blocks(messages):
         if not is_carrier(value):
             continue
-        payload = decode_carrier(value)
-        if payload is None:
-            counts[HISTORY_CARRIER_MALFORMED] = (
-                counts.get(HISTORY_CARRIER_MALFORMED, 0) + 1
+        native = _decode_accepted_carrier(value, destination, counts)
+        if native is None:
+            continue
+        if _append_unique_reasoning_item(items, message_index, native):
+            counts[HISTORY_CARRIER_REPLAYED] = (
+                counts.get(HISTORY_CARRIER_REPLAYED, 0) + 1
             )
-            continue
-        if not accepts(destination, payload.origin):
-            counts[HISTORY_CARRIER_FOREIGN] = counts.get(HISTORY_CARRIER_FOREIGN, 0) + 1
-            continue
-        items.setdefault(message_index, []).append(payload.native)
         replayed.add((message_index, block_index))
-        counts[HISTORY_CARRIER_REPLAYED] = counts.get(HISTORY_CARRIER_REPLAYED, 0) + 1
     return items, replayed
 
 
@@ -740,7 +801,9 @@ def _plaintext_items(
         if getattr(message, "role", None) != "assistant":
             continue
         content = getattr(message, "content", None)
+        turn_has_carrier = any(msg_idx == message_index for msg_idx, _ in replayed)
         if isinstance(content, list):
+            turn_replayed_thinking = False
             for block_index, block in enumerate(content):
                 # Only a ``thinking`` block has a text field. A
                 # ``redacted_thinking`` block's ``data`` is the envelope.
@@ -759,7 +822,20 @@ def _plaintext_items(
                 counts[HISTORY_PLAINTEXT_REPLAYED] = (
                     counts.get(HISTORY_PLAINTEXT_REPLAYED, 0) + 1
                 )
+                turn_replayed_thinking = True
+            if turn_has_carrier or turn_replayed_thinking:
+                continue
+            reasoning = getattr(message, "reasoning_content", None)
+            if not isinstance(reasoning, str) or not reasoning.strip():
+                continue
+            items.setdefault(message_index, []).append(_summary_item(reasoning))
+            replayed_blocks.add((message_index, _STRING_TURN_REASONING_INDEX))
+            counts[HISTORY_PLAINTEXT_REPLAYED] = (
+                counts.get(HISTORY_PLAINTEXT_REPLAYED, 0) + 1
+            )
         elif isinstance(content, str):
+            if turn_has_carrier:
+                continue
             reasoning = getattr(message, "reasoning_content", None)
             if not isinstance(reasoning, str) or not reasoning.strip():
                 continue
@@ -779,8 +855,9 @@ def _earlier_thinking(
 
     Exactly what the Responses surface leaves out of ``input``: every
     ``thinking`` block of an assistant turn given as a block list, every
-    ``redacted_thinking`` block beside it, and the top-level
-    ``reasoning_content`` of an assistant turn given as a plain string.
+    ``redacted_thinking`` block beside it, the top-level ``reasoning_content``
+    of an assistant turn (string or list content), and any un-replayed
+    ``encrypted_reasoning`` items when no ``reasoning_content`` covers that turn.
 
     ``replayed`` is the set of ``(message index, block index)`` whose reasoning
     the replay passes accepted (8.16.0, extended 8.17.0). A block in that set is
@@ -792,9 +869,10 @@ def _earlier_thinking(
     out is not a note. The change is visible only in ``params.wire``, never in a
     body.
 
-    A string-content assistant turn's ``reasoning_content`` is recorded under
-    :data:`_STRING_TURN_REASONING_INDEX`, so the plaintext pass can skip exactly
-    the turn it replayed.
+    A turn's ``reasoning_content`` is recorded under
+    :data:`_STRING_TURN_REASONING_INDEX`, and its ``encrypted_reasoning`` under
+    :data:`_ENCRYPTED_REASONING_INDEX`, so the omission count skips every turn
+    whose reasoning was already replayed.
     """
 
     skipped = replayed or set()
@@ -804,6 +882,9 @@ def _earlier_thinking(
         if getattr(message, "role", None) != "assistant":
             continue
         content = getattr(message, "content", None)
+        turn_encrypted_replayed = (message_index, _ENCRYPTED_REASONING_INDEX) in skipped
+        turn_text_replayed = (message_index, _STRING_TURN_REASONING_INDEX) in skipped
+        counted_turn_reasoning = False
         if isinstance(content, list):
             for block_index, block in enumerate(content):
                 block_type = get_block_type(block)
@@ -818,13 +899,37 @@ def _earlier_thinking(
                 blocks += 1
                 text = get_block_attr(block, field, "")
                 chars += len(text) if isinstance(text, str) else 0
+            if not turn_encrypted_replayed and not turn_text_replayed:
+                reasoning = getattr(message, "reasoning_content", None)
+                if isinstance(reasoning, str) and reasoning:
+                    blocks += 1
+                    chars += len(reasoning)
+                    counted_turn_reasoning = True
         elif isinstance(content, str):
-            if (message_index, _STRING_TURN_REASONING_INDEX) in skipped:
-                continue
-            reasoning = getattr(message, "reasoning_content", None)
-            if isinstance(reasoning, str) and reasoning:
-                blocks += 1
-                chars += len(reasoning)
+            if not turn_encrypted_replayed and not turn_text_replayed:
+                reasoning = getattr(message, "reasoning_content", None)
+                if isinstance(reasoning, str) and reasoning:
+                    blocks += 1
+                    chars += len(reasoning)
+                    counted_turn_reasoning = True
+        if (
+            not turn_encrypted_replayed
+            and not turn_text_replayed
+            and not counted_turn_reasoning
+        ):
+            encrypted_items = getattr(message, "encrypted_reasoning", None)
+            if isinstance(encrypted_items, list):
+                for raw_item in encrypted_items:
+                    if (
+                        isinstance(raw_item, Mapping)
+                        and raw_item.get("type") == "reasoning"
+                        and isinstance(
+                            encrypted := raw_item.get("encrypted_content"), str
+                        )
+                        and encrypted
+                    ):
+                        blocks += 1
+                        chars += len(encrypted)
     return blocks, chars
 
 
