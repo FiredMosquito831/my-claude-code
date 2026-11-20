@@ -15419,3 +15419,66 @@ SECTION_NAVIGATOR_VIEWS = frozenset(
 #:   8.3.0 USAGE PR 1 -> the `usage` page (tests/api/test_admin_usage_page_jsdom.py,
 #:                      base tree bb85fe79 = v8.2.0)
 VIEWS_ADDED_AFTER_BASELINES = frozenset({"usage"})
+
+
+@pytest.fixture(scope="module")
+def preferred_surface_ui() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="preferred_surface")
+
+
+def test_jsdom_preferred_surface_renders_only_on_multi_door_providers(
+    preferred_surface_ui: dict,
+) -> None:
+    assert preferred_surface_ui["fatal"] is None
+    assert preferred_surface_ui.get("scenarioError") is None
+    assert preferred_surface_ui["scriptErrors"] == []
+    assert preferred_surface_ui["consoleErrors"] == []
+
+    initial = preferred_surface_ui["initial"]
+    assert initial["goProviderPrefPresent"] is True
+    assert initial["groqProviderPrefPresent"] is False
+    assert initial["groqModelSurfacePresent"] is False
+    assert initial["goModelPrefOptions"][0] == {
+        "value": "",
+        "text": "Follow the client",
+    }
+    assert "Messages (/messages)" in initial["discoveredText"]
+    assert "Pin uses only that endpoint" in initial["distinctionText"]
+    assert (
+        initial["refusalText"]
+        == "you prefer Chat Completions; this host refused it at 20:25 UTC; serving Messages"
+    )
+
+
+def test_jsdom_preferred_surface_saves_preserve_dom_and_sync_inherit_label(
+    preferred_surface_ui: dict,
+) -> None:
+    after_model = preferred_surface_ui["afterModelSave"]
+    assert after_model["status"] == "Saved"
+    assert after_model["statusConnected"] is True
+    assert after_model["refusalHidden"] is True
+
+    after_provider = preferred_surface_ui["afterProviderSave"]
+    assert after_provider["status"] == "Saved"
+    assert after_provider["statusConnected"] is True
+    assert (
+        after_provider["modelInheritOptionText"]
+        == "Inherit from provider (Chat Completions)"
+    )
+
+    posts = preferred_surface_ui["posts"]
+    assert [p["path"] for p in posts] == [
+        "/admin/api/model-admin/preferred-surface",
+        "/admin/api/model-admin/preferred-surface",
+        "/admin/api/model-admin/preferred-surface",
+    ]
+    assert json.loads(posts[0]["body"]) == {
+        "scope": "model",
+        "key": "opencode_go/minimax-m3",
+        "surface": "responses",
+    }
+    assert json.loads(posts[2]["body"]) == {
+        "scope": "provider",
+        "key": "opencode_go",
+        "surface": "chat_completions",
+    }

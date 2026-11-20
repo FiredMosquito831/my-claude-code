@@ -87,6 +87,15 @@ FACT_CLIENT_IDENTITY_REQUIRED = "client_identity_required"
 #: *listing* statement, never a hiding one: the model keeps its row, with the
 #: reason on it.
 FACT_RESPONSE_SURFACE = "response_surface"
+#: An operator-preferred wire surface that this deployment's host refused in a
+#: surface-shaped way (8.32.0, Q9). ``detail`` names the refused surface value
+#: (e.g. ``"chat_completions"``); value: ``True``.
+#:
+#: Kept separate from :data:`FACT_RESPONSE_SURFACE` and from
+#: ``model_overrides.json``: the operator's preference is never silently
+#: rewritten, other learned doors are preserved, and while this fact is fresh
+#: (7 days) MCC does not re-probe the refused preferred door on every request.
+FACT_PREFERRED_SURFACE_REFUSED = "preferred_surface_refused"
 #: The longest tool name this host's Responses surface accepts, stated by the
 #: host in a 400 that named the ``name`` parameter. Provider-wide, because a
 #: request validator sits in front of the whole deployment rather than behind
@@ -226,6 +235,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_MODELS_ETAG,
         FACT_CLIENT_IDENTITY_REQUIRED,
         FACT_RESPONSE_SURFACE,
+        FACT_PREFERRED_SURFACE_REFUSED,
         FACT_RESPONSES_TOOL_NAME_MAX_LENGTH,
         FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
         FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
@@ -304,6 +314,10 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # often than it changes an output cap (four of Zen's free models moved in
     # six weeks), so this sits on the weaker clock on purpose.
     FACT_RESPONSE_SURFACE: INFERRED_FACT_TTL_SECONDS,
+    # Refusal of an operator's preferred door expires on the same 7-day clock so
+    # a host that later enables the door is retried once per TTL without paying
+    # a failed probe on every single request.
+    FACT_PREFERRED_SURFACE_REFUSED: INFERRED_FACT_TTL_SECONDS,
     FACT_REASONING_FIELD_REJECTED: INFERRED_FACT_TTL_SECONDS,
     # A refusal, like the field rejection beside it, and on the same clock for
     # the same reason: the host's sentence is evidence, but what MCC writes

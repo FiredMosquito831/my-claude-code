@@ -4875,6 +4875,15 @@ if (process.env.MCC_JSDOM_SCENARIO === "in_loop_chip") {
   );
   scenario = prepareInLoopChipScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=preferred_surface (8.32.0): Models-page preferred wire
+   surface controls (model + provider scope), Q10 discovered list, Q9 refusal
+   line, and Q11 single-door omission (admin_jsdom_preferred_surface.mjs). */
+if (process.env.MCC_JSDOM_SCENARIO === "preferred_surface") {
+  const { preparePreferredSurfaceScenario } = await import(
+    "./admin_jsdom_preferred_surface.mjs"
+  );
+  scenario = preparePreferredSurfaceScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=ux_views (7.122.3): every view's DOM digests, for the
    base-tree equality of the UX pass -- the same scenario runs on the base
    tree and here (admin_jsdom_ux_views.mjs). */

@@ -150,6 +150,8 @@ def test_the_models_page_talks_to_the_endpoints_that_exist() -> None:
         # 7.33.0: the wire surface pin, which has a writer of its own because
         # it has a validator of its own.
         "/admin/api/model-admin/surface",
+        # 8.32.0: the preferred wire surface (provider or model scope).
+        "/admin/api/model-admin/preferred-surface",
     ):
         assert f'"{path}"' in script, f"admin.js never calls {path}"
         assert f'"{path}"' in routes, f"admin_routes.py does not serve {path}"

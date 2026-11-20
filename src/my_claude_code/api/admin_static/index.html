@@ -3857,7 +3857,11 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   under the control. <strong>Save overrides</strong> writes the same
                   file it always did, in the same order, and nothing a request sends
                   changes until you save. <em>Pin endpoint</em> on the Wire surface row
-                  keeps its own save. The <em>override(s) active</em> chip beside a
+                  keeps its own exclusive save; on providers with two or more wire doors,
+                  <em>Set preference</em> (<code>preferred_surface</code>, per provider or per
+                  model, off by default) tries your chosen door first while keeping the
+                  fallback ladder, shows all discovered doors, and reports any active host
+                  refusal without overwriting your preference. The <em>override(s) active</em> chip beside a
                   model's name counts every key you set that reaches it &mdash; the
                   output cap, the context window and the reasoning word included.
                 </p>

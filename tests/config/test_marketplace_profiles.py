@@ -96,7 +96,7 @@ def test_no_file_is_no_profiles() -> None:
 
 def test_the_15th_key_is_a_non_body_key() -> None:
     assert MARKETPLACE_PROFILE_OVERRIDE in NON_BODY_OVERRIDE_PARAMETERS
-    assert len(NON_BODY_OVERRIDE_PARAMETERS) == 6
+    assert len(NON_BODY_OVERRIDE_PARAMETERS) == 7
 
 
 def _table(document: dict[str, Any]) -> ModelParameterOverrides:

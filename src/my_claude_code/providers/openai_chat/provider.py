@@ -164,6 +164,9 @@ from .request_policy import build_openai_chat_request_body, chat_tool_schema_not
 from .response_surface import (
     ResolvedSurfaceLadder,
     alternative_surfaces,
+    clear_preferred_surface_refusal,
+    preferred_surface_of,
+    remember_preferred_surface_refusal,
     remember_response_surfaces,
     resolve_surface_ladder,
 )
@@ -1416,6 +1419,7 @@ class OpenAIChatProvider(BaseProvider):
 
         # The known doors at resolution time, in try order. A fact another
         # request learns meanwhile cannot change what this one walks.
+        preferred = preferred_surface_of(self._provider_id, request.model)
         known = [candidate.surface for candidate in ladder.candidates]
         attempted: list[ResponseSurface] = []
         index = 0
@@ -1432,10 +1436,11 @@ class OpenAIChatProvider(BaseProvider):
             if candidate.guessed:
                 # The guessed door: either the vendor named an API this build
                 # cannot speak (7.114.0) or the vendor named nothing at all
-                # and this host opted into optimistic discovery (7.115.0). It
-                # is asked one tiny question first -- the client's tools and
-                # context never reach a wrong path -- and the answer is
-                # remembered either way.
+                # and this host opted into optimistic discovery (7.115.0), or
+                # the operator set ``preferred_surface`` to a declared but
+                # unproved door (8.32.0, Q4). It is asked one tiny question
+                # first -- the client's tools and context never reach a wrong
+                # path -- and the answer is remembered either way.
                 failure = await self._probe_guessed_surface(request.model, surface)
                 if failure is None:
                     remember_response_surfaces(
@@ -1444,6 +1449,10 @@ class OpenAIChatProvider(BaseProvider):
                         known,
                         evidence="a probe of a guessed door answered",
                     )
+                    if preferred is surface:
+                        clear_preferred_surface_refusal(
+                            self._provider_id, request.model, surface
+                        )
                 else:
                     evidence = _surface_failure_evidence(failure, guessed=True)
                     if evidence is None:
@@ -1463,6 +1472,13 @@ class OpenAIChatProvider(BaseProvider):
                         if index + 1 < len(ladder.candidates)
                         else "nothing",
                     )
+                    if preferred is surface:
+                        remember_preferred_surface_refusal(
+                            self._provider_id,
+                            request.model,
+                            surface,
+                            evidence=evidence,
+                        )
                     if index + 1 >= len(ladder.candidates):
                         raise failure
                     remember_response_surfaces(
@@ -1538,6 +1554,13 @@ class OpenAIChatProvider(BaseProvider):
                         known[index + 1 :],
                         evidence=evidence,
                     )
+                    if preferred is surface:
+                        remember_preferred_surface_refusal(
+                            self._provider_id,
+                            request.model,
+                            surface,
+                            evidence=evidence,
+                        )
                     index += 1
                     candidate = ladder.candidates[index]
                     surface = candidate.surface
@@ -1549,6 +1572,17 @@ class OpenAIChatProvider(BaseProvider):
                 )
                 if learned is None:
                     raise
+                if preferred is surface:
+                    remember_preferred_surface_refusal(
+                        self._provider_id,
+                        request.model,
+                        surface,
+                        evidence=evidence,
+                    )
+                if preferred is learned:
+                    clear_preferred_surface_refusal(
+                        self._provider_id, request.model, learned
+                    )
                 surface = learned
                 label = ResolvedResponseSurface(
                     learned, ResponseSurfaceSource.LEARNED, "proved by a probe"
