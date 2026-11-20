@@ -18,6 +18,7 @@ import pytest
 
 from my_claude_code.application.model_metadata import ModelReasoningCapability
 from my_claude_code.application.reasoning_gating import adapt_reasoning_policy
+from my_claude_code.config.provider_catalog import MISTRAL_DEFAULT_BASE
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.reasoning import (
     ReasoningAdaptationKind,
@@ -28,6 +29,7 @@ from my_claude_code.core.reasoning import (
 from my_claude_code.providers.anthropic_messages.provider import (
     ANTHROPIC_REASONING_DIALECT,
 )
+from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.chatgpt_oauth.conversion import (
     build_chatgpt_oauth_request_body,
 )
@@ -37,10 +39,12 @@ from my_claude_code.providers.chatgpt_oauth.provider import (
 from my_claude_code.providers.commandcode.client import _PROFILE as COMMANDCODE_PROFILE
 from my_claude_code.providers.deepseek.client import DEEPSEEK_REASONING_DIALECT
 from my_claude_code.providers.gemini.client import _PROFILE as GEMINI_PROFILE
+from my_claude_code.providers.mistral import MistralProvider
 from my_claude_code.providers.mistral.client import MISTRAL_REASONING_DIALECT
 from my_claude_code.providers.nvidia_nim.client import NIM_REASONING_DIALECT
 from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
 from my_claude_code.providers.openrouter_gateway import openrouter_gateway_profile
+from tests.providers.support import passthrough_rate_limiter
 
 # --------------------------------------------------------------------------
 # The two facts, per route.
@@ -286,11 +290,13 @@ WIRE_TABLE: tuple[tuple[Any, ...], ...] = (
         ReasoningEffort.MAX,
         {"reasoning_effort": "high"},
     ),
-    # Mistral publishes one on-value; every lower ask clamps up to it, visibly.
+    # Mistral declares the wide 6-rung scale (MINIMAL..MAX + OFF); per-model
+    # capability gating clamps single-rung models up to HIGH while preserving
+    # low/medium/xhigh/max on models that publish them.
     (
         "mistral",
-        "magistral-medium",
-        None,
+        "mistral-medium-3-5",
+        effort_model(ReasoningEffort.HIGH),
         MISTRAL_DIALECT,
         ReasoningEffort.LOW,
         None,  # Mistral builds its own body; asserted separately below.
@@ -478,18 +484,90 @@ def test_a_toggle_and_effort_model_on_nim_takes_the_chat_template_toggle() -> No
     assert policy.numeric_budget_tokens is None
 
 
-def test_mistrals_single_rung_clamps_up_and_is_recorded() -> None:
-    """One on-value, so a lower ask becomes it -- never "none", never silence."""
-
+def _mistral_wire_body(
+    model_id: str,
+    capability: ModelReasoningCapability | None,
+    effort: ReasoningEffort,
+) -> tuple[ReasoningPolicy, ReasoningAdaptationKind, dict[str, Any]]:
     adapted, adaptation = adapt_reasoning_policy(
-        ReasoningPolicy.on(effort=ReasoningEffort.LOW),
-        None,
+        ReasoningPolicy.on(effort=effort),
+        capability,
         dialect=MISTRAL_DIALECT,
-        model_ref="mistral/magistral-medium",
+        model_ref=f"mistral/{model_id}",
+    )
+    provider = MistralProvider(
+        ProviderConfig(api_key="test-mistral-key", base_url=MISTRAL_DEFAULT_BASE),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+    body = provider._build_request_body(
+        MessagesRequest(model=model_id, messages=[Message(role="user", content="hi")]),
+        reasoning=adapted,
+    )
+    return adapted, adaptation.kind, body
+
+
+def test_mistrals_single_rung_clamps_up_and_is_recorded() -> None:
+    """Capability-gated single-rung Mistral models still clamp LOW -> high."""
+
+    adapted, kind, body = _mistral_wire_body(
+        "mistral-medium-3-5",
+        effort_model(ReasoningEffort.HIGH),
+        ReasoningEffort.LOW,
     )
 
     assert adapted.effort is ReasoningEffort.HIGH
-    assert adaptation.kind.value == "clamped"
+    assert kind.value == "clamped"
+    assert body["reasoning_effort"] == "high"
+
+
+def test_mistral_wide_dialect_preserves_max_and_clamps_gap_on_glm() -> None:
+    """zai-glm-5-3 (LOW, HIGH, MAX) sends native max and clamps MEDIUM -> low."""
+
+    cap = effort_model(ReasoningEffort.LOW, ReasoningEffort.HIGH, ReasoningEffort.MAX)
+    max_adapted, max_kind, max_body = _mistral_wire_body(
+        "zai-glm-5-3", cap, ReasoningEffort.MAX
+    )
+    assert max_adapted.effort is ReasoningEffort.MAX
+    assert max_kind is ReasoningAdaptationKind.UNCHANGED
+    assert max_body["reasoning_effort"] == "max"
+
+    med_adapted, med_kind, med_body = _mistral_wire_body(
+        "zai-glm-5-3", cap, ReasoningEffort.MEDIUM
+    )
+    assert med_adapted.effort is ReasoningEffort.LOW
+    assert med_kind.value == "clamped"
+    assert med_body["reasoning_effort"] == "low"
+
+
+def test_mistral_wide_dialect_preserves_xhigh_when_supported() -> None:
+    """An XHIGH-capable model sends native xhigh without clamping down."""
+
+    cap = effort_model(
+        ReasoningEffort.LOW,
+        ReasoningEffort.MEDIUM,
+        ReasoningEffort.HIGH,
+        ReasoningEffort.XHIGH,
+    )
+    adapted, kind, body = _mistral_wire_body(
+        "fixture-xhigh-model", cap, ReasoningEffort.XHIGH
+    )
+
+    assert adapted.effort is ReasoningEffort.XHIGH
+    assert kind is ReasoningAdaptationKind.UNCHANGED
+    assert body["reasoning_effort"] == "xhigh"
+
+
+def test_mistral_large_4_sends_low_medium_high_natively() -> None:
+    """mistral-large-4 (LOW, MEDIUM, HIGH) forwards each rung verbatim."""
+
+    cap = effort_model(
+        ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH
+    )
+    for rung in (ReasoningEffort.LOW, ReasoningEffort.MEDIUM, ReasoningEffort.HIGH):
+        adapted, kind, body = _mistral_wire_body("mistral-large-4", cap, rung)
+        assert adapted.effort is rung
+        assert kind is ReasoningAdaptationKind.UNCHANGED
+        assert body["reasoning_effort"] == rung.value
 
 
 def test_a_max_capable_model_on_chatgpt_oauth_sends_max() -> None:

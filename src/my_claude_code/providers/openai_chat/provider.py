@@ -372,7 +372,9 @@ class OpenAIChatProvider(BaseProvider):
                     kind="stream_usage", rewrite=self._rewrite_without_stream_usage
                 ).rung(),
                 ProviderRecovery(
-                    kind="provider_specific", rewrite=self._get_retry_request_body
+                    kind="provider_specific",
+                    rewrite=self._get_retry_request_body,
+                    stripped_field=self._stripped_provider_reasoning_field,
                 ).rung(),
                 ReasoningStripRecovery(log_tag=log_tag).rung(),
             )
@@ -433,6 +435,10 @@ class OpenAIChatProvider(BaseProvider):
         """The learned reasoning refusals, under this family's long-standing name."""
         return self._recovery_memory.rejected_reasoning_fields
 
+    def _declared_reasoning_dialect(self) -> ReasoningDialect:
+        """The host's unnarrowed reasoning dialect before learned rejections."""
+        return self._profile.reasoning.dialect
+
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
         """What this profile's encoder can put on the wire, for this model.
 
@@ -446,7 +452,7 @@ class OpenAIChatProvider(BaseProvider):
         holds the model cache. Both only ever remove, so they compose in either
         order.
         """
-        dialect = self._profile.reasoning.dialect
+        dialect = self._declared_reasoning_dialect()
         rejections = self._recovery_memory.rejections_for(model_id) or {}
         value_rejections = self._recovery_memory.rejected_values_for(model_id)
         if not rejections and not value_rejections:
@@ -883,6 +889,19 @@ class OpenAIChatProvider(BaseProvider):
         """Return a modified request body for one retry, or None."""
         return None
 
+    def _stripped_provider_reasoning_field(
+        self, error: Exception, body: dict[str, Any]
+    ) -> str | None:
+        """Return the reasoning field a provider-specific retry stripped, if any."""
+        del error, body
+        return None
+
+    def _remember_provider_recovery(
+        self, body: dict[str, Any], prior_body: dict[str, Any], evidence: str
+    ) -> None:
+        """Hook for subclasses to persist non-field recoveries after 2xx acceptance."""
+        del body, prior_body, evidence
+
     def _provider_failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Return provider-specific failure semantics, or defer to shared policy."""
         return None
@@ -978,12 +997,14 @@ class OpenAIChatProvider(BaseProvider):
         # concurrent requests share this provider, and unlike the monotonic
         # output-cap table this value is consumed once the retry is accepted.
         stripped_reasoning: str | None = None
+        stripped_evidence = ""
         # The rung that produced the current body, and the host's own words
         # that provoked it. Both are only acted on once the retry is accepted:
         # a rewrite that did not fix anything is not evidence about the host.
         rewrite_evidence: dict[str, str] = {}
         # The effort words that same 400 proved refused, if it proved any.
         stripped_values: frozenset[str] = frozenset()
+        provider_recovery_prior: tuple[dict[str, Any], str] | None = None
 
         while True:
             try:
@@ -1060,8 +1081,13 @@ class OpenAIChatProvider(BaseProvider):
                     self._remember_reasoning_rejection(
                         body,
                         stripped_reasoning,
-                        rewrite_evidence.get("reasoning_field", ""),
+                        stripped_evidence,
                         stripped_values,
+                    )
+                if provider_recovery_prior is not None:
+                    prior_body, recovery_evidence = provider_recovery_prior
+                    self._remember_provider_recovery(
+                        body, prior_body, recovery_evidence
                     )
                 if "stream_usage" in used_retry_kinds:
                     self._remember_stream_usage_refusal(
@@ -1105,7 +1131,10 @@ class OpenAIChatProvider(BaseProvider):
                     rewrite_evidence[decision.kind] = decision.evidence
                 if decision.stripped_reasoning_field is not None:
                     stripped_reasoning = decision.stripped_reasoning_field
+                    stripped_evidence = decision.evidence
                     stripped_values = decision.rejected_effort_values
+                elif decision.kind == "provider_specific":
+                    provider_recovery_prior = (body, decision.evidence)
                 body = decision.body
 
     def _rewrite_without_stream_usage(

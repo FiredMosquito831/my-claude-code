@@ -20,34 +20,52 @@ from my_claude_code.providers.openai_chat import (
     CACHE_AFFINITY_HEADER_NAME,
     NO_REASONING,
     CacheAffinitySpec,
+    NamedEffortReasoning,
     OpenAIChatProfile,
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
     apply_cache_affinity_body,
     build_openai_chat_request_body,
+    validate_extra_body_does_not_override_canonical_fields,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import rejected_reasoning_field
 
 from .reasoning import (
     apply_mistral_reasoning_request_shape,
+    body_has_mistral_thinking,
     clone_body_without_mistral_reasoning,
     is_mistral_reasoning_rejection,
     normalize_mistral_stream,
+    strip_top_p_on_greedy_temperature,
 )
 
 _REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="MISTRAL",
     reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
+    include_extra_body=True,
+    extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
 )
-# 2026-08-29 audit: ``NO_REASONING`` here is deliberate, not a dead wire.
-# Mistral's reasoning shape is applied by ``apply_mistral_reasoning_request_shape``
-# inside ``_build_request_body`` below, together with the once-only retry that
-# strips it again when a non-reasoning model rejects it -- a pairing the profile
-# encoder cannot express. models.dev reports reasoning on only 7 of 34 Mistral
-# rows, which is why that retry exists. An encoder here would never be consulted.
-# PR F gave every profile-driven host the OpenAI standard dialect; this
-# one is excluded because the profile encoder is not the wire, and its
-# real dialect is declared alongside.
+
+_MISTRAL_EFFORTS = tuple((effort, effort.value) for effort in ReasoningEffort)
+
+MISTRAL_REASONING_ENCODER = NamedEffortReasoning(
+    _MISTRAL_EFFORTS,
+    disabled_value="none",
+)
+MISTRAL_REASONING_DIALECT = MISTRAL_REASONING_ENCODER.dialect
+"""Mistral wide per-model reasoning dialect (all 6 rungs ``minimal..max`` + ``none``).
+
+Capability gating intersects this wide host dialect with each model's
+published/probed capabilities (preserving ``max`` / ``xhigh`` where supported),
+and :meth:`OpenAIChatProvider.reasoning_dialect` narrows it per model on any
+learned 400/422 field, value, or ``"none"`` rejection.
+"""
+
+# ``NO_REASONING`` on ``_PROFILE`` is deliberate: ``MistralProvider`` applies
+# its reasoning shape via ``apply_mistral_reasoning_request_shape`` inside
+# ``_build_request_body`` rather than through ``_PROFILE.request_postprocessors``,
+# and keeps the v7.58.0 standalone-profile replay baseline byte-identical.
 _CACHE_AFFINITY = CacheAffinitySpec(
     header_name=CACHE_AFFINITY_HEADER_NAME,
     send_body_key=True,
@@ -58,20 +76,6 @@ _PROFILE = OpenAIChatProfile(
     NO_REASONING,
     cache_affinity=_CACHE_AFFINITY,
 )
-
-
-MISTRAL_REASONING_DIALECT = ReasoningDialect(
-    effort_values=frozenset({ReasoningEffort.HIGH}),
-    off=True,
-    effort_field="reasoning_effort",
-)
-"""Mistral's OpenAPI declares ``reasoning_effort: enum [high, none]``.
-
-One on-value and one off-value, which is a host vocabulary of exactly
-``{high}`` plus a spellable OFF. Gating clamps every lower rung onto it
-and records the clamp, which is where this fact used to live as a
-hardcoded provider vocabulary table.
-"""
 
 
 class MistralProvider(OpenAIChatProvider):
@@ -92,7 +96,7 @@ class MistralProvider(OpenAIChatProvider):
     credentials spending two different budgets must not share those.
     """
 
-    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+    def _declared_reasoning_dialect(self) -> ReasoningDialect:
         """See :data:`MISTRAL_REASONING_DIALECT`."""
         return MISTRAL_REASONING_DIALECT
 
@@ -125,9 +129,17 @@ class MistralProvider(OpenAIChatProvider):
             request,
             reasoning=reasoning,
             policy=_REQUEST_POLICY,
+            postprocessors=(strip_top_p_on_greedy_temperature,),
             provider_id=self._provider_id,
         )
-        apply_mistral_reasoning_request_shape(body, reasoning=reasoning)
+        apply_mistral_reasoning_request_shape(
+            body,
+            reasoning=reasoning,
+            dialect=self.reasoning_dialect(request.model),
+            strip_history_thinking=self._recovery_memory.history_thinking_refused_for(
+                request.model
+            ),
+        )
         apply_cache_affinity_body(
             body,
             request,
@@ -147,6 +159,34 @@ class MistralProvider(OpenAIChatProvider):
             "MISTRAL_STREAM: retrying without reasoning after upstream rejection"
         )
         return retry_body
+
+    def _stripped_provider_reasoning_field(
+        self, error: Exception, body: dict[str, Any]
+    ) -> str | None:
+        """Identify ``reasoning_effort`` when the rejection blames it over history."""
+        if rejected_reasoning_field(error, body) == "reasoning_effort":
+            return "reasoning_effort"
+        if "reasoning_effort" in body and not body_has_mistral_thinking(body):
+            return "reasoning_effort"
+        return None
+
+    def _remember_provider_recovery(
+        self, body: dict[str, Any], prior_body: dict[str, Any], evidence: str
+    ) -> None:
+        """Persist ``history_thinking_rejected`` once a thinking-stripped retry succeeds."""
+        if not body_has_mistral_thinking(prior_body) or body_has_mistral_thinking(body):
+            return
+        model = body.get("model")
+        if not isinstance(model, str) or not model:
+            return
+        if self._recovery_memory.remember_history_thinking_refusal(
+            model, evidence=evidence
+        ):
+            logger.warning(
+                "MISTRAL_STREAM: history thinking blocks learned as rejected for {} "
+                "-- later requests omit them",
+                model,
+            )
 
     async def _create_stream(
         self,
