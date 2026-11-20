@@ -1,4 +1,4 @@
-"""Mistral La Plateforme provider implementation (OpenAI-compatible chat completions)."""
+"""Mistral La Plateforme provider implementation (Chat Completions & Responses)."""
 
 from collections.abc import Mapping
 from typing import Any
@@ -6,8 +6,6 @@ from typing import Any
 from loguru import logger
 
 from my_claude_code.application.marketplace import MarketplaceChoice
-from my_claude_code.config.settings import configured_mistral_prompt_cache_affinity
-from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
@@ -17,16 +15,11 @@ from my_claude_code.core.reasoning import (
 )
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
-    CACHE_AFFINITY_HEADER_NAME,
-    NO_REASONING,
-    CacheAffinitySpec,
+    MISTRAL_CHAT_PROFILE,
     NamedEffortReasoning,
-    OpenAIChatProfile,
     OpenAIChatProvider,
-    OpenAIChatRequestPolicy,
     apply_cache_affinity_body,
     build_openai_chat_request_body,
-    validate_extra_body_does_not_override_canonical_fields,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import rejected_reasoning_field
@@ -40,12 +33,9 @@ from .reasoning import (
     strip_top_p_on_greedy_temperature,
 )
 
-_REQUEST_POLICY = OpenAIChatRequestPolicy(
-    provider_name="MISTRAL",
-    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
-    include_extra_body=True,
-    extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
-)
+_PROFILE = MISTRAL_CHAT_PROFILE
+_REQUEST_POLICY = _PROFILE.request_policy
+_CACHE_AFFINITY = _PROFILE.cache_affinity
 
 _MISTRAL_EFFORTS = tuple((effort, effort.value) for effort in ReasoningEffort)
 
@@ -61,21 +51,6 @@ published/probed capabilities (preserving ``max`` / ``xhigh`` where supported),
 and :meth:`OpenAIChatProvider.reasoning_dialect` narrows it per model on any
 learned 400/422 field, value, or ``"none"`` rejection.
 """
-
-# ``NO_REASONING`` on ``_PROFILE`` is deliberate: ``MistralProvider`` applies
-# its reasoning shape via ``apply_mistral_reasoning_request_shape`` inside
-# ``_build_request_body`` rather than through ``_PROFILE.request_postprocessors``,
-# and keeps the v7.58.0 standalone-profile replay baseline byte-identical.
-_CACHE_AFFINITY = CacheAffinitySpec(
-    header_name=CACHE_AFFINITY_HEADER_NAME,
-    send_body_key=True,
-    enabled=configured_mistral_prompt_cache_affinity,
-)
-_PROFILE = OpenAIChatProfile(
-    _REQUEST_POLICY,
-    NO_REASONING,
-    cache_affinity=_CACHE_AFFINITY,
-)
 
 
 class MistralProvider(OpenAIChatProvider):

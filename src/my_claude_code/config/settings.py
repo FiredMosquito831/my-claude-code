@@ -528,9 +528,13 @@ class Settings(BaseSettings):
 
     # ==================== Mistral La Plateforme ====================
     mistral_api_key: str = Field(default="", validation_alias="MISTRAL_API_KEY")
+    mistral_base_url: str = Field(default="", validation_alias="MISTRAL_BASE_URL")
 
     # ==================== Mistral Vibe (subscription) ====================
     mistral_vibe_api_key: str = Field(default="", validation_alias="MISTRAL_VIBE_KEY")
+    mistral_vibe_base_url: str = Field(
+        default="", validation_alias="MISTRAL_VIBE_BASE_URL"
+    )
     mistral_prompt_cache_affinity: bool = Field(
         default=MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT,
         validation_alias="MISTRAL_PROMPT_CACHE_AFFINITY",

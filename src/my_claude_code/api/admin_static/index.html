@@ -3439,6 +3439,20 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                     selector (<code>off</code>, <code>body</code>,
                     <code>header</code>, or <code>both</code>).
                   </p>
+                  <p>
+                    <strong>Regional endpoints &amp; Responses surface (8.31.0).</strong>
+                    Leave <code>MISTRAL_BASE_URL</code> (Studio) and
+                    <code>MISTRAL_VIBE_BASE_URL</code> (Vibe) empty for the global
+                    default (<code>https://api.mistral.ai/v1</code>), or point either
+                    independently at Mistral&rsquo;s official regional hosts
+                    (<code>https://api.eu.mistral.ai/v1</code> or
+                    <code>https://api.us.mistral.ai/v1</code>). Upstream bills EU/US
+                    regional endpoints at <strong>1.1x</strong>; MCC&rsquo;s cost
+                    estimates continue to use global Studio rates without multiplying.
+                    Both cards also declare <code>chat_completions</code> (default)
+                    and <code>responses</code> (<code>/v1/responses</code>), keeping
+                    learned surfaces isolated per pool.
+                  </p>
                 </div>
 
                 <h3 id="guide-models">Map model tiers</h3>

@@ -160,10 +160,10 @@ from my_claude_code.providers.commandcode import (
     is_anthropic_messages_model,
 )
 from my_claude_code.providers.openai_chat import (
-    OPENAI_CHAT_PROFILES,
     catalogue_surface,
     declared_surfaces_for,
     learned_effort_values,
+    surface_profile_for,
 )
 from my_claude_code.providers.runtime.models_dev import (
     MODELS_DEV_RUNG_BUCKET,
@@ -2133,7 +2133,7 @@ def speakable_surfaces(provider_id: str) -> tuple[ResponseSurface, ...]:
     nothing to choose between.
     """
 
-    profile = OPENAI_CHAT_PROFILES.get(provider_id)
+    profile = surface_profile_for(provider_id)
     if profile is not None:
         return profile.response_surfaces
     return declared_surfaces_for(provider_id)

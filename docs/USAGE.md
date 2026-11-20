@@ -3243,6 +3243,24 @@ affinity** selector (`off` default, `body`, `header`, or `both`) across Chat
 Completions and Responses, with a non-mutating UI hint when the Base URL
 targets `api.mistral.ai`, `api.eu.mistral.ai`, or `api.us.mistral.ai`.
 
+**Regional hosts (`MISTRAL_BASE_URL` / `MISTRAL_VIBE_BASE_URL`, 8.31.0).**
+Leave empty for `https://api.mistral.ai/v1` (global default), or set
+`MISTRAL_BASE_URL` (Studio) / `MISTRAL_VIBE_BASE_URL` (Vibe) independently to
+Mistral's official regional endpoints (`https://api.eu.mistral.ai/v1` for EU or
+`https://api.us.mistral.ai/v1` for US). Upstream bills EU and US regional
+endpoints at **1.1x** global pricing; MCC's cost estimates use `models.dev`
+global Studio rates (or cross-provider vote on Vibe) without applying a
+regional multiplier. Each card keeps its own proxy (`MISTRAL_PROXY` /
+`MISTRAL_VIBE_PROXY`) and credential isolation (`mistral_codestral` stays on
+`codestral.mistral.ai`).
+
+**Official `/v1/responses` surface (8.31.0).** Both `mistral` and
+`mistral_vibe` declare `chat_completions` and `responses`, defaulting unchanged
+to `/v1/chat/completions`. Models pinned to `responses` on the Models page (or
+proved on `/responses` by a probe) use `POST {base_url}/responses` and keep
+`MISTRAL_PROMPT_CACHE_AFFINITY` (`prompt_cache_key` + `x-affinity`) and
+per-provider learned surface memory isolated between Studio and Vibe.
+
 <a id="reading-a-failed-refresh-models"></a>
 
 ### Reading a failed Refresh models

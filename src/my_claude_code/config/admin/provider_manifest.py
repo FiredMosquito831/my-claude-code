@@ -18,6 +18,9 @@ from my_claude_code.config.constants import (
 from my_claude_code.config.provider_catalog import (
     AZURE_OPENAI_BASE_URL_EXAMPLE,
     INFERHUB_MARKET_DEFAULT_BASE,
+    MISTRAL_DEFAULT_BASE,
+    MISTRAL_EU_BASE,
+    MISTRAL_US_BASE,
     PROVIDER_CATALOG,
 )
 from my_claude_code.config.settings import Settings
@@ -44,6 +47,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
             "Pro plans cannot enable it at all."
         ),
     },
+    "MISTRAL_BASE_URL": {
+        "label": "Mistral Studio Base URL",
+        "description": (
+            f"Endpoint MCC sends Mistral Studio requests to. Leave empty for "
+            f"the global default ({MISTRAL_DEFAULT_BASE}). Official regional "
+            f"endpoints are {MISTRAL_EU_BASE} (EU) and {MISTRAL_US_BASE} (US). "
+            "Mistral charges a 1.1x regional pricing multiplier on the EU and "
+            "US endpoints upstream, while MCC cost estimates use models.dev "
+            "global Studio rates without applying a regional multiplier. "
+            "Applies on Save (preserves MISTRAL_PROXY and Studio/Vibe key "
+            "isolation)."
+        ),
+    },
     "MISTRAL_VIBE_KEY": {
         "label": "Mistral Vibe Key",
         "description": (
@@ -55,6 +71,19 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
             "Mistral, not published; a refusal means this key's entitlement "
             "does not cover that request. The Vibe web environment's session "
             "limits (24 h, 100/day) are not API limits."
+        ),
+    },
+    "MISTRAL_VIBE_BASE_URL": {
+        "label": "Mistral Vibe Base URL",
+        "description": (
+            f"Endpoint MCC sends Mistral Vibe requests to. Leave empty for "
+            f"the global default ({MISTRAL_DEFAULT_BASE}). Official regional "
+            f"endpoints are {MISTRAL_EU_BASE} (EU) and {MISTRAL_US_BASE} (US). "
+            "Mistral charges a 1.1x regional pricing multiplier on the EU and "
+            "US endpoints upstream, while MCC cost estimates use the "
+            "cross-provider vote without applying a regional multiplier. "
+            "Applies on Save (preserves MISTRAL_VIBE_PROXY and Studio/Vibe "
+            "key isolation)."
         ),
     },
     "CODESTRAL_API_KEY": {
@@ -528,11 +557,12 @@ def _mistral_cache_affinity_field_specs() -> tuple[dict[str, Any], ...]:
             "settings_attr": "mistral_prompt_cache_affinity",
             "description": (
                 "Applies to built-in Mistral Studio (mistral) and Mistral Vibe "
-                "(mistral_vibe) on api.mistral.ai (leaving mistral_codestral "
-                "OFF), sending an opaque restart-stable root-session digest "
-                "in prompt_cache_key and x-affinity to improve cache pod "
-                "routing for multi-turn chats and Claude Code subagents. "
-                "Applies on the next request without restarting."
+                "(mistral_vibe) on Mistral API hosts (api.mistral.ai / "
+                "api.eu.mistral.ai / api.us.mistral.ai) (leaving "
+                "mistral_codestral OFF), sending an opaque restart-stable "
+                "root-session digest in prompt_cache_key and x-affinity to "
+                "improve cache pod routing for multi-turn chats and Claude Code "
+                "subagents. Applies on the next request without restarting."
             ),
         },
     )

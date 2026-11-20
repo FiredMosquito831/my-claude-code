@@ -13,6 +13,7 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from my_claude_code.config.marketplaces import INFERHUB_MARKETPLACE, MarketplaceDialect
+from my_claude_code.config.settings import configured_mistral_prompt_cache_affinity
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import (
@@ -30,7 +31,11 @@ from my_claude_code.providers.openai_responses import (
 )
 
 from .base_url import openai_v1_base_url
-from .cache_affinity import CacheAffinitySpec, cache_affinity_spec_for_mode
+from .cache_affinity import (
+    CACHE_AFFINITY_HEADER_NAME,
+    CacheAffinitySpec,
+    cache_affinity_spec_for_mode,
+)
 from .client_identity import ClientIdentity
 from .extra_body import validate_extra_body_does_not_override_canonical_fields
 from .opencode_catalogue import (
@@ -40,6 +45,7 @@ from .opencode_catalogue import (
 from .opencode_identity import OPENCODE_CLIENT_IDENTITY
 from .reasoning import (
     LLAMACPP_REASONING,
+    NO_REASONING,
     SPLIT_REASONING_OUTPUT,
     ChatTemplateReasoning,
     EffortOrThinkingBudgetReasoning,
@@ -1244,6 +1250,51 @@ GENERIC_OPENAI_PROFILE = OpenAIChatProfile(
     ),
     OPENAI_STANDARD_REASONING,
 )
+
+
+# Declarative profile shared by ``mistral`` and ``mistral_vibe`` (both live in
+# ``_SPECIAL_PROVIDER_FACTORIES`` rather than ``OPENAI_CHAT_PROFILES`` because
+# ``MistralProvider`` owns Mistral's native reasoning shape and stream
+# normalisation). Kept beside ``OPENAI_CHAT_PROFILES`` so the Models page and
+# ``POST /admin/api/model-admin/surface`` inspect the same single source of
+# truth without importing ``providers.mistral`` (which would cycle).
+#
+# ``NO_REASONING`` is deliberate: ``MistralProvider`` applies its reasoning
+# shape via ``apply_mistral_reasoning_request_shape`` inside
+# ``_build_request_body`` rather than through ``_PROFILE.request_postprocessors``,
+# and keeps the v7.58.0 standalone-profile replay baseline byte-identical.
+MISTRAL_CHAT_PROFILE = OpenAIChatProfile(
+    _policy(
+        "MISTRAL",
+        ReasoningReplayMode.REASONING_CONTENT,
+        include_extra_body=True,
+        extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+    ),
+    NO_REASONING,
+    response_surfaces=(
+        ResponseSurface.CHAT_COMPLETIONS,
+        ResponseSurface.RESPONSES,
+    ),
+    no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
+    cache_affinity=CacheAffinitySpec(
+        header_name=CACHE_AFFINITY_HEADER_NAME,
+        send_body_key=True,
+        enabled=configured_mistral_prompt_cache_affinity,
+    ),
+)
+
+SPECIAL_SURFACE_PROFILES: dict[str, OpenAIChatProfile] = {
+    "mistral": MISTRAL_CHAT_PROFILE,
+    "mistral_vibe": MISTRAL_CHAT_PROFILE,
+}
+
+
+def surface_profile_for(provider_id: str) -> OpenAIChatProfile | None:
+    """Return the static OpenAI-chat surface profile for ``provider_id``, if any."""
+    profile = OPENAI_CHAT_PROFILES.get(provider_id)
+    if profile is not None:
+        return profile
+    return SPECIAL_SURFACE_PROFILES.get(provider_id)
 
 
 def profile_with_cache_affinity(
