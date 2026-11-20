@@ -143,9 +143,15 @@ def tool_item(
 def reasoning_output_item(
     state: ReasoningBlockState, *, status: str
 ) -> dict[str, object]:
+    text = "".join(state.text_parts)
     if state.encrypted_content is not None:
-        return encrypted_reasoning_item(state.item_id, state.encrypted_content, status)
-    return reasoning_item(state.item_id, "".join(state.text_parts), status)
+        return encrypted_reasoning_item(
+            state.item_id,
+            state.encrypted_content,
+            status,
+            summary_text=text or None,
+        )
+    return reasoning_item(state.item_id, text, status)
 
 
 def _reasoning_output_item(
