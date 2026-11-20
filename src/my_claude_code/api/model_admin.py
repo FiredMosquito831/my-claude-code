@@ -108,6 +108,7 @@ from my_claude_code.config.model_overrides import (
     MAX_OUTPUT_TOKENS_OVERRIDE,
     OWNED_ELSEWHERE_PARAMETERS,
     PREFERENCE_OVERRIDE_PARAMETERS,
+    PREFERRED_SURFACE_OVERRIDE,
     PROMPT_CACHE_TTL_OVERRIDE,
     REASONING_PREFERENCE_OVERRIDE,
     RESPONSE_SURFACE_OVERRIDE,
@@ -160,9 +161,12 @@ from my_claude_code.providers.commandcode import (
     is_anthropic_messages_model,
 )
 from my_claude_code.providers.openai_chat import (
+    catalogue_discovered_surfaces,
     catalogue_surface,
     declared_surfaces_for,
     learned_effort_values,
+    learned_surface_last_confirmed,
+    preferred_surface_refusal_time,
     surface_profile_for,
 )
 from my_claude_code.providers.runtime.models_dev import (
@@ -264,6 +268,8 @@ FACT_KIND_LABELS: dict[str, str] = {
     # model's Responses host refused a reasoning item MCC replayed in ``input``,
     # so its requests stop replaying carriers until the fact expires.
     "responses_reasoning_item_rejected": "reasoning item refused",
+    # 8.32.0: an operator-preferred wire surface this model's host refused.
+    "preferred_surface_refused": "preferred wire surface refused",
 }
 
 #: Kinds whose label the Models page payload's ``fact_labels`` table does not
@@ -278,6 +284,7 @@ PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
         "prompt_cache_lifetime_refused",
         "history_thinking_rejected",
         "responses_reasoning_item_rejected",
+        "preferred_surface_refused",
     }
 )
 
@@ -576,6 +583,13 @@ SURFACE_VALUE_LABELS: dict[ResponseSurface, str] = {
     ResponseSurface.CHAT_COMPLETIONS: "Chat Completions (/chat/completions)",
     ResponseSurface.RESPONSES: "Responses (/responses)",
     ResponseSurface.MESSAGES: "Messages (/messages)",
+    ResponseSurface.UNSERVABLE: "Unservable",
+}
+
+SURFACE_SHORT_LABELS: dict[ResponseSurface, str] = {
+    ResponseSurface.CHAT_COMPLETIONS: "Chat Completions",
+    ResponseSurface.RESPONSES: "Responses",
+    ResponseSurface.MESSAGES: "Messages",
     ResponseSurface.UNSERVABLE: "Unservable",
 }
 
@@ -1611,7 +1625,13 @@ def _capability_payload(
         # Which of a multi-surface gateway's endpoints MCC will actually post
         # this model to, and why. ``None`` -- and therefore no row at all --
         # for every provider that has one surface, which is 39 of the 41.
-        "response_surface": response_surface_payload(provider_id, model_id),
+        # ``include_preferences=False`` keeps the cached capability half and
+        # ``test_metadata_ladder_equality.py`` byte-identical; the route
+        # enriches multi-door rows beside the merge via
+        # :func:`with_surface_preferences`.
+        "response_surface": response_surface_payload(
+            provider_id, model_id, include_preferences=False
+        ),
         # What the provider's own list says the model is (7.79.0). Appended
         # last: every key above is exactly what it was before.
         **declared_payload(
@@ -2089,7 +2109,62 @@ def with_display_facts(
     return out
 
 
-def response_surface_payload(provider_id: str, model_id: str) -> dict[str, Any] | None:
+def _discovered_surface_entries(
+    provider_id: str, model_id: str
+) -> list[dict[str, Any]]:
+    """Known, non-guessed surfaces for one multi-door model, in discovery order (Q10)."""
+
+    entries: list[dict[str, Any]] = []
+    last_confirmed = learned_surface_last_confirmed(provider_id, model_id)
+    for candidate in catalogue_discovered_surfaces(provider_id, model_id):
+        entry: dict[str, Any] = {
+            "value": candidate.surface.value,
+            "label": SURFACE_VALUE_LABELS[candidate.surface],
+            "source": candidate.source.value,
+            "detail": candidate.detail,
+        }
+        if candidate.source is ResponseSurfaceSource.LEARNED and last_confirmed:
+            entry["last_confirmed"] = last_confirmed
+        entries.append(entry)
+    return entries
+
+
+def _preferred_refusal_message(
+    provider_id: str,
+    model_id: str,
+    preferred: str,
+    serving: ResponseSurface,
+) -> str:
+    """Format the Q9 refusal readout when the host refused ``preferred`` recently."""
+
+    if not preferred:
+        return ""
+    try:
+        pref_surface = ResponseSurface(preferred)
+    except ValueError:
+        return ""
+    refused_at = preferred_surface_refusal_time(provider_id, model_id, pref_surface)
+    if refused_at is None:
+        return ""
+    pref_name = SURFACE_SHORT_LABELS.get(pref_surface, preferred)
+    if serving is ResponseSurface.UNSERVABLE:
+        return (
+            f"you prefer {pref_name}; this host refused it at {refused_at}; "
+            "currently unservable"
+        )
+    serving_name = SURFACE_SHORT_LABELS.get(serving, serving.value)
+    return (
+        f"you prefer {pref_name}; this host refused it at {refused_at}; "
+        f"serving {serving_name}"
+    )
+
+
+def response_surface_payload(
+    provider_id: str,
+    model_id: str,
+    *,
+    include_preferences: bool = True,
+) -> dict[str, Any] | None:
     """The wire surface for one model, in the capability row's own shape.
 
     ``unservable`` is a value like any other here, and it always carries the
@@ -2101,7 +2176,8 @@ def response_surface_payload(provider_id: str, model_id: str) -> dict[str, Any] 
     resolved = catalogue_surface(provider_id, model_id)
     if resolved is None:
         return None
-    return {
+    speakable = speakable_surfaces(provider_id)
+    payload: dict[str, Any] = {
         "value": resolved.surface.value,
         "source": resolved.source.value,
         "source_label": SURFACE_SOURCE_LABELS.get(resolved.source, resolved.source),
@@ -2117,10 +2193,73 @@ def response_surface_payload(provider_id: str, model_id: str) -> dict[str, Any] 
         # fewer would hide one the host says it serves.
         "offered": [
             {"value": surface.value, "label": SURFACE_VALUE_LABELS[surface]}
-            for surface in speakable_surfaces(provider_id)
+            for surface in speakable
         ],
         "override": override_response_surface(provider_id, model_id),
     }
+    if not include_preferences:
+        return payload
+    overrides = current_model_overrides()
+    effective, scope, model_val, provider_val = overrides.preferred_surface_detail(
+        provider_id, model_ref_for(provider_id, model_id)
+    )
+    preferred_note = ""
+    if effective:
+        offered_values = {surface.value for surface in speakable}
+        if effective not in offered_values:
+            preferred_note = (
+                f"Preferred surface {effective!r} is not declared for "
+                f"{provider_id} and is ignored for this model."
+            )
+    payload["discovered"] = _discovered_surface_entries(provider_id, model_id)
+    payload["preferred"] = effective or ""
+    payload["preferred_scope"] = scope
+    payload["model_preferred"] = model_val or ""
+    payload["provider_preferred"] = provider_val or ""
+    payload["preferred_refusal"] = _preferred_refusal_message(
+        provider_id, model_id, effective or "", resolved.surface
+    )
+    payload["preferred_note"] = preferred_note
+    return payload
+
+
+def with_surface_preferences(
+    page: dict[str, Any], overrides: ModelParameterOverrides
+) -> dict[str, Any]:
+    """Attach live surface preferences, discovered doors and Q9 refusals to ``page``.
+
+    Applied on the Models page route outside ``build_capability_half`` so the
+    pinned capability snapshot stays byte-identical and learned surface/refusal
+    facts are never served stale from the disk cache. Single-door providers
+    receive zero additions (Q11).
+    """
+
+    for provider in page.get("providers", []) or []:
+        provider_id = str(provider.get("provider_id") or "")
+        offered = speakable_surfaces(provider_id)
+        if len(offered) < 2:
+            continue
+        provider_row = overrides.providers.get(normalize_override_key(provider_id), {})
+        raw_pref = provider_row.get(PREFERRED_SURFACE_OVERRIDE)
+        provider_pref = (
+            raw_pref.strip() if isinstance(raw_pref, str) and raw_pref.strip() else ""
+        )
+        provider["surface_preference"] = {
+            "offered": [
+                {"value": surface.value, "label": SURFACE_VALUE_LABELS[surface]}
+                for surface in offered
+            ],
+            "preferred": provider_pref,
+        }
+        for model in provider.get("models", []) or []:
+            model_id = str(model.get("model_id") or "")
+            if model_id:
+                pref_payload = response_surface_payload(
+                    provider_id, model_id, include_preferences=True
+                )
+                if pref_payload is not None:
+                    model["surface_preference"] = pref_payload
+    return page
 
 
 def speakable_surfaces(provider_id: str) -> tuple[ResponseSurface, ...]:
@@ -3302,6 +3441,33 @@ def with_surface_override_row(
         table[folded] = row
     else:
         table.pop(folded, None)
+    return replace(overrides, models=table)
+
+
+def with_preferred_surface_row(
+    overrides: ModelParameterOverrides,
+    *,
+    scope: str,
+    key: str,
+    surface: str | None,
+) -> ModelParameterOverrides:
+    """Set or clear ``preferred_surface`` on one provider or model row."""
+
+    folded = normalize_override_key(key)
+    source = overrides.providers if scope == PROVIDER_SCOPE else overrides.models
+    table = {name: dict(row) for name, row in source.items()}
+    row = dict(table.get(folded, {}))
+    cleaned = surface.strip() if isinstance(surface, str) else ""
+    if cleaned:
+        row[PREFERRED_SURFACE_OVERRIDE] = cleaned
+    else:
+        row.pop(PREFERRED_SURFACE_OVERRIDE, None)
+    if row:
+        table[folded] = row
+    else:
+        table.pop(folded, None)
+    if scope == PROVIDER_SCOPE:
+        return replace(overrides, providers=table)
     return replace(overrides, models=table)
 
 

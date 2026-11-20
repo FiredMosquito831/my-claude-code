@@ -135,9 +135,17 @@ ALLOWED_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
 #: absent inherits. It never reaches a body: the provider sends the ceiling
 #: as the marketplace's own request headers, and only for a provider whose
 #: profile declares a marketplace.
+#:
+#: ``preferred_surface`` (8.32.0) names which wire endpoint a multi-door
+#: gateway should try **first** (``chat_completions`` / ``responses`` /
+#: ``messages`` -- never ``unservable``), on a provider row or a model row,
+#: while keeping the rest of the fallback ladder intact. Unlike
+#: ``response_surface`` (which pins exclusively to one door), a preference
+#: leads the ladder and falls back cleanly inside the same attempt if refused.
 NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
     {
         "response_surface",
+        "preferred_surface",
         "reasoning_preference",
         "max_output_tokens",
         "context_length",
@@ -147,11 +155,19 @@ NON_BODY_OVERRIDE_PARAMETERS: frozenset[str] = frozenset(
 )
 
 RESPONSE_SURFACE_OVERRIDE = "response_surface"
+PREFERRED_SURFACE_OVERRIDE = "preferred_surface"
 REASONING_PREFERENCE_OVERRIDE = "reasoning_preference"
 MAX_OUTPUT_TOKENS_OVERRIDE = "max_output_tokens"
 CONTEXT_LENGTH_OVERRIDE = "context_length"
 PROMPT_CACHE_TTL_OVERRIDE = "prompt_cache_ttl"
 MARKETPLACE_PROFILE_OVERRIDE = "marketplace_profile"
+
+#: Valid wire surface spellings for ``preferred_surface`` (never ``unservable``).
+PREFERRED_SURFACE_VALUES: tuple[str, ...] = (
+    "chat_completions",
+    "responses",
+    "messages",
+)
 
 #: The two non-body keys the Models page editor may write. A strict subset of
 #: :data:`NON_BODY_OVERRIDE_PARAMETERS`: ``response_surface`` is written by the
@@ -265,6 +281,24 @@ def marketplace_profile_problem(value: object) -> str | None:
     """
 
     return profile_name_problem(value)
+
+
+def preferred_surface_problem(value: object) -> str | None:
+    """Why ``value`` cannot be a ``preferred_surface``, or ``None`` if it can.
+
+    ``unservable`` is deliberately refused here: an operator preference can
+    only name a speakable wire endpoint (``chat_completions``, ``responses``,
+    or ``messages``).
+    """
+
+    if not isinstance(value, str):
+        return "must be a wire surface name"
+    word = value.strip()
+    if not word:
+        return "must not be empty"
+    if word not in PREFERRED_SURFACE_VALUES:
+        return f"must be one of: {', '.join(PREFERRED_SURFACE_VALUES)}"
+    return None
 
 
 def normalize_override_key(raw: str) -> str:
@@ -446,6 +480,34 @@ class ModelParameterOverrides:
             stated(self.providers.get(normalize_override_key(provider_id), {})),
         )
 
+    def preferred_surface_detail(
+        self, provider_id: str, model_ref: str
+    ) -> tuple[str | None, str, str | None, str | None]:
+        """Return ``(effective, scope, model_value, provider_value)`` for ``preferred_surface``.
+
+        ``scope`` is ``"model"``, ``"provider"``, or ``""`` when unset or forced
+        unset (``null``) at the model row.
+        """
+
+        provider_row = self.providers.get(normalize_override_key(provider_id), {})
+        model_row = self.models.get(normalize_override_key(model_ref), {})
+        raw_provider = provider_row.get(PREFERRED_SURFACE_OVERRIDE)
+        provider_val = (
+            raw_provider.strip()
+            if isinstance(raw_provider, str) and raw_provider.strip()
+            else None
+        )
+        if PREFERRED_SURFACE_OVERRIDE in model_row:
+            raw_model = model_row[PREFERRED_SURFACE_OVERRIDE]
+            if raw_model is None:
+                return (None, "", None, provider_val)
+            if isinstance(raw_model, str) and raw_model.strip():
+                model_val = raw_model.strip()
+                return (model_val, "model", model_val, provider_val)
+        if provider_val is not None:
+            return (provider_val, "provider", None, provider_val)
+        return (None, "", None, None)
+
     def marketplace_profile_rows(
         self, provider_id: str, model_ref: str
     ) -> tuple[StatedMarketplaceProfile | None, StatedMarketplaceProfile | None]:
@@ -571,6 +633,18 @@ def _parse_parameters(
                     where,
                     name,
                     profile_problem,
+                )
+                continue
+        if name == PREFERRED_SURFACE_OVERRIDE and value is not None:
+            # ``null`` is the force-"Follow the client" state and always
+            # well-formed; a provider row is as valid as a model row.
+            surface_problem = preferred_surface_problem(value)
+            if surface_problem is not None:
+                logger.warning(
+                    "MODEL OVERRIDES: '{}.{}' {}; ignoring it",
+                    where,
+                    name,
+                    surface_problem,
                 )
                 continue
         parameters[name] = value

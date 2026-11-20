@@ -46202,6 +46202,8 @@ function fillModelsProviderBody(body, provider, models) {
         provider.preferences,
       ),
     );
+    const providerSurface = buildProviderPreferredSurfaceEditor(provider);
+    if (providerSurface) editor.appendChild(providerSurface);
   };
   if (settings.open) buildEditor();
   settings.addEventListener("toggle", () => {
@@ -48965,10 +48967,93 @@ function placeReadonlyFieldRows(table, entries, model) {
       surfaceEditorOffered(entry.field, model)
         ? pinned
         : null;
+    if (kept) syncSurfaceEditorReadouts(kept, entry.field, model);
     fieldsGroupBody(table, entry.group).appendChild(
       buildReadonlyFieldRow(entry, labels, model, kept),
     );
   });
+}
+
+function surfaceOptionLabel(surface, discoveredList) {
+  const match = Array.isArray(discoveredList)
+    ? discoveredList.find((item) => item && item.value === surface.value)
+    : null;
+  if (!match) return surface.label;
+  if (match.last_confirmed) {
+    return `${surface.label} — ${match.source}, ${match.last_confirmed}`;
+  }
+  if (match.detail) return `${surface.label} — ${match.detail}`;
+  return `${surface.label} — ${match.source}`;
+}
+
+function surfaceShortLabel(value) {
+  if (value === "chat_completions") return "Chat Completions";
+  if (value === "responses") return "Responses";
+  if (value === "messages") return "Messages";
+  return value;
+}
+
+function formatDiscoveredLine(field) {
+  const offered = Array.isArray(field.offered) ? field.offered : [];
+  const discovered = Array.isArray(field.discovered) ? field.discovered : [];
+  if (!discovered.length) {
+    return (
+      "Discovered: none yet (host declares " +
+      offered.map((item) => item.label).join(", ") +
+      ")"
+    );
+  }
+  return (
+    "Discovered: " +
+    discovered
+      .map((item) => {
+        if (item.last_confirmed) {
+          return `${item.label} (${item.source}, ${item.last_confirmed})`;
+        }
+        return item.detail
+          ? `${item.label} (${item.source}: ${item.detail})`
+          : `${item.label} (${item.source})`;
+      })
+      .join("; ")
+  );
+}
+
+function syncSurfaceEditorReadouts(container, field, model) {
+  if (!container || !field) return;
+  const pref = (model && model.surface_preference) || field;
+  const offered = Array.isArray(field.offered) ? field.offered : [];
+  const discovered = Array.isArray(pref.discovered) ? pref.discovered : null;
+  const prefSelect = container.querySelector(".models-surface-preferred-select");
+  if (prefSelect) {
+    const first = prefSelect.options[0];
+    if (first && first.value === "") {
+      first.textContent = pref.provider_preferred
+        ? `Inherit from provider (${surfaceShortLabel(pref.provider_preferred)})`
+        : "Follow the client";
+    }
+    offered.forEach((surface, idx) => {
+      const option = prefSelect.options[idx + 1];
+      if (option && option.value === surface.value) {
+        option.textContent = surfaceOptionLabel(surface, discovered);
+      }
+    });
+    if (!prefSelect.disabled) {
+      prefSelect.value = pref.model_preferred || "";
+    }
+  }
+  const discoveredNode = container.querySelector(".models-surface-discovered");
+  if (discoveredNode && discovered !== null) {
+    discoveredNode.textContent = formatDiscoveredLine({
+      offered: offered,
+      discovered: discovered,
+    });
+  }
+  const refusalNode = container.querySelector(".models-surface-refusal");
+  if (refusalNode) {
+    const refusalText = pref.preferred_refusal || pref.preferred_note || "";
+    refusalNode.textContent = refusalText;
+    refusalNode.hidden = !refusalText;
+  }
 }
 
 /* The one writable thing in a read-only panel, and it sits here rather than in
@@ -48978,17 +49063,25 @@ function placeReadonlyFieldRows(table, entries, model) {
    provider, the registry entry's for a hand-configured one -- because a
    surface the host does not serve would be folded straight back to
    "unservable" with a reason, which is a worse way of saying "you cannot pick
-   that". Absent for every single-surface provider, which is 39 of the 41 and
+   that". Absent for every single-surface provider, which is 40 of the 43 and
    every custom entry that did not opt in. */
 function buildSurfaceOverrideEditor(field, model) {
   if (!field || !model || !model.model_ref) return null;
   const offered = Array.isArray(field.offered) ? field.offered : [];
   if (offered.length < 2) return null;
+  const pref = (model && model.surface_preference) || field;
+  const hasPreferenceSpec = Boolean(
+    (model && model.surface_preference) ||
+      Array.isArray(field.discovered) ||
+      Object.prototype.hasOwnProperty.call(field, "preferred"),
+  );
   const wrap = document.createElement("div");
   wrap.className = "models-surface-override";
   const head = document.createElement("p");
   head.className = "models-subhead";
-  head.textContent = "Which endpoint to use for this model";
+  head.textContent = hasPreferenceSpec
+    ? "Pin endpoint (use only this for this model)"
+    : "Which endpoint to use for this model";
   wrap.appendChild(head);
 
   const select = document.createElement("select");
@@ -49033,6 +49126,157 @@ function buildSurfaceOverrideEditor(field, model) {
   });
   wrap.appendChild(save);
   wrap.appendChild(status);
+  if (!hasPreferenceSpec) return wrap;
+
+  const discovered = Array.isArray(pref.discovered) ? pref.discovered : null;
+  const prefWrap = document.createElement("div");
+  prefWrap.className = "models-surface-preferred";
+  const prefHead = document.createElement("p");
+  prefHead.className = "models-subhead";
+  prefHead.textContent = "Preferred endpoint (try first, fall back if refused)";
+  prefWrap.appendChild(prefHead);
+
+  const prefSelect = document.createElement("select");
+  prefSelect.className = "models-surface-preferred-select";
+  prefSelect.setAttribute("aria-label", "Preferred wire surface");
+  const follow = document.createElement("option");
+  follow.value = "";
+  follow.textContent = pref.provider_preferred
+    ? `Inherit from provider (${surfaceShortLabel(pref.provider_preferred)})`
+    : "Follow the client";
+  prefSelect.appendChild(follow);
+  offered.forEach((surface) => {
+    const option = document.createElement("option");
+    option.value = surface.value;
+    option.textContent = surfaceOptionLabel(surface, discovered);
+    prefSelect.appendChild(option);
+  });
+  prefSelect.value = pref.model_preferred || "";
+  prefWrap.appendChild(prefSelect);
+
+  const prefStatus = document.createElement("span");
+  prefStatus.className = "models-status";
+  const prefSave = document.createElement("button");
+  prefSave.className = "ghost-button models-surface-preferred-save";
+  prefSave.type = "button";
+  prefSave.textContent = "Set preference";
+  prefSave.addEventListener("click", () => {
+    prefSave.disabled = true;
+    prefSelect.disabled = true;
+    prefStatus.className = "models-status";
+    prefStatus.textContent = "Saving...";
+    savePreferredSurface("model", model.model_ref, prefSelect.value)
+      .then(() => {
+        prefStatus.textContent = "Saved";
+        prefStatus.className = "models-status ok";
+      })
+      .catch((error) => {
+        prefStatus.textContent = error.message;
+        prefStatus.className = "models-status error";
+        showMessage(error.message, "error");
+      })
+      .finally(() => {
+        prefSave.disabled = false;
+        prefSelect.disabled = false;
+      });
+  });
+  prefWrap.appendChild(prefSave);
+  prefWrap.appendChild(prefStatus);
+  wrap.appendChild(prefWrap);
+
+  const distinction = document.createElement("p");
+  distinction.className = "models-surface-distinction";
+  distinction.textContent =
+    "Pin uses only that endpoint. Preferred tries that endpoint first and " +
+    "falls back to the ladder if refused (switching doors re-reads the prompt cache).";
+  wrap.appendChild(distinction);
+
+  if (discovered !== null) {
+    const discoveredEl = document.createElement("p");
+    discoveredEl.className = "models-surface-discovered";
+    discoveredEl.textContent = formatDiscoveredLine({
+      offered: offered,
+      discovered: discovered,
+    });
+    wrap.appendChild(discoveredEl);
+  }
+
+  const refusalEl = document.createElement("p");
+  refusalEl.className = "models-surface-refusal";
+  const refusalText = pref.preferred_refusal || pref.preferred_note || "";
+  refusalEl.textContent = refusalText;
+  refusalEl.hidden = !refusalText;
+  wrap.appendChild(refusalEl);
+
+  return wrap;
+}
+
+function buildProviderPreferredSurfaceEditor(provider) {
+  const spec = provider && provider.surface_preference;
+  const offered = spec && Array.isArray(spec.offered) ? spec.offered : [];
+  if (offered.length < 2) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "models-provider-surface";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = `Preferred wire surface for every ${provider.provider_id} model`;
+  wrap.appendChild(head);
+
+  const select = document.createElement("select");
+  select.className = "models-provider-surface-select";
+  select.setAttribute(
+    "aria-label",
+    `Preferred wire surface for ${provider.provider_id}`,
+  );
+  const follow = document.createElement("option");
+  follow.value = "";
+  follow.textContent = "Follow the client";
+  select.appendChild(follow);
+  offered.forEach((surface) => {
+    const option = document.createElement("option");
+    option.value = surface.value;
+    option.textContent = surface.label;
+    select.appendChild(option);
+  });
+  select.value = spec.preferred || "";
+  wrap.appendChild(select);
+
+  const status = document.createElement("span");
+  status.className = "models-status";
+  const save = document.createElement("button");
+  save.className = "ghost-button models-provider-surface-save";
+  save.type = "button";
+  save.textContent = "Set preference";
+  save.addEventListener("click", () => {
+    save.disabled = true;
+    select.disabled = true;
+    status.className = "models-status";
+    status.textContent = "Saving...";
+    savePreferredSurface("provider", provider.provider_id, select.value)
+      .then(() => {
+        status.textContent = "Saved";
+        status.className = "models-status ok";
+      })
+      .catch((error) => {
+        status.textContent = error.message;
+        status.className = "models-status error";
+        showMessage(error.message, "error");
+      })
+      .finally(() => {
+        save.disabled = false;
+        select.disabled = false;
+      });
+  });
+  wrap.appendChild(save);
+  wrap.appendChild(status);
+
+  const note = document.createElement("p");
+  note.className = "models-provider-surface-note";
+  note.textContent =
+    "Preferred tries that endpoint first for every model under this provider " +
+    "while keeping the fallback ladder; a model's own preference or pin wins. " +
+    "Ignored per model if the model's host declarations do not include it.";
+  wrap.appendChild(note);
   return wrap;
 }
 
@@ -49353,6 +49597,10 @@ function refreshProviderRow(providerId) {
     const editor = node.querySelector(".models-provider-settings .models-fields-editor");
     const paint = editor ? MODELS_FIELD_PAINTERS.get(editor) : null;
     if (paint) paint({ row: provider.override || {}, preferences: provider.preferences });
+    const prefSelect = node.querySelector(".models-provider-surface-select");
+    if (prefSelect && provider.surface_preference && !prefSelect.disabled) {
+      prefSelect.value = provider.surface_preference.preferred || "";
+    }
   });
   // A provider override changes what every model under it sends, so the open
   // model bodies below it have to be repainted too.
@@ -49967,6 +50215,17 @@ async function saveModelSurface(key, surface) {
     }),
   );
   refreshModelRows([key]);
+}
+
+async function savePreferredSurface(scope, key, surface) {
+  applyModelsData(
+    await api("/admin/api/model-admin/preferred-surface", {
+      method: "POST",
+      body: JSON.stringify({ scope, key, surface }),
+    }),
+  );
+  if (scope === "provider") refreshProviderRow(key);
+  else refreshModelRows([key]);
 }
 
 async function saveModelOverrides(scope, key, updates) {

@@ -55,7 +55,9 @@ from my_claude_code.api.model_admin import (
     speakable_surfaces,
     visibility_payload,
     with_override_row,
+    with_preferred_surface_row,
     with_surface_override_row,
+    with_surface_preferences,
 )
 from my_claude_code.api.model_catalog import settings_model_visibility
 from my_claude_code.api.models_page_cache import (
@@ -562,6 +564,14 @@ class ModelSurfacePayload(BaseModel):
 
     key: str
     surface: str = ""
+
+
+class PreferredSurfacePayload(BaseModel):
+    """Which endpoint a provider or model prefers first, while keeping fallback."""
+
+    key: str
+    surface: str = ""
+    scope: str = MODEL_SCOPE
 
 
 class RtkUpdatePayload(BaseModel):
@@ -1985,7 +1995,7 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     # route-note rows, beside the cached half for the same reason: the market
     # snapshot moves hourly and the pinned half must not.
     merged["marketplaces"] = marketplaces_payload(merged)
-    return merged
+    return with_surface_preferences(merged, overrides)
 
 
 @router.get("/admin/api/model-admin")
@@ -2685,6 +2695,51 @@ async def save_model_surface_override(
             )
     updated = with_surface_override_row(
         current_model_overrides(), key=key, surface=surface
+    )
+    await asyncio.to_thread(save_model_overrides, updated)
+    return await asyncio.to_thread(_models_page_payload, services)
+
+
+@router.post("/admin/api/model-admin/preferred-surface")
+async def save_preferred_surface_override(
+    payload: PreferredSurfacePayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Set or clear ``preferred_surface`` for one provider or model.
+
+    Leads the surface ladder without collapsing it; refused with 422 if the
+    surface is ``unservable`` or not among the host's >= 2 speakable doors.
+    """
+
+    require_loopback_admin(request)
+    if payload.scope not in (PROVIDER_SCOPE, MODEL_SCOPE):
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope must be '{PROVIDER_SCOPE}' or '{MODEL_SCOPE}'",
+        )
+    key = payload.key.strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="key must not be empty")
+    provider_id = key if payload.scope == PROVIDER_SCOPE else key.split("/", 1)[0]
+    surface = payload.surface.strip()
+    if surface == INHERIT_SENTINEL:
+        surface = ""
+    if surface:
+        offered = [item.value for item in speakable_surfaces(provider_id)]
+        if len(offered) < 2 or surface not in offered:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{provider_id} does not declare the {surface!r} surface. "
+                    f"It serves: {offered or ['chat_completions']}."
+                ),
+            )
+    updated = with_preferred_surface_row(
+        current_model_overrides(),
+        scope=payload.scope,
+        key=key,
+        surface=surface,
     )
     await asyncio.to_thread(save_model_overrides, updated)
     return await asyncio.to_thread(_models_page_payload, services)

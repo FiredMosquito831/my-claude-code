@@ -71,9 +71,10 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     "Keep trying exits until one answers",
     "Add proxy",
     # Models: the Guide's "Read a model's fields and override one" and USAGE
-    # name the two saves a model's table has (7.101.0).
+    # name the saves a model's table has (7.101.0, 8.32.0).
     "Save overrides",
     "Pin endpoint",
+    "Set preference",
     # The InferHub page (7.110.0): the Guide's "InferHub: set a price ceiling"
     # and USAGE's "The InferHub page" send the reader to these by name.
     "New profile",

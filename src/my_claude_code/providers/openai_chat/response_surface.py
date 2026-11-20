@@ -55,6 +55,7 @@ admin answer identical to the release before.
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 
 from loguru import logger
 
@@ -66,14 +67,17 @@ from my_claude_code.application.model_metadata import (
 )
 from my_claude_code.config.marketplaces import upstream_prefix
 from my_claude_code.config.model_overrides import (
+    PREFERRED_SURFACE_OVERRIDE,
     RESPONSE_SURFACE_OVERRIDE,
     current_model_overrides,
     model_ref_for,
 )
 from my_claude_code.core.client_family import ClientFamily, current_client_family
 from my_claude_code.providers.recovery import (
+    FACT_PREFERRED_SURFACE_REFUSED,
     FACT_RESPONSE_SURFACE,
     SOURCE_PROBE,
+    LearnedFact,
     learned_fact_store,
 )
 
@@ -314,72 +318,142 @@ def override_surface(provider_id: str, model_id: str) -> ResponseSurface | None:
         return None
 
 
-def resolve_surface_ladder(
+def preferred_surface_of(provider_id: str, model_id: str) -> ResponseSurface | None:
+    """Return the operator's preferred wire surface, or ``None`` when unset.
+
+    Precedence within ``preferred_surface``: model row > provider row (with
+    ``null`` on a model row cancelling a provider-level preference). Never
+    returns ``ResponseSurface.UNSERVABLE``.
+    """
+
+    raw = current_model_overrides().non_body_override(
+        PREFERRED_SURFACE_OVERRIDE, provider_id, model_ref_for(provider_id, model_id)
+    )
+    if raw is None:
+        return None
+    try:
+        surface = ResponseSurface(raw)
+    except ValueError:
+        logger.warning(
+            "MODEL OVERRIDES: {!r} is not a valid preferred_surface; ignoring it for {}/{}",
+            raw,
+            provider_id,
+            model_id,
+        )
+        return None
+    if surface is ResponseSurface.UNSERVABLE:
+        logger.warning(
+            "MODEL OVERRIDES: 'unservable' cannot be a preferred_surface; ignoring it for {}/{}",
+            provider_id,
+            model_id,
+        )
+        return None
+    return surface
+
+
+def preferred_surface_refusal_fact(
+    provider_id: str, model_id: str, surface: ResponseSurface
+) -> LearnedFact | None:
+    """Return the active refusal fact if this host refused ``surface`` within the TTL."""
+
+    if not provider_id or not model_id:
+        return None
+    for fact in learned_fact_store().fresh_facts_for_provider(provider_id):
+        if (
+            fact.model_id == model_id
+            and fact.fact_kind == FACT_PREFERRED_SURFACE_REFUSED
+            and fact.detail == surface.value
+        ):
+            return fact
+    return None
+
+
+def preferred_surface_refusal_time(
+    provider_id: str, model_id: str, surface: ResponseSurface
+) -> str | None:
+    """Return ``HH:MM UTC`` when ``surface`` has a fresh refusal fact, else ``None``."""
+
+    fact = preferred_surface_refusal_fact(provider_id, model_id, surface)
+    if fact is None:
+        return None
+    raw = fact.last_confirmed_at.strip()
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return fact.last_confirmed_at
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).strftime("%H:%M UTC")
+
+
+def learned_surface_last_confirmed(provider_id: str, model_id: str) -> str:
+    """Return ``YYYY-MM-DD`` of the fresh learned surface fact, or ``""``."""
+
+    if not provider_id or not model_id:
+        return ""
+    for fact in learned_fact_store().fresh_facts_for_provider(provider_id):
+        if fact.model_id == model_id and fact.fact_kind == FACT_RESPONSE_SURFACE:
+            return fact.last_confirmed_at[:10]
+    return ""
+
+
+def remember_preferred_surface_refusal(
+    provider_id: str,
+    model_id: str,
+    surface: ResponseSurface,
+    *,
+    evidence: str = "",
+) -> None:
+    """Record that the host refused the operator's preferred ``surface`` (Q9).
+
+    Never alters ``model_overrides.json`` and never erases other known doors in
+    ``FACT_RESPONSE_SURFACE``; prevents re-probing the refused door on every
+    request for the 7-day TTL.
+    """
+
+    if not provider_id or not model_id or surface is ResponseSurface.UNSERVABLE:
+        return
+    learned_fact_store().record(
+        provider_id,
+        model_id,
+        FACT_PREFERRED_SURFACE_REFUSED,
+        True,
+        source=SOURCE_PROBE,
+        detail=surface.value,
+        evidence=evidence,
+    )
+
+
+def clear_preferred_surface_refusal(
+    provider_id: str, model_id: str, surface: ResponseSurface
+) -> None:
+    """Clear any stored refusal for ``surface`` once a probe proves it answers."""
+
+    if not provider_id or not model_id or surface is ResponseSurface.UNSERVABLE:
+        return
+    learned_fact_store().forget(
+        provider_id, model_id, FACT_PREFERRED_SURFACE_REFUSED, detail=surface.value
+    )
+
+
+PREFERRED_SURFACE_GUESS = "preferred by operator -- unproved, will probe"
+
+
+def _resolve_base_surface_ladder(
     provider_id: str,
     model_id: str,
     *,
-    client_family: ClientFamily | None = None,
+    family: ClientFamily,
+    speakable: tuple[ResponseSurface, ...],
     registry_provider: str = "",
-    declared: tuple[ResponseSurface, ...] = (),
     no_information: ResponseSurface | None = None,
     by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
     measured: tuple[tuple[str, MeasuredSurfaceSet], ...] = (),
     optimistic: bool = False,
 ) -> ResolvedSurfaceLadder:
-    """Resolve every door one model is *known* to answer on, in try order.
-
-    Five rungs, strongest first, and the first non-empty one wins:
-    the operator's override, a fact this deployment learned, a dated
-    measurement shipped with the build, the vendor's published registry, the
-    marketplace's per-upstream declaration -- and then the profile's floor,
-    which answers only when every rung above it is empty. That is 7.113.x's
-    control flow with one rung inserted where a measurement belongs, so a
-    model with one known door produces the identical ``(surface, source,
-    detail)`` triple it always produced.
-
-    ``client_family`` orders the answer; it never filters it. ``None`` reads
-    the request in flight (``core.client_family.current_client_family``), which
-    is ``UNKNOWN`` outside one -- the Models page, an admin call, a capability
-    probe -- and ``UNKNOWN`` prefers nothing, so those callers keep the order
-    they had.
-
-    ``optimistic`` is the profile's ``optimistic_first_try``, and only the two
-    OpenCode profiles set it. Two branches read it, both confined to them:
-
-    * **unservable** (7.114.0) -- a model the vendor places on an API this
-      build cannot speak is not refused on such a host but tried on the door
-      its client prefers and then on the floor, one probe before the client's
-      request ever reaches the guess. Every other profile keeps the refusal.
-    * **unknown** (7.115.0) -- a model the vendor's registry says nothing
-      about resolves to the profile's floor and nothing else; on such a host
-      the door the client family prefers is *tried once* ahead of it, learned
-      from, and fallen back from inside the same attempt. This is the one
-      place in the resolver that answers with a door nobody vouched for, so
-      it is also the one place a caller can see ``guessed`` ahead of the
-      floor. With no request in flight the family is ``UNKNOWN``, there is no
-      preferred door, and the answer is the floor -- byte for byte what every
-      caller outside a request answered before this release.
-
-    ``declared`` is what the *profile* says this provider can speak. A
-    resolved surface that is not in it becomes :data:`ResponseSurface.
-    UNSERVABLE` carrying the reason, so the Models page can name it rather
-    than the model quietly vanishing. An empty ``declared`` means the profile
-    made no statement -- which is every profile but the OpenCode ones and
-    InferHub -- and those keep the default with no unservable case at all,
-    exactly as before.
-
-    ``no_information`` is the profile's own answer for the case nobody else
-    has one. ``None`` keeps :data:`DEFAULT_SURFACE` and the ``DEFAULT``
-    source, so a single-surface provider resolves byte for byte what it always
-    did.
-    """
-
-    speakable = declared or (DEFAULT_SURFACE,)
-    family = current_client_family() if client_family is None else client_family
-
-    forced = override_surface(provider_id, model_id)
-    if forced is not None:
-        return _one(_constrain(forced, ResponseSurfaceSource.OVERRIDE, "", speakable))
+    """Resolve the ladder below the operator pin and preference rungs."""
 
     proved = learned_surfaces(provider_id, model_id)
     if proved:
@@ -452,6 +526,161 @@ def resolve_surface_ladder(
             floor_detail=detail,
         )
     return _one(floor)
+
+
+def discovered_surfaces(
+    provider_id: str,
+    model_id: str,
+    *,
+    registry_provider: str = "",
+    declared: tuple[ResponseSurface, ...] = (),
+    no_information: ResponseSurface | None = None,
+    by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
+    measured: tuple[tuple[str, MeasuredSurfaceSet], ...] = (),
+) -> tuple[ResolvedResponseSurface, ...]:
+    """Known, non-guessed, speakable doors for one model in discovery order (Q10)."""
+
+    speakable = declared or (DEFAULT_SURFACE,)
+    ladder = _resolve_base_surface_ladder(
+        provider_id,
+        model_id,
+        family=ClientFamily.UNKNOWN,
+        speakable=speakable,
+        registry_provider=registry_provider,
+        no_information=no_information,
+        by_upstream=by_upstream,
+        measured=measured,
+        optimistic=False,
+    )
+    return tuple(
+        candidate
+        for candidate in ladder.candidates
+        if not candidate.guessed and candidate.surface is not ResponseSurface.UNSERVABLE
+    )
+
+
+def resolve_surface_ladder(
+    provider_id: str,
+    model_id: str,
+    *,
+    client_family: ClientFamily | None = None,
+    registry_provider: str = "",
+    declared: tuple[ResponseSurface, ...] = (),
+    no_information: ResponseSurface | None = None,
+    by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
+    measured: tuple[tuple[str, MeasuredSurfaceSet], ...] = (),
+    optimistic: bool = False,
+) -> ResolvedSurfaceLadder:
+    """Resolve every door one model is *known* to answer on, in try order.
+
+    Precedence, strongest first:
+
+    1. Operator pin (``model_overrides.json`` ``response_surface``): exclusive.
+    2. Operator preference (``model_overrides.json`` ``preferred_surface``,
+       model > provider): leads the ladder while keeping remaining candidates
+       in ``client_family`` order; probes once if declared-but-unproved (Q4);
+       defers to the remaining ladder without erasing the preference if refused
+       within the 7-day TTL (Q9).
+    3. Learned set (this deployment's probes, <= 7 days).
+    4. Shipped dated measurement (``MeasuredSurfaceSet``).
+    5. Vendor registry (models.dev ``provider.npm``).
+    6. Marketplace upstream (``surface_by_upstream``).
+    7. Profile floor (``no_information_surface``), with optional optimistic
+       guess when unset.
+    """
+
+    speakable = declared or (DEFAULT_SURFACE,)
+    family = current_client_family() if client_family is None else client_family
+
+    forced = override_surface(provider_id, model_id)
+    if forced is not None:
+        return _one(_constrain(forced, ResponseSurfaceSource.OVERRIDE, "", speakable))
+
+    preferred = preferred_surface_of(provider_id, model_id)
+    if preferred is None or preferred not in speakable:
+        return _resolve_base_surface_ladder(
+            provider_id,
+            model_id,
+            family=family,
+            speakable=speakable,
+            registry_provider=registry_provider,
+            no_information=no_information,
+            by_upstream=by_upstream,
+            measured=measured,
+            optimistic=optimistic,
+        )
+
+    if preferred_surface_refusal_fact(provider_id, model_id, preferred) is not None:
+        base_ladder = _resolve_base_surface_ladder(
+            provider_id,
+            model_id,
+            family=family,
+            speakable=speakable,
+            registry_provider=registry_provider,
+            no_information=no_information,
+            by_upstream=by_upstream,
+            measured=measured,
+            optimistic=optimistic,
+        )
+        non_refused = tuple(
+            candidate
+            for candidate in base_ladder.candidates
+            if candidate.surface is not preferred
+        )
+        if non_refused and len(non_refused) < len(base_ladder.candidates):
+            refused = tuple(
+                candidate
+                for candidate in base_ladder.candidates
+                if candidate.surface is preferred
+            )
+            return ResolvedSurfaceLadder(non_refused + refused)
+        return base_ladder
+
+    base_ladder = _resolve_base_surface_ladder(
+        provider_id,
+        model_id,
+        family=family,
+        speakable=speakable,
+        registry_provider=registry_provider,
+        no_information=no_information,
+        by_upstream=by_upstream,
+        measured=measured,
+        optimistic=False,
+    )
+    known_candidates = tuple(
+        candidate
+        for candidate in base_ladder.candidates
+        if candidate.surface is not ResponseSurface.UNSERVABLE
+    )
+    for candidate in known_candidates:
+        if candidate.surface is preferred:
+            rest = tuple(
+                other for other in known_candidates if other.surface is not preferred
+            )
+            return ResolvedSurfaceLadder((candidate, *rest))
+
+    guessed_preferred = ResolvedResponseSurface(
+        preferred,
+        ResponseSurfaceSource.OVERRIDE,
+        PREFERRED_SURFACE_GUESS,
+        guessed=True,
+    )
+    if base_ladder.primary.surface is ResponseSurface.UNSERVABLE:
+        if (
+            optimistic
+            and no_information is not None
+            and no_information in speakable
+            and no_information is not preferred
+        ):
+            floor = _constrain(
+                no_information,
+                ResponseSurfaceSource.PROFILE,
+                registry_silence(registry_provider),
+                speakable,
+            )
+            return ResolvedSurfaceLadder((guessed_preferred, floor))
+        return _one(guessed_preferred)
+    return ResolvedSurfaceLadder((guessed_preferred, *known_candidates))
 
 
 def resolve_response_surface(
@@ -661,6 +890,32 @@ def catalogue_surface(
             resolved, detail=f"{resolved.detail}; MCC will probe it on first use"
         )
     return resolved
+
+
+def catalogue_discovered_surfaces(
+    provider_id: str, model_id: str
+) -> tuple[ResolvedResponseSurface, ...]:
+    """Known non-guessed surfaces for one multi-door model, for the Models page (Q10)."""
+
+    from .profiles import surface_profile_for
+
+    profile = surface_profile_for(provider_id)
+    if profile is None:
+        declared = declared_surfaces_for(provider_id)
+        if not declared:
+            return ()
+        return discovered_surfaces(provider_id, model_id, declared=declared)
+    if not profile.response_surfaces:
+        return ()
+    return discovered_surfaces(
+        provider_id,
+        model_id,
+        registry_provider=profile.surface_registry_provider,
+        declared=profile.response_surfaces,
+        no_information=profile.no_information_surface,
+        by_upstream=profile.surface_by_upstream,
+        measured=profile.measured_surfaces,
+    )
 
 
 def declared_surfaces_for(provider_id: str) -> tuple[ResponseSurface, ...]:

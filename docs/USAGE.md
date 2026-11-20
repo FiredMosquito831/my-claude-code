@@ -3769,17 +3769,24 @@ of which this provider speaks — keeps its row and reads
 drops a model the vendor is giving away is worse than one that says why it
 cannot use it.
 
-To pin an endpoint yourself, in `model_overrides.json`:
+To pin an endpoint exclusively yourself, in `model_overrides.json`:
 
 ```json
 {"models": {"opencode/muse-spark-1.3-contributor-free": {"response_surface": "responses"}}}
 ```
 
-Values are `chat_completions`, `responses`, `messages` and `unservable`. This
-key is deliberately **not** a request parameter — it is never written into a
-request body — and an unrecognised value is ignored with a log line rather
-than obeyed. `reasoning_preference` and `max_output_tokens` are the other two
-keys of that kind; see **Per-model reasoning and output preferences** below.
+Values are `chat_completions`, `responses`, `messages` and `unservable`. To **prefer** an endpoint first while keeping the fallback ladder (off by default — unset requests stay byte-identical), set `preferred_surface` on a provider row or a model row (valid values: `chat_completions`, `responses`, `messages`; never `unservable`), or use **Set preference** on the **Models** page:
+
+```json
+{
+  "providers": {"opencode_go": {"preferred_surface": "chat_completions"}},
+  "models": {"opencode_go/deepseek-v4.1-flash": {"preferred_surface": "messages"}}
+}
+```
+
+Precedence is `response_surface` pin > `preferred_surface` (model > provider) > learned > measured > registry > marketplace > floor. If your preferred door has not been proved for that model yet (but the host declares it), MCC probes it once (~16 tokens) before sending the client's request; if the host refuses it in a surface-shaped way, MCC records the refusal for seven days, falls back inside the same attempt, and keeps your `preferred_surface` intact while the **Models** page reports `"you prefer X; this host refused it at HH:MM UTC; serving Y"`.
+
+Both keys are deliberately **not** request parameters — neither is ever written into a request body — and an unrecognised value is ignored with a log line rather than obeyed. `reasoning_preference` and `max_output_tokens` are the other two keys of that kind; see **Per-model reasoning and output preferences** below.
 
 ### InferHub marketplace profiles
 
@@ -4699,7 +4706,7 @@ It is read when you open it, for that one model, by `GET /admin/api/models/knowl
 | Limits | context length, output limit | yes (`context_length`, `max_output_tokens`) |
 | Reasoning | the reasoning word, then the seven reasoning facts (can reason, supports effort / toggle / budget control, supported efforts, mandatory, default enabled) | the word (`reasoning_preference`) |
 | Request parameters (sent in the body) | `frequency_penalty`, `min_p`, `presence_penalty`, `repetition_penalty`, `seed`, `stop`, `temperature`, `top_k`, `top_p`, then the prompt cache lifetime (7.105.0) | yes (the lifetime is `prompt_cache_ttl`, see [Prompt cache lifetime](#prompt-cache-lifetime)) |
-| Wire surface | which endpoint the model is posted to, only on a provider that serves more than one | its own *Pin endpoint* |
+| Wire surface | which endpoint the model is posted to, only on a provider that serves two or more doors (`>= 2`); shows discovered doors (`discovered`) and any active refusal note | **Pin endpoint** (exclusive) and **Set preference** (try first, fall back if refused; also per provider) |
 | What the model is | kind, accepts → produces, model type, endpoints, reads images | no |
 | Prices | input, output, cache read, cache write, reasoning (USD per million tokens) | no |
 | Dates | description, knowledge cutoff, published, listed on OpenRouter, retires | no |
@@ -4719,7 +4726,7 @@ These are the rows the earlier override editor, *What this forces onto the reque
 
 A provider's own table (*Parameter overrides for every <provider> model*) has the same rows except the context window, which is set per model; its value column is that provider row's own setting, and the default reads *per model -- open a model to see its default*, because a provider has no single capability record.
 
-**Saving is unchanged.** *Save overrides* sends the same body to the same route, key for key, and writes `model_overrides.json` exactly as before; a value the page refuses (a fraction for a window, an output cap above the published limit, *Force value* with an empty box) is refused with the same message. After a save the value columns and the default lines repaint in place and *Saved* stays on screen. *Pin endpoint* on the Wire surface row keeps its own save, checked against what the host serves.
+**Saving is unchanged.** *Save overrides* sends the same body to the same route, key for key, and writes `model_overrides.json` exactly as before; a value the page refuses (a fraction for a window, an output cap above the published limit, *Force value* with an empty box) is refused with the same message. After a save the value columns and the default lines repaint in place and *Saved* stays on screen. *Pin endpoint* on the Wire surface row keeps its own save (`POST /admin/api/model-admin/surface`), checked against what the host serves. *Set preference* writes `preferred_surface` via `POST /admin/api/model-admin/preferred-surface` (accepting `"Follow the client"` `""` to clear or any offered door, refusing `unservable` and undeclared doors with HTTP 422), and is shown only on providers with two or more speakable doors (`>= 2`). Unlike *Pin endpoint* (which uses only that door), *Set preference* tries that door first while keeping the fallback ladder intact (switching doors re-reads the prompt cache).
 
 **The *override(s) active* chip** beside a model's name counts every key you set that reaches that model -- the output cap, the context window, the reasoning word, the prompt cache lifetime and a pinned endpoint as well as the nine request parameters, from the model's own row and from its provider's. Before 7.101.0 it counted only the nine.
 
