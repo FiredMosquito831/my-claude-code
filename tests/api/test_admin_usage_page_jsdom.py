@@ -650,7 +650,9 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
     #: page moves.
     #: 8.20.3 adds `claude`: the OpenClaw launcher paragraph on that page now
     #: names the additive keys MCC writes beside its block (prose only).
-    DECLARED_MOVES = {"guide", "requests", "usage", "providers", "claude"}
+    #: 8.34.0 adds `web_search`: Track 5 PR3 upgrades the Web Search Analytics
+    #: view with Logical Searches (Routes), chain filters, and failed-try columns.
+    DECLARED_MOVES = {"guide", "requests", "usage", "providers", "claude", "web_search"}
 
     # No view is new and none was removed: 8.3.0 already had the page.
     assert sorted(set(mine) - set(base)) == []

@@ -10,7 +10,7 @@ import math
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
 import httpx
@@ -28,6 +28,8 @@ from .errors import (
     WebSearchInvalidRequestError,
     WebSearchRateLimitError,
     WebSearchUpstreamError,
+    consume_last_http_status,
+    reset_last_http_status,
 )
 from .rotation import SEARCH_POOL_TUNING, KeyPool, mask_key_label
 
@@ -208,6 +210,7 @@ class BaseWebSearchProvider(ABC):
             key_index, key = acquired
             excluded.add(key_index)
             try_started = time.perf_counter()
+            reset_last_http_status()
             try:
                 if request_options is None:
                     response = await self._search_with_key(
@@ -229,6 +232,7 @@ class BaseWebSearchProvider(ABC):
                         request_options=request_options,
                     )
             except (WebSearchInvalidRequestError, WebSearchConfigError) as error:
+                reset_last_http_status()
                 # Caller/config faults: rotating keys cannot help.
                 if tries_out is not None:
                     tries_out.append(
@@ -245,6 +249,7 @@ class BaseWebSearchProvider(ABC):
                     )
                 raise
             except WebSearchError as error:
+                reset_last_http_status()
                 error.key_index = key_index
                 charge, benched_for_s = self._report_failure(
                     key_index, error, key_charge
@@ -265,6 +270,7 @@ class BaseWebSearchProvider(ABC):
                     )
                 last_error = error
             except Exception as error:
+                reset_last_http_status()
                 charge, benched_for_s = self._report_failure(
                     key_index, error, key_charge
                 )
@@ -283,6 +289,9 @@ class BaseWebSearchProvider(ABC):
                     )
                 raise
             else:
+                last_status = consume_last_http_status()
+                if response.http_status is None and last_status is not None:
+                    response = replace(response, http_status=last_status)
                 self._pool.report_success(key_index)
                 if tries_out is not None:
                     tries_out.append(
@@ -420,24 +429,34 @@ class BaseWebSearchProvider(ABC):
         if not self.SUPPORTS_DOMAINS:
             allowed_domains = ()
             blocked_domains = ()
-        if request_options is None:
-            return await self._search_with_key(
-                query,
-                key,
-                key_index,
-                max_results=max_results,
-                allowed_domains=allowed_domains,
-                blocked_domains=blocked_domains,
-            )
-        return await self._search_with_key_options(
-            query,
-            key,
-            key_index,
-            max_results=max_results,
-            allowed_domains=allowed_domains,
-            blocked_domains=blocked_domains,
-            request_options=request_options,
-        )
+        reset_last_http_status()
+        try:
+            if request_options is None:
+                response = await self._search_with_key(
+                    query,
+                    key,
+                    key_index,
+                    max_results=max_results,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                )
+            else:
+                response = await self._search_with_key_options(
+                    query,
+                    key,
+                    key_index,
+                    max_results=max_results,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                    request_options=request_options,
+                )
+        except BaseException:
+            reset_last_http_status()
+            raise
+        last_status = consume_last_http_status()
+        if response.http_status is None and last_status is not None:
+            response = replace(response, http_status=last_status)
+        return response
 
     async def _search_with_key_options(
         self,

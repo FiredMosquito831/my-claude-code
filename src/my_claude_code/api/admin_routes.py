@@ -395,7 +395,10 @@ from my_claude_code.providers.oauth_ownership import (
 )
 from my_claude_code.providers.runtime.config import masked_exit_for
 from my_claude_code.websearch.errors import WebSearchError
-from my_claude_code.websearch.registry import search_with_logging
+from my_claude_code.websearch.registry import (
+    search_with_logging,
+    websearch_telemetry_context,
+)
 
 from .dependencies import get_services, get_settings
 from .ports import ApiServices
@@ -3176,12 +3179,13 @@ async def test_websearch_provider(
         provider = await runtime_provider(settings, provider_id)
         # The same key rules as a search (7.112.1): a failed test must not
         # bench a key that a real search would have left alone.
-        response = await search_with_logging(
-            provider,
-            "web search",
-            max_results=3,
-            key_charge=no_chain_key_charge,
-        )
+        with websearch_telemetry_context(door="admin_test", tool_kind="web_search"):
+            response = await search_with_logging(
+                provider,
+                "web search",
+                max_results=3,
+                key_charge=no_chain_key_charge,
+            )
     except WebSearchError as error:
         return {
             "provider_id": provider_id,

@@ -358,6 +358,8 @@ async def _execute_mcp_tool(
     settings: Settings,
     request_id: str,
 ) -> dict[str, Any]:
+    from my_claude_code.websearch.registry import websearch_telemetry_context
+
     from .web_tools import outbound, rest_service, streaming
 
     started_mono = time.monotonic()
@@ -392,14 +394,18 @@ async def _execute_mcp_tool(
         allowed_domains = arguments.get("allowed_domains") or ()
         blocked_domains = arguments.get("blocked_domains") or ()
         try:
-            response, items, meta = await outbound._run_web_search_response(
-                arguments["query"],
-                settings,
-                max_results=int(arguments["max_results"]),
-                allowed_domains=allowed_domains,
-                blocked_domains=blocked_domains,
-                provider_override=provider_override,
-            )
+            with websearch_telemetry_context(
+                door="mcp",
+                tool_kind="search_docs" if tool_name == "search_docs" else "web_search",
+            ):
+                response, items, meta = await outbound._run_web_search_response(
+                    arguments["query"],
+                    settings,
+                    max_results=int(arguments["max_results"]),
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                    provider_override=provider_override,
+                )
         except Exception as exc:
             duration_ms = (time.monotonic() - started_mono) * 1000.0
             summary = outbound._web_tool_client_error_summary(
@@ -487,6 +493,7 @@ async def _execute_mcp_tool(
             egress=egress,
             settings=settings,
             proxy_url=outbound.websearch_proxy_url(),
+            door="mcp",
         )
         record_rest_web_tool_call(
             settings,
@@ -519,6 +526,7 @@ async def _execute_mcp_tool(
         egress=egress,
         settings=settings,
         proxy_url=outbound.websearch_proxy_url(),
+        door="mcp",
     )
     record_rest_web_tool_call(
         settings,

@@ -60,9 +60,12 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
   };
 
   let keysMode = "healthy";
+  let statsMode = "stats";
   let requestsMode = "requests";
+  let routesMode = null;
   const posts = [];
   const gets = [];
+  const analyticsUrls = [];
   const ok = (body) => ({
     ok: true,
     status: 200,
@@ -97,8 +100,18 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
       }
       return ok({});
     }
-    if (path === "/admin/api/websearch/stats") return ok(fixture.stats);
-    if (path === "/admin/api/websearch/requests") return ok(fixture[requestsMode]);
+    if (path === "/admin/api/websearch/stats") {
+      analyticsUrls.push(full);
+      return ok(fixture[statsMode]);
+    }
+    if (path === "/admin/api/websearch/requests") {
+      analyticsUrls.push(full);
+      return ok(fixture[requestsMode]);
+    }
+    if (path === "/admin/api/websearch/routes") {
+      analyticsUrls.push(full);
+      return ok(routesMode ? fixture[routesMode] : { total: 0, limit: 50, offset: 0, items: [] });
+    }
     const detail = path.match(/^\/admin\/api\/websearch\/requests\/(\d+)$/);
     if (detail) return ok(fixture.details[detail[1]] || {});
     return harnessFetch(url, options);
@@ -489,6 +502,70 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     out.detailSkipped = await detailFor(5);
     out.detailNoChain = await detailFor(3);
     out.detailOld = await detailFor(1);
+
+    // ---------------------------------------------- 8.34.0 analytics + UI
+    statsMode = "stats_v834";
+    routesMode = "routes_v834";
+    requestsMode = "requests_v834_siblings";
+    choose(doc.getElementById("webSearchFilterStatus"), "skipped");
+    choose(doc.getElementById("webSearchFilterToolKind"), "web_fetch");
+    choose(doc.getElementById("webSearchFilterDoor"), "rest");
+    const emptyBox = doc.getElementById("webSearchFilterEmptyOnly");
+    emptyBox.checked = true;
+    emptyBox.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await wait(600);
+
+    const blockNamed = (title) => {
+      const blocks = Array.from(doc.querySelectorAll("#webSearchAnalytics .analytics-block"));
+      return blocks.find((block) => flat(block.querySelector("h4, h3")) === title) || null;
+    };
+    const routesBlock = blockNamed("Logical Searches (Routes)");
+    const keyHealthBlock = blockNamed("Credential health");
+    out.v834 = {
+      statusOptions: Array.from(doc.getElementById("webSearchFilterStatus").options).map(
+        (opt) => opt.value,
+      ),
+      toolKindOptions: Array.from(doc.getElementById("webSearchFilterToolKind").options).map(
+        (opt) => opt.value,
+      ),
+      analyticsUrls: analyticsUrls.filter((u) => u.includes("status=skipped")),
+      routesTable: tableShape(routesBlock),
+      routesMarkup: routesBlock ? routesBlock.querySelectorAll("img, b, script").length : -1,
+      keyHealthTable: tableShape(keyHealthBlock),
+      keyHealthMarkup: keyHealthBlock
+        ? keyHealthBlock.querySelectorAll("img, b, script").length
+        : -1,
+    };
+
+    await window.openWebSearchDetail(101);
+    await wait(400);
+    const siblingsPane = doc.getElementById("webSearchDetailSiblingsPane");
+    const siblingBtns = Array.from(siblingsPane.querySelectorAll("button.ws-sibling-link"));
+    const firstModalTitle = flat(doc.getElementById("webSearchDetailTitle"));
+    const firstModalMeta = {};
+    Array.from(doc.getElementById("webSearchDetailMeta").querySelectorAll("dt")).forEach(
+      (term) => {
+        firstModalMeta[flat(term)] = flat(term.nextElementSibling);
+      },
+    );
+    const siblingItemsBefore = Array.from(siblingsPane.querySelectorAll("li")).map(flat);
+    if (siblingBtns.length) {
+      press(siblingBtns[0]);
+      await wait(400);
+    }
+    const secondModalTitle = flat(doc.getElementById("webSearchDetailTitle"));
+    const siblingMarkup = siblingsPane.querySelectorAll("img, b, script").length;
+    window.closeWebSearchDetail();
+    await settle();
+    out.v834Siblings = {
+      hidden: siblingsPane.hidden,
+      items: siblingItemsBefore,
+      firstModalTitle,
+      firstModalMeta,
+      secondModalTitle,
+      siblingMarkup,
+    };
+
     out.xssRan = Boolean(window.__wsXss);
     out.gets = gets.slice();
 

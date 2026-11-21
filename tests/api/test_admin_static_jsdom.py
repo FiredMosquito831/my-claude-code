@@ -1758,6 +1758,9 @@ MOVED_VIEWS = {
     # Cache affinity selector (#cpCacheAffinityField / #cpCacheAffinity /
     # #cpCacheAffinityHint).
     "providers": "the custom provider form adds the Cache affinity selector",
+    # 8.34.0: Web Search Analytics & UI (Track 5 PR3) adds Logical Searches
+    # (Routes), skipped/tool_kind/door/empty_only filters, and failed-try columns.
+    "web_search": "Web Search Analytics adds Logical Searches and chain filters",
 }
 
 #: The base-written per-view digests. Recorded by running THIS harness against
@@ -12842,6 +12845,68 @@ def test_jsdom_third_party_text_on_the_chain_surfaces_stays_text(
     assert WS_PROBE in websearch_chain["detailFailed"]["summary"]
     assert WS_PROBE in websearch_chain["detailFailed"]["meta"]["Error"]
     assert WS_PROBE in websearch_chain["triesCells"][1]["lines"][0]["text"]
+
+
+def test_jsdom_v834_logical_routes_by_key_filters_and_sibling_modal(
+    websearch_chain,
+) -> None:
+    v834 = websearch_chain["v834"]
+    assert "skipped" in v834["statusOptions"]
+    assert set(v834["toolKindOptions"]) == {
+        "",
+        "all",
+        "web_search",
+        "web_fetch",
+        "search_docs",
+    }
+    assert any(
+        "status=skipped" in u
+        and "tool_kind=web_fetch" in u
+        and "door=rest" in u
+        and "empty_only=true" in u
+        for u in v834["analyticsUrls"]
+    )
+
+    routes_table = v834["routesTable"]
+    assert routes_table is not None
+    assert routes_table["headers"] == [
+        "Time",
+        "Route",
+        "Query",
+        "Path",
+        "Attempts",
+        "Skipped",
+        "Rotations",
+        "Empty fallbacks",
+        "Door",
+        "Status",
+        "Latency",
+        "Actions",
+    ]
+    assert len(routes_table["rows"]) == 1
+    assert routes_table["rows"][0][3] == "exa → tavily"
+    assert routes_table["rows"][0][4:9] == ["2", "1", "1", "1", "rest"]
+    assert v834["routesMarkup"] == 0
+
+    key_health = v834["keyHealthTable"]
+    assert key_health is not None
+    assert "Failed tries" in key_health["headers"]
+    assert "Rotations" in key_health["headers"]
+    assert key_health["rows"][0][0] == "exa"
+    assert key_health["rows"][0][4] == "17"
+    assert key_health["rows"][0][5] == "17"
+    assert v834["keyHealthMarkup"] == 0
+
+    sibs = websearch_chain["v834Siblings"]
+    assert sibs["hidden"] is False
+    assert len(sibs["items"]) == 2
+    assert "attempt 1" in sibs["firstModalTitle"]
+    assert sibs["firstModalMeta"]["Door"] == "rest"
+    assert sibs["firstModalMeta"]["HTTP status"] == "200"
+    assert sibs["firstModalMeta"]["Empty results"] == "Yes (0 results)"
+    assert "attempt 2" in sibs["secondModalTitle"]
+    assert sibs["siblingMarkup"] == 0
+    assert websearch_chain["xssRan"] is False
 
 
 # --------------------------------------------------------------------------

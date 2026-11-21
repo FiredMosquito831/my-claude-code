@@ -23,6 +23,8 @@ from ..errors import (
     WebSearchQuotaError,
     WebSearchRateLimitError,
     WebSearchUpstreamError,
+    reset_last_http_status,
+    set_last_http_status,
 )
 
 DEFAULT_HTTP_TIMEOUT = 20.0
@@ -99,6 +101,7 @@ async def request_json(
 ) -> Any:
     """Execute one JSON request; transport/HTTP failures become WebSearchError."""
 
+    reset_last_http_status()
     try:
         response = await client.request(
             method, url, headers=headers, params=params, json=json_body
@@ -115,6 +118,7 @@ async def request_json(
             f"transport error ({type(exc).__name__})",
             kind_detail=KIND_DETAIL_TRANSPORT,
         ) from exc
+    set_last_http_status(response.status_code)
     if response.status_code >= 400:
         raise map_status_error(
             provider_id, response, extra_status_errors=extra_status_errors

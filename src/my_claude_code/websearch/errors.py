@@ -4,7 +4,33 @@ The ``kind`` class attribute is the canonical classification consumed by key
 rotation (auth -> lockout, rate_limit -> cooldown, etc.) and by analytics.
 """
 
+from contextvars import ContextVar
 from typing import ClassVar
+
+_LAST_HTTP_STATUS: ContextVar[int | None] = ContextVar(
+    "websearch_last_http_status", default=None
+)
+
+
+def set_last_http_status(status_code: int | None) -> None:
+    """Record the last upstream HTTP status observed for the active task."""
+
+    _LAST_HTTP_STATUS.set(status_code)
+
+
+def reset_last_http_status() -> None:
+    """Clear the per-task last upstream HTTP status before a try."""
+
+    _LAST_HTTP_STATUS.set(None)
+
+
+def consume_last_http_status() -> int | None:
+    """Read and clear the last upstream HTTP status observed for the active task."""
+
+    status = _LAST_HTTP_STATUS.get()
+    _LAST_HTTP_STATUS.set(None)
+    return status
+
 
 #: What kind of ``upstream`` failure carried no HTTP status: the request timed
 #: out, the connection itself failed, or the provider answered a body that is

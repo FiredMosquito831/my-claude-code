@@ -142,7 +142,11 @@ CREATE TABLE IF NOT EXISTS search_log (
     chain_position INTEGER,
     outcome TEXT,
     failure_kind TEXT,
-    tries_json TEXT
+    tries_json TEXT,
+    tool_kind TEXT DEFAULT 'web_search',
+    door TEXT,
+    http_status INTEGER,
+    empty_results INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS search_route_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,7 +164,11 @@ CREATE TABLE IF NOT EXISTS search_route_log (
     results_count INTEGER NOT NULL,
     cost_usd REAL,
     error_kind TEXT,
-    error_message TEXT
+    error_message TEXT,
+    door TEXT,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    key_rotations INTEGER NOT NULL DEFAULT 0,
+    empty_fallback_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS search_log_meta (
     key TEXT PRIMARY KEY,
@@ -176,6 +184,7 @@ CREATE INDEX IF NOT EXISTS idx_search_route_log_terminal_ts
 
 _POST_MIGRATION_SCHEMA = """
 CREATE INDEX IF NOT EXISTS idx_search_log_route_id ON search_log (route_id);
+CREATE INDEX IF NOT EXISTS idx_search_log_ts_outcome ON search_log (ts_epoch, outcome);
 """
 
 #: The search-chain attempt columns (7.112.0). Nullable, ALTER-only, NULL on
@@ -188,6 +197,22 @@ _CHAIN_ATTEMPT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("outcome", "TEXT"),
     ("failure_kind", "TEXT"),
     ("tries_json", "TEXT"),
+)
+
+#: Additive attempt telemetry columns (8.34.0, III.8).
+_ATTEMPT_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("tool_kind", "TEXT DEFAULT 'web_search'"),
+    ("door", "TEXT"),
+    ("http_status", "INTEGER"),
+    ("empty_results", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+#: Additive logical-route telemetry columns (8.34.0, III.8).
+_ROUTE_MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("door", "TEXT"),
+    ("skipped_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("key_rotations", "INTEGER NOT NULL DEFAULT 0"),
+    ("empty_fallback_count", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 #: The INSERT column list, in :func:`_row_tuple` order. The statement and its
@@ -217,6 +242,7 @@ _INSERT_COLUMNS: tuple[str, ...] = (
     "output_sha256",
     "content_captured",
     *(name for name, _type in _CHAIN_ATTEMPT_COLUMNS),
+    *(name for name, _type in _ATTEMPT_MIGRATION_COLUMNS),
 )
 
 _INSERT_SQL = (
@@ -229,11 +255,15 @@ _INSERT_SQL = (
 #: count, so the stats count exactly what they counted before 7.112.0.
 SKIPPED_STATUS = "skipped"
 _STATUS_POSITION = _INSERT_COLUMNS.index("status")
+_PROVIDER_POSITION = _INSERT_COLUMNS.index("provider")
+_TOOL_KIND_POSITION = _INSERT_COLUMNS.index("tool_kind")
 #: Set in ``search_log_meta`` by the first skipped row ever written. Until it
 #: exists no row can be skipped, so the aggregates run exactly the SQL they
 #: ran before 7.112.0 -- no extra predicate, no cost -- and a database no
 #: chain ever wrote to is read exactly as before.
 _SKIPPED_ROWS_KEY = "chain_skipped_rows_v1"
+#: Set in ``search_log_meta`` when any ``web_fetch`` row exists in ``search_log``.
+_WEBFETCH_ROWS_KEY = "webfetch_rows_v1"
 _MARK_SKIPPED_ROWS_SQL = (
     "INSERT OR IGNORE INTO search_log_meta (key, value) VALUES (?, '1')"
 )
@@ -242,8 +272,9 @@ _INSERT_ROUTE_SQL = """
 INSERT INTO search_route_log (
     route_id, ts_epoch, ts_iso, query, primary_provider, terminal_provider,
     provider_path, attempt_count, fallback_used, duration_ms, status,
-    results_count, cost_usd, error_kind, error_message
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    results_count, cost_usd, error_kind, error_message,
+    door, skipped_count, key_rotations, empty_fallback_count
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _PRUNE_SQL = """
@@ -276,7 +307,8 @@ _REQUEST_COLUMNS = (
     # 7.113.0: the search chain's four columns (7.112.0), read for the
     # Analytics table and its ladder. NULL on every row a search without a
     # chain wrote, and on every row from before 7.112.0.
-    " chain_position, outcome, failure_kind, tries_json"
+    " chain_position, outcome, failure_kind, tries_json,"
+    " tool_kind, door, http_status, empty_results"
 )
 
 _REQUEST_DETAIL_COLUMNS = (
@@ -286,7 +318,8 @@ _REQUEST_DETAIL_COLUMNS = (
 _ROUTE_COLUMNS = (
     "id, route_id, ts_epoch, ts_iso, query, primary_provider, terminal_provider,"
     " provider_path, attempt_count, fallback_used, duration_ms, status,"
-    " results_count, cost_usd, error_kind, error_message"
+    " results_count, cost_usd, error_kind, error_message,"
+    " door, skipped_count, key_rotations, empty_fallback_count"
 )
 
 
@@ -446,6 +479,10 @@ class WebSearchLogStore:
         *,
         provider: str | None = None,
         status: str | None = None,
+        door: str | None = None,
+        tool_kind: str | None = None,
+        route_id: str | None = None,
+        empty_only: bool = False,
         q: str | None = None,
         since_epoch: float | None = None,
         until_epoch: float | None = None,
@@ -457,6 +494,10 @@ class WebSearchLogStore:
         route_where, route_params = _route_filter_where(
             provider=provider,
             status=status,
+            door=door,
+            tool_kind=tool_kind,
+            route_id=route_id,
+            empty_only=empty_only,
             q=q,
             since_epoch=since_epoch,
             until_epoch=until_epoch,
@@ -466,10 +507,15 @@ class WebSearchLogStore:
             attempt_where, attempt_params = _attempt_filter_where(
                 provider=provider,
                 status=status,
+                door=door,
+                tool_kind=tool_kind,
+                route_id=route_id,
+                empty_only=empty_only,
                 q=q,
                 since_epoch=since_epoch,
                 until_epoch=until_epoch,
                 counted_only=_may_hold_skipped_rows(connection),
+                has_webfetch=_may_hold_webfetch_rows(connection),
             )
             attempts = _attempt_stats(connection, attempt_where, attempt_params, period)
             routes = _route_stats(connection, route_where, route_params, period)
@@ -477,15 +523,24 @@ class WebSearchLogStore:
             connection.close()
         route_window = routes["window"]
         attempt_window = attempts["window"]
+        filters_out: dict[str, Any] = {
+            "provider": provider,
+            "status": status,
+            "q": q,
+            "since_epoch": since_epoch,
+            "until_epoch": until_epoch,
+        }
+        if door is not None:
+            filters_out["door"] = door
+        if tool_kind is not None:
+            filters_out["tool_kind"] = tool_kind
+        if route_id is not None:
+            filters_out["route_id"] = route_id
+        if empty_only:
+            filters_out["empty_only"] = True
         return {
             "period": period,
-            "filters": {
-                "provider": provider,
-                "status": status,
-                "q": q,
-                "since_epoch": since_epoch,
-                "until_epoch": until_epoch,
-            },
+            "filters": filters_out,
             "window": {
                 "since_epoch": (
                     since_epoch
@@ -528,6 +583,10 @@ class WebSearchLogStore:
         offset: int = 0,
         provider: str | None = None,
         status: str | None = None,
+        door: str | None = None,
+        tool_kind: str | None = None,
+        route_id: str | None = None,
+        empty_only: bool = False,
         q: str | None = None,
         since_epoch: float | None = None,
         until_epoch: float | None = None,
@@ -537,15 +596,20 @@ class WebSearchLogStore:
 
         limit = min(max(1, limit), _MAX_LIMIT)
         offset = max(0, offset)
-        where, params = _attempt_filter_where(
-            provider=provider,
-            status=status,
-            q=q,
-            since_epoch=since_epoch,
-            until_epoch=until_epoch,
-        )
         connection = self._connect_reader()
         try:
+            where, params = _attempt_filter_where(
+                provider=provider,
+                status=status,
+                door=door,
+                tool_kind=tool_kind,
+                route_id=route_id,
+                empty_only=empty_only,
+                q=q,
+                since_epoch=since_epoch,
+                until_epoch=until_epoch,
+                has_webfetch=_may_hold_webfetch_rows(connection),
+            )
             total = connection.execute(
                 f"SELECT COUNT(*) FROM search_log {where}", params
             ).fetchone()[0]
@@ -562,6 +626,51 @@ class WebSearchLogStore:
             connection.close()
         return {"total": int(total), "limit": limit, "offset": offset, "items": items}
 
+    def routes(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        provider: str | None = None,
+        status: str | None = None,
+        door: str | None = None,
+        q: str | None = None,
+        since_epoch: float | None = None,
+        until_epoch: float | None = None,
+        fallback_only: bool = False,
+        empty_only: bool = False,
+    ) -> dict[str, Any]:
+        """Page logical search routes (newest first) with optional filters."""
+
+        limit = min(max(1, limit), _MAX_LIMIT)
+        offset = max(0, offset)
+        where, params = _route_filter_where(
+            provider=provider,
+            status=status,
+            door=door,
+            q=q,
+            since_epoch=since_epoch,
+            until_epoch=until_epoch,
+            fallback_only=fallback_only,
+            empty_only=empty_only,
+        )
+        connection = self._connect_reader()
+        try:
+            total = connection.execute(
+                f"SELECT COUNT(*) FROM search_route_log {where}", params
+            ).fetchone()[0]
+            items = [
+                _route_dict(row)
+                for row in connection.execute(
+                    f"SELECT {_ROUTE_COLUMNS} FROM search_route_log {where}"
+                    " ORDER BY ts_epoch DESC, id DESC LIMIT ? OFFSET ?",
+                    (*params, limit, offset),
+                ).fetchall()
+            ]
+        finally:
+            connection.close()
+        return {"total": int(total), "limit": limit, "offset": offset, "items": items}
+
     def iter_export_rows(
         self,
         *,
@@ -569,6 +678,10 @@ class WebSearchLogStore:
         include_content: bool,
         provider: str | None = None,
         status: str | None = None,
+        door: str | None = None,
+        tool_kind: str | None = None,
+        route_id: str | None = None,
+        empty_only: bool = False,
         q: str | None = None,
         since_epoch: float | None = None,
         until_epoch: float | None = None,
@@ -582,13 +695,6 @@ class WebSearchLogStore:
         ``input_json``/``output_json``/``provider_config_json`` when
         ``include_content`` is true.
         """
-        where, params = _attempt_filter_where(
-            provider=provider,
-            status=status,
-            q=q,
-            since_epoch=since_epoch,
-            until_epoch=until_epoch,
-        )
         # Keyset pagination needs ts_epoch + id; _attempt_dict needs
         # content_captured unconditionally. Force-include all three.
         required = {"ts_epoch", "id", "content_captured"}
@@ -607,6 +713,18 @@ class WebSearchLogStore:
         )
         connection = self._connect_reader()
         try:
+            where, params = _attempt_filter_where(
+                provider=provider,
+                status=status,
+                door=door,
+                tool_kind=tool_kind,
+                route_id=route_id,
+                empty_only=empty_only,
+                q=q,
+                since_epoch=since_epoch,
+                until_epoch=until_epoch,
+                has_webfetch=_may_hold_webfetch_rows(connection),
+            )
             cursor: tuple[float, int] | None = None
             while True:
                 page_where = where
@@ -637,6 +755,10 @@ class WebSearchLogStore:
         group_by: list[str],
         provider: str | None = None,
         status: str | None = None,
+        door: str | None = None,
+        tool_kind: str | None = None,
+        route_id: str | None = None,
+        empty_only: bool = False,
         q: str | None = None,
         since_epoch: float | None = None,
         until_epoch: float | None = None,
@@ -647,10 +769,15 @@ class WebSearchLogStore:
             where, params = _attempt_filter_where(
                 provider=provider,
                 status=status,
+                door=door,
+                tool_kind=tool_kind,
+                route_id=route_id,
+                empty_only=empty_only,
                 q=q,
                 since_epoch=since_epoch,
                 until_epoch=until_epoch,
                 counted_only=_may_hold_skipped_rows(connection),
+                has_webfetch=_may_hold_webfetch_rows(connection),
             )
             group_sql = ", ".join(group_by)
             order_sql = ", ".join(group_by)
@@ -769,6 +896,12 @@ class WebSearchLogStore:
                     # In the same transaction as the row: from now on the
                     # aggregates leave skipped rows out (see ``_counts_skipped``).
                     connection.execute(_MARK_SKIPPED_ROWS_SQL, (_SKIPPED_ROWS_KEY,))
+                if any(
+                    row[_PROVIDER_POSITION] == "web_fetch"
+                    or row[_TOOL_KIND_POSITION] == "web_fetch"
+                    for row in attempt_rows
+                ):
+                    connection.execute(_MARK_SKIPPED_ROWS_SQL, (_WEBFETCH_ROWS_KEY,))
             if route_rows:
                 connection.executemany(_INSERT_ROUTE_SQL, route_rows)
             connection.commit()
@@ -1273,6 +1406,13 @@ def _row_tuple(
         outcome.outcome,
         outcome.failure_kind,
         outcome.tries_json,
+        outcome.tool_kind or "web_search",
+        outcome.door,
+        outcome.http_status,
+        int(
+            bool(outcome.empty_results)
+            or (outcome.status == "success" and outcome.results_count == 0)
+        ),
     )
 
 
@@ -1300,6 +1440,10 @@ def _route_row_tuple(
             if outcome.error_message
             else None
         ),
+        outcome.door,
+        max(0, outcome.skipped_count),
+        max(0, outcome.key_rotations),
+        max(0, outcome.empty_fallback_count),
     )
 
 
@@ -1310,6 +1454,8 @@ def _row_dict(row: sqlite3.Row) -> dict[str, Any]:
 def _attempt_dict(row: sqlite3.Row) -> dict[str, Any]:
     shaped = _row_dict(row)
     shaped["content_captured"] = bool(shaped["content_captured"])
+    if "empty_results" in shaped and shaped["empty_results"] is not None:
+        shaped["empty_results"] = bool(shaped["empty_results"])
     # The raw columns are *_json; the export path aliases them to the decoded
     # names ("input"/"output"/"provider_config"). Decode whichever shape a
     # query projected.
@@ -1584,6 +1730,17 @@ def _may_hold_skipped_rows(connection: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def _may_hold_webfetch_rows(connection: sqlite3.Connection) -> bool:
+    """Whether ``search_log`` holds any ``web_fetch`` rows to split out by default."""
+    try:
+        row = connection.execute(
+            "SELECT 1 FROM search_log_meta WHERE key = ?", (_WEBFETCH_ROWS_KEY,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return row is not None
+
+
 def _attempt_filter_where(
     *,
     provider: str | None,
@@ -1592,25 +1749,56 @@ def _attempt_filter_where(
     since_epoch: float | None,
     until_epoch: float | None,
     counted_only: bool = False,
+    door: str | None = None,
+    tool_kind: str | None = None,
+    route_id: str | None = None,
+    empty_only: bool = False,
+    has_webfetch: bool = False,
 ) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
-    if counted_only:
+    if counted_only and status != SKIPPED_STATUS:
         # Aggregates count attempts. A chain entry that was skipped (7.112.0)
         # was never attempted, so it is listed but never counted: with no
         # chain set there are no such rows and every number is what it was.
         clauses.append("status != ?")
         params.append(SKIPPED_STATUS)
-    if provider:
+    providers = [part for part in provider.split(",") if part] if provider else []
+    if providers:
         # Comma-separated values mean "any of these providers" (multi-select).
-        providers = [part for part in provider.split(",") if part]
-        if providers:
-            placeholders = ",".join("?" * len(providers))
-            clauses.append(f"provider IN ({placeholders})")
-            params.extend(providers)
+        placeholders = ",".join("?" * len(providers))
+        clauses.append(f"provider IN ({placeholders})")
+        params.extend(providers)
     if status:
         clauses.append("status = ?")
         params.append(status)
+    if door:
+        clauses.append("door = ?")
+        params.append(door)
+    if route_id:
+        clauses.append("route_id = ?")
+        params.append(route_id)
+    if empty_only:
+        clauses.append(
+            "(empty_results = 1 OR (status = 'success' AND results_count = 0))"
+        )
+    if tool_kind == "web_fetch":
+        clauses.append("(tool_kind = 'web_fetch' OR provider = 'web_fetch')")
+    elif tool_kind == "search_docs":
+        clauses.append("tool_kind = 'search_docs'")
+    elif tool_kind == "web_search":
+        clauses.append(
+            "(COALESCE(tool_kind, 'web_search') = 'web_search' AND provider != 'web_fetch')"
+        )
+    elif (
+        tool_kind != "all"
+        and has_webfetch
+        and "web_fetch" not in providers
+        and not route_id
+    ):
+        clauses.append(
+            "(COALESCE(tool_kind, 'web_search') != 'web_fetch' AND provider != 'web_fetch')"
+        )
     if q:
         clauses.append(
             "(instr(lower(query), lower(?)) > 0"
@@ -1635,7 +1823,14 @@ def _route_filter_where(
     q: str | None,
     since_epoch: float | None,
     until_epoch: float | None,
+    door: str | None = None,
+    tool_kind: str | None = None,
+    route_id: str | None = None,
+    fallback_only: bool = False,
+    empty_only: bool = False,
 ) -> tuple[str, list[Any]]:
+    if tool_kind == "web_fetch":
+        return "WHERE 1 = 0", []
     clauses: list[str] = []
     params: list[Any] = []
     if provider:
@@ -1644,6 +1839,16 @@ def _route_filter_where(
     if status:
         clauses.append("status = ?")
         params.append(status)
+    if door:
+        clauses.append("door = ?")
+        params.append(door)
+    if route_id:
+        clauses.append("route_id = ?")
+        params.append(route_id)
+    if fallback_only:
+        clauses.append("fallback_used = 1")
+    if empty_only:
+        clauses.append("(status = 'success' AND results_count = 0)")
     if q:
         clauses.append(
             "(instr(lower(search_route_log.query), lower(?)) > 0"
@@ -1705,6 +1910,7 @@ def _attempt_stats(
             params,
         ).fetchall()
     ]
+    by_key = _merge_key_tries_into_by_key(connection, where, params, by_key)
     error_where = f"{where} {'AND' if where else 'WHERE'} status = 'error'"
     top_errors = [
         _row_dict(row)
@@ -2018,8 +2224,135 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             column,
             f"ALTER TABLE search_log ADD COLUMN {column} {column_type}",
         )
+    for column, column_def in _ATTEMPT_MIGRATION_COLUMNS:
+        _ensure_column(
+            connection,
+            "search_log",
+            column,
+            f"ALTER TABLE search_log ADD COLUMN {column} {column_def}",
+        )
+    for column, column_def in _ROUTE_MIGRATION_COLUMNS:
+        _ensure_column(
+            connection,
+            "search_route_log",
+            column,
+            f"ALTER TABLE search_route_log ADD COLUMN {column} {column_def}",
+        )
+    if (
+        not _may_hold_webfetch_rows(connection)
+        and connection.execute(
+            "SELECT 1 FROM search_log"
+            " WHERE provider = 'web_fetch' OR tool_kind = 'web_fetch' LIMIT 1"
+        ).fetchone()
+    ):
+        connection.execute(_MARK_SKIPPED_ROWS_SQL, (_WEBFETCH_ROWS_KEY,))
     connection.executescript(_POST_MIGRATION_SCHEMA)
     connection.commit()
+
+
+def _merge_key_tries_into_by_key(
+    connection: sqlite3.Connection,
+    where: str,
+    params: list[Any],
+    by_key: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Aggregate intermediate try/failure/rotation counts from ``tries_json``."""
+
+    tries_where = f"{where} {'AND' if where else 'WHERE'} tries_json IS NOT NULL"
+    rows = connection.execute(
+        f"SELECT provider, tries_json FROM search_log {tries_where}",
+        params,
+    ).fetchall()
+    if not rows:
+        return by_key
+    try_stats: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        provider = str(row["provider"])
+        raw_tries = row["tries_json"]
+        if not isinstance(raw_tries, str) or not raw_tries:
+            continue
+        try:
+            parsed = json.loads(raw_tries)
+        except ValueError:
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for entry in parsed:
+            if not isinstance(entry, dict):
+                continue
+            key_index = entry.get("key_index")
+            if isinstance(key_index, int) and not isinstance(key_index, bool):
+                if key_index < 0:
+                    continue
+                resolved_index: int | None = key_index
+            else:
+                resolved_index = None
+            if entry.get("kind") == "pool_benched":
+                continue
+            key_label = str(entry.get("key_label") or "")
+            agg = try_stats.setdefault(
+                (provider, key_label),
+                {
+                    "key_index": resolved_index,
+                    "tries_total": 0,
+                    "tries_failed": 0,
+                    "tries_succeeded": 0,
+                    "key_rotations": 0,
+                },
+            )
+            agg["tries_total"] += 1
+            if entry.get("ok"):
+                agg["tries_succeeded"] += 1
+            else:
+                agg["tries_failed"] += 1
+            if entry.get("rotated"):
+                agg["key_rotations"] += 1
+            if agg["key_index"] is None and resolved_index is not None:
+                agg["key_index"] = resolved_index
+    if not try_stats:
+        return by_key
+    merged: list[dict[str, Any]] = []
+    for item in by_key:
+        agg = try_stats.pop((str(item["provider"]), str(item["key_label"])), None)
+        enriched = dict(item)
+        if agg is not None:
+            enriched["key_index"] = agg["key_index"]
+            enriched["tries_total"] = agg["tries_total"]
+            enriched["tries_failed"] = agg["tries_failed"]
+            enriched["tries_succeeded"] = agg["tries_succeeded"]
+            enriched["key_rotations"] = agg["key_rotations"]
+        else:
+            enriched["key_index"] = None
+            enriched["tries_total"] = 0
+            enriched["tries_failed"] = 0
+            enriched["tries_succeeded"] = 0
+            enriched["key_rotations"] = 0
+        merged.append(enriched)
+    for (provider, key_label), agg in try_stats.items():
+        merged.append(
+            {
+                "provider": provider,
+                "key_label": key_label,
+                "key_index": agg["key_index"],
+                "requests": 0,
+                "errors": 0,
+                "avg_duration_ms": None,
+                "results": 0,
+                "tries_total": agg["tries_total"],
+                "tries_failed": agg["tries_failed"],
+                "tries_succeeded": agg["tries_succeeded"],
+                "key_rotations": agg["key_rotations"],
+            }
+        )
+    merged.sort(
+        key=lambda entry: (
+            -int(entry["requests"]),
+            -int(entry["tries_total"]),
+            str(entry["provider"]),
+            str(entry["key_label"]),
+        )
+    )
+    return merged
 
 
 def _ensure_column(

@@ -2685,7 +2685,33 @@
                     <option value="">any</option>
                     <option value="success">success</option>
                     <option value="error">error</option>
+                    <option value="skipped">skipped</option>
                   </select>
+                </label>
+                <label>
+                  Tool
+                  <select id="webSearchFilterToolKind">
+                    <option value="">web search</option>
+                    <option value="all">all tools</option>
+                    <option value="web_search">web_search</option>
+                    <option value="web_fetch">web_fetch</option>
+                    <option value="search_docs">search_docs</option>
+                  </select>
+                </label>
+                <label>
+                  Door
+                  <select id="webSearchFilterDoor">
+                    <option value="">all doors</option>
+                    <option value="anthropic_stream">anthropic_stream</option>
+                    <option value="tool_loop">tool_loop</option>
+                    <option value="rest">rest</option>
+                    <option value="mcp">mcp</option>
+                    <option value="admin_test">admin_test</option>
+                  </select>
+                </label>
+                <label class="ws-filter-checkbox">
+                  <input id="webSearchFilterEmptyOnly" type="checkbox" />
+                  Empty results only
                 </label>
                 <label>
                   Search input/output
@@ -2761,6 +2787,11 @@
                 <section id="webSearchDetailTriesPane" class="ws-detail-tries" hidden>
                   <h4>Key tries</h4>
                   <div id="webSearchDetailTries"></div>
+                </section>
+
+                <section id="webSearchDetailSiblingsPane" class="ws-detail-siblings" hidden>
+                  <h4>Route timeline (sibling attempts)</h4>
+                  <div id="webSearchDetailSiblings"></div>
                 </section>
 
                 <details id="webSearchDetailConfigPane" class="ws-detail-pane">
@@ -5487,8 +5518,18 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   <code>WEB_SEARCH_CHAIN_SKIP_KINDS</code> stays decoupled from the LLM
                   <code>FALLBACK_SKIP_KINDS</code>). In Analytics, the
                   <em>Key tries</em> column expands to every try on every key (for both
-                  search-chain and multi-key routes). Empty the card and Apply to go
-                  back to the provider route above.
+                  search-chain and multi-key routes), the
+                  <strong>Logical Searches (Routes)</strong> table summarizes route
+                  paths, skipped entries, key rotations, and empty-result fallbacks
+                  via <code>GET /admin/api/websearch/routes</code>,
+                  <strong>Credential health</strong> aggregates failed intermediate
+                  key tries with a link to each provider&apos;s key pool, the toolbar
+                  filters by <strong>Status</strong> (including <code>skipped</code>),
+                  <strong>Tool</strong> (splitting <code>web_fetch</code> out of
+                  default search metrics), <strong>Door</strong>, and
+                  <strong>Empty results only</strong>, and the detail dialog links
+                  all sibling attempts sharing a <code>route_id</code>. Empty the
+                  card and Apply to go back to the provider route above.
                 </p>
                 <p>
                   <strong>Context7</strong> answers with library documentation rather

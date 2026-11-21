@@ -4425,6 +4425,65 @@ audio.req-media-preview {
   margin: 8px 0 0;
 }
 
+.ws-filter-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.ws-key-pool-link,
+.ws-route-filter-btn,
+.ws-route-inspect-btn,
+.ws-route-filter-clear,
+.ws-sibling-link {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.ws-route-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ws-route-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.ws-detail-siblings {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.ws-siblings-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ws-sibling-current {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+}
+
 @media (max-width: 760px) {
   .requests-breakdowns {
     grid-template-columns: 1fr;
