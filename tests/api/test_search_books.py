@@ -20,8 +20,10 @@ from my_claude_code.core.failures import FailureKind
 from my_claude_code.core.rate_limit import RateLimitCooldown
 from my_claude_code.websearch.adapters.http import map_status_error, request_json
 from my_claude_code.websearch.errors import (
+    WebSearchAuthError,
     WebSearchConfigError,
     WebSearchError,
+    WebSearchQuotaError,
     WebSearchRateLimitError,
     WebSearchUpstreamError,
 )
@@ -57,9 +59,40 @@ def _message(text: str) -> dict[str, object]:
             None,
         ),
         (_status(403, _message("forbidden")), FailureKind.PERMISSION, 403, False, None),
-        # A bare 402 rotates and charges nothing: no evidence of credits.
-        (_status(402, _message("plan limit")), FailureKind.QUOTA, 402, False, None),
-        # An exact credits phrase benches for RATE_LIMIT_COOLDOWN_SECONDS.
+        (
+            _status(403, _message("This service is not available in your country")),
+            FailureKind.PERMISSION,
+            403,
+            False,
+            None,
+        ),
+        # Search quota errors (402, Tavily 432/433, WebSearchQuotaError) ALWAYS
+        # bench for RATE_LIMIT_COOLDOWN_SECONDS (Track 5 T5-Q4).
+        (_status(402, _message("plan limit")), FailureKind.QUOTA, 402, False, 60.0),
+        (
+            _status(402, _message("You have exceeded your credits limit.")),
+            FailureKind.QUOTA,
+            402,
+            False,
+            60.0,
+        ),
+        (
+            WebSearchQuotaError("tavily", "plan usage limit exceeded", status_code=432),
+            FailureKind.QUOTA,
+            432,
+            False,
+            60.0,
+        ),
+        (
+            WebSearchQuotaError(
+                "tavily", "pay-as-you-go limit exceeded", status_code=433
+            ),
+            FailureKind.QUOTA,
+            433,
+            False,
+            60.0,
+        ),
+        (WebSearchQuotaError("exa", ""), FailureKind.QUOTA, 402, False, 60.0),
         (
             _status(402, _message("insufficient credits")),
             FailureKind.QUOTA,
@@ -76,6 +109,13 @@ def _message(text: str) -> dict[str, object]:
         ),
         (
             _status(403, _message("out of credits")),
+            FailureKind.QUOTA,
+            403,
+            False,
+            60.0,
+        ),
+        (
+            _status(403, _message("You have exceeded your credits limit.")),
             FailureKind.QUOTA,
             403,
             False,
@@ -121,6 +161,45 @@ def _message(text: str) -> dict[str, object]:
             FailureKind.UPSTREAM,
             502,
             False,
+            None,
+        ),
+        # HTTP-200 JSON error payloads classified by searchapi/serpapi (Track 5 T5-Q8).
+        (
+            WebSearchAuthError(
+                "searchapi", "search error: Invalid API key", status_code=200
+            ),
+            FailureKind.AUTHENTICATION,
+            200,
+            False,
+            None,
+        ),
+        (
+            WebSearchQuotaError(
+                "serpapi",
+                "search error: Your account has run out of searches",
+                status_code=200,
+            ),
+            FailureKind.QUOTA,
+            200,
+            False,
+            60.0,
+        ),
+        (
+            WebSearchRateLimitError(
+                "searchapi", "search error: Rate limit exceeded", status_code=200
+            ),
+            FailureKind.RATE_LIMIT,
+            429,
+            True,
+            None,
+        ),
+        (
+            WebSearchUpstreamError(
+                "serpapi", "search error: Temporary backend failure", status_code=200
+            ),
+            FailureKind.UPSTREAM,
+            200,
+            True,
             None,
         ),
     ],

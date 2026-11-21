@@ -51,15 +51,14 @@ NOT_KEY_SHAPED = frozenset(
         "connect",
         "bad_json",
         "raw_error",
-        # The model path's rules, read through the chain's translation: a 402
-        # naming no credits phrase is unsure, and unsure never benches; a 403
-        # whose words refuse the caller's country is about the address.
-        "s402_bare",
+        # A 403 whose words refuse the caller's country is about the address.
         "s403_region",
     }
 )
-#: Failures that charge the key, exactly as before.
-KEY_SHAPED = frozenset({"s401", "s403", "s402_credits", "s429", "s429_ra7"})
+#: Failures that charge the key, including authoritative 402 search quota (T5-Q4).
+KEY_SHAPED = frozenset(
+    {"s401", "s403", "s402_bare", "s402_credits", "s429", "s429_ra7"}
+)
 RATE_LIMITS = frozenset({"s429", "s429_ra7"})
 #: A rejected query: never charged, never rotated -- untouched by Q8.
 REQUEST_SHAPED = frozenset({"s400", "s400_credits"})

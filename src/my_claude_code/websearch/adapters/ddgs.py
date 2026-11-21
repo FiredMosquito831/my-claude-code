@@ -108,7 +108,15 @@ class DdgsWebSearchProvider(BaseWebSearchProvider):
             raise WebSearchUpstreamError(
                 self.provider_id, f"ddgs search failed: {exc}"
             ) from exc
-        items = tuple(item for row in rows if (item := _result_item(row)) is not None)
+        except Exception as exc:
+            raise WebSearchUpstreamError(
+                self.provider_id,
+                f"ddgs search failed ({type(exc).__name__}): {exc}",
+            ) from exc
+        safe_rows = rows if isinstance(rows, list) else []
+        items = tuple(
+            item for row in safe_rows if (item := _result_item(row)) is not None
+        )
         return WebSearchResponse(
             provider=self.provider_id,
             query=query,

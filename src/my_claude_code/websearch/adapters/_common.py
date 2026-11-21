@@ -1,10 +1,19 @@
 """Shared non-mutating option mapping and additive metadata helpers for adapters."""
 
 import math
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from my_claude_code.core.websearch.models import WebSearchRequestOptions
+
+from ..errors import (
+    WebSearchAuthError,
+    WebSearchError,
+    WebSearchQuotaError,
+    WebSearchRateLimitError,
+    WebSearchUpstreamError,
+)
 
 TIME_RANGE_TO_BRAVE: dict[str, str] = {
     "day": "pd",
@@ -173,3 +182,89 @@ def effective_option(
     if request_options is None:
         return None
     return getattr(request_options, attr, None)
+
+
+def dict_list(obj: Any, key: str) -> list[dict[str, Any]]:
+    """Return list of dict items from ``obj[key]``, or ``[]`` when null/non-list."""
+    if not isinstance(obj, Mapping):
+        return []
+    raw = obj.get(key)
+    if not isinstance(raw, list):
+        return []
+    return [row for row in raw if isinstance(row, dict)]
+
+
+def opt_nested_float(obj: Any, *keys: str) -> float | None:
+    """Safely traverse nested mappings and coerce the leaf to a finite float."""
+    current: Any = obj
+    for key in keys:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(key)
+    return opt_float(current)
+
+
+_JSON_AUTH_PHRASES: tuple[str, ...] = (
+    "invalid api key",
+    "api key",
+    "unauthorized",
+    "authentication",
+    "account is disabled",
+    "forbidden",
+)
+_JSON_QUOTA_PHRASES: tuple[str, ...] = (
+    "run out of searches",
+    "out of searches",
+    "insufficient credits",
+    "credit",
+    "quota",
+    "plan limit",
+    "usage limit",
+    "exceeded your credits",
+    "upgrade your plan",
+)
+_JSON_RATE_LIMIT_PHRASES: tuple[str, ...] = (
+    "rate limit",
+    "too many requests",
+    "throttl",
+)
+
+
+def _extract_error_text(error_value: Any) -> str:
+    if isinstance(error_value, str):
+        return error_value.strip()
+    if isinstance(error_value, Mapping):
+        for key in ("message", "error", "detail"):
+            nested = error_value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+    return str(error_value).strip()
+
+
+def classify_json_error(
+    provider_id: str,
+    error_value: Any,
+    *,
+    status_code: int = 200,
+    upstream_body: object = None,
+) -> WebSearchError:
+    """Classify an HTTP-200 JSON ``error`` payload into a typed WebSearchError."""
+    raw = _extract_error_text(error_value)
+    lower = raw.lower()
+    message = f"search error: {raw}" if raw else "search error"
+    body = upstream_body if upstream_body is not None else {"error": error_value}
+    if any(phrase in lower for phrase in _JSON_AUTH_PHRASES):
+        return WebSearchAuthError(
+            provider_id, message, status_code=status_code, upstream_body=body
+        )
+    if any(phrase in lower for phrase in _JSON_QUOTA_PHRASES):
+        return WebSearchQuotaError(
+            provider_id, message, status_code=status_code, upstream_body=body
+        )
+    if any(phrase in lower for phrase in _JSON_RATE_LIMIT_PHRASES):
+        return WebSearchRateLimitError(
+            provider_id, message, status_code=status_code, upstream_body=body
+        )
+    return WebSearchUpstreamError(
+        provider_id, message, status_code=status_code, upstream_body=body
+    )

@@ -1,6 +1,6 @@
 """Ollama hosted web search adapter (POST ollama.com/api/web_search)."""
 
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from my_claude_code.config.websearch_catalog import OLLAMA_SEARCH_DEFAULT_BASE
 from my_claude_code.core.websearch.models import (
@@ -10,6 +10,7 @@ from my_claude_code.core.websearch.models import (
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
+from ._common import dict_list, text_str
 from .http import build_async_client, request_json
 
 _SNIPPET_CHARS = 1000
@@ -71,18 +72,16 @@ class OllamaWebSearchProvider(BaseWebSearchProvider):
                 "max_results": min(max_results, _MAX_RESULTS_CAP),
             },
         )
-        rows = data.get("results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
-            url = _text(row.get("url"))
+            url = text_str(row.get("url"))
             if not url:
                 continue
-            content = _text(row.get("content"))
+            content = text_str(row.get("content"))
             items.append(
                 WebSearchResultItem(
-                    title=_text(row.get("title")),
+                    title=text_str(row.get("title")),
                     url=url,
                     snippet=content[:_SNIPPET_CHARS],
                     content=content or None,
@@ -96,7 +95,3 @@ class OllamaWebSearchProvider(BaseWebSearchProvider):
             key_index=key_index,
             cost_usd=None,
         )
-
-
-def _text(value: Any) -> str:
-    return value if isinstance(value, str) else ""

@@ -17,7 +17,7 @@ from my_claude_code.core.websearch.models import (
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..options import option_enabled, option_int
-from ._common import TIME_RANGE_TO_BRAVE, opt_str, opt_str_tuple, text_str
+from ._common import TIME_RANGE_TO_BRAVE, dict_list, opt_str, opt_str_tuple, text_str
 from .http import build_async_client, request_json
 
 _MAX_COUNT = 20
@@ -142,12 +142,10 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
             headers={"X-Subscription-Token": key},
             params=params,
         )
-        web = data.get("web", {}) if isinstance(data, dict) else {}
-        rows = web.get("results", []) if isinstance(web, dict) else []
+        web = data.get("web") if isinstance(data, dict) else None
+        rows = dict_list(web, "results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue
@@ -210,12 +208,10 @@ class BraveWebSearchProvider(BaseWebSearchProvider):
             headers={"X-Subscription-Token": key},
             json_body=payload,
         )
-        grounding = data.get("grounding", {}) if isinstance(data, dict) else {}
-        rows = grounding.get("generic", []) if isinstance(grounding, dict) else []
+        grounding = data.get("grounding") if isinstance(data, dict) else None
+        rows = dict_list(grounding, "generic")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue

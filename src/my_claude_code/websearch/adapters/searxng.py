@@ -10,7 +10,7 @@ from my_claude_code.core.websearch.models import (
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..errors import WebSearchAuthError, WebSearchConfigError
-from ._common import TIME_RANGE_TO_SEARXNG, opt_float, text_str
+from ._common import TIME_RANGE_TO_SEARXNG, dict_list, opt_float, text_str
 from .http import build_async_client, request_json
 
 
@@ -105,12 +105,11 @@ class SearxngWebSearchProvider(BaseWebSearchProvider):
                 "SearXNG instance rejected the request; enable format=json in "
                 f"its settings.yml ({error.message})",
                 status_code=error.status_code,
+                upstream_body=error.upstream_body,
             ) from error
-        rows = data.get("results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue

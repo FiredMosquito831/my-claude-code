@@ -21,8 +21,10 @@ from ..errors import WebSearchError, WebSearchQuotaError
 from ..options import option_int
 from ._common import (
     DEPTH_TO_TAVILY,
+    dict_list,
     opt_float,
     opt_images,
+    opt_nested_float,
     opt_seconds_to_ms,
     opt_str,
     text_str,
@@ -156,11 +158,9 @@ class TavilyWebSearchProvider(BaseWebSearchProvider):
             json_body=payload,
             extra_status_errors=_EXTRA_STATUS_ERRORS,
         )
-        rows = data.get("results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue
@@ -176,7 +176,6 @@ class TavilyWebSearchProvider(BaseWebSearchProvider):
                 )
             )
         answer = text_str(data.get("answer")) if isinstance(data, dict) else ""
-        usage = data.get("usage") if isinstance(data, dict) else None
         return WebSearchResponse(
             provider=self.provider_id,
             query=query,
@@ -190,8 +189,6 @@ class TavilyWebSearchProvider(BaseWebSearchProvider):
             provider_response_time_ms=opt_seconds_to_ms(data.get("response_time"))
             if isinstance(data, dict)
             else None,
-            usage_credits=opt_float(usage.get("credits"))
-            if isinstance(usage, dict)
-            else None,
+            usage_credits=opt_nested_float(data, "usage", "credits"),
             images=opt_images(data.get("images")) if isinstance(data, dict) else None,
         )

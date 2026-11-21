@@ -15,7 +15,7 @@ from my_claude_code.core.websearch.models import (
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
-from ._common import opt_str, text_str
+from ._common import dict_list, opt_str, text_str
 from .http import build_async_client, request_json
 
 _SNIPPET_CHARS = 1000
@@ -88,11 +88,9 @@ class JinaWebSearchProvider(BaseWebSearchProvider):
             headers=headers,
             params=params or None,
         )
-        rows = data.get("data", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "data")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue

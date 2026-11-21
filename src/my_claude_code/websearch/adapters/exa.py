@@ -20,8 +20,10 @@ from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..options import option_int
 from ._common import (
     DEPTH_TO_EXA,
+    dict_list,
     opt_float,
     opt_float_tuple,
+    opt_nested_float,
     opt_str,
     opt_str_tuple,
     text_str,
@@ -154,11 +156,9 @@ class ExaWebSearchProvider(BaseWebSearchProvider):
             headers={"x-api-key": key},
             json_body=payload,
         )
-        rows = data.get("results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue
@@ -184,15 +184,12 @@ class ExaWebSearchProvider(BaseWebSearchProvider):
                     highlight_scores=opt_float_tuple(row.get("highlightScores")),
                 )
             )
-        cost = (
-            data.get("costDollars", {}).get("total") if isinstance(data, dict) else None
-        )
         return WebSearchResponse(
             provider=self.provider_id,
             query=query,
             results=tuple(items[:max_results]),
             key_index=key_index,
-            cost_usd=float(cost) if isinstance(cost, int | float) else None,
+            cost_usd=opt_nested_float(data, "costDollars", "total"),
             request_id=opt_str(data.get("requestId"))
             if isinstance(data, dict)
             else None,

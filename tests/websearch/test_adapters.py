@@ -541,11 +541,49 @@ class TestProviderErrorQuirks:
     async def test_serp_200_with_error_body_raises_upstream(self, adapter_cls) -> None:
         provider = adapter_cls(build_config())
         attach_mock_client(
-            provider, lambda request: json_response({"error": "Invalid API key"})
+            provider,
+            lambda request: json_response({"error": "Temporary backend failure"}),
         )
         try:
-            with pytest.raises(WebSearchUpstreamError, match="Invalid API key"):
+            with pytest.raises(
+                WebSearchUpstreamError, match="Temporary backend failure"
+            ) as caught:
                 await provider.search("q")
+            assert caught.value.status_code == 200
+        finally:
+            await provider.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_cls", [SearchApiWebSearchProvider, SerpApiWebSearchProvider]
+    )
+    @pytest.mark.parametrize(
+        ("message", "expected_cls"),
+        [
+            ("Invalid API key", WebSearchAuthError),
+            ("Your account has run out of searches", WebSearchQuotaError),
+            ("Rate limit exceeded", WebSearchRateLimitError),
+        ],
+    )
+    async def test_serp_200_classified_json_errors(
+        self, adapter_cls, message: str, expected_cls: type[Exception]
+    ) -> None:
+        provider = adapter_cls(build_config())
+        attach_mock_client(
+            provider,
+            lambda request: json_response(
+                {
+                    "error": message,
+                    "search_parameters": {"api_key": TEST_KEY},
+                }
+            ),
+        )
+        try:
+            with pytest.raises(expected_cls) as caught:
+                await provider.search("q")
+            err = caught.value
+            assert getattr(err, "status_code", None) == 200
+            assert TEST_KEY not in repr(getattr(err, "upstream_body", None))
         finally:
             await provider.close()
 
@@ -562,8 +600,9 @@ class TestProviderErrorQuirks:
             provider, lambda request: json_response({"error": "forbidden"}, status=403)
         )
         try:
-            with pytest.raises(WebSearchAuthError, match="format=json"):
+            with pytest.raises(WebSearchAuthError, match="format=json") as caught:
                 await provider.search("q")
+            assert caught.value.upstream_body == {"error": "forbidden"}
         finally:
             await provider.close()
 
@@ -634,6 +673,36 @@ class TestDdgsAdapter:
         provider = DdgsWebSearchProvider(build_config(api_keys=(), rotation="single"))
         with pytest.raises(WebSearchUpstreamError, match="engine exploded"):
             await provider.search("q")
+
+    @pytest.mark.asyncio
+    async def test_ddgs_unexpected_exception_maps_to_upstream(
+        self, monkeypatch
+    ) -> None:
+        class FakeDDGS:
+            def __init__(self, proxy=None, timeout=None) -> None:
+                pass
+
+            def text(self, query, **kwargs):
+                raise RuntimeError("primp tls panic")
+
+        monkeypatch.setattr("my_claude_code.websearch.adapters.ddgs.DDGS", FakeDDGS)
+        provider = DdgsWebSearchProvider(build_config(api_keys=(), rotation="single"))
+        with pytest.raises(WebSearchUpstreamError, match="RuntimeError"):
+            await provider.search("q")
+
+    @pytest.mark.asyncio
+    async def test_ddgs_non_list_rows_returns_empty(self, monkeypatch) -> None:
+        class FakeDDGS:
+            def __init__(self, proxy=None, timeout=None) -> None:
+                pass
+
+            def text(self, query, **kwargs):
+                return None
+
+        monkeypatch.setattr("my_claude_code.websearch.adapters.ddgs.DDGS", FakeDDGS)
+        provider = DdgsWebSearchProvider(build_config(api_keys=(), rotation="single"))
+        response = await provider.search("q")
+        assert response.results == ()
 
 
 class TestDdgsAdapterHrefs:
