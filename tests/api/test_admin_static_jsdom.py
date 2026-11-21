@@ -2789,6 +2789,8 @@ def test_the_wire_api_field_carries_its_own_help_text(rendered) -> None:
 
     assert len(help_text) > 20
     assert "routes each model" in help_text
+    assert "Preferred" in help_text
+    assert "Models" in help_text
 
 
 def test_a_created_provider_declares_chat_completions_by_default(rendered) -> None:

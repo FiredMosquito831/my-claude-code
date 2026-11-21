@@ -809,3 +809,381 @@ async def test_a_host_that_has_refused_nothing_sends_what_it_always_sent() -> No
 
     body = json.loads(upstream.requests[0].content)
     assert body["tools"][0]["name"] == LONG_TOOL_NAME
+
+
+# --------------------------------------------------------------------------
+# Bug C1 fix & T3-Q2 floor preservation for custom providers
+# --------------------------------------------------------------------------
+
+RESPONSES_SSE = (
+    'event: response.created\ndata: {"type":"response.created","response":{"id":"r1","status":"in_progress"}}\n\n'
+    'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg1","type":"message","role":"assistant","content":[]}}\n\n'
+    'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","item_id":"msg1","output_index":0,"content_index":0,"delta":"ok"}\n\n'
+    'event: response.completed\ndata: {"type":"response.completed","response":{"id":"r1","status":"completed","usage":{"input_tokens":3,"output_tokens":1}}}\n\n'
+)
+
+
+def _wire_mock_provider(
+    provider_id: str,
+    surfaces: tuple[str, ...],
+    *,
+    responses_handler: Any = None,
+    messages_handler: Any = None,
+) -> tuple[Any, list[str]]:
+    """Build a custom provider whose Chat / Responses / Messages doors are wired to mocks."""
+
+    provider: Any = create_openai_chat_provider(
+        provider_id,
+        ProviderConfig(api_key="sk-house", base_url=BASE_URL),
+        passthrough_rate_limiter(),
+        profile=profile_with_declared_surfaces(GENERIC_OPENAI_PROFILE, surfaces),
+    )
+    hits: list[str] = []
+
+    async def _chat_create(*_: Any, **__: Any):
+        hits.append("chat_completions")
+        raise AssertionError("chat_completions must not be called when undeclared")
+
+    provider._client.chat.completions.create = _chat_create
+
+    if responses_handler is not None:
+
+        def _wrap_responses(request: httpx.Request) -> httpx.Response:
+            hits.append("responses")
+            return responses_handler(request)
+
+        provider._responses._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_wrap_responses)
+        )
+
+    if messages_handler is not None:
+
+        def _wrap_messages(request: httpx.Request) -> httpx.Response:
+            hits.append("messages")
+            return messages_handler(request)
+
+        provider._messages._provider._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_wrap_messages)
+        )
+
+    return provider, hits
+
+
+def _sse_response(payload: bytes) -> httpx.Response:
+    async def _body() -> Any:
+        yield payload
+
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_body(),
+    )
+
+
+def _responses_ok(request: httpx.Request) -> httpx.Response:
+    if (
+        request.url.path.endswith("/responses")
+        and json.loads(request.content).get("stream") is False
+    ):
+        return httpx.Response(200, json={"ok": True}, request=request)
+    return _sse_response(RESPONSES_SSE.encode())
+
+
+def _messages_ok(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=MESSAGES_SSE.encode(),
+        request=request,
+    )
+
+
+def test_default_surface_for_and_empty_or_chat_only_stay_byte_identical(
+    registry,
+) -> None:
+    """Empty and chat_completions-only custom hosts remain unchanged (IV.7)."""
+
+    from my_claude_code.providers.openai_chat import (
+        catalogue_discovered_surfaces,
+        default_surface_for,
+    )
+
+    assert default_surface_for(()) is None
+    assert default_surface_for((ResponseSurface.CHAT_COMPLETIONS,)) is None
+    assert (
+        default_surface_for((ResponseSurface.RESPONSES,)) is ResponseSurface.RESPONSES
+    )
+    assert default_surface_for((ResponseSurface.MESSAGES,)) is ResponseSurface.MESSAGES
+    assert (
+        default_surface_for((ResponseSurface.RESPONSES, ResponseSurface.MESSAGES))
+        is ResponseSurface.RESPONSES
+    )
+    assert (
+        default_surface_for(
+            (
+                ResponseSurface.CHAT_COMPLETIONS,
+                ResponseSurface.RESPONSES,
+                ResponseSurface.MESSAGES,
+            )
+        )
+        is ResponseSurface.CHAT_COMPLETIONS
+    )
+
+    registry.add("Plain", BASE_URL, ("sk-1",), surfaces=["chat_completions"])
+    same = profile_with_declared_surfaces(GENERIC_OPENAI_PROFILE, ())
+    assert same is GENERIC_OPENAI_PROFILE
+    assert same.no_information_surface is None
+    assert catalogue_surface("custom_plain", "m") is None
+    assert catalogue_discovered_surfaces("custom_plain", "m") == ()
+
+
+def test_direct_base_resolver_never_returns_undeclared_chat_completions() -> None:
+    """Even with no_information=None, _resolve_base_surface_ladder guards speakable."""
+
+    from my_claude_code.core.client_family import ClientFamily
+    from my_claude_code.providers.openai_chat import resolve_surface_ladder
+
+    for declared in (
+        (ResponseSurface.RESPONSES,),
+        (ResponseSurface.MESSAGES,),
+        (ResponseSurface.RESPONSES, ResponseSurface.MESSAGES),
+    ):
+        for family in (
+            ClientFamily.ANTHROPIC,
+            ClientFamily.OPENAI,
+            ClientFamily.UNKNOWN,
+        ):
+            ladder = resolve_surface_ladder(
+                "custom_direct",
+                "m",
+                client_family=family,
+                declared=declared,
+                no_information=None,
+            )
+            assert ladder.primary.surface is declared[0]
+            assert ladder.primary.surface is not ResponseSurface.CHAT_COMPLETIONS
+
+
+@pytest.mark.asyncio
+async def test_custom_responses_only_never_dials_chat_completions(registry) -> None:
+    """Bug C1: a custom host declaring ['responses'] only resolves & streams /responses."""
+
+    from my_claude_code.api.model_admin import (
+        response_surface_payload,
+        with_surface_preferences,
+    )
+    from my_claude_code.config.model_overrides import ModelParameterOverrides
+    from my_claude_code.core.client_family import client_family_scope
+    from my_claude_code.providers.openai_chat import (
+        catalogue_discovered_surfaces,
+        resolve_surface_ladder,
+    )
+
+    registry.add("RespOnly", BASE_URL, ("sk-house",), surfaces=["responses"])
+    profile = profile_with_declared_surfaces(GENERIC_OPENAI_PROFILE, ("responses",))
+    assert profile.no_information_surface is ResponseSurface.RESPONSES
+
+    cat = catalogue_surface("custom_responly", "m")
+    assert cat is not None
+    assert cat.surface is ResponseSurface.RESPONSES
+    assert cat.source is ResponseSurfaceSource.PROFILE
+
+    discovered = catalogue_discovered_surfaces("custom_responly", "m")
+    assert [d.surface for d in discovered] == [ResponseSurface.RESPONSES]
+    assert discovered[0].source is ResponseSurfaceSource.PROFILE
+
+    payload = response_surface_payload("custom_responly", "m")
+    assert payload is not None
+    assert payload["value"] == "responses"
+    assert [row["value"] for row in payload["offered"]] == ["responses"]
+
+    # Single-door host gets no switcher on the Models page (Q11).
+    page = with_surface_preferences(
+        {
+            "providers": [
+                {"provider_id": "custom_responly", "models": [{"model_id": "m"}]}
+            ]
+        },
+        ModelParameterOverrides(),
+    )
+    assert "surface_preference" not in page["providers"][0]
+    assert "surface_preference" not in page["providers"][0]["models"][0]
+
+    for wire_api in ("messages", "responses", "gemini"):
+        with client_family_scope(wire_api):
+            ladder = resolve_surface_ladder(
+                "custom_responly",
+                "m",
+                declared=profile.response_surfaces,
+                no_information=profile.no_information_surface,
+                optimistic=profile.optimistic_first_try,
+            )
+            assert [c.surface for c in ladder.candidates] == [ResponseSurface.RESPONSES]
+
+            provider, hits = _wire_mock_provider(
+                "custom_responly",
+                ("responses",),
+                responses_handler=_responses_ok,
+            )
+            events = [event async for event in provider.stream_response(_request("m"))]
+            assert events
+            assert hits == ["responses"]
+
+
+@pytest.mark.asyncio
+async def test_custom_messages_only_never_dials_chat_completions(registry) -> None:
+    """Bug C1: a custom host declaring ['messages'] only resolves & streams /messages."""
+
+    from my_claude_code.api.model_admin import (
+        response_surface_payload,
+        with_surface_preferences,
+    )
+    from my_claude_code.config.model_overrides import ModelParameterOverrides
+    from my_claude_code.core.client_family import client_family_scope
+    from my_claude_code.providers.openai_chat import catalogue_discovered_surfaces
+
+    registry.add("MsgOnly", BASE_URL, ("sk-house",), surfaces=["messages"])
+    profile = profile_with_declared_surfaces(GENERIC_OPENAI_PROFILE, ("messages",))
+    assert profile.no_information_surface is ResponseSurface.MESSAGES
+
+    cat = catalogue_surface("custom_msgonly", "m")
+    assert cat is not None
+    assert cat.surface is ResponseSurface.MESSAGES
+    assert [
+        d.surface for d in catalogue_discovered_surfaces("custom_msgonly", "m")
+    ] == [ResponseSurface.MESSAGES]
+
+    payload = response_surface_payload("custom_msgonly", "m")
+    assert payload is not None
+    assert payload["value"] == "messages"
+    assert [row["value"] for row in payload["offered"]] == ["messages"]
+
+    page = with_surface_preferences(
+        {
+            "providers": [
+                {"provider_id": "custom_msgonly", "models": [{"model_id": "m"}]}
+            ]
+        },
+        ModelParameterOverrides(),
+    )
+    assert "surface_preference" not in page["providers"][0]
+
+    for wire_api in ("messages", "responses", "gemini"):
+        with client_family_scope(wire_api):
+            provider, hits = _wire_mock_provider(
+                "custom_msgonly",
+                ("messages",),
+                messages_handler=_messages_ok,
+            )
+            events = [event async for event in provider.stream_response(_request("m"))]
+            assert events
+            assert hits == ["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 404, 405, 500])
+@pytest.mark.parametrize("wire_api", ["messages", "responses", "gemini"])
+async def test_custom_responses_and_messages_falls_back_without_chat_completions(
+    registry, status_code: int, wire_api: str
+) -> None:
+    """['responses', 'messages'] starts on /responses and falls back to /messages only."""
+
+    from my_claude_code.core.client_family import client_family_scope
+
+    registry.add(
+        "DualNoChat", BASE_URL, ("sk-house",), surfaces=["responses", "messages"]
+    )
+    profile = profile_with_declared_surfaces(
+        GENERIC_OPENAI_PROFILE, ("responses", "messages")
+    )
+    assert profile.no_information_surface is ResponseSurface.RESPONSES
+
+    def _refuse_responses(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            json={
+                "error": {"message": "unsupported endpoint /responses; use /messages"}
+            },
+            request=request,
+        )
+
+    provider, hits = _wire_mock_provider(
+        "custom_dualnochat",
+        ("responses", "messages"),
+        responses_handler=_refuse_responses,
+        messages_handler=_messages_ok,
+    )
+    with client_family_scope(wire_api):
+        events = [event async for event in provider.stream_response(_request("m"))]
+
+    assert events
+    assert hits == ["responses", "messages", "messages"]
+    assert "chat_completions" not in hits
+    facts = learned_fact_store().facts_for_model("custom_dualnochat", "m")
+    surface_facts = [f for f in facts if f.fact_kind == "response_surface"]
+    assert len(surface_facts) == 1
+    assert surface_facts[0].value == ["messages"]
+
+
+@pytest.mark.asyncio
+async def test_multi_door_custom_with_chat_keeps_floor_and_honors_preferred_surface(
+    registry, monkeypatch
+) -> None:
+    """T3-Q2: ['chat_completions', 'responses', 'messages'] keeps Chat floor + switches on preferred_surface."""
+
+    from my_claude_code.config.model_overrides import ModelParameterOverrides
+    from my_claude_code.core.client_family import client_family_scope
+
+    registry.add(
+        "Tri",
+        BASE_URL,
+        ("sk-house",),
+        surfaces=["chat_completions", "responses", "messages"],
+    )
+    profile = profile_with_declared_surfaces(
+        GENERIC_OPENAI_PROFILE, ("chat_completions", "responses", "messages")
+    )
+    assert profile.no_information_surface is ResponseSurface.CHAT_COMPLETIONS
+    assert profile.optimistic_first_try is False
+
+    cat = catalogue_surface("custom_tri", "m")
+    assert cat is not None
+    assert cat.surface is ResponseSurface.CHAT_COMPLETIONS
+    assert cat.source is ResponseSurfaceSource.PROFILE
+
+    for wire_api in ("messages", "responses", "gemini"):
+        with client_family_scope(wire_api):
+            provider: Any = create_openai_chat_provider(
+                "custom_tri",
+                ProviderConfig(api_key="sk-house", base_url=BASE_URL),
+                passthrough_rate_limiter(),
+                profile=profile,
+            )
+            ladder = provider.resolved_surface_ladder("m")
+            assert ladder.primary.surface is ResponseSurface.CHAT_COMPLETIONS
+            assert ladder.primary.source is ResponseSurfaceSource.PROFILE
+
+    for target_surface, expected_hit in (
+        ("responses", "responses"),
+        ("messages", "messages"),
+    ):
+        table = ModelParameterOverrides.from_document(
+            {"providers": {"custom_tri": {"preferred_surface": target_surface}}}
+        )
+        monkeypatch.setattr(
+            "my_claude_code.providers.openai_chat.response_surface.current_model_overrides",
+            lambda t=table: t,
+        )
+        provider, hits = _wire_mock_provider(
+            "custom_tri",
+            ("chat_completions", "responses", "messages"),
+            responses_handler=_responses_ok,
+            messages_handler=_messages_ok,
+        )
+        events = [
+            event
+            async for event in provider.stream_response(_request(f"m-{target_surface}"))
+        ]
+        assert events
+        assert hits == [expected_hit, expected_hit]
+        assert "chat_completions" not in hits
