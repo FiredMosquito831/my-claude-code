@@ -40,6 +40,7 @@ class WebSearchResponse:
     provider_response_time_ms: float | None = None
     usage_credits: float | None = None
     images: tuple[str | dict[str, Any], ...] | None = None
+    http_status: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

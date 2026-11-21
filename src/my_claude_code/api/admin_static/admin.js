@@ -103,6 +103,9 @@ const state = {
   webSearchAnalyticsStatsKey: "",
   webSearchAnalyticsPage: null,
   webSearchAnalyticsPageKey: "",
+  webSearchAnalyticsRoutes: null,
+  webSearchAnalyticsRoutesKey: "",
+  webSearchFilterRouteId: "",
   webSearchAnalyticsLoadId: 0,
   webSearchLastRoute: null,
   webSearchDetailReturnFocus: null,
@@ -25985,6 +25988,67 @@ function webSearchSeriesChart(series) {
   return wrapper;
 }
 
+function openWebSearchProviderPool(providerId) {
+  if (!providerId) return;
+  const cards = Array.from(
+    document.querySelectorAll("#webSearchGrid [data-websearch-provider]"),
+  );
+  const card = cards.find((el) => el.dataset.websearchProvider === providerId);
+  if (card instanceof HTMLElement) {
+    if (typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    card.click();
+  }
+}
+
+function webSearchKeyPoolButton(row) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary-button ws-key-pool-link";
+  button.textContent =
+    row.key_index != null ? `Key ${row.key_index} pool` : "Key pool";
+  button.setAttribute(
+    "aria-label",
+    `Open key pool for ${row.provider || "provider"}`.trim(),
+  );
+  button.addEventListener("click", () => openWebSearchProviderPool(row.provider));
+  return button;
+}
+
+function webSearchRouteActionsCell(entry) {
+  const wrap = document.createElement("div");
+  wrap.className = "ws-route-actions";
+  const filterBtn = document.createElement("button");
+  filterBtn.type = "button";
+  filterBtn.className = "secondary-button ws-route-filter-btn";
+  filterBtn.textContent = "Filter";
+  filterBtn.addEventListener("click", () => {
+    state.webSearchFilterRouteId = entry.route_id || "";
+    loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error"));
+  });
+  const inspectBtn = document.createElement("button");
+  inspectBtn.type = "button";
+  inspectBtn.className = "secondary-button ws-route-inspect-btn";
+  inspectBtn.textContent = "Inspect";
+  inspectBtn.addEventListener("click", async () => {
+    if (!entry.route_id) return;
+    const params = new URLSearchParams({ route_id: entry.route_id, limit: "50" });
+    const data = await api(`/admin/api/websearch/requests?${params}`);
+    const items = Array.isArray(data?.items) ? data.items : [];
+    if (!items.length) {
+      showMessage("No attempt rows found for this route.", "info");
+      return;
+    }
+    const sorted = [...items].sort(
+      (a, b) => Number(a.attempt_number || 0) - Number(b.attempt_number || 0),
+    );
+    await openWebSearchDetail(sorted[0].id);
+  });
+  wrap.append(filterBtn, inspectBtn);
+  return wrap;
+}
+
 function renderWebSearchAnalytics(
   container,
   stats,
@@ -25992,6 +26056,7 @@ function renderWebSearchAnalytics(
   period,
   partialErrors = [],
   stale = {},
+  routes = null,
 ) {
   container.innerHTML = "";
   const routeTotals = stats?.routes?.totals || stats?.route_totals || null;
@@ -26155,16 +26220,29 @@ function renderWebSearchAnalytics(
     // whose counters were never recorded cannot read as one that did nothing.
     formatOptionalNumber(row.requests),
     formatOptionalNumber(row.errors),
+    row.tries_failed != null ? formatAnalyticsNumber(row.tries_failed) : NOT_MEASURED,
+    row.key_rotations != null ? formatAnalyticsNumber(row.key_rotations) : NOT_MEASURED,
     row.avg_duration_ms != null
       ? `${formatAnalyticsNumber(row.avg_duration_ms)} ms`
       : NOT_MEASURED,
     formatOptionalNumber(row.results),
+    row.provider ? webSearchKeyPoolButton(row) : "—",
   ]);
   container.appendChild(
     analyticsBlock(
       "Credential health",
       analyticsTable(
-        ["Provider", "Key", "Requests", "Errors", "Avg latency", "Results"],
+        [
+          "Provider",
+          "Key",
+          "Requests",
+          "Errors",
+          "Failed tries",
+          "Rotations",
+          "Avg latency",
+          "Results",
+          "Pool",
+        ],
         keyRows,
         stats ? "No key usage recorded yet." : "Credential metrics unavailable.",
       ),
@@ -26209,6 +26287,68 @@ function renderWebSearchAnalytics(
       ),
     ),
   );
+
+  const routeItems = routes && Array.isArray(routes.items) ? routes.items : [];
+  const routeRows = routeItems.map((entry) => {
+    const pathText =
+      Array.isArray(entry.providers) && entry.providers.length
+        ? entry.providers.join(" \u2192 ")
+        : `${entry.primary_provider || "—"} \u2192 ${entry.terminal_provider || "—"}`;
+    return [
+      formatRequestTime(entry),
+      entry.route_id ? String(entry.route_id).slice(0, 8) : "—",
+      entry.query || "—",
+      pathText,
+      entry.attempt_count ?? 0,
+      entry.skipped_count ?? 0,
+      entry.key_rotations ?? 0,
+      entry.empty_fallback_count ?? 0,
+      entry.door || NOT_MEASURED,
+      entry.status || "—",
+      entry.duration_ms != null ? `${Math.round(entry.duration_ms)} ms` : "—",
+      webSearchRouteActionsCell(entry),
+    ];
+  });
+  container.appendChild(
+    analyticsBlock(
+      "Logical Searches (Routes)",
+      analyticsTable(
+        [
+          "Time",
+          "Route",
+          "Query",
+          "Path",
+          "Attempts",
+          "Skipped",
+          "Rotations",
+          "Empty fallbacks",
+          "Door",
+          "Status",
+          "Latency",
+          "Actions",
+        ],
+        routeRows,
+        routes ? "No logical search routes recorded." : "Logical routes unavailable.",
+      ),
+    ),
+  );
+
+  if (state.webSearchFilterRouteId) {
+    const filterBar = document.createElement("div");
+    filterBar.className = "ws-route-filter-bar";
+    const label = document.createElement("span");
+    label.textContent = `Filtering attempts by route: ${state.webSearchFilterRouteId}`;
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "secondary-button ws-route-filter-clear";
+    clearBtn.textContent = "Clear route filter";
+    clearBtn.addEventListener("click", () => {
+      state.webSearchFilterRouteId = "";
+      loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error"));
+    });
+    filterBar.append(label, clearBtn);
+    container.appendChild(filterBar);
+  }
 
   const requestItems = requests
     ? requests.requests || requests.items || (Array.isArray(requests) ? requests : [])
@@ -26784,6 +26924,57 @@ function previewResultsFromJson(preview) {
   }
 }
 
+async function renderWebSearchDetailSiblings(row) {
+  const pane = byId("webSearchDetailSiblingsPane");
+  const body = byId("webSearchDetailSiblings");
+  if (!pane || !body) return;
+  body.textContent = "";
+  pane.hidden = true;
+  if (!row?.route_id) return;
+  let data;
+  try {
+    const params = new URLSearchParams({ route_id: row.route_id, limit: "50" });
+    data = await api(`/admin/api/websearch/requests?${params}`);
+  } catch {
+    return;
+  }
+  const items = Array.isArray(data?.items) ? data.items : [];
+  if (items.length <= 1) return;
+  const sorted = [...items].sort(
+    (left, right) =>
+      Number(left.attempt_number || 0) - Number(right.attempt_number || 0) ||
+      Number(left.id || 0) - Number(right.id || 0),
+  );
+  const list = document.createElement("ol");
+  list.className = "ws-siblings-list";
+  sorted.forEach((entry) => {
+    const li = document.createElement("li");
+    const statusText =
+      entry.http_status != null ? `${entry.status} (HTTP ${entry.http_status})` : entry.status;
+    const summary = `#${entry.attempt_number ?? "?"} · ${entry.provider || "—"} · ${statusText} · ${entry.results_count ?? 0} results`;
+    if (entry.id === row.id) {
+      const current = document.createElement("span");
+      current.className = "ws-sibling-current";
+      current.textContent = `${summary} (current)`;
+      li.appendChild(current);
+    } else {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "secondary-button ws-sibling-link";
+      btn.textContent = summary;
+      btn.addEventListener("click", () => {
+        openWebSearchDetail(entry.id).catch((error) =>
+          showMessage(`Could not load web search detail: ${error.message}`, "error"),
+        );
+      });
+      li.appendChild(btn);
+    }
+    list.appendChild(li);
+  });
+  body.appendChild(list);
+  pane.hidden = false;
+}
+
 async function openWebSearchDetail(requestId) {
   state.webSearchDetailReturnFocus = document.activeElement;
   const row = await api(`/admin/api/websearch/requests/${requestId}`);
@@ -26806,6 +26997,15 @@ async function openWebSearchDetail(requestId) {
     ["Attempt", row.attempt_number],
     ...chainMeta,
     ["Provider", row.provider],
+    ["Tool kind", row.tool_kind],
+    ["Door", row.door],
+    ["HTTP status", row.http_status != null ? String(row.http_status) : null],
+    [
+      "Empty results",
+      row.empty_results || (row.status === "success" && Number(row.results_count) === 0)
+        ? "Yes (0 results)"
+        : null,
+    ],
     // A dash, not "keyless": the field was not recorded, which is not the
     // same claim as the provider having needed no key.
     ["Credential", row.key_label || NOT_MEASURED],
@@ -26832,6 +27032,7 @@ async function openWebSearchDetail(requestId) {
   renderWebSearchResponseSummary(row.output);
   byId("webSearchDetailModal").hidden = false;
   byId("webSearchDetailClose").focus();
+  await renderWebSearchDetailSiblings(row);
 }
 
 function closeWebSearchDetail() {
@@ -26842,17 +27043,34 @@ function closeWebSearchDetail() {
   state.webSearchDetailReturnFocus = null;
 }
 
-function webSearchAnalyticsParams({ includePeriod = false, limit = null } = {}) {
+function webSearchAnalyticsParams({
+  includePeriod = false,
+  limit = null,
+  forRoutes = false,
+} = {}) {
   const params = new URLSearchParams();
   const provider = byId("webSearchFilterProvider")?.value || "";
   const status = byId("webSearchFilterStatus")?.value || "";
+  const toolKind = byId("webSearchFilterToolKind")?.value || "";
+  const door = byId("webSearchFilterDoor")?.value || "";
+  const emptyOnly = Boolean(byId("webSearchFilterEmptyOnly")?.checked);
   const query = byId("webSearchFilterQuery")?.value.trim() || "";
   const windowSeconds = byId("webSearchFilterWindow")?.value || "";
   if (includePeriod) {
     params.set("period", state.webSearchStatsPeriod);
   }
   if (provider) params.set("provider", provider);
-  if (status) params.set("status", status);
+  if (forRoutes) {
+    if (status === "success" || status === "error") params.set("status", status);
+  } else {
+    if (status) params.set("status", status);
+    if (toolKind) params.set("tool_kind", toolKind);
+    if (state.webSearchFilterRouteId) {
+      params.set("route_id", state.webSearchFilterRouteId);
+    }
+  }
+  if (door) params.set("door", door);
+  if (emptyOnly) params.set("empty_only", "true");
   if (query) params.set("q", query);
   if (windowSeconds) {
     params.set(
@@ -26874,14 +27092,18 @@ async function loadWebSearchAnalytics() {
   const statsKey = statsParams.toString();
   const requestParams = webSearchAnalyticsParams({ limit: 50 });
   const requestKey = requestParams.toString();
-  const [statsResult, requestsResult] = await Promise.allSettled([
+  const routeParams = webSearchAnalyticsParams({ limit: 50, forRoutes: true });
+  const routeKey = routeParams.toString();
+  const [statsResult, requestsResult, routesResult] = await Promise.allSettled([
     api(`/admin/api/websearch/stats?${statsParams}`),
     api(`/admin/api/websearch/requests?${requestParams}`),
+    api(`/admin/api/websearch/routes?${routeParams}`),
   ]);
   if (loadId !== state.webSearchAnalyticsLoadId) return;
 
   let stats = null;
   let requests = null;
+  let routes = null;
   const partialErrors = [];
   const stale = { stats: false, requests: false };
   if (statsResult.status === "fulfilled") {
@@ -26919,7 +27141,25 @@ async function loadWebSearchAnalytics() {
         : null;
     stale.requests = Boolean(requests);
   }
-  renderWebSearchAnalytics(container, stats, requests, period, partialErrors, stale);
+  if (routesResult.status === "fulfilled") {
+    routes = routesResult.value;
+    state.webSearchAnalyticsRoutes = routes;
+    state.webSearchAnalyticsRoutesKey = routeKey;
+  } else {
+    routes =
+      state.webSearchAnalyticsRoutesKey === routeKey
+        ? state.webSearchAnalyticsRoutes
+        : null;
+  }
+  renderWebSearchAnalytics(
+    container,
+    stats,
+    requests,
+    period,
+    partialErrors,
+    stale,
+    routes,
+  );
   byId("webSearchLastUpdated").textContent =
     `${partialErrors.length ? "Refresh incomplete" : "Updated"} ${new Date().toLocaleTimeString()}`;
 }
@@ -32661,6 +32901,15 @@ byId("applyButton").addEventListener("click", () =>
   apply().catch((error) => showMessage(error.message, "error")),
 );
 byId("webSearchStatsApply").addEventListener("click", () =>
+  loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error")),
+);
+byId("webSearchFilterToolKind").addEventListener("change", () =>
+  loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error")),
+);
+byId("webSearchFilterDoor").addEventListener("change", () =>
+  loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error")),
+);
+byId("webSearchFilterEmptyOnly").addEventListener("change", () =>
   loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error")),
 );
 byId("webSearchStatsRefresh").addEventListener("click", () =>
@@ -42295,6 +42544,14 @@ const EXPORT_FIELDS = {
     { id: "error_message", label: "Error message" },
     { id: "attempt_number", label: "Attempt #" },
     { id: "route_id", label: "Route" },
+    { id: "tool_kind", label: "Tool kind" },
+    { id: "door", label: "Door" },
+    { id: "http_status", label: "HTTP status" },
+    { id: "empty_results", label: "Empty results" },
+    { id: "chain_position", label: "Chain position" },
+    { id: "outcome", label: "Outcome" },
+    { id: "failure_kind", label: "Failure kind" },
+    { id: "tries_json", label: "Key tries" },
     { id: "input", label: "Input" },
     { id: "output", label: "Output" },
     { id: "provider_config", label: "Provider config" },

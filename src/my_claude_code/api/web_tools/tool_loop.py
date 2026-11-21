@@ -33,6 +33,7 @@ from my_claude_code.core.anthropic.server_tool_sse import (
 )
 from my_claude_code.core.anthropic.streaming import format_sse_event
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.websearch.registry import websearch_telemetry_context
 
 from ..request_capture import RequestCapture
 from . import outbound, streaming
@@ -618,13 +619,20 @@ async def _execute_synthetic_call(
             response = None
         else:
             try:
-                response, raw_items, _meta = await outbound._run_web_search_response(
-                    query,
-                    settings,
-                    max_results=config.search_max_results,
-                    allowed_domains=config.search_options.allowed_domains,
-                    blocked_domains=config.search_options.blocked_domains,
-                )
+                with websearch_telemetry_context(
+                    door="tool_loop", tool_kind="web_search"
+                ):
+                    (
+                        response,
+                        raw_items,
+                        _meta,
+                    ) = await outbound._run_web_search_response(
+                        query,
+                        settings,
+                        max_results=config.search_max_results,
+                        allowed_domains=config.search_options.allowed_domains,
+                        blocked_domains=config.search_options.blocked_domains,
+                    )
                 items = _filter_search_items(
                     raw_items,
                     allowed_domains=config.search_options.allowed_domains,

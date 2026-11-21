@@ -10,7 +10,9 @@ import importlib
 import json
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlsplit, urlunsplit
@@ -45,6 +47,64 @@ ON_ERROR_ROTATION_ALIAS = "on_error"
 WEBSEARCH_PROXY_ENV = "WEBSEARCH_PROXY"
 _QUERY_LOG_CHARS = 256
 _ERROR_MESSAGE_LOG_CHARS = 500
+
+_TELEMETRY_DOOR: ContextVar[str | None] = ContextVar(
+    "websearch_telemetry_door", default=None
+)
+_TELEMETRY_TOOL_KIND: ContextVar[str | None] = ContextVar(
+    "websearch_telemetry_tool_kind", default=None
+)
+_TELEMETRY_ROTATION_SINK: ContextVar[Callable[[int], None] | None] = ContextVar(
+    "websearch_telemetry_rotation_sink", default=None
+)
+
+
+def current_telemetry_door() -> str | None:
+    """Return the active web-tool door tag for the current async task."""
+
+    return _TELEMETRY_DOOR.get()
+
+
+def current_telemetry_tool_kind() -> str | None:
+    """Return the active web-tool kind tag for the current async task."""
+
+    return _TELEMETRY_TOOL_KIND.get()
+
+
+def reset_telemetry_contextvars() -> None:
+    """Reset telemetry ContextVars to defaults (for test isolation)."""
+
+    _TELEMETRY_DOOR.set(None)
+    _TELEMETRY_TOOL_KIND.set(None)
+    _TELEMETRY_ROTATION_SINK.set(None)
+
+
+@contextmanager
+def websearch_telemetry_context(
+    *, door: str | None = None, tool_kind: str | None = None
+) -> Iterator[None]:
+    """Bind caller ``door`` and ``tool_kind`` for nested websearch telemetry."""
+
+    door_token = _TELEMETRY_DOOR.set(door) if door is not None else None
+    kind_token = _TELEMETRY_TOOL_KIND.set(tool_kind) if tool_kind is not None else None
+    try:
+        yield
+    finally:
+        if kind_token is not None:
+            _TELEMETRY_TOOL_KIND.reset(kind_token)
+        if door_token is not None:
+            _TELEMETRY_DOOR.reset(door_token)
+
+
+@contextmanager
+def websearch_rotation_sink(callback: Callable[[int], None]) -> Iterator[None]:
+    """Capture intra-provider key rotation counts for the active search route."""
+
+    token = _TELEMETRY_ROTATION_SINK.set(callback)
+    try:
+        yield
+    finally:
+        _TELEMETRY_ROTATION_SINK.reset(token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +290,14 @@ class SearchOutcome:
     failure_kind: str | None = None
     #: The per-key tries behind this attempt, as JSON text.
     tries_json: str | None = None
+    #: Logical tool kind (``web_search``, ``web_fetch``, ``search_docs``).
+    tool_kind: str = "web_search"
+    #: Caller door (``anthropic_stream``, ``tool_loop``, ``rest``, ``mcp``, ``admin_test``).
+    door: str | None = None
+    #: Upstream HTTP status code observed for this attempt (e.g. 200, 402, 429).
+    http_status: int | None = None
+    #: True when a successful search returned 0 results.
+    empty_results: bool = False
 
 
 SearchRecorder = Callable[[SearchOutcome], None]
@@ -254,6 +322,10 @@ class SearchRouteOutcome:
     cost_usd: float | None
     error_kind: str | None
     error_message: str | None
+    door: str | None = None
+    skipped_count: int = 0
+    key_rotations: int = 0
+    empty_fallback_count: int = 0
 
 
 SearchRouteRecorder = Callable[[SearchRouteOutcome], None]
@@ -273,6 +345,8 @@ async def search(
     key_charge: KeyChargeJudge | None = None,
     request_options: WebSearchRequestOptions | None = None,
     mark_empty_outcome: bool = False,
+    door: str | None = None,
+    tool_kind: str | None = None,
 ) -> WebSearchResponse:
     """Run ``provider.search`` and optionally record the outcome via ``recorder``.
 
@@ -281,6 +355,12 @@ async def search(
 
     ts_epoch = time.time()
     started = time.perf_counter()
+    resolved_door = door if door is not None else current_telemetry_door()
+    resolved_tool_kind = (
+        tool_kind
+        if tool_kind is not None
+        else (current_telemetry_tool_kind() or "web_search")
+    )
     input_payload = _search_input_payload(
         query,
         max_results=max_results,
@@ -339,6 +419,18 @@ async def search(
             if (len(tries) > 1 or any(not bool(row.get("ok")) for row in tries))
             else None
         )
+        rotations = sum(1 for row in tries if bool(row.get("rotated")))
+        if rotations:
+            sink = _TELEMETRY_ROTATION_SINK.get()
+            if sink is not None:
+                sink(rotations)
+        http_status: int | None = (
+            error.status_code if isinstance(error, WebSearchError) else None
+        )
+        if http_status is None and tries:
+            last_status = tries[-1].get("status")
+            if isinstance(last_status, int) and not isinstance(last_status, bool):
+                http_status = last_status
         _emit(
             recorder,
             SearchOutcome(
@@ -362,6 +454,10 @@ async def search(
                 output_payload=_error_output_payload(error),
                 provider_config=provider_config,
                 tries_json=tries_json,
+                tool_kind=resolved_tool_kind,
+                door=resolved_door,
+                http_status=http_status,
+                empty_results=False,
             ),
         )
         raise
@@ -370,6 +466,11 @@ async def search(
         if (len(tries) > 1 or any(not bool(row.get("ok")) for row in tries))
         else None
     )
+    rotations = sum(1 for row in tries if bool(row.get("rotated")))
+    if rotations:
+        sink = _TELEMETRY_ROTATION_SINK.get()
+        if sink is not None:
+            sink(rotations)
     empty_outcome = "empty" if (mark_empty_outcome and not response.results) else None
     _emit(
         recorder,
@@ -393,6 +494,10 @@ async def search(
             provider_config=provider_config,
             outcome=empty_outcome,
             tries_json=tries_json,
+            tool_kind=resolved_tool_kind,
+            door=resolved_door,
+            http_status=response.http_status,
+            empty_results=(len(response.results) == 0),
         ),
     )
     return response
@@ -412,11 +517,18 @@ async def search_with_logging(
     key_charge: KeyChargeJudge | None = None,
     request_options: WebSearchRequestOptions | None = None,
     mark_empty_outcome: bool = False,
+    door: str | None = None,
+    tool_kind: str | None = None,
 ) -> WebSearchResponse:
     """Search with analytics recording; defaults to the shared attempt recorder."""
 
     selected_recorder = recorder if recorder is not None else _default_recorder()
-    if request_options is None and not mark_empty_outcome:
+    if (
+        request_options is None
+        and not mark_empty_outcome
+        and door is None
+        and tool_kind is None
+    ):
         return await search(
             provider,
             query,
@@ -442,6 +554,8 @@ async def search_with_logging(
         key_charge=key_charge,
         request_options=request_options,
         mark_empty_outcome=mark_empty_outcome,
+        door=door,
+        tool_kind=tool_kind,
     )
 
 

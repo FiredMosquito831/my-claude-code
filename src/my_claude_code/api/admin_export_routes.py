@@ -167,6 +167,10 @@ async def export_analytics(
     session: str | None = Query(None, description="conversation id or its prefix"),
     folder: str | None = Query(None, description="a full folder path, or part of one"),
     exit: str | None = Query(None, description="part of an exit's label"),
+    door: str | None = Query(None, description="websearch door filter"),
+    tool_kind: str | None = Query(None, description="websearch tool_kind filter"),
+    route_id: str | None = Query(None, description="websearch route_id filter"),
+    empty_only: bool = Query(False, description="websearch empty-results filter"),
     settings: Settings = Depends(get_settings),
     websearch_store: WebSearchLogStore = Depends(get_websearch_log_store),
 ):
@@ -236,6 +240,10 @@ async def export_analytics(
         until_epoch=until_epoch,
         provider=provider,
         status=status,
+        door=door,
+        tool_kind=tool_kind,
+        route_id=route_id,
+        empty_only=empty_only,
         q=q,
         store=websearch_store,
     )
@@ -697,6 +705,10 @@ def _websearch_export(
     until_epoch: float | None,
     provider: str | None,
     status: str | None,
+    door: str | None = None,
+    tool_kind: str | None = None,
+    route_id: str | None = None,
+    empty_only: bool = False,
     q: str | None,
     store: WebSearchLogStore,
 ) -> StreamingResponse:
@@ -739,6 +751,10 @@ def _websearch_export(
             group_by=dims,
             provider=provider,
             status=status,
+            door=door,
+            tool_kind=tool_kind,
+            route_id=route_id,
+            empty_only=empty_only,
             q=q,
             since_epoch=since_epoch,
             until_epoch=until_epoch,
@@ -754,7 +770,7 @@ def _websearch_export(
         )
 
     columns = export_engine.websearch_detail_columns(selected)
-    derived_columns = export_engine.websearch_detail_derived_columns()
+    derived_columns = export_engine.websearch_detail_derived_columns(selected)
     output_columns = columns + derived_columns
     headers = export_engine.websearch_detail_headers(output_columns)
     include_content = bool(_WEBSEARCH_BODY_FIELDS.intersection(selected))
@@ -763,6 +779,10 @@ def _websearch_export(
         include_content=include_content,
         provider=provider,
         status=status,
+        door=door,
+        tool_kind=tool_kind,
+        route_id=route_id,
+        empty_only=empty_only,
         q=q,
         since_epoch=since_epoch,
         until_epoch=until_epoch,
@@ -772,7 +792,7 @@ def _websearch_export(
 
     def detail_rows() -> Iterator[dict[str, Any]]:
         for row in iterator:
-            export_engine.compute_websearch_detail_derived(row, key_names)
+            export_engine.compute_websearch_detail_derived(row, key_names, selected)
             yield {column: row.get(column) for column in output_columns}
 
     return _stream(fmt, detail_rows(), output_columns, headers, filename, exported_at)

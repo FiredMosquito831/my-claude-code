@@ -41,11 +41,14 @@ from my_claude_code.websearch.registry import (
     SearchOutcome,
     SearchRouteOutcome,
     WebSearchRoute,
+    current_telemetry_door,
+    current_telemetry_tool_kind,
     emit_route_outcome,
     emit_search_outcome,
     resolve_search_route,
     resolve_websearch_proxy,
     search_with_logging,
+    websearch_rotation_sink,
 )
 
 from . import constants, duckduckgo_lite, fetch_extract
@@ -89,6 +92,10 @@ class _SearchRouteTrace:
     cost_usd: float | None = None
     error_kind: str | None = "internal"
     error_message: str | None = "web search route did not complete"
+    door: str | None = None
+    skipped_count: int = 0
+    key_rotations: int = 0
+    empty_fallback_count: int = 0
 
     def begin_attempt(self, provider: str) -> int:
         if not self.providers:
@@ -97,6 +104,15 @@ class _SearchRouteTrace:
         self.terminal_provider = provider
         self.attempt_count += 1
         return self.attempt_count
+
+    def record_skip(self, count: int = 1) -> None:
+        self.skipped_count += max(0, count)
+
+    def record_key_rotations(self, count: int) -> None:
+        self.key_rotations += max(0, count)
+
+    def record_empty_fallback(self, count: int = 1) -> None:
+        self.empty_fallback_count += max(0, count)
 
     def succeed(
         self,
@@ -138,6 +154,10 @@ class _SearchRouteTrace:
             cost_usd=self.cost_usd,
             error_kind=self.error_kind,
             error_message=self.error_message,
+            door=self.door,
+            skipped_count=self.skipped_count,
+            key_rotations=self.key_rotations,
+            empty_fallback_count=self.empty_fallback_count,
         )
 
 
@@ -381,6 +401,7 @@ async def _run_web_search_response(
             ts_epoch=time.time(),
             query=query,
             started=time.perf_counter(),
+            door=current_telemetry_door(),
         )
         route = resolve_search_route(settings)
         if route.provider_ids:
@@ -424,6 +445,7 @@ async def _run_web_search_response(
         ts_epoch=time.time(),
         query=query,
         started=time.perf_counter(),
+        door=current_telemetry_door(),
     )
     captured_response: list[WebSearchResponse] = []
     try:
@@ -646,6 +668,7 @@ async def _chain_route_search_detail(
         ts_epoch=time.time(),
         query=query,
         started=time.perf_counter(),
+        door=current_telemetry_door(),
     )
     captured: list[WebSearchResponse | None] = []
     try:
@@ -750,33 +773,34 @@ async def _provider_web_search(
             )
             raise
         try:
-            if request_options is None:
-                response = await search_with_logging(
-                    provider,
-                    query,
-                    max_results=max_results,
-                    allowed_domains=allowed_domains,
-                    blocked_domains=blocked_domains,
-                    route_id=trace.route_id,
-                    attempt_number=attempt_number,
-                    route_context=route_context,
-                    key_charge=no_chain_key_charge,
-                    mark_empty_outcome=mark_empty,
-                )
-            else:
-                response = await search_with_logging(
-                    provider,
-                    query,
-                    max_results=max_results,
-                    allowed_domains=allowed_domains,
-                    blocked_domains=blocked_domains,
-                    route_id=trace.route_id,
-                    attempt_number=attempt_number,
-                    route_context=route_context,
-                    key_charge=no_chain_key_charge,
-                    request_options=request_options,
-                    mark_empty_outcome=mark_empty,
-                )
+            with websearch_rotation_sink(trace.record_key_rotations):
+                if request_options is None:
+                    response = await search_with_logging(
+                        provider,
+                        query,
+                        max_results=max_results,
+                        allowed_domains=allowed_domains,
+                        blocked_domains=blocked_domains,
+                        route_id=trace.route_id,
+                        attempt_number=attempt_number,
+                        route_context=route_context,
+                        key_charge=no_chain_key_charge,
+                        mark_empty_outcome=mark_empty,
+                    )
+                else:
+                    response = await search_with_logging(
+                        provider,
+                        query,
+                        max_results=max_results,
+                        allowed_domains=allowed_domains,
+                        blocked_domains=blocked_domains,
+                        route_id=trace.route_id,
+                        attempt_number=attempt_number,
+                        route_context=route_context,
+                        key_charge=no_chain_key_charge,
+                        request_options=request_options,
+                        mark_empty_outcome=mark_empty,
+                    )
         except asyncio.CancelledError as error:
             trace.fail(provider_id, error)
             raise
@@ -811,6 +835,7 @@ async def _provider_web_search(
             else:
                 results = _web_search_response_items(response, max_results=max_results)
             if not results and mark_empty:
+                trace.record_empty_fallback()
                 if first_empty is None:
                     first_empty = (results, response, provider_id)
                 continue
@@ -935,6 +960,11 @@ def _emit_manual_attempt(
                 "message": str(error)[:_ERROR_MESSAGE_LOG_CHARS],
             }
         }
+    http_status: int | None = None
+    if isinstance(error, WebSearchError):
+        http_status = error.status_code
+    elif isinstance(error, httpx.HTTPStatusError):
+        http_status = error.response.status_code
     emit_search_outcome(
         SearchOutcome(
             ts_epoch=ts_epoch,
@@ -966,6 +996,10 @@ def _emit_manual_attempt(
                 "options": {},
                 "route": route_context or {},
             },
+            tool_kind=current_telemetry_tool_kind() or "web_search",
+            door=trace.door or current_telemetry_door(),
+            http_status=http_status,
+            empty_results=(status == "success" and results_count == 0),
         )
     )
 

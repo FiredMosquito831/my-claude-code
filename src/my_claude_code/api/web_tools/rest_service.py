@@ -56,7 +56,11 @@ from my_claude_code.websearch.errors import (
     WebSearchQuotaError,
     WebSearchRateLimitError,
 )
-from my_claude_code.websearch.registry import SearchOutcome, emit_search_outcome
+from my_claude_code.websearch.registry import (
+    SearchOutcome,
+    emit_search_outcome,
+    websearch_telemetry_context,
+)
 
 from ..dependencies import resolve_provider
 from ..ports import ApiServices
@@ -589,16 +593,17 @@ async def execute_websearch(
             else _MAX_SEARCH_RESULTS
         )
         request_options = request_data.to_request_options()
-        response, items, meta = await outbound._run_web_search_response(
-            request_data.query,
-            settings,
-            max_results=effective_max_results,
-            allowed_domains=tuple(request_data.allowed_domains),
-            blocked_domains=tuple(request_data.blocked_domains),
-            provider_override=request_data.provider,
-            request_options=request_options,
-            capture_meta=True,
-        )
+        with websearch_telemetry_context(door="rest", tool_kind="web_search"):
+            response, items, meta = await outbound._run_web_search_response(
+                request_data.query,
+                settings,
+                max_results=effective_max_results,
+                allowed_domains=tuple(request_data.allowed_domains),
+                blocked_domains=tuple(request_data.blocked_domains),
+                provider_override=request_data.provider,
+                request_options=request_options,
+                capture_meta=True,
+            )
 
         if response is not None:
             result_models = [
@@ -912,8 +917,15 @@ def _emit_webfetch_outcome(
     egress: WebFetchEgressPolicy | None,
     settings: Settings,
     proxy_url: str | None,
+    door: str = "rest",
+    http_status: int | None = None,
 ) -> None:
     safe_input_url = _safe_url_for_log(input_url) or "[invalid-url]"
+    resolved_http_status = (
+        http_status
+        if http_status is not None
+        else (200 if status == "success" else None)
+    )
     emit_search_outcome(
         SearchOutcome(
             ts_epoch=ts_epoch,
@@ -961,6 +973,10 @@ def _emit_webfetch_outcome(
                 ),
                 "proxy": _safe_url_for_log(proxy_url) if proxy_url else None,
             },
+            tool_kind="web_fetch",
+            door=door,
+            http_status=resolved_http_status,
+            empty_results=False,
         )
     )
 

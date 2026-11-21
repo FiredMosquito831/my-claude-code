@@ -20,6 +20,7 @@ from my_claude_code.websearch.errors import (
     WebSearchQuotaError,
     WebSearchRateLimitError,
 )
+from my_claude_code.websearch.registry import websearch_telemetry_context
 
 from . import outbound
 from .constants import _MAX_FETCH_CHARS
@@ -217,12 +218,15 @@ async def stream_web_server_tool_response(
                 raise _MaxUsesExceeded(
                     f"web_search max_uses is {search_options.max_uses}"
                 )
-            results = await outbound._run_web_search(
-                query,
-                settings,
-                allowed_domains=search_options.allowed_domains,
-                blocked_domains=search_options.blocked_domains,
-            )
+            with websearch_telemetry_context(
+                door="anthropic_stream", tool_kind="web_search"
+            ):
+                results = await outbound._run_web_search(
+                    query,
+                    settings,
+                    allowed_domains=search_options.allowed_domains,
+                    blocked_domains=search_options.blocked_domains,
+                )
             result_content: Any = [
                 _web_search_result_block(result) for result in results
             ]

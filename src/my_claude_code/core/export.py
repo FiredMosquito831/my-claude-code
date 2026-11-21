@@ -16,6 +16,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, Literal, cast
 
 from my_claude_code.core.cancelled_reasons import CANCELLED_SUB_LABEL_TEXT
+from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.generation_rate import (
     measured_generation_rate,
     throughput_rate,
@@ -135,6 +136,14 @@ WEBSEARCH_FIELD_IDS: tuple[str, ...] = (
     "error_message",
     "attempt_number",
     "route_id",
+    "tool_kind",
+    "door",
+    "http_status",
+    "empty_results",
+    "chain_position",
+    "outcome",
+    "failure_kind",
+    "tries_json",
     "input",
     "output",
     "provider_config",
@@ -152,6 +161,14 @@ WEBSEARCH_FIELD_LABELS: dict[str, str] = {
     "error_message": "Error message",
     "attempt_number": "Attempt #",
     "route_id": "Route",
+    "tool_kind": "Tool kind",
+    "door": "Door",
+    "http_status": "HTTP status",
+    "empty_results": "Empty results",
+    "chain_position": "Chain position",
+    "outcome": "Outcome",
+    "failure_kind": "Failure kind",
+    "tries_json": "Key tries",
     "input": "Input",
     "output": "Output",
     "provider_config": "Provider config",
@@ -939,6 +956,14 @@ _WEBSEARCH_FIELD_COLUMNS: dict[str, tuple[str, ...]] = {
     "error_message": ("error_message",),
     "attempt_number": ("attempt_number",),
     "route_id": ("route_id",),
+    "tool_kind": ("tool_kind",),
+    "door": ("door",),
+    "http_status": ("http_status",),
+    "empty_results": ("empty_results",),
+    "chain_position": ("chain_position",),
+    "outcome": ("outcome",),
+    "failure_kind": ("failure_kind",),
+    "tries_json": ("tries_json",),
     "input": ("input",),
     "output": ("output",),
     "provider_config": ("provider_config",),
@@ -970,6 +995,15 @@ _WEBSEARCH_COLUMN_ORDER: tuple[str, ...] = (
     "error_message",
     "attempt_number",
     "route_id",
+    "tool_kind",
+    "door",
+    "http_status",
+    "empty_results",
+    "chain_position",
+    "outcome",
+    "failure_kind",
+    "tries_json",
+    "tries_summary",
     "content_captured",
     "input",
     "output",
@@ -991,6 +1025,15 @@ _WEBSEARCH_COLUMN_LABELS: dict[str, str] = {
     "error_message": "Error message",
     "attempt_number": "Attempt #",
     "route_id": "Route",
+    "tool_kind": "Tool kind",
+    "door": "Door",
+    "http_status": "HTTP status",
+    "empty_results": "Empty results",
+    "chain_position": "Chain position",
+    "outcome": "Outcome",
+    "failure_kind": "Failure kind",
+    "tries_json": "Key tries",
+    "tries_summary": "Key tries summary",
     "content_captured": "Content captured",
     "input": "Input",
     "output": "Output",
@@ -1005,6 +1048,14 @@ _WEBSEARCH_DETAIL_ONLY = frozenset(
         "error_message",
         "attempt_number",
         "route_id",
+        "tool_kind",
+        "door",
+        "http_status",
+        "empty_results",
+        "chain_position",
+        "outcome",
+        "failure_kind",
+        "tries_json",
         "input",
         "output",
         "provider_config",
@@ -1028,18 +1079,84 @@ _WEBSEARCH_DIMENSION_SQL: dict[str, str] = {
 }
 
 
-def websearch_detail_derived_columns() -> list[str]:
+def websearch_detail_derived_columns(
+    field_ids: Iterable[str] | None = None,
+) -> list[str]:
     """Return the web-search detail columns computed per row, not selected."""
 
-    return list(_WEBSEARCH_ALWAYS_DERIVED)
+    derived = list(_WEBSEARCH_ALWAYS_DERIVED)
+    if field_ids is not None and "tries_json" in set(field_ids):
+        derived.append("tries_summary")
+    return derived
 
 
 def compute_websearch_detail_derived(
-    row: dict[str, Any], key_names: Mapping[str, str] | None = None
+    row: dict[str, Any],
+    key_names: Mapping[str, str] | None = None,
+    field_ids: Iterable[str] | None = None,
 ) -> None:
     """Mutate ``row`` in place, filling the derived web-search columns."""
 
     row["key_name"] = resolve_key_name(row, key_names)
+    if "tries_json" in row and isinstance(row["tries_json"], str):
+        row["tries_json"] = _sanitize_websearch_tries_json(row["tries_json"])
+    if (
+        field_ids is not None and "tries_json" in set(field_ids)
+    ) or "tries_json" in row:
+        row["tries_summary"] = _format_websearch_tries_summary(row.get("tries_json"))
+
+
+def _sanitize_websearch_tries_json(raw: str) -> str:
+    if not raw:
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return redact_sensitive_error_text(raw)
+    if not isinstance(parsed, list):
+        return raw
+    cleaned: list[object] = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            cleaned.append(entry)
+            continue
+        item = dict(entry)
+        decision = item.get("decision")
+        if isinstance(decision, str):
+            item["decision"] = redact_sensitive_error_text(decision)
+        cleaned.append(item)
+    return json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
+
+
+def _format_websearch_tries_summary(raw: object) -> str | None:
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    parts: list[str] = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        key_index = entry.get("key_index")
+        prefix = (
+            f"k{key_index}" if isinstance(key_index, int) and key_index >= 0 else "pool"
+        )
+        if entry.get("ok"):
+            parts.append(f"{prefix}:200")
+            continue
+        status = entry.get("status")
+        kind = entry.get("kind")
+        if status is not None:
+            parts.append(f"{prefix}:{status}")
+        elif kind:
+            parts.append(f"{prefix}:{kind}")
+        else:
+            parts.append(f"{prefix}:err")
+    return " -> ".join(parts) if parts else None
 
 
 def websearch_detail_columns(field_ids: Iterable[str]) -> list[str]:
@@ -1472,11 +1589,26 @@ def render_csv(
         yield buffer.getvalue().encode("utf-8")
 
 
+def _neutralize_formula_str(text: str) -> str:
+    if not text:
+        return text
+    if text[0] in ("=", "+", "@", "\t", "\r"):
+        return "'" + text
+    if text[0] == "-":
+        try:
+            float(text)
+        except ValueError:
+            return "'" + text
+    return text
+
+
 def _csv_cell(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
+        return _neutralize_formula_str(json.dumps(value, ensure_ascii=False))
+    if isinstance(value, str):
+        return _neutralize_formula_str(value)
     return str(value)
 
 
@@ -1556,10 +1688,10 @@ def _xlsx_cell(value: Any) -> Any:
     if value is None:
         return ""
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
+        return _neutralize_formula_str(json.dumps(value, ensure_ascii=False))
     if isinstance(value, str):
         # Every other character, and every non-string value, is unchanged.
-        return value.translate(_XLSX_ILLEGAL)
+        return _neutralize_formula_str(value.translate(_XLSX_ILLEGAL))
     return value
 
 

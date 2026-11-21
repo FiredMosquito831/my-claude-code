@@ -277,6 +277,10 @@ def test_with_both_features_off_every_view_is_the_base_tree(
         # 8.20.3: the OpenClaw launcher paragraph on the Claude page names the
         # additive keys MCC writes beside its block. Prose only.
         "claude",
+        # 8.34.0: Web Search Analytics & UI (Track 5 PR3) adds Logical Searches
+        # (Routes) panel, skipped/tool_kind/door/empty_only filters, and
+        # failed-try key-pool telemetry on the web_search page.
+        "web_search",
     }
     base = baseline["views"]
     mine = design_system_off["views"]

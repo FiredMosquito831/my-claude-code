@@ -27,6 +27,7 @@ from my_claude_code.websearch.analytics import (
 from my_claude_code.websearch.registry import SearchOutcome
 
 CHAIN_COLUMNS = ("chain_position", "outcome", "failure_kind", "tries_json")
+TELEMETRY_COLUMNS = ("tool_kind", "door", "http_status", "empty_results")
 
 #: ``search_log`` exactly as 7.111.6 (and every version since 7.77.0) creates
 #: it -- the shape every existing websearch.db has.
@@ -149,7 +150,8 @@ def _old_database(path: Path, rows: int = 3) -> None:
 
 def test_the_insert_list_and_its_placeholders_come_from_one_tuple() -> None:
     assert _INSERT_SQL.count("?") == len(_INSERT_COLUMNS)
-    assert tuple(_INSERT_COLUMNS[-4:]) == CHAIN_COLUMNS
+    assert tuple(_INSERT_COLUMNS[-8:-4]) == CHAIN_COLUMNS
+    assert tuple(_INSERT_COLUMNS[-4:]) == TELEMETRY_COLUMNS
     assert tuple(name for name, _type in _CHAIN_ATTEMPT_COLUMNS) == CHAIN_COLUMNS
     row = _row_tuple(_outcome(), capture_content=True, max_content_chars=2048)
     assert len(row) == len(_INSERT_COLUMNS)
@@ -158,7 +160,9 @@ def test_the_insert_list_and_its_placeholders_come_from_one_tuple() -> None:
 def test_a_fresh_database_has_the_columns(tmp_path: Path) -> None:
     store = WebSearchLogStore(tmp_path / "websearch.db")
     store.close()
-    assert _columns(tmp_path / "websearch.db")[-4:] == list(CHAIN_COLUMNS)
+    cols = _columns(tmp_path / "websearch.db")
+    assert cols[-8:-4] == list(CHAIN_COLUMNS)
+    assert cols[-4:] == list(TELEMETRY_COLUMNS)
 
 
 def test_an_existing_database_gains_them_once_and_keeps_its_rows(
@@ -172,8 +176,10 @@ def test_an_existing_database_gains_them_once_and_keeps_its_rows(
             _initialize_schema(connection)
         finally:
             connection.close()
-        assert _columns(path)[-4:] == list(CHAIN_COLUMNS)
-        assert _columns(path).count("tries_json") == 1
+        cols = _columns(path)
+        assert cols[-8:-4] == list(CHAIN_COLUMNS)
+        assert cols[-4:] == list(TELEMETRY_COLUMNS)
+        assert cols.count("tries_json") == 1
     connection = sqlite3.connect(path)
     try:
         rows = connection.execute(
@@ -205,7 +211,9 @@ def test_a_kill_between_two_alters_is_completed_by_the_next_open(
     store.record(_outcome(chain_position=2, outcome="failed", failure_kind="upstream"))
     store.close()
 
-    assert _columns(path)[-4:] == list(CHAIN_COLUMNS)
+    cols = _columns(path)
+    assert cols[-8:-4] == list(CHAIN_COLUMNS)
+    assert cols[-4:] == list(TELEMETRY_COLUMNS)
 
 
 def test_an_old_version_still_writes_and_reads_the_migrated_file(

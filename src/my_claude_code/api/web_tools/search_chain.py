@@ -91,6 +91,8 @@ from my_claude_code.websearch.registry import (
     _provider_config_snapshot,
     _response_output_payload,
     _search_input_payload,
+    current_telemetry_door,
+    current_telemetry_tool_kind,
     emit_search_outcome,
 )
 
@@ -136,8 +138,15 @@ class RouteTrace(Protocol):
     primary_provider: str
     terminal_provider: str
     attempt_count: int
+    door: str | None
 
     def begin_attempt(self, provider: str) -> int: ...
+
+    def record_skip(self, count: int = 1) -> None: ...
+
+    def record_key_rotations(self, count: int) -> None: ...
+
+    def record_empty_fallback(self, count: int = 1) -> None: ...
 
     def succeed(
         self, provider: str, *, results_count: int, cost_usd: float | None
@@ -1036,6 +1045,7 @@ def _skip_row(
     context: Mapping[str, object],
 ) -> None:
     now = time.time()
+    trace.record_skip()
     emit_search_outcome(
         SearchOutcome(
             ts_epoch=now,
@@ -1060,6 +1070,10 @@ def _skip_row(
             outcome=OUTCOME_SKIPPED,
             failure_kind=None,
             tries_json=None,
+            tool_kind=current_telemetry_tool_kind() or "web_search",
+            door=trace.door or current_telemetry_door(),
+            http_status=None,
+            empty_results=False,
         )
     )
 
@@ -1115,7 +1129,14 @@ def _emit_row(
             "route": dict(context),
         }
     tries_json = json.dumps(result.tries, separators=(",", ":"), default=str)
+    rotations = sum(1 for row in result.tries if bool(row.get("rotated")))
+    if rotations:
+        trace.record_key_rotations(rotations)
+    if outcome_override == OUTCOME_EMPTY:
+        trace.record_empty_fallback()
+    http_status: int | None = None
     if result.skipped is not None:
+        trace.record_skip()
         status = SKIPPED_STATUS
         outcome = OUTCOME_SKIPPED
         error_message: str | None = f"skipped: {result.skipped}"
@@ -1132,6 +1153,7 @@ def _emit_row(
         kind_value = None
         cost = None
         if isinstance(result.value, WebSearchResponse):
+            http_status = result.value.http_status
             results_count = len(result.value.results)
             cost = result.value.cost_usd
             output_payload = _response_output_payload(result.value)
@@ -1158,6 +1180,14 @@ def _emit_row(
         results_count = 0
         cost = None
         output_payload = _error_output_payload(result.error)
+        if isinstance(result.error, WebSearchError):
+            http_status = result.error.status_code
+        elif isinstance(result.error, httpx.HTTPStatusError):
+            http_status = result.error.response.status_code
+        if http_status is None and result.tries:
+            last_status = result.tries[-1].get("status")
+            if isinstance(last_status, int) and not isinstance(last_status, bool):
+                http_status = last_status
     emit_search_outcome(
         SearchOutcome(
             ts_epoch=ts_epoch,
@@ -1183,6 +1213,10 @@ def _emit_row(
             outcome=outcome,
             failure_kind=kind_value,
             tries_json=tries_json,
+            tool_kind=current_telemetry_tool_kind() or "web_search",
+            door=trace.door or current_telemetry_door(),
+            http_status=http_status,
+            empty_results=(status == "success" and results_count == 0),
         )
     )
 

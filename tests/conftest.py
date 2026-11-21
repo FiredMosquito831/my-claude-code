@@ -119,6 +119,19 @@ def _reset_seen_settings_files():
 
 
 @pytest.fixture(autouse=True)
+def _reset_websearch_telemetry_context():
+    """Ensure websearch telemetry ContextVars never leak across tests."""
+    from my_claude_code.websearch.errors import reset_last_http_status
+    from my_claude_code.websearch.registry import reset_telemetry_contextvars
+
+    reset_telemetry_contextvars()
+    reset_last_http_status()
+    yield
+    reset_telemetry_contextvars()
+    reset_last_http_status()
+
+
+@pytest.fixture(autouse=True)
 def _reset_listener_state():
     """7.69.2: two process-wide facts about the listening socket.
 
