@@ -55,6 +55,25 @@ def declared_surfaces(names: Iterable[str]) -> tuple[ResponseSurface, ...]:
     )
 
 
+def default_surface_for(
+    surfaces: tuple[ResponseSurface, ...],
+) -> ResponseSurface | None:
+    """The no-information floor for a declared surface tuple, or ``None``.
+
+    Returns ``None`` for empty or Chat-Completions-only declarations so
+    single-door custom providers stay byte-identical to
+    :data:`GENERIC_OPENAI_PROFILE`. Multi-door hosts that include Chat
+    Completions keep it as their floor; hosts that omit Chat Completions
+    default to their first declared door instead of an undeclared endpoint.
+    """
+
+    if not surfaces or surfaces == (ResponseSurface.CHAT_COMPLETIONS,):
+        return None
+    if ResponseSurface.CHAT_COMPLETIONS in surfaces:
+        return ResponseSurface.CHAT_COMPLETIONS
+    return surfaces[0]
+
+
 def profile_with_declared_surfaces(
     profile: OpenAIChatProfile, names: Iterable[str]
 ) -> OpenAIChatProfile:
@@ -72,4 +91,10 @@ def profile_with_declared_surfaces(
     surfaces = declared_surfaces(names)
     if not surfaces or surfaces == (ResponseSurface.CHAT_COMPLETIONS,):
         return profile
-    return dataclasses.replace(profile, response_surfaces=surfaces)
+    return dataclasses.replace(
+        profile,
+        response_surfaces=surfaces,
+        no_information_surface=(
+            profile.no_information_surface or default_surface_for(surfaces)
+        ),
+    )

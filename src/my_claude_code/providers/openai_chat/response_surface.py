@@ -500,8 +500,11 @@ def _resolve_base_surface_ladder(
                 )
 
     if no_information is None:
+        floor_surface = (
+            DEFAULT_SURFACE if DEFAULT_SURFACE in speakable else speakable[0]
+        )
         return _one(
-            ResolvedResponseSurface(DEFAULT_SURFACE, ResponseSurfaceSource.DEFAULT)
+            ResolvedResponseSurface(floor_surface, ResponseSurfaceSource.DEFAULT)
         )
     detail = registry_silence(registry_provider)
     floor = _constrain(
@@ -871,7 +874,14 @@ def catalogue_surface(
         declared = declared_surfaces_for(provider_id)
         if not declared:
             return None
-        return resolve_response_surface(provider_id, model_id, declared=declared)
+        from .declared_surfaces import default_surface_for
+
+        return resolve_response_surface(
+            provider_id,
+            model_id,
+            declared=declared,
+            no_information=default_surface_for(declared),
+        )
     if not profile.response_surfaces:
         return None
     resolved = resolve_response_surface(
@@ -904,7 +914,14 @@ def catalogue_discovered_surfaces(
         declared = declared_surfaces_for(provider_id)
         if not declared:
             return ()
-        return discovered_surfaces(provider_id, model_id, declared=declared)
+        from .declared_surfaces import default_surface_for
+
+        return discovered_surfaces(
+            provider_id,
+            model_id,
+            declared=declared,
+            no_information=default_surface_for(declared),
+        )
     if not profile.response_surfaces:
         return ()
     return discovered_surfaces(

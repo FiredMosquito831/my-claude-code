@@ -20,7 +20,11 @@ from .complaint import (
     sampling_parameter_evidence,
     upstream_complaint,
 )
-from .declared_surfaces import declared_surfaces, profile_with_declared_surfaces
+from .declared_surfaces import (
+    declared_surfaces,
+    default_surface_for,
+    profile_with_declared_surfaces,
+)
 from .extra_body import (
     validate_extra_body_does_not_override_canonical_fields,
     validate_extra_body_does_not_override_reasoning_fields,
@@ -133,6 +137,7 @@ __all__ = [
     "create_openai_chat_provider",
     "declared_surfaces",
     "declared_surfaces_for",
+    "default_surface_for",
     "free_quota_reset",
     "identity_headers_for_body",
     "identity_wire_record",
