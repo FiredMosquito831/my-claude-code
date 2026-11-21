@@ -2860,6 +2860,7 @@
                 <a href="#guide-models">Map model tiers</a>
                 <a href="#guide-learned">What MCC knows and learned</a>
                 <a href="#guide-agent-tiers">Tiers for every agent</a>
+                <a href="#guide-agent-surfaces">Surfaces it uses</a>
                 <a href="#guide-reasoning">Reasoning</a>
                 <a href="#guide-prompt-cache-lifetime">Prompt cache lifetime</a>
                 <a href="#guide-responses-protocol">Responses protocol</a>
@@ -4047,6 +4048,29 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
                   does not exist &mdash; and neither failure is visible from the file that
                   caused it. Overrides live in <code>~/.mcc/harness_tiers.json</code>; the
                   card is the supported way to edit them.
+                </p>
+
+                <h3 id="guide-agent-surfaces">Surfaces it uses</h3>
+                <p>
+                  Each card on the <strong>Coding agents</strong> page also has a
+                  <em>Surfaces it uses</em> section for providers that declare two or more
+                  wire endpoints (such as <code>opencode</code>, <code>opencode_go</code>,
+                  <code>inferhub</code>, <code>mistral</code>, <code>mistral_vibe</code>,
+                  and multi-door custom providers). Pick a door to try first whenever that
+                  agent asks that host, or leave <em>Follow the client (auto)</em> to
+                  inherit the Models page preference and the client-family ladder.
+                </p>
+                <p class="guide-note">
+                  <strong>Attribution is a label, not a login.</strong> MCC identifies the
+                  agent from <code>x-mcc-harness</code> (or its <code>User-Agent</code>);
+                  Claude Desktop shares <code>claude</code>. Preferences apply per host and
+                  are stored under <code>harness_surfaces</code> in
+                  <code>~/.mcc/model_overrides.json</code> (precedence:
+                  <code>response_surface</code> pin &gt; <code>harness_surfaces</code> &gt;
+                  model <code>preferred_surface</code> &gt; provider
+                  <code>preferred_surface</code> &gt; ladder). Fallback models on other
+                  hosts ignore it, and internal vision-describe calls inherit the client
+                  request&rsquo;s harness.
                 </p>
 
                 <h3 id="guide-reasoning">Reasoning</h3>

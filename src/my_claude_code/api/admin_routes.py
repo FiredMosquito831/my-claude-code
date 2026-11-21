@@ -5,6 +5,7 @@ import dataclasses
 import ipaddress
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
@@ -166,8 +167,10 @@ from my_claude_code.config.harnesses import (
 from my_claude_code.config.media_request_fields import load_media_request_fields
 from my_claude_code.config.model_overrides import (
     current_model_overrides,
+    load_model_overrides,
     normalize_override_key,
     save_model_overrides,
+    with_harness_surface_row,
 )
 from my_claude_code.config.model_refs import (
     configured_chat_model_refs,
@@ -2746,6 +2749,24 @@ async def save_preferred_surface_override(
     )
     await asyncio.to_thread(save_model_overrides, updated)
     return await asyncio.to_thread(_models_page_payload, services)
+
+
+_HARNESS_SURFACE_WRITE_LOCK = threading.Lock()
+
+
+def commit_harness_surface(harness_id: str, provider_id: str, surface: str) -> None:
+    """Persist one ``(harness, provider)`` surface preference atomically."""
+
+    with _HARNESS_SURFACE_WRITE_LOCK:
+        current = load_model_overrides()
+        save_model_overrides(
+            with_harness_surface_row(
+                current,
+                harness=harness_id,
+                provider_id=provider_id,
+                surface=surface or None,
+            )
+        )
 
 
 @router.get("/admin/api/models")

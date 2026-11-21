@@ -75,6 +75,7 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     "Save overrides",
     "Pin endpoint",
     "Set preference",
+    "Surfaces it uses",
     # The InferHub page (7.110.0): the Guide's "InferHub: set a price ceiling"
     # and USAGE's "The InferHub page" send the reader to these by name.
     "New profile",

@@ -115,6 +115,9 @@ _CHATGPT_SESSION_HEADERS: tuple[str, ...] = (
 #: The harness ids whose user-agent marks the caller as OpenCode itself.
 _OPENCODE_HARNESSES = frozenset({"opencode", "opencode2"})
 
+#: The bucket for a request whose client said nothing recognisable.
+UNKNOWN_HARNESS = "unknown"
+
 
 @dataclass(frozen=True, slots=True)
 class ClientFingerprint:
@@ -134,6 +137,10 @@ class ClientFingerprint:
     #: when the provider it is configured with has an id starting
     #: ``opencode``. Read only through :attr:`opencode_session_ids`.
     opencode_session: str | None = None
+    #: The attributed harness id (``x-mcc-harness`` else ``user-agent``), or
+    #: :data:`UNKNOWN_HARNESS`. Used strictly in-process (e.g. per-harness
+    #: wire-surface preference); never mirrored to upstream providers.
+    harness: str = UNKNOWN_HARNESS
 
     @property
     def opencode_session_ids(self) -> tuple[str, ...]:
@@ -176,15 +183,18 @@ class ClientFingerprint:
 
     @property
     def is_empty(self) -> bool:
-        return not any(
-            (
-                self.user_agent,
-                self.x_app,
-                self.anthropic_version,
-                self.anthropic_beta,
-                self.session_id,
-                self.opencode_session,
+        return (
+            not any(
+                (
+                    self.user_agent,
+                    self.x_app,
+                    self.anthropic_version,
+                    self.anthropic_beta,
+                    self.session_id,
+                    self.opencode_session,
+                )
             )
+            and self.harness == UNKNOWN_HARNESS
         )
 
 
@@ -240,7 +250,13 @@ def fingerprint_from_headers(
             session = raw_value.strip()[:MAX_MIRRORED_CHARS]
         elif opencode_session is None and name == _OPENCODE_SESSION_HEADER:
             opencode_session = raw_value.strip()[:MAX_MIRRORED_CHARS]
-    if not seen and session is None and opencode_session is None:
+    harness = harness_from_headers(headers).harness
+    if (
+        not seen
+        and session is None
+        and opencode_session is None
+        and harness == UNKNOWN_HARNESS
+    ):
         return EMPTY_FINGERPRINT
     return ClientFingerprint(
         user_agent=seen.get("user-agent"),
@@ -249,6 +265,7 @@ def fingerprint_from_headers(
         anthropic_beta=seen.get("anthropic-beta"),
         session_id=session,
         opencode_session=opencode_session,
+        harness=harness,
     )
 
 
@@ -302,9 +319,6 @@ HARNESS_VERSION_HEADER = "x-mcc-harness-version"
 HARNESS_SOURCE_HEADER = "header"
 HARNESS_SOURCE_USER_AGENT = "user-agent"
 HARNESS_SOURCE_NONE = "none"
-
-#: The bucket for a request whose client said nothing recognisable.
-UNKNOWN_HARNESS = "unknown"
 
 #: Bound on a harness id or version taken from a header. Registry ids are far
 #: shorter; anything longer is a client with no reason to be believed verbatim.

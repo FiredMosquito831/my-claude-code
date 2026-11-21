@@ -50,12 +50,19 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from my_claude_code.api.admin_routes import require_loopback_admin
+from my_claude_code.api.admin_proxy_routes import configured_provider_ids
+from my_claude_code.api.admin_routes import (
+    INHERIT_SENTINEL,
+    commit_harness_surface,
+    require_loopback_admin,
+)
 from my_claude_code.api.dependencies import get_services
 from my_claude_code.api.model_admin import (
+    SURFACE_VALUE_LABELS,
     DisplayFactsLookup,
     bound_display_facts,
     capability_payload,
+    speakable_surfaces,
 )
 from my_claude_code.api.ports import ApiServices
 from my_claude_code.application.catalogue_model import (
@@ -99,7 +106,13 @@ from my_claude_code.config.harnesses import (
     not_yet_cards,
 )
 from my_claude_code.config.mcp_media import mcp_media_document
+from my_claude_code.config.model_overrides import (
+    current_model_overrides,
+    preferred_surface_problem,
+)
 from my_claude_code.config.paths import harness_catalogue_path
+from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.rtk import load_rtk_state
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.tier_refs import (
@@ -118,6 +131,12 @@ router = APIRouter()
 # the env-var settings, which this file cannot use because it writes a JSON
 # document rather than keys.
 _TIER_WRITE_LOCK = threading.Lock()
+
+HARNESS_SURFACE_ATTRIBUTION_NOTE = (
+    "This is what the client said it was (x-mcc-harness, else its user-agent). "
+    "It is a label, not a login; Claude Desktop shares claude. "
+    "Applies per host; fallback models on other providers ignore it."
+)
 
 
 @router.get("/admin/api/harnesses")
@@ -305,6 +324,135 @@ def _chain_payload(chain: Any) -> dict[str, Any]:
         "paused": list(chain.paused),
         "paused_label": chain.paused_label,
         "source": chain.source,
+    }
+
+
+# -------------------------------------------------------------- wire surfaces
+
+
+class HarnessSurfacePayload(BaseModel):
+    """One ``(harness, provider)`` preferred wire surface edit."""
+
+    harness: str
+    provider: str
+    surface: str | None = None
+
+
+@router.get("/admin/api/harness-surfaces")
+async def get_harness_surfaces(
+    request: Request, services: ApiServices = Depends(get_services)
+):
+    """Return multi-door providers and every coding agent's surface preferences."""
+
+    require_loopback_admin(request)
+    return await asyncio.to_thread(_harness_surfaces_payload, services)
+
+
+@router.post("/admin/api/harness-surfaces")
+async def set_harness_surface(
+    payload: HarnessSurfacePayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Set or clear one ``(harness, provider)`` preferred surface in ``model_overrides.json``."""
+
+    require_loopback_admin(request)
+    harness_id = payload.harness.strip().lower()
+    known_harnesses = {spec.id for spec in harness_specs()}
+    if not harness_id or harness_id not in known_harnesses:
+        raise HTTPException(
+            status_code=422, detail=f"Not a coding agent: {payload.harness}"
+        )
+
+    provider_id = payload.provider.strip().lower()
+    offered = [item.value for item in speakable_surfaces(provider_id)]
+    if not provider_id or len(offered) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{provider_id or payload.provider} does not declare two or more "
+                f"wire surfaces. It serves: {offered or ['chat_completions']}."
+            ),
+        )
+
+    raw_surface = (payload.surface or "").strip()
+    if raw_surface.casefold() in ("", "auto", INHERIT_SENTINEL):
+        surface = ""
+    else:
+        surface = raw_surface
+        if preferred_surface_problem(surface) is not None or surface not in offered:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{provider_id} does not declare the {surface!r} surface. "
+                    f"It serves: {offered or ['chat_completions']}."
+                ),
+            )
+
+    await asyncio.to_thread(commit_harness_surface, harness_id, provider_id, surface)
+    return await asyncio.to_thread(_harness_surfaces_payload, services)
+
+
+def _multi_door_surface_providers(services: ApiServices) -> list[dict[str, Any]]:
+    settings = services.requests.current_settings()
+    configured_ids = configured_provider_ids(settings)
+    cached_models = services.admin.cached_model_ids()
+    candidates: list[tuple[str, str, bool]] = [
+        (descriptor.provider_id, descriptor.display_name, False)
+        for descriptor in PROVIDER_CATALOG.values()
+    ]
+    candidates.extend(
+        (entry.provider_id, entry.display_name or entry.provider_id, True)
+        for entry in get_provider_registry().list_custom()
+    )
+
+    providers: list[dict[str, Any]] = []
+    for provider_id, display_name, is_custom in candidates:
+        offered = speakable_surfaces(provider_id)
+        if len(offered) < 2:
+            continue
+        configured = provider_id in configured_ids
+        model_count = len(cached_models.get(provider_id, ()))
+        if configured and model_count:
+            status_summary = f"Configured · {model_count} model(s)"
+        elif configured:
+            status_summary = "Configured · no models discovered yet"
+        elif model_count:
+            status_summary = f"Not configured · {model_count} model(s)"
+        else:
+            status_summary = "Not configured"
+        providers.append(
+            {
+                "provider_id": provider_id,
+                "display_name": display_name,
+                "custom": is_custom,
+                "configured": configured,
+                "discovered_model_count": model_count,
+                "status_summary": status_summary,
+                "offered": [
+                    {"value": surface.value, "label": SURFACE_VALUE_LABELS[surface]}
+                    for surface in offered
+                ],
+            }
+        )
+    return providers
+
+
+def _harness_surfaces_payload(services: ApiServices) -> dict[str, Any]:
+    providers = _multi_door_surface_providers(services)
+    overrides = current_model_overrides()
+    return {
+        "providers": providers,
+        "harnesses": {
+            spec.id: {
+                provider["provider_id"]: (
+                    overrides.harness_surface(spec.id, provider["provider_id"]) or ""
+                )
+                for provider in providers
+            }
+            for spec in harness_specs()
+        },
+        "attribution_note": HARNESS_SURFACE_ATTRIBUTION_NOTE,
     }
 
 
