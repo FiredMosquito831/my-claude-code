@@ -5385,8 +5385,10 @@ mcc-gemini</code></pre>
                 <p>
                   <code>WEB_SEARCH_PROVIDER=auto</code> needs <strong>no
                   configuration</strong> &mdash; with no keys it falls back to the keyless
-                  <code>ddgs</code> metasearch, then to MCC's own DuckDuckGo hop. Add any
-                  provider key and <code>auto</code> prefers it. A missing key on an
+                  <code>ddgs</code> metasearch, then to MCC's own DuckDuckGo hop. Add one
+                  or more provider keys and <code>auto</code> cascades through all
+                  configured auto-eligible providers in catalog order before falling back
+                  to <code>ddgs</code> and the DuckDuckGo hop. A missing key on an
                   explicitly chosen provider fails visibly rather than degrading silently.
                 </p>
                 <p>
@@ -5471,13 +5473,22 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                 <p>
                   While a chain is set, the route summary shows it and says that Web
                   Search Provider and Fallback Policy are not used; Disabled still
-                  disables search. Each service's keys follow your model providers'
-                  rules: a key is benched only for a rejected key, a 429 or an
-                  out-of-credits message, and <strong>Manage keys</strong> on its card
-                  shows why (<em>benched 60 s: rate limited</em>, <em>locked out, tier 1
-                  of 3</em>) with a <strong>Reset</strong> button. In Analytics, the
-                  <em>Key tries</em> column expands to every try on every key. Empty the
-                  card and Apply to go back to the provider route above.
+                  disables search. Each service's keys bench for rejected keys, 429s, or
+                  out-of-credits errors (default <code>WEB_SEARCH_QUOTA_COOLDOWN_SECONDS=1800</code>
+                  so exhausted search keys stay benched without relying on the short 429
+                  cooldown), rotate after one try per healthy key across multi-key pools
+                  on transient 429/503/504 errors, and step over rate-limited keyless
+                  entries without sleeping while another viable service remains.
+                  <strong>Manage keys</strong> on a card shows why a key is benched
+                  (<em>benched 60 s: rate limited</em>, <em>benched 30m: out of credits</em>,
+                  <em>locked out, tier 1 of 3</em>) with a <strong>Reset</strong> button.
+                  Empty-result HTTP 200 responses also fall back automatically when
+                  <code>WEB_SEARCH_FALLBACK_ON_EMPTY=true</code> (and
+                  <code>WEB_SEARCH_CHAIN_SKIP_KINDS</code> stays decoupled from the LLM
+                  <code>FALLBACK_SKIP_KINDS</code>). In Analytics, the
+                  <em>Key tries</em> column expands to every try on every key (for both
+                  search-chain and multi-key routes). Empty the card and Apply to go
+                  back to the provider route above.
                 </p>
                 <p>
                   <strong>Context7</strong> answers with library documentation rather

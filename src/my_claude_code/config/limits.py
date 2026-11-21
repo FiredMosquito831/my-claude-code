@@ -370,6 +370,12 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "websearch_legacy_min_interval_seconds": LimitRange(
         0.0, 3_600.0, "0 sends the requests back to back"
     ),
+    # Dedicated bench duration for exhausted search keys (402 / 432 / 433 /
+    # search quota refusals, 8.33.0). 0 disables quota benching; 86400 caps
+    # hand-typed values at one day without interfering with 429 windows.
+    "web_search_quota_cooldown_seconds": LimitRange(
+        0.0, 86_400.0, "0 disables quota benching; default 1800s (30 min)"
+    ),
     "web_search_tool_loop_max_steps": LimitRange(
         1, 25, "bounds multi-door web search tool loop steps"
     ),

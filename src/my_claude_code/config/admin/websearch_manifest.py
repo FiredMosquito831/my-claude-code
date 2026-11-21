@@ -363,6 +363,56 @@ def _search_chain_field_specs() -> tuple[dict[str, Any], ...]:
                 "this setting."
             ),
         },
+        {
+            "key": "WEB_SEARCH_CHAIN_SKIP_KINDS",
+            "label": "Search Chain Do Not Fall Back On",
+            "section_id": "websearch",
+            "field_type": "text",
+            "settings_attr": "web_search_chain_skip_kinds",
+            "default": "",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "Comma-separated FailureKind values that end WEB_SEARCH_CHAIN "
+                "instead of trying the next service (independent of LLM "
+                "FALLBACK_SKIP_KINDS). Empty (default) always falls back on "
+                "provider 400/404/422 or upstream errors. Known kinds: "
+                "invalid_request, model_rejected, context_length, "
+                "authentication, permission, quota, rate_limit, overloaded, "
+                "timeout, upstream, unavailable, free_tier."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_QUOTA_COOLDOWN_SECONDS",
+            "label": "Search Key Quota Cooldown (s)",
+            "section_id": "websearch",
+            "field_type": "number",
+            "settings_attr": "web_search_quota_cooldown_seconds",
+            "default": "1800",
+            "restart_required": False,
+            "description": (
+                "Seconds to bench a search API key after an out-of-credits or "
+                "plan-limit refusal (HTTP 402, Tavily 432/433, or quota refusal). "
+                "Separate from RATE_LIMIT_COOLDOWN_SECONDS (429 waits), and "
+                "resettable immediately from Manage keys. 0 disables quota benching."
+            ),
+        },
+        {
+            "key": "WEB_SEARCH_FALLBACK_ON_EMPTY",
+            "label": "Fall Back On Empty Results",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "web_search_fallback_on_empty",
+            "default": "true",
+            "restart_required": False,
+            "affects_providers": False,
+            "description": (
+                "When a search provider returns HTTP 200 with zero results and "
+                "another fallback service remains in WEB_SEARCH_CHAIN or an "
+                "auto/fallback route, continue to the next service without charging "
+                "key health. Explicit named provider overrides stay strict."
+            ),
+        },
     )
 
 

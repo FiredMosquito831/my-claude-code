@@ -33,6 +33,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
+from my_claude_code.config.constants import WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT
 from my_claude_code.config.credentials import mask_key_label
 from my_claude_code.core.credential_rotation import (
     WEBSEARCH_TUNING,
@@ -178,6 +179,7 @@ class KeyPool:
         policy: str = DEFAULT_MULTI_KEY_POLICY,
         clock: Callable[[], float] = time.monotonic,
         tuning: RotationTuning = WEBSEARCH_TUNING,
+        quota_cooldown_seconds: float = WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT,
     ) -> None:
         if policy not in ROTATION_POLICIES:
             raise ValueError(
@@ -187,6 +189,7 @@ class KeyPool:
             raise ValueError("KeyPool requires at least one key slot")
         self._keys = tuple(keys)
         self._clock = clock
+        self._quota_cooldown_seconds = max(0.0, float(quota_cooldown_seconds))
         self._lockout_tiers = len(tuning.lockout_tiers)
         self._engine = RotationEngine(
             len(self._keys), policy=policy, tuning=tuning, clock=clock
@@ -195,9 +198,12 @@ class KeyPool:
         # can be told apart from a generic-ladder one (a caller that still
         # reports generic failures shares the same state and deadline field).
         self._rate_limited_until: dict[int, float] = {}
+        # Dedicated quota cooldown deadline so 402/432/433 benches honor
+        # WEB_SEARCH_QUOTA_COOLDOWN_SECONDS without affecting 429 windows.
+        self._quota_until: dict[int, float] = {}
         # 7.113.0, read only by ``health_facts``: what last locked each slot
         # out -- "auth" (the provider rejected the key) or "quota" (it said
-        # the balance is empty). Both walk the same lockout ladder.
+        # the balance is empty).
         self._lockout_kind: dict[int, str] = {}
 
     @property
@@ -216,6 +222,11 @@ class KeyPool:
 
     def _view(self, index: int, slot: PoolSlot) -> KeyHealth:
         return KeyHealth(key=self._keys[index], slot=slot)
+
+    def has_selectable(self, *, exclude: frozenset[int] = frozenset()) -> bool:
+        """Return whether any slot outside ``exclude`` can still be acquired."""
+
+        return any(index not in exclude for index in self._engine.selectable_indexes())
 
     def acquire(
         self, *, exclude: frozenset[int] = frozenset()
@@ -257,6 +268,17 @@ class KeyPool:
             return 0.0
         return max(0.0, until - self._clock())
 
+    def _quota_remaining(self, index: int) -> float:
+        slot = self._engine.slot(index)
+        until = self._quota_until.get(index)
+        if (
+            until is None
+            or slot.state is not KeyHealthState.COOLDOWN
+            or slot.cooldown_until != until
+        ):
+            return 0.0
+        return max(0.0, until - self._clock())
+
     def bench_summary(self) -> tuple[int, int, int, float]:
         """Why nothing can serve: (rate limited, locked out, other, wait).
 
@@ -271,30 +293,61 @@ class KeyPool:
         for index, slot in enumerate(self._engine.slots()):
             if slot.state is KeyHealthState.HEALTHY:
                 continue
-            if self._rate_limit_remaining(index) > 0:
-                rate_limited += 1
-            elif slot.state is KeyHealthState.LOCKED_OUT:
+            if (
+                slot.state is KeyHealthState.LOCKED_OUT
+                or self._quota_remaining(index) > 0
+            ):
                 locked_out += 1
+            elif self._rate_limit_remaining(index) > 0:
+                rate_limited += 1
             else:
                 other += 1
         return rate_limited, locked_out, other, wait
 
     def report_success(self, index: int) -> None:
         self._engine.succeed(index)
+        self._rate_limited_until.pop(index, None)
+        self._quota_until.pop(index, None)
         self._lockout_kind.pop(index, None)
 
     def report_failure(
         self, index: int, *, kind: str, message: str | None = None
     ) -> None:
-        """Record a non-429 failure; auth/quota lock out, others climb the ladder."""
+        """Record a non-429 failure; auth locks out, quota cools down, others climb ladder."""
 
         if kind == "rate_limit":
             self.report_rate_limit(index, message=message)
             return
-        failure_class = "auth" if kind in ("auth", "quota") else "transient"
+        if kind == "quota":
+            self.report_quota(index, message=message)
+            return
+        failure_class = "auth" if kind == "auth" else "transient"
         if failure_class == "auth":
             self._lockout_kind[index] = kind
         self._engine.fail(index, failure_class, message=message)
+
+    def report_quota(
+        self,
+        index: int,
+        *,
+        message: str | None = None,
+    ) -> None:
+        """Bench an exhausted key for ``quota_cooldown_seconds`` (default 1800s)."""
+
+        duration = self._quota_cooldown_seconds
+        self._engine.note_rate_limit(
+            index,
+            message=message,
+            retry_after=duration,
+        )
+        if 0 <= index < len(self._keys):
+            slot = self._engine.slot(index)
+            if duration > 0:
+                slot.cooldown_until = self._clock() + duration
+                self._quota_until[index] = slot.cooldown_until
+            else:
+                self._engine.refresh()
+                self._quota_until.pop(index, None)
 
     def reset_key(self, index: int) -> bool:
         """Restore one key to healthy by hand (the Web Search page's Reset).
@@ -307,6 +360,7 @@ class KeyPool:
         restored = self._engine.restore(index)
         if restored:
             self._rate_limited_until.pop(index, None)
+            self._quota_until.pop(index, None)
             self._lockout_kind.pop(index, None)
         return restored
 
@@ -315,8 +369,8 @@ class KeyPool:
 
         ``state`` is the snapshot's own lowercase value; ``reason`` is
         ``None`` (healthy), ``"rate_limited"`` (inside a 429 wait),
-        ``"out_of_credits"`` or ``"rejected"`` (locked out by an empty
-        balance or a rejected key) or ``"failures"`` (the generic ladder or
+        ``"out_of_credits"`` or ``"rejected"`` (locked out by a rejected key or
+        benched for exhausted credits) or ``"failures"`` (the generic ladder or
         the breaker); ``lockout_tier`` is the step of the lockout ladder the
         slot is on (0 when it has none) out of ``lockout_tiers``.
         """
@@ -328,6 +382,8 @@ class KeyPool:
             state = slot.state
             if state is KeyHealthState.HEALTHY:
                 reason: str | None = None
+            elif self._quota_remaining(index) > 0:
+                reason = "out_of_credits"
             elif state is KeyHealthState.LOCKED_OUT:
                 reason = (
                     "out_of_credits"

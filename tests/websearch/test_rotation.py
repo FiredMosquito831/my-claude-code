@@ -145,10 +145,22 @@ class TestHealthTransitions:
         pool.report_failure(0, kind="auth")
         assert health.state_until == pytest.approx(clock.now + LOCKOUT_BASE_SECONDS * 2)
         clock.advance(LOCKOUT_BASE_SECONDS * 2)
-        pool.report_failure(0, kind="quota")  # quota also locks out
+        pool.report_failure(0, kind="auth")
         assert health.state is KeyHealthState.LOCKED_OUT
         assert health.lockouts == 3
         assert health.state_until == pytest.approx(clock.now + LOCKOUT_BASE_SECONDS * 4)
+
+    def test_quota_failure_cooldowns_key_for_quota_duration(self) -> None:
+        clock = FakeClock()
+        pool = KeyPool(("k0",), policy="failover", clock=clock)
+        pool.report_failure(0, kind="quota")
+        health = pool.health_at(0)
+        assert health.state is KeyHealthState.COOLDOWN
+        assert health.lockouts == 0
+        assert health.state_until == pytest.approx(clock.now + 1800.0)
+        assert pool.bench_summary() == (0, 1, 0, pytest.approx(1800.0))
+        pool.reset_key(0)
+        assert pool.health_at(0).state is KeyHealthState.HEALTHY
 
     def test_lockout_escalation_is_capped(self) -> None:
         clock = FakeClock()

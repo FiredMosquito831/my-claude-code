@@ -292,7 +292,7 @@ async def test_the_step_over_never_skips_the_last_entry(
 async def test_fallback_skip_kinds_end_the_route(
     upstream: Upstream, recorded: Recorded
 ) -> None:
-    settings = _settings(FALLBACK_SKIP_KINDS="invalid_request,model_rejected")
+    settings = _settings(WEB_SEARCH_CHAIN_SKIP_KINDS="invalid_request,model_rejected")
     upstream.answer("exa", EXA_KEY_1, 400)
 
     with pytest.raises(WebSearchInvalidRequestError):
@@ -301,6 +301,20 @@ async def test_fallback_skip_kinds_end_the_route(
     assert upstream.calls == [("exa", EXA_KEY_1, 400)]
     assert recorded.chain_rows() == [("exa", 0, "error", "failed")]
     assert recorded.rows[0].failure_kind == "model_rejected"
+
+
+@pytest.mark.asyncio
+async def test_llm_fallback_skip_kinds_does_not_abort_search_chain(
+    upstream: Upstream, recorded: Recorded
+) -> None:
+    """T5-Q1: LLM FALLBACK_SKIP_KINDS never aborts WEB_SEARCH_CHAIN."""
+    settings = _settings(FALLBACK_SKIP_KINDS="invalid_request,model_rejected")
+    upstream.answer("exa", EXA_KEY_1, 400)
+
+    results = await _search(settings)
+
+    assert [item["provider"] for item in results] == ["tavily"]
+    assert upstream.calls == [("exa", EXA_KEY_1, 400), ("tavily", TAVILY_KEY, 200)]
 
 
 @pytest.mark.asyncio

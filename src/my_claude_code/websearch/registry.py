@@ -7,6 +7,7 @@ Route owners may emit one correlated :class:`SearchRouteOutcome` through
 """
 
 import importlib
+import json
 import os
 import time
 from collections.abc import Callable, Mapping
@@ -103,6 +104,7 @@ def build_provider(settings: Settings, provider_id: str) -> BaseWebSearchProvide
             proxy=proxy,
             http_timeout=DEFAULT_HTTP_TIMEOUT,
             options=options,
+            quota_cooldown_seconds=settings.web_search_quota_cooldown_seconds,
         )
     )
 
@@ -137,10 +139,11 @@ def resolve_search_route(settings: Settings) -> WebSearchRoute:
     """Resolve the ordered attempts implied by provider selection and policy.
 
     ``auto`` fallback policy is deliberately context-aware: automatic provider
-    selection retains the historical provider -> DDGS -> legacy resilience,
-    while a named provider is strict. Explicit policies override that default.
-    Missing configuration is still owned by :func:`build_provider` and must not
-    be converted into fallback by callers.
+    selection cascades across all configured auto-selectable paid providers in
+    catalog order, then DDGS, then legacy scrape (``T5-Q6``), while a named
+    provider stays strict. Explicit policies override that default. Missing
+    configuration is still owned by :func:`build_provider` and must not be
+    converted into fallback by callers.
     """
 
     selection = settings.web_search_provider
@@ -149,16 +152,33 @@ def resolve_search_route(settings: Settings) -> WebSearchRoute:
     if selection == "off":
         return WebSearchRoute((), use_legacy_scrape=True)
 
+    policy = settings.web_search_fallback_policy
+    if policy == "auto":
+        policy = "legacy" if selection == "auto" else "none"
+
+    if selection == "auto":
+        configured = [
+            pid
+            for pid, descriptor in WEBSEARCH_CATALOG.items()
+            if pid != "ddgs"
+            and descriptor.auto_select
+            and _descriptor_is_configured(descriptor, settings)
+        ]
+        if policy == "none":
+            provider_ids = [configured[0]] if configured else ["ddgs"]
+        else:
+            provider_ids = [*configured, "ddgs"]
+        return WebSearchRoute(
+            tuple(provider_ids),
+            use_legacy_scrape=policy == "legacy",
+        )
+
     provider_id = resolve_provider_id(settings)
     if provider_id is None:  # Defensive: handled by the branches above.
         raise WebSearchConfigError(
             selection,
             f"web search provider {selection!r} did not resolve",
         )
-
-    policy = settings.web_search_fallback_policy
-    if policy == "auto":
-        policy = "legacy" if selection == "auto" else "none"
 
     provider_ids = [provider_id]
     if policy in {"ddgs", "legacy"} and provider_id != "ddgs":
@@ -252,6 +272,7 @@ async def search(
     route_context: Mapping[str, object] | None = None,
     key_charge: KeyChargeJudge | None = None,
     request_options: WebSearchRequestOptions | None = None,
+    mark_empty_outcome: bool = False,
 ) -> WebSearchResponse:
     """Run ``provider.search`` and optionally record the outcome via ``recorder``.
 
@@ -268,14 +289,34 @@ async def search(
         request_options=request_options,
     )
     provider_config = _provider_config_snapshot(provider, route_context)
+    tries: list[dict[str, object]] = []
+    supports_tries = isinstance(provider, BaseWebSearchProvider)
     try:
-        if request_options is None:
+        if request_options is None and not supports_tries:
             response = await provider.search(
                 query,
                 max_results=max_results,
                 allowed_domains=allowed_domains,
                 blocked_domains=blocked_domains,
                 key_charge=key_charge,
+            )
+        elif request_options is None:
+            response = await provider.search(
+                query,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                key_charge=key_charge,
+                tries_out=tries,
+            )
+        elif not supports_tries:
+            response = await provider.search(
+                query,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                key_charge=key_charge,
+                request_options=request_options,
             )
         else:
             response = await provider.search(
@@ -285,12 +326,18 @@ async def search(
                 blocked_domains=blocked_domains,
                 key_charge=key_charge,
                 request_options=request_options,
+                tries_out=tries,
             )
     except Exception as error:
         key_index = (
             error.key_index
             if isinstance(error, WebSearchError) and error.key_index is not None
             else 0
+        )
+        tries_json = (
+            json.dumps(tries, separators=(",", ":"), default=str)
+            if (len(tries) > 1 or any(not bool(row.get("ok")) for row in tries))
+            else None
         )
         _emit(
             recorder,
@@ -314,9 +361,16 @@ async def search(
                 input_payload=input_payload,
                 output_payload=_error_output_payload(error),
                 provider_config=provider_config,
+                tries_json=tries_json,
             ),
         )
         raise
+    tries_json = (
+        json.dumps(tries, separators=(",", ":"), default=str)
+        if (len(tries) > 1 or any(not bool(row.get("ok")) for row in tries))
+        else None
+    )
+    empty_outcome = "empty" if (mark_empty_outcome and not response.results) else None
     _emit(
         recorder,
         SearchOutcome(
@@ -337,6 +391,8 @@ async def search(
             input_payload=input_payload,
             output_payload=_response_output_payload(response),
             provider_config=provider_config,
+            outcome=empty_outcome,
+            tries_json=tries_json,
         ),
     )
     return response
@@ -355,11 +411,12 @@ async def search_with_logging(
     route_context: Mapping[str, object] | None = None,
     key_charge: KeyChargeJudge | None = None,
     request_options: WebSearchRequestOptions | None = None,
+    mark_empty_outcome: bool = False,
 ) -> WebSearchResponse:
     """Search with analytics recording; defaults to the shared attempt recorder."""
 
     selected_recorder = recorder if recorder is not None else _default_recorder()
-    if request_options is None:
+    if request_options is None and not mark_empty_outcome:
         return await search(
             provider,
             query,
@@ -384,6 +441,7 @@ async def search_with_logging(
         route_context=route_context,
         key_charge=key_charge,
         request_options=request_options,
+        mark_empty_outcome=mark_empty_outcome,
     )
 
 

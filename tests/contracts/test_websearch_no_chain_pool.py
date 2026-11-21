@@ -59,6 +59,8 @@ NOT_KEY_SHAPED = frozenset(
 KEY_SHAPED = frozenset(
     {"s401", "s403", "s402_bare", "s402_credits", "s429", "s429_ra7"}
 )
+#: Quota failures cooldown for WEB_SEARCH_QUOTA_COOLDOWN_SECONDS (T5-Q5: 1800s default).
+QUOTA_SHAPED = frozenset({"s402_bare", "s402_credits"})
 RATE_LIMITS = frozenset({"s429", "s429_ra7"})
 #: A rejected query: never charged, never rotated -- untouched by Q8.
 REQUEST_SHAPED = frozenset({"s400", "s400_credits"})
@@ -103,8 +105,10 @@ def _expected_changed_cells() -> set[str]:
     for answer in ANSWERS:
         for setup in SETUPS:
             name = answer.name
-            if name in NOT_KEY_SHAPED or (
-                name in KEY_SHAPED and (setup.one_slot or _all_fail(setup))
+            if (
+                name in NOT_KEY_SHAPED
+                or name in QUOTA_SHAPED
+                or (name in KEY_SHAPED and (setup.one_slot or _all_fail(setup)))
             ):
                 changed.add(cell_id(answer, setup))
     return changed
@@ -158,11 +162,23 @@ def test_a_failure_that_is_not_about_the_key_never_benches_it(live) -> None:
 
 
 def test_a_key_shaped_failure_charges_exactly_as_before(baseline, live) -> None:
-    """Same state, same seconds, same lockout tier -- on every keyed pool."""
+    """Same state, same seconds, same lockout tier -- on every keyed pool.
+
+    T5-Q5: quota answers cooldown for WEB_SEARCH_QUOTA_COOLDOWN_SECONDS (1800s)
+    rather than escalating auth lockout tiers.
+    """
     for cell, record in live.items():
         answer, setup = cell.split("|", 1)
         if answer in KEY_SHAPED and _setup(setup).keys > 0:
-            assert record["s1_keys_after"] == baseline[cell]["s1_keys_after"], cell
+            if answer in QUOTA_SHAPED:
+                failing = set(_setup(setup).failing)
+                expected = [
+                    ["cooldown", 1800, 0] if idx in failing else ["healthy", 0, 0]
+                    for idx in range(_setup(setup).keys)
+                ]
+                assert record["s1_keys_after"] == expected, cell
+            else:
+                assert record["s1_keys_after"] == baseline[cell]["s1_keys_after"], cell
             assert any(key[0] != "healthy" for key in record["s1_keys_after"]), cell
 
 

@@ -152,14 +152,16 @@ def test_with_no_chain_the_list_is_the_pool_snapshot_it_always_was(
     assert _frozen(body["health"]) == _frozen(snapshot)
     assert [key["state"] for key in body["health"]["keys"]] == [
         "cooldown",
-        "locked_out",
+        "cooldown",
     ]
     facts = body["key_health"]["keys"]
     assert body["key_health"]["pool"] == "default"
     assert [fact["reason"] for fact in facts] == ["rate_limited", "out_of_credits"]
-    assert facts[1]["lockout_tier"] == 1
+    # T5-Q5: quota enters dedicated 1800s cooldown rather than lockout tiers.
+    assert facts[1]["lockout_tier"] == 0
     assert facts[1]["lockout_tiers"] == 5
     assert 59 < facts[0]["remaining_s"] <= 60
+    assert 1795 < facts[1]["remaining_s"] <= 1800
 
 
 def test_with_a_chain_the_list_projects_the_books_into_the_same_shape(
