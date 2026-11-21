@@ -259,10 +259,13 @@ from .constants import (
     VISION_ADAPTER_MODE_NAMES,
     WEB_FETCH_EXTRACTOR_DEFAULT,
     WEB_FETCH_EXTRACTOR_NAMES,
+    WEB_SEARCH_CHAIN_SKIP_KINDS_DEFAULT,
     WEB_SEARCH_CHAT_ENABLED_DEFAULT,
     WEB_SEARCH_DOOR_MODE_DEFAULT,
     WEB_SEARCH_DOOR_MODE_VALUES,
+    WEB_SEARCH_FALLBACK_ON_EMPTY_DEFAULT,
     WEB_SEARCH_GEMINI_ENABLED_DEFAULT,
+    WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT,
     WEB_SEARCH_TOOL_LOOP_MAX_STEPS_DEFAULT,
     WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT,
     WITHHELD_FACT_TTL_SECONDS_DEFAULT,
@@ -2186,6 +2189,24 @@ class Settings(BaseSettings):
     web_search_chain_paused: str | None = Field(
         default=None, validation_alias="WEB_SEARCH_CHAIN_PAUSED"
     )
+    # Comma-separated FailureKind values that end WEB_SEARCH_CHAIN without
+    # trying the next service (decoupled from LLM FALLBACK_SKIP_KINDS, 8.33.0).
+    web_search_chain_skip_kinds: str = Field(
+        default=WEB_SEARCH_CHAIN_SKIP_KINDS_DEFAULT,
+        validation_alias="WEB_SEARCH_CHAIN_SKIP_KINDS",
+    )
+    # Dedicated cooldown duration in seconds when a search key reports
+    # exhausted credits/quota (402 / 432 / 433 / search quota refusal, 8.33.0).
+    web_search_quota_cooldown_seconds: float = Field(
+        default=WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT,
+        validation_alias="WEB_SEARCH_QUOTA_COOLDOWN_SECONDS",
+    )
+    # Whether an HTTP 200 search response with 0 results advances to the next
+    # fallback entry in WEB_SEARCH_CHAIN or an auto/fallback route (8.33.0).
+    web_search_fallback_on_empty: bool = Field(
+        default=WEB_SEARCH_FALLBACK_ON_EMPTY_DEFAULT,
+        validation_alias="WEB_SEARCH_FALLBACK_ON_EMPTY",
+    )
     # The least time, in seconds, between two requests of the keyless
     # DuckDuckGo hop (the "legacy" route entry, 7.119.0). 0 sends them back to
     # back, as before; read per request, so a save applies to the next search.
@@ -3008,6 +3029,20 @@ class Settings(BaseSettings):
             )
         return value
 
+    @staticmethod
+    def _validate_skip_kinds(v: str, *, field_name: str) -> str:
+        """Reject an unknown FailureKind at load rather than ignoring it at runtime."""
+        kinds = [part.strip().lower() for part in (v or "").split(",")]
+        kept = [kind for kind in kinds if kind]
+        known = FAILURE_KIND_NAMES
+        unknown = [kind for kind in kept if kind not in known]
+        if unknown:
+            raise ValueError(
+                f"Unknown {field_name}: {', '.join(unknown)}. "
+                f"Known kinds: {', '.join(sorted(known))}"
+            )
+        return ",".join(dict.fromkeys(kept))
+
     @field_validator("fallback_skip_kinds")
     @classmethod
     def validate_fallback_skip_kinds(cls, v: str) -> str:
@@ -3018,16 +3053,13 @@ class Settings(BaseSettings):
         value is the difference between a config error and a setting that looks
         applied for months.
         """
-        kinds = [part.strip().lower() for part in (v or "").split(",")]
-        kept = [kind for kind in kinds if kind]
-        known = FAILURE_KIND_NAMES
-        unknown = [kind for kind in kept if kind not in known]
-        if unknown:
-            raise ValueError(
-                f"Unknown fallback_skip_kinds: {', '.join(unknown)}. "
-                f"Known kinds: {', '.join(sorted(known))}"
-            )
-        return ",".join(dict.fromkeys(kept))
+        return cls._validate_skip_kinds(v, field_name="fallback_skip_kinds")
+
+    @field_validator("web_search_chain_skip_kinds")
+    @classmethod
+    def validate_web_search_chain_skip_kinds(cls, v: str) -> str:
+        """Reject an unknown FailureKind in WEB_SEARCH_CHAIN_SKIP_KINDS."""
+        return cls._validate_skip_kinds(v, field_name="web_search_chain_skip_kinds")
 
     @field_validator("credential_lockout_tiers")
     @classmethod

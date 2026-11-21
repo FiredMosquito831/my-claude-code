@@ -244,28 +244,84 @@ def test_the_chat_stack_still_decides_what_the_base_tree_recorded(
     assert not mismatches, "\n".join(mismatches[:20])
 
 
+_QUOTA_COOLDOWN_ANSWERS = frozenset(
+    {"s400_credits", "s402_bare", "s402_credits", "s403_credits"}
+)
+_FAST_ROTATE_ANSWERS = frozenset(
+    {"s429", "s429_ra7", "s429_body120", "s503", "s504", "connect", "timeout"}
+)
+
+
+def _assert_fast_rotate_cell(cell_id: str, got: str) -> None:
+    """Assert T5-Q2 invariants for k3 non-single cells on 429/503/504/timeout/connect."""
+    parts = cell_id.split("|")
+    behavior = parts[1]
+    failing = parts[5]
+    attempts = parts[6]
+    backoff = parts[7]
+    first, _rest = got.split(" | health=", 1)
+    assert "0.2" not in first and "1.2" not in first, (cell_id, got)
+    if failing == "first":
+        assert "calls=0.1,1.1 slept=- out=ok@1" in first, (cell_id, got)
+    elif behavior == "then_ok" and attempts == "a3":
+        expected_step1 = "0" if backoff == "zero" else "2.5"
+        assert first.startswith(
+            f"calls=0.1,1.1,2.1,2.2 slept={expected_step1} out=ok@2"
+        ), (cell_id, got)
+    else:
+        assert " out=failed " in first, (cell_id, got)
+        if attempts == "a1":
+            assert first.startswith("calls=0.1,1.1,2.1 slept=- "), (cell_id, got)
+        else:
+            expected_slept = "0,0" if backoff == "zero" else "2.5,4.5"
+            assert first.startswith(
+                f"calls=0.1,1.1,2.1,2.2,2.3 slept={expected_slept} "
+            ), (cell_id, got)
+
+
 @pytest.mark.parametrize("answer", ANSWERS, ids=lambda answer: answer.name)
 def test_search_keys_decide_exactly_as_model_keys(answer: Answer) -> None:
     """Every cell: tries, sleeps, ending, charge, bench, limiter, route end, next.
 
     Track 5 T5-Q4: search keys bench authoritatively on HTTP 402 even without an
-    LLM billing phrase, so ``s402_bare`` matches the ``s402_credits`` baseline
-    while the frozen chat stack keeps its original ``s402_bare`` behavior.
+    LLM billing phrase, so ``s402_bare`` matches ``s402_credits``.
+    Track 5 T5-Q5: quota errors bench for ``WEB_SEARCH_QUOTA_COOLDOWN_SECONDS``
+    (1800s default instead of rate-limit's 60s).
+    Track 5 T5-Q2: multi-key pools (k3, non-single) rotate after 1 try per
+    healthy key on 429/503/504/timeout/connect while last-key retries stay intact.
     """
     baseline = _baseline()
     if answer.name == "s402_bare":
-        expected = {
+        raw_expected = {
             key.replace("s402_credits|", "s402_bare|", 1): value
             for key, value in baseline.items()
             if key.startswith("s402_credits|")
         }
     else:
-        expected = {
+        raw_expected = {
             key: value
             for key, value in baseline.items()
             if key.startswith(f"{answer.name}|")
         }
-    mismatches = _diff(expected, _records(search_cell, answer))
+    expected: dict[str, str] = {}
+    actual = _records(search_cell, answer)
+    for cell_id, value in raw_expected.items():
+        if answer.name in _QUOTA_COOLDOWN_ANSWERS:
+            value = value.replace(":b60:", ":b1800:").replace(
+                "throttle=60 ", "throttle=1800 "
+            )
+        if (
+            answer.name in _FAST_ROTATE_ANSWERS
+            and "|k3|" in cell_id
+            and "|single|" not in cell_id
+        ):
+            _assert_fast_rotate_cell(cell_id, actual[cell_id])
+            continue
+        expected[cell_id] = value
+    filtered_actual = {
+        cell_id: value for cell_id, value in actual.items() if cell_id in expected
+    }
+    mismatches = _diff(expected, filtered_actual)
     assert not mismatches, "\n".join(mismatches[:20])
 
 

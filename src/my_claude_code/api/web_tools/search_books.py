@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from typing import Literal, cast
 
 from my_claude_code.application.route_health import RouteHealthRegistry
+from my_claude_code.config.constants import WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT
 from my_claude_code.config.settings import Settings, parse_lockout_tiers
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.rate_limit import (
@@ -137,6 +138,7 @@ class SearchBooksPolicy:
     backoff_base_seconds: float
     backoff_max_seconds: float
     backoff_jitter_seconds: float
+    quota_cooldown_seconds: float = WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT
 
     @classmethod
     def from_settings(cls, settings: Settings, rotation: str) -> SearchBooksPolicy:
@@ -151,6 +153,7 @@ class SearchBooksPolicy:
             backoff_base_seconds=settings.provider_retry_backoff_base_seconds,
             backoff_max_seconds=settings.provider_retry_backoff_max_seconds,
             backoff_jitter_seconds=settings.provider_retry_backoff_jitter_seconds,
+            quota_cooldown_seconds=settings.web_search_quota_cooldown_seconds,
         )
 
     def cooldown(self) -> RateLimitCooldown:
@@ -242,7 +245,11 @@ class SearchKeyBooks:
 
     def translate(self, error: BaseException) -> ExecutionFailure | None:
         """The ``provider_failure_override`` the key ladder runs with."""
-        return translate_search_error(error, cooldown=self.cooldown)
+        return translate_search_error(
+            error,
+            cooldown=self.cooldown,
+            quota_cooldown_seconds=self.policy.quota_cooldown_seconds,
+        )
 
 
 class _UpstreamRefusal(Exception):
@@ -266,7 +273,10 @@ class _UpstreamRefusal(Exception):
 
 
 def translate_search_error(
-    error: BaseException, *, cooldown: RateLimitCooldown
+    error: BaseException,
+    *,
+    cooldown: RateLimitCooldown,
+    quota_cooldown_seconds: float | None = None,
 ) -> ExecutionFailure | None:
     """Classify one search failure into the model path's ``ExecutionFailure``.
 
@@ -275,12 +285,13 @@ def translate_search_error(
     entry, nothing is charged) or an exception no adapter raised -- so the
     retry ladder and the pool read it exactly as they would read it raw.
 
-    The table (spec §3.3 + Track 5 T5-Q4):
+    The table (spec §3.3 + Track 5 T5-Q4 + T5-Q5):
 
     * ``quota`` (402, Tavily's 432/433, ``WebSearchQuotaError``), or a 400/403
       whose body names an exact search or LLM credits phrase ->
-      ``FailureKind.QUOTA`` with ``retry_after_seconds=cooldown.fallback_seconds``
-      so exhausted search keys are always benched.
+      ``FailureKind.QUOTA`` with ``retry_after_seconds=quota_cooldown_seconds``
+      (or ``cooldown.fallback_seconds`` when omitted) so exhausted search keys
+      are benched cleanly without reusing short 429 cooldowns.
     * ``auth`` 403 -> PERMISSION; any other ``auth`` -> AUTHENTICATION.
     * ``rate_limit`` -> RATE_LIMIT 429, retryable, with the wait the provider
       published (header under the operator's ceiling, else its body).
@@ -299,7 +310,11 @@ def translate_search_error(
     """
     if not isinstance(error, WebSearchError) or isinstance(error, WebSearchConfigError):
         return None
-    failure = _translate(error, cooldown)
+    failure = _translate(
+        error,
+        cooldown,
+        quota_cooldown_seconds=quota_cooldown_seconds,
+    )
     failure.__cause__ = _UpstreamRefusal(error)
     return failure
 
@@ -335,7 +350,17 @@ def _search_quota_phrase(error: WebSearchError) -> str | None:
     return None
 
 
-def _translate(error: WebSearchError, cooldown: RateLimitCooldown) -> ExecutionFailure:
+def _translate(
+    error: WebSearchError,
+    cooldown: RateLimitCooldown,
+    *,
+    quota_cooldown_seconds: float | None = None,
+) -> ExecutionFailure:
+    effective_quota_seconds = (
+        max(0.0, float(quota_cooldown_seconds))
+        if quota_cooldown_seconds is not None
+        else cooldown.fallback_seconds
+    )
     message = str(error)
     status = error.status_code
     if error.kind == "quota":
@@ -350,12 +375,12 @@ def _translate(error: WebSearchError, cooldown: RateLimitCooldown) -> ExecutionF
             status or 402,
             quota_message,
             False,
-            cooldown.fallback_seconds,
+            effective_quota_seconds,
         )
     if status in _QUOTA_PHRASE_STATUSES:
         refusal = _UpstreamRefusal(error)
         if is_quota_error(refusal):
-            return quota_failure(refusal, cooldown.fallback_seconds)
+            return quota_failure(refusal, effective_quota_seconds)
         phrase = _search_quota_phrase(error)
         if phrase is not None:
             return _failure(
@@ -363,7 +388,7 @@ def _translate(error: WebSearchError, cooldown: RateLimitCooldown) -> ExecutionF
                 status,
                 f"Provider quota/credits exhausted ({phrase})",
                 False,
-                cooldown.fallback_seconds,
+                effective_quota_seconds,
             )
     if error.kind == "auth":
         if status == 403:

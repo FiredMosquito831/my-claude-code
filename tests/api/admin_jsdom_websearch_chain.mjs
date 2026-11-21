@@ -161,6 +161,10 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     // 8.27.0: Gemini /v1beta and Chat Completions /v1/chat/completions web search controls, additive.
     '.field[data-key="WEB_SEARCH_GEMINI_ENABLED"]',
     '.field[data-key="WEB_SEARCH_CHAT_ENABLED"]',
+    // 8.33.0: Web search chain resilience controls, additive.
+    '.field[data-key="WEB_SEARCH_CHAIN_SKIP_KINDS"]',
+    '.field[data-key="WEB_SEARCH_QUOTA_COOLDOWN_SECONDS"]',
+    '.field[data-key="WEB_SEARCH_FALLBACK_ON_EMPTY"]',
   ];
   const stripped = (node) => {
     if (!node) return null;

@@ -1353,6 +1353,13 @@ MEDIA_UPLOAD_MAX_MB_DEFAULT = 0
 # random 0.5-2 s (Crush); those are references, the value is the operator's.
 WEBSEARCH_LEGACY_MIN_INTERVAL_SECONDS_DEFAULT = 0.0
 
+# Track 5 PR2 (8.33.0, T5-Q1/T5-Q3/T5-Q5): dedicated search chain skip kinds
+# (decoupled from LLM FALLBACK_SKIP_KINDS), dedicated search quota cooldown
+# duration (1800s default for 402/432/433 exhaustion), and empty-200 fallback.
+WEB_SEARCH_CHAIN_SKIP_KINDS_DEFAULT = ""
+WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT = 1800.0
+WEB_SEARCH_FALLBACK_ON_EMPTY_DEFAULT = True
+
 # What web_fetch makes of an HTML page's text (7.120.0; RESEARCH-DDG-WEBSEARCH.md
 # R3, USER DECISIONS Q6/Q7). `trafilatura` -- the new default -- keeps the
 # page's main content as markdown with links and tables; it is imported on the

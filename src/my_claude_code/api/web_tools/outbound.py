@@ -459,6 +459,9 @@ async def _run_web_search_response(
             trace.fail(trace.terminal_provider, error)
             raise error
         items: list[dict[str, str]] | None = None
+        first_empty_fallback: list[
+            tuple[list[dict[str, str]], WebSearchResponse, str]
+        ] = []
         if route.provider_ids:
             items = await _provider_web_search(
                 query,
@@ -471,12 +474,41 @@ async def _run_web_search_response(
                 blocked_domains=blocked_domains,
                 request_options=request_options,
                 on_response=captured_response.append if capture_meta else None,
+                empty_fallback_out=first_empty_fallback,
             )
         if items is None:
             if route.use_legacy_scrape:
-                items = await _legacy_route_search(
-                    query, trace, route_context, max_results=max_results
-                )
+                try:
+                    items = await _legacy_route_search(
+                        query, trace, route_context, max_results=max_results
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    if not first_empty_fallback:
+                        raise
+                    empty_items, empty_resp, empty_provider = first_empty_fallback[0]
+                    if capture_meta:
+                        captured_response.append(empty_resp)
+                    trace.succeed(
+                        empty_provider,
+                        results_count=0,
+                        cost_usd=empty_resp.cost_usd,
+                    )
+                    items = empty_items
+                else:
+                    if not items and first_empty_fallback:
+                        empty_items, empty_resp, empty_provider = first_empty_fallback[
+                            0
+                        ]
+                        if capture_meta:
+                            captured_response.append(empty_resp)
+                        trace.succeed(
+                            empty_provider,
+                            results_count=0,
+                            cost_usd=empty_resp.cost_usd,
+                        )
+                        items = empty_items
             else:
                 error = WebSearchConfigError(
                     settings.web_search_provider,
@@ -688,11 +720,16 @@ async def _provider_web_search(
     blocked_domains: tuple[str, ...] = (),
     request_options: WebSearchRequestOptions | None = None,
     on_response: Callable[[WebSearchResponse], None] | None = None,
+    empty_fallback_out: list[tuple[list[dict[str, str]], WebSearchResponse, str]]
+    | None = None,
 ) -> list[dict[str, str]] | None:
     """Try the provider route; None means its terminal legacy fallback may run."""
 
-    last_error: WebSearchError | None = None
+    last_error: BaseException | None = None
+    first_empty: tuple[list[dict[str, str]], WebSearchResponse, str] | None = None
     for attempt, provider_id in enumerate(route.provider_ids, start=1):
+        has_more = attempt < len(route.provider_ids) or route.use_legacy_scrape
+        mark_empty = settings.web_search_fallback_on_empty and has_more
         attempt_number = trace.begin_attempt(provider_id)
         attempt_ts = time.time()
         attempt_started = time.perf_counter()
@@ -724,6 +761,7 @@ async def _provider_web_search(
                     attempt_number=attempt_number,
                     route_context=route_context,
                     key_charge=no_chain_key_charge,
+                    mark_empty_outcome=mark_empty,
                 )
             else:
                 response = await search_with_logging(
@@ -737,7 +775,11 @@ async def _provider_web_search(
                     route_context=route_context,
                     key_charge=no_chain_key_charge,
                     request_options=request_options,
+                    mark_empty_outcome=mark_empty,
                 )
+        except asyncio.CancelledError as error:
+            trace.fail(provider_id, error)
+            raise
         except WebSearchConfigError as error:
             # A selected provider missing credentials/base URL is an operator
             # error, not an upstream outage. Never hide it behind another search.
@@ -754,13 +796,24 @@ async def _provider_web_search(
                 error,
             )
         except Exception as error:
+            last_error = error
             trace.fail(provider_id, error)
-            raise
+            logger.warning(
+                "web_search provider unexpected error provider={} attempt={}/{} error={}",
+                provider_id,
+                attempt,
+                len(route.provider_ids),
+                error,
+            )
         else:
             if max_results == _MAX_SEARCH_RESULTS:
                 results = _web_search_response_items(response)
             else:
                 results = _web_search_response_items(response, max_results=max_results)
+            if not results and mark_empty:
+                if first_empty is None:
+                    first_empty = (results, response, provider_id)
+                continue
             if on_response is not None:
                 on_response(response)
             trace.succeed(
@@ -771,7 +824,19 @@ async def _provider_web_search(
             return results
 
     if route.use_legacy_scrape:
+        if empty_fallback_out is not None and first_empty is not None:
+            empty_fallback_out.append(first_empty)
         return None
+    if first_empty is not None:
+        empty_results, empty_resp, empty_provider = first_empty
+        if on_response is not None:
+            on_response(empty_resp)
+        trace.succeed(
+            empty_provider,
+            results_count=0,
+            cost_usd=empty_resp.cost_usd,
+        )
+        return empty_results
     if last_error is not None:
         raise last_error
     raise WebSearchConfigError(

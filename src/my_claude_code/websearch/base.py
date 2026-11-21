@@ -7,6 +7,7 @@ selection itself (the web search chain).
 """
 
 import math
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from typing import ClassVar
 
 import httpx
 
+from my_claude_code.config.constants import WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT
 from my_claude_code.core.websearch.models import (
     WebSearchRequestOptions,
     WebSearchResponse,
@@ -45,6 +47,56 @@ def _whole_seconds(wait: float) -> int:
     return max(1, math.ceil(wait)) if wait > 0 else 0
 
 
+def _build_try_row(
+    *,
+    key_index: int,
+    key_label: str,
+    elapsed_ms: float,
+    ok: bool,
+    error: BaseException | None = None,
+    charged: str | None = None,
+    benched_for_s: float | None = None,
+    rotated: bool | None = None,
+) -> dict[str, object]:
+    """Format one non-chain key try in the ``search_chain.tries_json`` shape."""
+
+    if ok:
+        return {
+            "key_index": key_index,
+            "key_label": key_label,
+            "try": 1,
+            "status": None,
+            "kind": None,
+            "retry_after": None,
+            "ms": round(elapsed_ms, 3),
+            "slept_s": None,
+            "ok": True,
+        }
+    retry_after = (
+        round(error.retry_after_seconds, 3)
+        if isinstance(error, WebSearchRateLimitError)
+        and error.retry_after_seconds is not None
+        else None
+    )
+    return {
+        "key_index": key_index,
+        "key_label": key_label,
+        "try": 1,
+        "status": error.status_code if isinstance(error, WebSearchError) else None,
+        "kind": error.kind
+        if isinstance(error, WebSearchError)
+        else type(error).__name__,
+        "retry_after": retry_after,
+        "ms": round(elapsed_ms, 3),
+        "slept_s": None,
+        "ok": False,
+        "charged": charged,
+        "benched_for_s": benched_for_s,
+        "decision": str(error)[:200] if error is not None else None,
+        "rotated": rotated,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class WebSearchProviderConfig:
     """Resolved immutable configuration for one web search provider instance."""
@@ -56,6 +108,7 @@ class WebSearchProviderConfig:
     http_timeout: float  # seconds, default 20
     # Dotenv-only advanced options (env var name -> raw value), catalog-driven.
     options: Mapping[str, str] = field(default_factory=dict)
+    quota_cooldown_seconds: float = WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT
 
 
 class BaseWebSearchProvider(ABC):
@@ -72,6 +125,7 @@ class BaseWebSearchProvider(ABC):
             config.api_keys or ("",),
             policy=config.credential_rotation,
             tuning=SEARCH_POOL_TUNING,
+            quota_cooldown_seconds=config.quota_cooldown_seconds,
         )
         self._client: httpx.AsyncClient | None = None
 
@@ -101,6 +155,7 @@ class BaseWebSearchProvider(ABC):
         blocked_domains: tuple[str, ...] = (),
         key_charge: KeyChargeJudge | None = None,
         request_options: WebSearchRequestOptions | None = None,
+        tries_out: list[dict[str, object]] | None = None,
     ) -> WebSearchResponse:
         """Run the search with key rotation; each key is tried at most once.
 
@@ -125,6 +180,24 @@ class BaseWebSearchProvider(ABC):
             blocked_domains = ()
         waiting = self._pool.bypass_rate_limit_wait()
         if waiting > 0:
+            if tries_out is not None:
+                tries_out.append(
+                    {
+                        "key_index": 0,
+                        "key_label": self.key_label(0),
+                        "try": 1,
+                        "status": 429,
+                        "kind": "rate_limit",
+                        "retry_after": round(waiting, 3),
+                        "ms": 0.0,
+                        "slept_s": None,
+                        "ok": False,
+                        "charged": None,
+                        "benched_for_s": round(waiting, 3),
+                        "decision": "rate limited (bypass wait)",
+                        "rotated": False,
+                    }
+                )
             raise self._rate_limited_error(waiting, "the key is")
         excluded: set[int] = set()
         last_error: WebSearchError | None = None
@@ -134,6 +207,7 @@ class BaseWebSearchProvider(ABC):
                 break
             key_index, key = acquired
             excluded.add(key_index)
+            try_started = time.perf_counter()
             try:
                 if request_options is None:
                     response = await self._search_with_key(
@@ -154,32 +228,95 @@ class BaseWebSearchProvider(ABC):
                         blocked_domains=blocked_domains,
                         request_options=request_options,
                     )
-            except WebSearchInvalidRequestError, WebSearchConfigError:
+            except (WebSearchInvalidRequestError, WebSearchConfigError) as error:
                 # Caller/config faults: rotating keys cannot help.
+                if tries_out is not None:
+                    tries_out.append(
+                        _build_try_row(
+                            key_index=key_index,
+                            key_label=self.key_label(key_index),
+                            elapsed_ms=(time.perf_counter() - try_started) * 1000.0,
+                            ok=False,
+                            error=error,
+                            charged=None,
+                            benched_for_s=None,
+                            rotated=False,
+                        )
+                    )
                 raise
             except WebSearchError as error:
                 error.key_index = key_index
-                self._report_failure(key_index, error, key_charge)
+                charge, benched_for_s = self._report_failure(
+                    key_index, error, key_charge
+                )
+                will_rotate = self._pool.has_selectable(exclude=frozenset(excluded))
+                if tries_out is not None:
+                    tries_out.append(
+                        _build_try_row(
+                            key_index=key_index,
+                            key_label=self.key_label(key_index),
+                            elapsed_ms=(time.perf_counter() - try_started) * 1000.0,
+                            ok=False,
+                            error=error,
+                            charged=charge,
+                            benched_for_s=benched_for_s,
+                            rotated=will_rotate,
+                        )
+                    )
                 last_error = error
             except Exception as error:
-                self._report_failure(key_index, error, key_charge)
+                charge, benched_for_s = self._report_failure(
+                    key_index, error, key_charge
+                )
+                if tries_out is not None:
+                    tries_out.append(
+                        _build_try_row(
+                            key_index=key_index,
+                            key_label=self.key_label(key_index),
+                            elapsed_ms=(time.perf_counter() - try_started) * 1000.0,
+                            ok=False,
+                            error=error,
+                            charged=charge,
+                            benched_for_s=benched_for_s,
+                            rotated=False,
+                        )
+                    )
                 raise
             else:
                 self._pool.report_success(key_index)
+                if tries_out is not None:
+                    tries_out.append(
+                        _build_try_row(
+                            key_index=key_index,
+                            key_label=self.key_label(key_index),
+                            elapsed_ms=(time.perf_counter() - try_started) * 1000.0,
+                            ok=True,
+                        )
+                    )
                 return response
         if last_error is not None:
             raise last_error
+        if tries_out is not None:
+            _, _, _, wait = self._pool.bench_summary()
+            tries_out.append(
+                {
+                    "key_index": -1,
+                    "key_label": "",
+                    "kind": "pool_benched",
+                    "retry_after": round(wait, 3),
+                }
+            )
         raise self._exhausted_error()
 
     def _report_failure(
         self, key_index: int, error: Exception, key_charge: KeyChargeJudge | None
-    ) -> None:
-        """Tell the pool what one failed try costs its key (maybe nothing)."""
+    ) -> tuple[str | None, float | None]:
+        """Tell the pool what one failed try costs its key; return (charge, benched_s)."""
 
         if not self._config.api_keys:
             # A keyless provider has nothing to bench: its anonymous slot is
             # the whole service, and the next search simply tries again.
-            return
+            return None, None
         message = error.message if isinstance(error, WebSearchError) else None
         if key_charge is None:
             # No judge: the pool's own historical reading of the search kind.
@@ -192,7 +329,7 @@ class BaseWebSearchProvider(ABC):
         else:
             charge = key_charge(error)
         if charge is None:
-            return
+            return None, None
         if charge == "rate_limit":
             self._pool.report_rate_limit(
                 key_index,
@@ -203,8 +340,15 @@ class BaseWebSearchProvider(ABC):
                     else None
                 ),
             )
-            return
-        self._pool.report_failure(key_index, kind=charge, message=message)
+        else:
+            self._pool.report_failure(key_index, kind=charge, message=message)
+        facts = self._pool.health_facts()
+        remaining = (
+            float(facts[key_index]["remaining_s"])
+            if 0 <= key_index < len(facts)
+            else 0.0
+        )
+        return charge, round(remaining, 3) if remaining > 0 else None
 
     def _rate_limited_error(self, wait: float, subject: str) -> WebSearchError:
         """The no-call refusal inside a 429 wait, naming how long is left."""

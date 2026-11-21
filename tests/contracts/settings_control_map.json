@@ -2260,12 +2260,20 @@
       "control": "field-WEB_SEARCH_CHAIN_PAUSED",
       "page": "web_search"
     },
+    "WEB_SEARCH_CHAIN_SKIP_KINDS": {
+      "control": "field-WEB_SEARCH_CHAIN_SKIP_KINDS",
+      "page": "web_search"
+    },
     "WEB_SEARCH_CHAT_ENABLED": {
       "control": "field-WEB_SEARCH_CHAT_ENABLED",
       "page": "web_search"
     },
     "WEB_SEARCH_DOOR_MODE": {
       "control": "field-WEB_SEARCH_DOOR_MODE",
+      "page": "web_search"
+    },
+    "WEB_SEARCH_FALLBACK_ON_EMPTY": {
+      "control": "field-WEB_SEARCH_FALLBACK_ON_EMPTY",
       "page": "web_search"
     },
     "WEB_SEARCH_FALLBACK_POLICY": {
@@ -2282,6 +2290,10 @@
     },
     "WEB_SEARCH_PROVIDER": {
       "control": "field-WEB_SEARCH_PROVIDER",
+      "page": "web_search"
+    },
+    "WEB_SEARCH_QUOTA_COOLDOWN_SECONDS": {
+      "control": "field-WEB_SEARCH_QUOTA_COOLDOWN_SECONDS",
       "page": "web_search"
     },
     "WEB_SEARCH_RESPONSES_ENABLED": {

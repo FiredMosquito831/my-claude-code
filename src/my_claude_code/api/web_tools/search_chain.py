@@ -39,7 +39,7 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -59,6 +59,7 @@ from my_claude_code.core.credential_attribution import (
     NO_CREDENTIAL_LABEL,
 )
 from my_claude_code.core.failures import (
+    ExecutionFailure,
     FailureKind,
     failure_kind,
     find_execution_failure,
@@ -108,8 +109,14 @@ from .search_providers import runtime_provider
 ENTRY_REF_PREFIX = "websearch:"
 
 OUTCOME_SUCCEEDED = "succeeded"
+OUTCOME_EMPTY = "empty"
 OUTCOME_FAILED = "failed"
 OUTCOME_SKIPPED = "skipped"
+
+_FAST_ROTATE_KINDS = frozenset(
+    {FailureKind.RATE_LIMIT, FailureKind.TIMEOUT, FailureKind.UNAVAILABLE}
+)
+_FAST_ROTATE_STATUSES = frozenset({429, 503, 504})
 #: ``search_log.status`` of a skipped entry (``websearch.analytics``
 #: excludes it from every success/error count).
 SKIPPED_STATUS = "skipped"
@@ -196,6 +203,13 @@ async def run_search_chain(
         )
         trace.fail(trace.terminal_provider, error)
         raise error
+    if not entries:
+        error = WebSearchConfigError(
+            "web_search",
+            "WEB_SEARCH_CHAIN has no entries configured",
+        )
+        trace.fail(trace.terminal_provider, error)
+        raise error
     context = _route_context(settings, entries, paused, max_results=max_results)
     health = search_route_health(settings)
     order = health.usable_indexes(
@@ -222,17 +236,53 @@ async def run_search_chain(
         )
         _skip_rows(trace, entries, (position,), reason, query, context)
 
-    policy_skip = parse_failure_kinds(settings.fallback_skip_kinds)
+    policy_skip = parse_failure_kinds(settings.web_search_chain_skip_kinds)
     floor = settings.fallback_cooldown_step_over_floor
     deadline = (
         time.monotonic() + settings.fallback_total_timeout
         if settings.fallback_total_timeout > 0
         else None
     )
+    resolved_cache: dict[
+        int, tuple[BaseWebSearchProvider | None, SearchKeyBooks] | WebSearchConfigError
+    ] = {}
+
+    async def _resolve_slot(
+        slot_pos: int,
+    ) -> tuple[BaseWebSearchProvider | None, SearchKeyBooks] | WebSearchConfigError:
+        cached = resolved_cache.get(slot_pos)
+        if cached is not None:
+            return cached
+        slot_entry = entries[slot_pos]
+        if slot_entry == WEB_SEARCH_CHAIN_LEGACY_ENTRY:
+            pair = (None, await legacy_scraper_books(settings))
+            resolved_cache[slot_pos] = pair
+            return pair
+        try:
+            slot_provider = await runtime_provider(settings, slot_entry)
+        except WebSearchConfigError as config_err:
+            resolved_cache[slot_pos] = config_err
+            return config_err
+        pair = (slot_provider, await search_key_books(settings, slot_provider))
+        resolved_cache[slot_pos] = pair
+        return pair
+
+    async def _has_later_viable(current_slot: int) -> bool:
+        for later_pos in order[current_slot + 1 :]:
+            resolved = await _resolve_slot(later_pos)
+            if not isinstance(resolved, WebSearchConfigError):
+                return True
+        return False
+
+    stepped_over: list[
+        tuple[float, int, BaseWebSearchProvider | None, SearchKeyBooks]
+    ] = []
+    first_empty: tuple[list[dict[str, str]], WebSearchResponse | None, str] | None = (
+        None
+    )
     last_error: BaseException | None = None
     for slot, position in enumerate(order):
         entry = entries[position]
-        is_last = slot + 1 >= len(order)
         if deadline is not None and time.monotonic() >= deadline:
             # Starting another entry with no time left only delays the error
             # the caller is already going to see; every entry from here on is
@@ -248,30 +298,26 @@ async def run_search_chain(
             if last_error is None:
                 last_error = _budget_spent_error(entry, settings.fallback_total_timeout)
             break
-        started_ts = time.time()
-        started = time.perf_counter()
-        provider: BaseWebSearchProvider | None = None
-        if entry == WEB_SEARCH_CHAIN_LEGACY_ENTRY:
-            books = await legacy_scraper_books(settings)
-        else:
-            try:
-                provider = await runtime_provider(settings, entry)
-            except WebSearchConfigError as error:
-                _skip_row(
-                    trace,
-                    entry,
-                    position,
-                    f"not configured: {error.message}",
-                    query,
-                    context,
-                )
-                continue
-            books = await search_key_books(settings, provider)
+        resolved = await _resolve_slot(position)
+        if isinstance(resolved, WebSearchConfigError):
+            _skip_row(
+                trace,
+                entry,
+                position,
+                f"not configured: {resolved.message}",
+                query,
+                context,
+            )
+            continue
+        provider, books = resolved
         # The step-over: a pool whose every key is benched would only make
-        # this search wait or fail. Never on the last entry -- a skipped chain
-        # with nothing behind it is an outage, and waiting still beats it.
-        cooldown = 0.0 if is_last else books.throttle_remaining()
-        if not is_last and cooldown >= floor:
+        # this search wait or fail. Only step over when a viable configured
+        # entry actually remains ahead; unconfigured trailing entries must not
+        # starve an earlier configured entry even if it is cooling down.
+        cooldown = books.throttle_remaining()
+        is_keyless = provider is None or not provider.config.api_keys
+        would_step_over = (cooldown > 0.0) if is_keyless else (cooldown >= floor)
+        if would_step_over and await _has_later_viable(slot):
             logger.warning(
                 "WEB SEARCH CHAIN: '{}' is cooling down for {:.0f}s;"
                 " trying the next entry instead of waiting",
@@ -286,8 +332,11 @@ async def run_search_chain(
                 query,
                 context,
             )
+            stepped_over.append((cooldown, position, provider, books))
             continue
 
+        started_ts = time.time()
+        started = time.perf_counter()
         attempt_number = trace.begin_attempt(entry)
         if provider is None:
             result = await _bounded(
@@ -344,6 +393,33 @@ async def run_search_chain(
                 results = response_items(result.value)
                 cost = result.value.cost_usd
                 won_response = result.value
+            empty_fallback = (
+                not results
+                and settings.web_search_fallback_on_empty
+                and await _has_later_viable(slot)
+            )
+            if empty_fallback:
+                if first_empty is None:
+                    first_empty = (results, won_response, entry)
+                _emit_row(
+                    trace,
+                    entry=entry,
+                    provider=provider,
+                    position=position,
+                    attempt_number=attempt_number,
+                    ts_epoch=started_ts,
+                    started=started,
+                    result=result,
+                    query=query,
+                    context=context,
+                    max_results=max_results,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                    request_options=request_options,
+                    legacy_results=results if provider is None else None,
+                    outcome_override=OUTCOME_EMPTY,
+                )
+                continue
             if on_response is not None:
                 on_response(won_response)
             _emit_row(
@@ -399,11 +475,134 @@ async def run_search_chain(
             continue
         kind = failure_kind(result.failure)
         if policy_skip and kind is not None and kind in policy_skip:
-            # The model rule: a kind the operator listed in
-            # FALLBACK_SKIP_KINDS ends the route -- nothing behind it would
-            # be asked anything different.
+            # The search-chain rule: a kind the operator listed in
+            # WEB_SEARCH_CHAIN_SKIP_KINDS ends the route -- nothing behind it
+            # would be asked anything different.
             break
 
+    if last_error is None and first_empty is None and stepped_over:
+        # All remaining configured entries skipped dynamically (e.g. runtime
+        # WebSearchConfigError); retry stepped-over entries from shortest wait
+        # so cooled-down configured entries are never starved.
+        stepped_over.sort(key=lambda item: (item[0], item[1]))
+        for _wait, position, provider, books in stepped_over:
+            entry = entries[position]
+            if deadline is not None and time.monotonic() >= deadline:
+                last_error = _budget_spent_error(entry, settings.fallback_total_timeout)
+                break
+            started_ts = time.time()
+            started = time.perf_counter()
+            attempt_number = trace.begin_attempt(entry)
+            if provider is None:
+                result = await _bounded(
+                    _run_legacy(books, query, legacy_scrape),
+                    deadline,
+                    entry,
+                    settings,
+                )
+            else:
+                result = await _bounded(
+                    _run_provider(
+                        books,
+                        provider,
+                        query,
+                        max_results=max_results,
+                        allowed_domains=allowed_domains,
+                        blocked_domains=blocked_domains,
+                        request_options=request_options,
+                    ),
+                    deadline,
+                    entry,
+                    settings,
+                )
+            if result.skipped is not None:
+                _emit_row(
+                    trace,
+                    entry=entry,
+                    provider=provider,
+                    position=position,
+                    attempt_number=attempt_number,
+                    ts_epoch=started_ts,
+                    started=started,
+                    result=result,
+                    query=query,
+                    context=context,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                )
+                continue
+            if result.ok:
+                health.record_success(refs[position])
+                won_response = None
+                if provider is None:
+                    raw = result.value if isinstance(result.value, list) else []
+                    results = [
+                        {
+                            **{str(name): str(value) for name, value in item.items()},
+                            "provider": WEB_SEARCH_CHAIN_LEGACY_ENTRY,
+                        }
+                        for item in raw
+                        if isinstance(item, dict)
+                    ][:max_results]
+                    cost = None
+                else:
+                    assert isinstance(result.value, WebSearchResponse)
+                    results = response_items(result.value)
+                    cost = result.value.cost_usd
+                    won_response = result.value
+                if on_response is not None:
+                    on_response(won_response)
+                _emit_row(
+                    trace,
+                    entry=entry,
+                    provider=provider,
+                    position=position,
+                    attempt_number=attempt_number,
+                    ts_epoch=started_ts,
+                    started=started,
+                    result=result,
+                    query=query,
+                    context=context,
+                    max_results=max_results,
+                    allowed_domains=allowed_domains,
+                    blocked_domains=blocked_domains,
+                    request_options=request_options,
+                    legacy_results=results if provider is None else None,
+                )
+                trace.succeed(entry, results_count=len(results), cost_usd=cost)
+                return results
+            assert result.failure is not None and result.error is not None
+            last_error = result.error
+            trace.fail(entry, result.error)
+            _record_route_failure(health, refs[position], result.failure)
+            _emit_row(
+                trace,
+                entry=entry,
+                provider=provider,
+                position=position,
+                attempt_number=attempt_number,
+                ts_epoch=started_ts,
+                started=started,
+                result=result,
+                query=query,
+                context=context,
+                max_results=max_results,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+                request_options=request_options,
+            )
+            break
+
+    if first_empty is not None:
+        empty_results, empty_response, empty_entry = first_empty
+        if on_response is not None:
+            on_response(empty_response)
+        trace.succeed(
+            empty_entry,
+            results_count=0,
+            cost_usd=None if empty_response is None else empty_response.cost_usd,
+        )
+        return empty_results
     if last_error is not None:
         trace.fail(trace.terminal_provider, last_error)
         raise last_error
@@ -461,6 +660,55 @@ async def _run_legacy(
     return await drive_keys(books, one_try)
 
 
+def _has_other_key(books: SearchKeyBooks, attempted: set[int]) -> bool:
+    """True when at least one unattempted healthy selectable key remains."""
+    if books.policy.rotation == "single":
+        return False
+    unavailable = books.unavailable_now()
+    return any(
+        idx not in attempted and idx not in unavailable
+        for idx in books.state.selectable_indexes()
+    )
+
+
+def _is_fast_rotate_failure(failure: BaseException | None) -> bool:
+    """Transient kinds that rotate on the first try across multi-key pools."""
+    if failure is None:
+        return False
+    kind = failure_kind(failure)
+    if kind in _FAST_ROTATE_KINDS:
+        return True
+    ef = find_execution_failure(failure)
+    return ef is not None and ef.status_code in _FAST_ROTATE_STATUSES
+
+
+def _fast_rotate_translate(
+    books: SearchKeyBooks, error: BaseException
+) -> ExecutionFailure | None:
+    """Translate errors on a non-last key so 429/503/504 rotate after 1 try."""
+    translated = books.translate(error)
+    if translated is not None:
+        if translated.retryable and _is_fast_rotate_failure(translated):
+            return replace(translated, retryable=False)
+        return translated
+    if not isinstance(error, Exception):
+        return None
+    classified = classify_provider_failure(
+        error,
+        provider_name=books.provider_id,
+        read_timeout_s=None,
+        request_id=None,
+        mark_rate_limited=lambda _wait: None,
+        cooldown=books.cooldown,
+        mark_rate_limited_enabled=False,
+    )
+    if isinstance(classified, ExecutionFailure):
+        if classified.retryable and _is_fast_rotate_failure(classified):
+            return replace(classified, retryable=False)
+        return classified
+    return None
+
+
 async def drive_keys(
     books: SearchKeyBooks,
     one_try: Callable[[int, str], Awaitable[object]],
@@ -504,14 +752,22 @@ async def drive_keys(
             result.key_index = index
             first_try = len(ladder.tries)
             first_decision = len(ladder.decisions)
+            has_other = _has_other_key(books, attempted)
+            translate_fn = (
+                (lambda err: _fast_rotate_translate(books, err))
+                if has_other
+                else books.translate
+            )
             limiter = books.limiters[index]
             try:
                 value = await limiter.execute_with_retry(
                     one_try,
                     index,
                     books.keys[index],
-                    provider_failure_override=books.translate,
+                    provider_failure_override=translate_fn,
                 )
+            except asyncio.CancelledError:
+                raise
             except WebSearchConfigError as error:
                 # A missing key or base URL is the operator's, not the key's:
                 # nothing is charged and the entry is skipped.
@@ -522,6 +778,15 @@ async def drive_keys(
                 failure = _classify(books, index, error)
                 last_failure, last_error = failure, error
                 rotate = await books.state.report_failure(index, failure)
+                if (
+                    not rotate
+                    and has_other
+                    and (
+                        not isinstance(error, WebSearchError)
+                        or _is_fast_rotate_failure(failure)
+                    )
+                ):
+                    rotate = True
                 result.tries.extend(
                     _key_tries(
                         books,
@@ -816,6 +1081,7 @@ def _emit_row(
     blocked_domains: tuple[str, ...],
     request_options: WebSearchRequestOptions | None = None,
     legacy_results: list[dict[str, str]] | None = None,
+    outcome_override: str | None = None,
 ) -> None:
     """One attempt row for one tried entry, in today's shape plus the chain's."""
     if provider is not None and not provider.SUPPORTS_DOMAINS:
@@ -860,7 +1126,7 @@ def _emit_row(
         output_payload: Mapping[str, object] | None = None
     elif result.ok:
         status = "success"
-        outcome = OUTCOME_SUCCEEDED
+        outcome = outcome_override or OUTCOME_SUCCEEDED
         error_message = None
         error_kind = None
         kind_value = None
