@@ -34,7 +34,7 @@ failures" rule (III.5) -- per the table in
 """
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
@@ -71,6 +71,56 @@ _NO_CONCURRENCY_CAP = 2**31 - 1
 #: The statuses a credits phrase is read on besides 402 (the model path's own
 #: ``providers/failure_policy._QUOTA_PHRASE_STATUSES``).
 _QUOTA_PHRASE_STATUSES = frozenset({400, 403})
+
+#: Search-specific quota/billing refusal phrases (Exa 402, Tavily 432/433,
+#: SearchAPI/SerpAPI HTTP-200 error payloads, or 400/403 quota refusals).
+_SEARCH_QUOTA_PHRASES: tuple[str, ...] = (
+    "exceeded your credits limit",
+    "usage limit",
+    "run out of searches",
+    "out of searches",
+    "credit limit",
+    "credits limit",
+    "quota exceeded",
+    "insufficient credits",
+    "insufficient_quota",
+    "plan limit",
+    "upgrade your plan",
+    "out of credits",
+    "purchase more credits",
+    "insufficient balance",
+    "not enough balance",
+    "not_enough_balance",
+    "credit balance is too low",
+    "creditserror",
+)
+
+_COMPLAINT_KEYS = frozenset(
+    {
+        "message",
+        "detail",
+        "details",
+        "msg",
+        "error",
+        "errors",
+        "reason",
+        "title",
+        "type",
+        "code",
+    }
+)
+_ECHO_KEYS = frozenset(
+    {
+        "input",
+        "body",
+        "request",
+        "payload",
+        "data",
+        "ctx",
+        "value",
+        "received",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,10 +275,12 @@ def translate_search_error(
     entry, nothing is charged) or an exception no adapter raised -- so the
     retry ladder and the pool read it exactly as they would read it raw.
 
-    The table (spec §3.3):
+    The table (spec §3.3 + Track 5 T5-Q4):
 
-    * ``quota`` (402, Tavily's 432), or a 400/403 whose body names an exact
-      credits phrase -> ``quota_failure``: benched only on the phrase.
+    * ``quota`` (402, Tavily's 432/433, ``WebSearchQuotaError``), or a 400/403
+      whose body names an exact search or LLM credits phrase ->
+      ``FailureKind.QUOTA`` with ``retry_after_seconds=cooldown.fallback_seconds``
+      so exhausted search keys are always benched.
     * ``auth`` 403 -> PERMISSION; any other ``auth`` -> AUTHENTICATION.
     * ``rate_limit`` -> RATE_LIMIT 429, retryable, with the wait the provider
       published (header under the operator's ceiling, else its body).
@@ -236,9 +288,9 @@ def translate_search_error(
       builds its own request and may accept it (user decision Q5a).
     * ``upstream``: timeout -> TIMEOUT 504 and transport -> UNAVAILABLE 503
       (both retryable); an unparseable body -> UPSTREAM 502 (not retryable);
-      a 5xx -> UPSTREAM with that status (retryable); any other status ->
-      UPSTREAM, retryable as a 429/5xx would be; no status at all -> UPSTREAM
-      502, not retryable.
+      an HTTP 200 JSON error or 5xx -> UPSTREAM with that status (retryable);
+      any other status -> UPSTREAM, retryable as a 429/5xx would be; no status
+      at all -> UPSTREAM 502, not retryable.
 
     The failure carries the provider's refusal on ``__cause__``, as every
     model-path classifier raises its failure ``from`` the host's error: the
@@ -252,13 +304,67 @@ def translate_search_error(
     return failure
 
 
+def _collect_search_complaint(value: object, parts: list[str], *, keyed: bool) -> None:
+    if isinstance(value, str):
+        if keyed:
+            parts.append(value)
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            name = str(key).lower()
+            if name in _ECHO_KEYS:
+                continue
+            _collect_search_complaint(item, parts, keyed=name in _COMPLAINT_KEYS)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        for item in value:
+            _collect_search_complaint(item, parts, keyed=keyed)
+
+
+def _search_quota_phrase(error: WebSearchError) -> str | None:
+    parts: list[str] = []
+    if error.upstream_body is not None:
+        if isinstance(error.upstream_body, str):
+            parts.append(error.upstream_body)
+        else:
+            _collect_search_complaint(error.upstream_body, parts, keyed=False)
+    text = (" ".join(parts) if parts else error.message).lower()
+    for phrase in _SEARCH_QUOTA_PHRASES:
+        if phrase in text:
+            return phrase
+    return None
+
+
 def _translate(error: WebSearchError, cooldown: RateLimitCooldown) -> ExecutionFailure:
     message = str(error)
     status = error.status_code
-    if error.kind == "quota" or (
-        status in _QUOTA_PHRASE_STATUSES and is_quota_error(_UpstreamRefusal(error))
-    ):
-        return quota_failure(_UpstreamRefusal(error), cooldown.fallback_seconds)
+    if error.kind == "quota":
+        phrase = _search_quota_phrase(error)
+        quota_message = (
+            "Provider quota/credits exhausted"
+            if phrase is None
+            else f"Provider quota/credits exhausted ({phrase})"
+        )
+        return _failure(
+            FailureKind.QUOTA,
+            status or 402,
+            quota_message,
+            False,
+            cooldown.fallback_seconds,
+        )
+    if status in _QUOTA_PHRASE_STATUSES:
+        refusal = _UpstreamRefusal(error)
+        if is_quota_error(refusal):
+            return quota_failure(refusal, cooldown.fallback_seconds)
+        phrase = _search_quota_phrase(error)
+        if phrase is not None:
+            return _failure(
+                FailureKind.QUOTA,
+                status,
+                f"Provider quota/credits exhausted ({phrase})",
+                False,
+                cooldown.fallback_seconds,
+            )
     if error.kind == "auth":
         if status == 403:
             return _failure(FailureKind.PERMISSION, 403, message, False)
@@ -282,7 +388,10 @@ def _translate(error: WebSearchError, cooldown: RateLimitCooldown) -> ExecutionF
         return _failure(FailureKind.UPSTREAM, 502, message, False)
     if status is not None:
         return _failure(
-            FailureKind.UPSTREAM, status, message, status == 429 or status >= 500
+            FailureKind.UPSTREAM,
+            status,
+            message,
+            status == 200 or status == 429 or status >= 500,
         )
     return _failure(FailureKind.UPSTREAM, 502, message, False)
 

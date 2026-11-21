@@ -19,7 +19,7 @@ from my_claude_code.core.websearch.models import (
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..options import option_enabled
-from ._common import opt_float, opt_str, text_str
+from ._common import dict_list, opt_float, opt_str, text_str
 from .http import build_async_client, request_json
 
 _DEEPSEEK_SEARCH_COST_USD = 0.00075
@@ -93,11 +93,9 @@ class DeepSeekWebSearchProvider(BaseWebSearchProvider):
             headers={"Authorization": f"Bearer {key}"},
             json_body=payload,
         )
-        rows = data.get("results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "results")
         items: list[WebSearchResultItem] = []
-        for row in rows if isinstance(rows, list) else []:
-            if not isinstance(row, dict):
-                continue
+        for row in rows:
             url = text_str(row.get("url"))
             if not url:
                 continue

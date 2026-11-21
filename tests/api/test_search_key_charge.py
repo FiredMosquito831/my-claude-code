@@ -5,6 +5,9 @@ import pytest
 
 from my_claude_code.api.web_tools.search_key_charge import no_chain_key_charge
 from my_claude_code.websearch.adapters.http import map_status_error
+from my_claude_code.websearch.adapters.tavily import (
+    _EXTRA_STATUS_ERRORS as _TAVILY_STATUS_ERRORS,
+)
 from my_claude_code.websearch.errors import (
     KIND_DETAIL_BAD_JSON,
     KIND_DETAIL_TIMEOUT,
@@ -21,7 +24,10 @@ def _http_error(status: int, message: str, headers: dict[str, str] | None = None
         json={"error": {"message": message}},
         request=httpx.Request("POST", "http://exa.test.invalid/search"),
     )
-    return map_status_error("exa", response)
+    extra = _TAVILY_STATUS_ERRORS if status in _TAVILY_STATUS_ERRORS else None
+    return map_status_error(
+        "tavily" if extra else "exa", response, extra_status_errors=extra
+    )
 
 
 @pytest.mark.parametrize(
@@ -31,12 +37,17 @@ def _http_error(status: int, message: str, headers: dict[str, str] | None = None
         (403, "forbidden", "auth"),
         (429, "too many requests", "rate_limit"),
         (402, "insufficient credits", "quota"),
-        (402, "plan limit reached", None),  # a bare 402 is unsure: no charge
+        (402, "plan limit reached", "quota"),
+        (402, "You have exceeded your credits limit", "quota"),
+        (432, "plan usage limit exceeded", "quota"),
+        (433, "usage limit reached", "quota"),
         (403, "This service is not available in your country", None),
         (500, "internal error", None),
         (502, "bad gateway", None),
         (503, "unavailable", None),
         (400, "unsupported parameter", None),
+        (404, "library not found", None),
+        (422, "unprocessable query", None),
     ],
 )
 def test_an_http_failure_is_charged_only_when_it_is_about_the_key(

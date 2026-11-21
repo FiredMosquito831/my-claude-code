@@ -16,7 +16,7 @@ from my_claude_code.core.websearch.models import (
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
-from ._common import TIME_RANGE_TO_TBS, text_str
+from ._common import TIME_RANGE_TO_TBS, dict_list, text_str
 from .http import build_async_client, request_json
 
 _KNOWN_SOURCES = ("web", "news", "images")
@@ -121,15 +121,12 @@ class FirecrawlWebSearchProvider(BaseWebSearchProvider):
             headers={"Authorization": f"Bearer {key}"},
             json_body=payload,
         )
-        section = data.get("data", {}) if isinstance(data, dict) else {}
+        section = data.get("data") if isinstance(data, dict) else None
         items = []
         for source in sources:
             if source not in _KNOWN_SOURCES:
                 continue
-            rows = section.get(source, []) if isinstance(section, dict) else []
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
+            for row in dict_list(section, source):
                 item = self._map_row(source, row)
                 if item is not None:
                     items.append(item)

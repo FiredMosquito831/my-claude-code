@@ -16,7 +16,13 @@ from my_claude_code.core.websearch.models import (
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
-from ._common import DEPTH_TO_LINKUP, opt_str, text_str, time_range_start_iso
+from ._common import (
+    DEPTH_TO_LINKUP,
+    dict_list,
+    opt_str,
+    text_str,
+    time_range_start_iso,
+)
 from .http import build_async_client, request_json
 
 _SNIPPET_CHARS = 1000
@@ -123,15 +129,13 @@ class LinkupWebSearchProvider(BaseWebSearchProvider):
         answer = ""
         if isinstance(data, dict) and output_type == "sourcedAnswer":
             answer = text_str(data.get("answer"))
-            rows = data.get("sources", [])
+            rows = dict_list(data, "sources")
             snippet_field = "snippet"
         else:
-            rows = data.get("results", []) if isinstance(data, dict) else []
+            rows = dict_list(data, "results")
             snippet_field = "content"
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue

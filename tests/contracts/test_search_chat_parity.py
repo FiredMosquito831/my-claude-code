@@ -246,13 +246,25 @@ def test_the_chat_stack_still_decides_what_the_base_tree_recorded(
 
 @pytest.mark.parametrize("answer", ANSWERS, ids=lambda answer: answer.name)
 def test_search_keys_decide_exactly_as_model_keys(answer: Answer) -> None:
-    """Every cell: tries, sleeps, ending, charge, bench, limiter, route end, next."""
+    """Every cell: tries, sleeps, ending, charge, bench, limiter, route end, next.
+
+    Track 5 T5-Q4: search keys bench authoritatively on HTTP 402 even without an
+    LLM billing phrase, so ``s402_bare`` matches the ``s402_credits`` baseline
+    while the frozen chat stack keeps its original ``s402_bare`` behavior.
+    """
     baseline = _baseline()
-    expected = {
-        key: value
-        for key, value in baseline.items()
-        if key.startswith(f"{answer.name}|")
-    }
+    if answer.name == "s402_bare":
+        expected = {
+            key.replace("s402_credits|", "s402_bare|", 1): value
+            for key, value in baseline.items()
+            if key.startswith("s402_credits|")
+        }
+    else:
+        expected = {
+            key: value
+            for key, value in baseline.items()
+            if key.startswith(f"{answer.name}|")
+        }
     mismatches = _diff(expected, _records(search_cell, answer))
     assert not mismatches, "\n".join(mismatches[:20])
 

@@ -17,7 +17,7 @@ from my_claude_code.core.websearch.models import (
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..options import option_enabled
-from ._common import TIME_RANGE_TO_TBS, opt_float, text_str
+from ._common import TIME_RANGE_TO_TBS, dict_list, opt_float, text_str
 from .http import build_async_client, request_json
 
 
@@ -94,11 +94,9 @@ class SerperWebSearchProvider(BaseWebSearchProvider):
             headers={"X-API-KEY": key},
             json_body=payload,
         )
-        rows = data.get("organic", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "organic")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("link"))
             if not url:
                 continue
@@ -150,15 +148,11 @@ def _rich_blocks_answer(data: dict[str, Any]) -> str:
             parts.append(f"{title}: {description}")
         elif title or description:
             parts.append(title or description)
-    people_also_ask = data.get("peopleAlsoAsk")
-    if isinstance(people_also_ask, list):
-        for row in people_also_ask:
-            if not isinstance(row, dict):
-                continue
-            question = text_str(row.get("question"))
-            snippet = text_str(row.get("snippet"))
-            if question and snippet:
-                parts.append(f"Q: {question}\nA: {snippet}")
-            elif question:
-                parts.append(f"Q: {question}")
+    for row in dict_list(data, "peopleAlsoAsk"):
+        question = text_str(row.get("question"))
+        snippet = text_str(row.get("snippet"))
+        if question and snippet:
+            parts.append(f"Q: {question}\nA: {snippet}")
+        elif question:
+            parts.append(f"Q: {question}")
     return "\n\n".join(parts)

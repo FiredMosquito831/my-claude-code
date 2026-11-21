@@ -17,8 +17,15 @@ from my_claude_code.core.websearch.models import (
 )
 
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
-from ..errors import WebSearchUpstreamError
-from ._common import TIME_RANGE_TO_TBS, opt_seconds_to_ms, opt_str, text_str
+from ._common import (
+    TIME_RANGE_TO_TBS,
+    classify_json_error,
+    dict_list,
+    opt_nested_float,
+    opt_seconds_to_ms,
+    opt_str,
+    text_str,
+)
 from .http import build_async_client, request_json
 
 
@@ -102,14 +109,15 @@ class SerpApiWebSearchProvider(BaseWebSearchProvider):
             params=params,
         )
         if isinstance(data, dict) and data.get("error"):
-            raise WebSearchUpstreamError(
-                self.provider_id, f"search error: {data['error']}"
+            raise classify_json_error(
+                self.provider_id,
+                data["error"],
+                status_code=200,
+                upstream_body={"error": data["error"]},
             )
-        rows = data.get("organic_results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "organic_results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("link"))
             if not url:
                 continue
@@ -140,9 +148,9 @@ class SerpApiWebSearchProvider(BaseWebSearchProvider):
             cost_usd=None,
             answer=answer or None,
             request_id=opt_str(meta.get("id")) if isinstance(meta, dict) else None,
-            provider_response_time_ms=opt_seconds_to_ms(meta.get("total_time_taken"))
-            if isinstance(meta, dict)
-            else None,
+            provider_response_time_ms=opt_seconds_to_ms(
+                opt_nested_float(data, "search_metadata", "total_time_taken")
+            ),
         )
 
 

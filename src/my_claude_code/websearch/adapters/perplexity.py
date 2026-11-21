@@ -17,7 +17,13 @@ from my_claude_code.core.websearch.models import (
 from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..errors import WebSearchAuthError, WebSearchError
 from ..options import option_int
-from ._common import DEPTH_TO_PERPLEXITY, iso_to_mmddyyyy, opt_str, text_str
+from ._common import (
+    DEPTH_TO_PERPLEXITY,
+    dict_list,
+    iso_to_mmddyyyy,
+    opt_str,
+    text_str,
+)
 from .http import build_async_client, request_json
 
 _EXTRA_STATUS_ERRORS: dict[int, type[WebSearchError]] = {451: WebSearchAuthError}
@@ -119,11 +125,9 @@ class PerplexityWebSearchProvider(BaseWebSearchProvider):
             json_body=payload,
             extra_status_errors=_EXTRA_STATUS_ERRORS,
         )
-        rows = data.get("results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue

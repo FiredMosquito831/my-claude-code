@@ -20,6 +20,7 @@ from ..base import BaseWebSearchProvider, WebSearchProviderConfig
 from ..options import option_int
 from ._common import (
     DEPTH_TO_PARALLEL,
+    dict_list,
     opt_str,
     opt_str_tuple,
     text_str,
@@ -113,11 +114,9 @@ class ParallelWebSearchProvider(BaseWebSearchProvider):
             headers={"x-api-key": key},
             json_body=payload,
         )
-        rows = data.get("results", []) if isinstance(data, dict) else []
+        rows = dict_list(data, "results")
         items = []
         for row in rows:
-            if not isinstance(row, dict):
-                continue
             url = text_str(row.get("url"))
             if not url:
                 continue
