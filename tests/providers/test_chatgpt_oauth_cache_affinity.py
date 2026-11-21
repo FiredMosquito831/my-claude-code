@@ -247,7 +247,10 @@ def test_client_fingerprint_stays_unchanged_for_existing_consumers() -> None:
             "x-claude-code-session-id": "cc-root-1",
         }
     )
-    assert fp == ClientFingerprint(user_agent="claude-cli/2.1.0 (external, cli)")
+    assert fp == ClientFingerprint(
+        user_agent="claude-cli/2.1.0 (external, cli)",
+        harness="claude",
+    )
     assert fp.session_id is None
     assert fp.opencode_session is None
     assert current_chatgpt_session_id() == "cc-root-1"

@@ -205,22 +205,36 @@ def test_every_id_the_classifier_emits_is_declared_somewhere() -> None:
 
 
 def test_the_oauth_mirroring_record_is_untouched_by_the_classifier() -> None:
-    """The harness column must not widen what the OAuth provider mirrors.
+    """``ClientFingerprint`` carries ``harness`` in-process, never upstream.
 
-    ``ClientFingerprint`` is reproduced upstream on the subscription path. The
-    classifier reads the same headers but adds nothing to that record, so the
-    OAuth wire contract cannot move because attribution changed.
+    Under Plan A (8.35.0), ``ClientFingerprint.harness`` is populated so the
+    wire-surface resolver can read it inside the request context without touching
+    ``application/execution.py``. The Anthropic OAuth wire header builder must
+    still never mirror ``x-mcc-harness`` or ``harness`` upstream.
     """
+    from my_claude_code.providers.anthropic_oauth.auth import (
+        AnthropicOAuthAuth,
+        OAuthTokens,
+    )
+
     fingerprint = fingerprint_from_headers(
         {
             "user-agent": "claude-cli/2.1.258 (external, cli)",
-            HARNESS_HEADER: "claude",
+            HARNESS_HEADER: "qwen_code",
             "x-app": "cli",
         }
     )
     assert fingerprint.user_agent == "claude-cli/2.1.258 (external, cli)"
     assert fingerprint.x_app == "cli"
-    assert not hasattr(fingerprint, "harness")
+    assert fingerprint.harness == "qwen_code"
+
+    auth = AnthropicOAuthAuth(OAuthTokens(access_token="sk-ant-oat01-test"))
+    upstream = auth._headers_for(
+        OAuthTokens(access_token="sk-ant-oat01-test"), fingerprint
+    )
+    lowered = {k.lower() for k in upstream}
+    assert HARNESS_HEADER not in lowered
+    assert "harness" not in lowered
 
 
 # --------------------------------------------------- the conversation id

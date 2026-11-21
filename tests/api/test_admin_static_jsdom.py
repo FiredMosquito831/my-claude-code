@@ -15549,3 +15549,63 @@ def test_jsdom_preferred_surface_saves_preserve_dom_and_sync_inherit_label(
         "key": "opencode_go",
         "surface": "chat_completions",
     }
+
+
+@pytest.fixture(scope="module")
+def harness_surfaces_ui() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="harness_surfaces")
+
+
+def test_jsdom_harness_surfaces_renders_multi_door_only_and_escapes_xss(
+    harness_surfaces_ui: dict,
+) -> None:
+    assert harness_surfaces_ui["fatal"] is None
+    assert harness_surfaces_ui.get("scenarioError") is None
+    assert harness_surfaces_ui["scriptErrors"] == []
+    assert harness_surfaces_ui["consoleErrors"] == []
+
+    initial = harness_surfaces_ui["initial"]
+    assert initial["claudeHasSurfaces"] is True
+    assert "Surfaces it uses" in initial["codexSummary"]
+    assert "x-mcc-harness" in initial["attributionNote"]
+    assert "Claude Desktop" in initial["attributionNote"]
+    assert initial["renderedProviderIds"] == ["opencode_go", "custom_evil"]
+    assert initial["groqRendered"] is False
+    assert initial["customDisplayNameText"] == harness_surfaces_ui["xssDisplayName"]
+    assert initial["injectedElementCount"] == 0
+    assert initial["goOptions"][0] == {
+        "value": "",
+        "text": "Follow the client (auto)",
+    }
+
+
+def test_jsdom_harness_surfaces_saves_and_resets_auto_cleanly(
+    harness_surfaces_ui: dict,
+) -> None:
+    after_save = harness_surfaces_ui["afterSave"]
+    assert after_save["feedbackText"] == "Saved"
+    assert after_save["feedbackConnected"] is True
+    assert after_save["selectValue"] == "responses"
+    assert "Preferred: Responses" in after_save["statusText"]
+
+    after_reset = harness_surfaces_ui["afterReset"]
+    assert after_reset["feedbackText"] == "Saved"
+    assert after_reset["feedbackConnected"] is True
+    assert after_reset["selectValue"] == ""
+    assert "Follow the client" in after_reset["statusText"]
+
+    posts = harness_surfaces_ui["posts"]
+    assert [p["path"] for p in posts] == [
+        "/admin/api/harness-surfaces",
+        "/admin/api/harness-surfaces",
+    ]
+    assert json.loads(posts[0]["body"]) == {
+        "harness": "codex",
+        "provider": "opencode_go",
+        "surface": "responses",
+    }
+    assert json.loads(posts[1]["body"]) == {
+        "harness": "codex",
+        "provider": "opencode_go",
+        "surface": "auto",
+    }

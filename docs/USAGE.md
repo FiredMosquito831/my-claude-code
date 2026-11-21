@@ -4389,6 +4389,21 @@ the row's parameters — enough to answer the question `resolved_model` alone
 cannot, which is whether *your* override fired or the agent quietly followed the
 global route. Nothing about the log's schema changed and exports are unchanged.
 
+**Per-agent wire surfaces (`harness_surfaces`).** Each card on the **Coding
+agents** page also has a **Surfaces it uses** section for providers declaring two
+or more wire surfaces (`opencode`, `opencode_go`, `inferhub`, `mistral`,
+`mistral_vibe`, and multi-door custom providers). Single-door providers show no
+surface control. Picking a door saves `harness_surfaces.<harness>.<provider>` in
+`~/.mcc/model_overrides.json` via `POST /admin/api/harness-surfaces` (choosing
+*Follow the client (auto)* removes the entry cleanly, and invalid or
+single-door requests fail with HTTP 422). Precedence across preferences is:
+`response_surface` pin > `harness_surfaces[harness][provider]` > model
+`preferred_surface` > provider `preferred_surface` > the discovered surface
+ladder. Attribution comes from `x-mcc-harness` (else `User-Agent`), is a
+client-claimed label rather than a login, and groups Claude Desktop under
+`claude`; internal vision-describe calls inherit the client request's harness,
+and fallback models on other hosts ignore a preference set for another provider.
+
 <a id="how-an-agents-model-list-gets-to-disk"></a>
 
 ### How an agent's model list gets to disk
@@ -4726,7 +4741,7 @@ These are the rows the earlier override editor, *What this forces onto the reque
 
 A provider's own table (*Parameter overrides for every <provider> model*) has the same rows except the context window, which is set per model; its value column is that provider row's own setting, and the default reads *per model -- open a model to see its default*, because a provider has no single capability record.
 
-**Saving is unchanged.** *Save overrides* sends the same body to the same route, key for key, and writes `model_overrides.json` exactly as before; a value the page refuses (a fraction for a window, an output cap above the published limit, *Force value* with an empty box) is refused with the same message. After a save the value columns and the default lines repaint in place and *Saved* stays on screen. *Pin endpoint* on the Wire surface row keeps its own save (`POST /admin/api/model-admin/surface`), checked against what the host serves. *Set preference* writes `preferred_surface` via `POST /admin/api/model-admin/preferred-surface` (accepting `"Follow the client"` `""` to clear or any offered door, refusing `unservable` and undeclared doors with HTTP 422), and is shown only on providers with two or more speakable doors (`>= 2`). Unlike *Pin endpoint* (which uses only that door), *Set preference* tries that door first while keeping the fallback ladder intact (switching doors re-reads the prompt cache).
+**Saving is unchanged.** *Save overrides* sends the same body to the same route, key for key, and writes `model_overrides.json` exactly as before; a value the page refuses (a fraction for a window, an output cap above the published limit, *Force value* with an empty box) is refused with the same message. After a save the value columns and the default lines repaint in place and *Saved* stays on screen. *Pin endpoint* on the Wire surface row keeps its own save (`POST /admin/api/model-admin/surface`), checked against what the host serves. *Set preference* writes `preferred_surface` via `POST /admin/api/model-admin/preferred-surface` (accepting `"Follow the client"` `""` to clear or any offered door, refusing `unservable` and undeclared doors with HTTP 422), and is shown only on providers with two or more speakable doors (`>= 2`). Per-coding-agent overrides under **Coding agents → Surfaces it uses** (`harness_surfaces` in `model_overrides.json`, written via `POST /admin/api/harness-surfaces`) outrank both model- and provider-level `preferred_surface` (while `response_surface` pins still win over everything). Unlike *Pin endpoint* (which uses only that door), *Set preference* tries that door first while keeping the fallback ladder intact (switching doors re-reads the prompt cache).
 
 **The *override(s) active* chip** beside a model's name counts every key you set that reaches that model -- the output cap, the context window, the reasoning word, the prompt cache lifetime and a pinned endpoint as well as the nine request parameters, from the model's own row and from its provider's. Before 7.101.0 it counted only the nine.
 

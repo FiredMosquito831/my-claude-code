@@ -50,7 +50,7 @@ Two families are excluded on purpose:
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Self
 
@@ -61,11 +61,13 @@ from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_MAX_MINUTES,
     PROMPT_CACHE_TTL_MIN_MINUTES,
 )
+from my_claude_code.config.harnesses import harness_ids
 from my_claude_code.config.marketplace_profiles import profile_name_problem
 from my_claude_code.config.paths import model_overrides_path
 
 PROVIDERS_KEY = "providers"
 MODELS_KEY = "models"
+HARNESS_SURFACES_KEY = "harness_surfaces"
 
 # Real request fields only. Adding to this list makes a parameter settable;
 # nothing else about it has to change.
@@ -335,12 +337,13 @@ class ModelParameterOverrides:
 
     providers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     models: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    harness_surfaces: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
         """Whether this table can change any request at all."""
 
-        return not self.providers and not self.models
+        return not self.providers and not self.models and not self.harness_surfaces
 
     @classmethod
     def from_document(cls, document: object) -> Self:
@@ -354,6 +357,9 @@ class ModelParameterOverrides:
         return cls(
             providers=_parse_section(document.get(PROVIDERS_KEY), PROVIDERS_KEY),
             models=_parse_section(document.get(MODELS_KEY), MODELS_KEY),
+            harness_surfaces=_parse_harness_surfaces(
+                document.get(HARNESS_SURFACES_KEY)
+            ),
         )
 
     def resolve(self, provider_id: str, model_ref: str) -> dict[str, Any]:
@@ -530,16 +536,112 @@ class ModelParameterOverrides:
             stated(self.providers.get(normalize_override_key(provider_id), {})),
         )
 
-    def as_document(self) -> dict[str, dict[str, dict[str, Any]]]:
+    def harness_surfaces_for(self, harness_id: str | None) -> Mapping[str, str]:
+        """Return ``{provider_id: surface}`` preferences for one coding agent."""
+
+        if not harness_id:
+            return {}
+        return self.harness_surfaces.get(normalize_override_key(harness_id), {})
+
+    def harness_surface(self, harness_id: str | None, provider_id: str) -> str | None:
+        """Return the preferred wire surface for ``(harness_id, provider_id)``, or ``None``."""
+
+        if not harness_id or not provider_id:
+            return None
+        return self.harness_surfaces_for(harness_id).get(
+            normalize_override_key(provider_id)
+        )
+
+    def as_document(self) -> dict[str, dict[str, Any]]:
         """Render back to the on-disk shape."""
 
-        return {
+        document: dict[str, dict[str, Any]] = {
             PROVIDERS_KEY: {key: dict(value) for key, value in self.providers.items()},
             MODELS_KEY: {key: dict(value) for key, value in self.models.items()},
         }
+        if self.harness_surfaces:
+            document[HARNESS_SURFACES_KEY] = {
+                key: dict(value) for key, value in self.harness_surfaces.items()
+            }
+        return document
 
 
 EMPTY_MODEL_OVERRIDES = ModelParameterOverrides()
+
+
+def with_harness_surface_row(
+    overrides: ModelParameterOverrides,
+    *,
+    harness: str,
+    provider_id: str,
+    surface: str | None,
+) -> ModelParameterOverrides:
+    """Return a copy of ``overrides`` with one ``(harness, provider)`` surface set or cleared."""
+
+    folded_harness = normalize_override_key(harness)
+    folded_provider = normalize_override_key(provider_id)
+    table = {key: dict(row) for key, row in overrides.harness_surfaces.items()}
+    row = dict(table.get(folded_harness, {}))
+    cleaned = surface.strip() if isinstance(surface, str) else ""
+    if cleaned:
+        row[folded_provider] = cleaned
+    else:
+        row.pop(folded_provider, None)
+    if row:
+        table[folded_harness] = row
+    else:
+        table.pop(folded_harness, None)
+    return replace(overrides, harness_surfaces=table)
+
+
+def _parse_harness_surfaces(section: object) -> dict[str, dict[str, str]]:
+    if section is None:
+        return {}
+    if not isinstance(section, Mapping):
+        logger.warning(
+            "MODEL OVERRIDES: '{}' is not an object; ignoring it",
+            HARNESS_SURFACES_KEY,
+        )
+        return {}
+    known = {normalize_override_key(item) for item in harness_ids()}
+    parsed: dict[str, dict[str, str]] = {}
+    for raw_harness, raw_providers in section.items():
+        harness_id = normalize_override_key(str(raw_harness))
+        if not harness_id:
+            continue
+        if harness_id not in known:
+            logger.warning(
+                "MODEL OVERRIDES: '{}.{}' is not a known coding agent; ignoring it",
+                HARNESS_SURFACES_KEY,
+                harness_id,
+            )
+            continue
+        if not isinstance(raw_providers, Mapping):
+            logger.warning(
+                "MODEL OVERRIDES: '{}.{}' is not an object; ignoring it",
+                HARNESS_SURFACES_KEY,
+                harness_id,
+            )
+            continue
+        providers_map: dict[str, str] = {}
+        for raw_provider, raw_surface in raw_providers.items():
+            provider_id = normalize_override_key(str(raw_provider))
+            if not provider_id:
+                continue
+            problem = preferred_surface_problem(raw_surface)
+            if problem is not None:
+                logger.warning(
+                    "MODEL OVERRIDES: '{}.{}.{}' {}; ignoring it",
+                    HARNESS_SURFACES_KEY,
+                    harness_id,
+                    provider_id,
+                    problem,
+                )
+                continue
+            providers_map[provider_id] = str(raw_surface).strip()
+        if providers_map:
+            parsed[harness_id] = providers_map
+    return parsed
 
 
 def _parse_section(section: object, section_name: str) -> dict[str, dict[str, Any]]:

@@ -94,6 +94,9 @@ const state = {
   // GET /admin/api/harness-tiers: the five tiers, what each resolves to
   // globally, and which of them each coding agent overrides.
   harnessTiers: null,
+  // GET /admin/api/harness-surfaces: multi-door providers (>= 2 speakable
+  // doors) and each coding agent's preferred wire surface per provider.
+  harnessSurfaces: null,
   // 7.122.0 (U11): the markup now opens on Get Started, so the state agrees
   // with it before load() has answered -- the first paint is the page the
   // server will most likely ask for, not the Providers grid.
@@ -10111,6 +10114,7 @@ const GUIDE_ANCHORS = {
   cli: "guide-cli",
   desktop_apps: "guide-desktop-apps",
   agent_tiers: "guide-agent-tiers",
+  agent_surfaces: "guide-agent-surfaces",
   learned: "guide-learned",
   images: "guide-images",
   cost: "guide-cost",
@@ -29262,6 +29266,7 @@ async function loadHarnesses() {
     state.harnessUsage = null;
   }
   await loadHarnessTiers();
+  await loadHarnessSurfaces();
   renderHarnesses();
   renderRtkState();
   // 7.99.0: each card's Add / Remove MCP server button and the MCC media
@@ -29369,6 +29374,9 @@ function harnessCard(harness) {
 
   const tiers = harnessTiersSection(harness);
   if (tiers) card.append(tiers);
+
+  const surfaces = harnessSurfacesSection(harness);
+  if (surfaces) card.append(surfaces);
 
   if (!harness.installed && harness.install_hint) {
     const hint = document.createElement("p");
@@ -31412,6 +31420,195 @@ async function saveHarnessTier(harnessId, tierId, body, button) {
     showMessage(error.message, "error");
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+async function loadHarnessSurfaces() {
+  try {
+    state.harnessSurfaces = await api("/admin/api/harness-surfaces");
+  } catch (_) {
+    state.harnessSurfaces = null;
+  }
+}
+
+function formatHarnessSurfaceStatus(provider, currentSurface) {
+  const summary = provider.status_summary || "";
+  const active = currentSurface
+    ? `Preferred: ${surfaceShortLabel(currentSurface)}`
+    : "Follow the client";
+  return summary ? `${summary} · ${active}` : active;
+}
+
+/** The "Surfaces it uses" block for one coding agent card, gated to >=2-door providers (Q11). */
+function harnessSurfacesSection(harness) {
+  const payload = state.harnessSurfaces;
+  if (!payload) return null;
+  const providers = Array.isArray(payload.providers)
+    ? payload.providers.filter(
+        (provider) => Array.isArray(provider.offered) && provider.offered.length >= 2,
+      )
+    : [];
+  const perHarness = (payload.harnesses || {})[harness.id];
+  if (!providers.length || !perHarness) return null;
+
+  const block = document.createElement("details");
+  block.className = "agent-surfaces";
+  block.dataset.harness = harness.id;
+  block.open = providers.some((provider) =>
+    Boolean(perHarness[provider.provider_id]),
+  );
+
+  const summary = document.createElement("summary");
+  summary.className = "agent-surfaces-summary";
+  summary.textContent = "Surfaces it uses";
+  summary.append(guideLink("agent_surfaces"));
+  block.append(summary);
+
+  const intro = document.createElement("p");
+  intro.className = "field-description";
+  intro.textContent =
+    payload.attribution_note ||
+    "This is what the client said it was (x-mcc-harness, else its user-agent). " +
+      "It is a label, not a login; Claude Desktop shares claude. " +
+      "Applies per host; fallback models on other providers ignore it.";
+  block.append(intro);
+
+  providers.forEach((provider) => {
+    block.append(
+      harnessSurfaceRow(
+        harness,
+        provider,
+        perHarness[provider.provider_id] || "",
+      ),
+    );
+  });
+  return block;
+}
+
+function harnessSurfaceRow(harness, provider, currentSurface) {
+  const row = document.createElement("div");
+  row.className = "agent-surface";
+  row.dataset.provider = provider.provider_id;
+
+  const head = document.createElement("div");
+  head.className = "agent-surface-head";
+
+  const name = document.createElement("span");
+  name.className = "agent-surface-provider";
+  name.textContent = provider.display_name || provider.provider_id;
+
+  const idCode = document.createElement("code");
+  idCode.className = "agent-surface-provider-id";
+  idCode.textContent = provider.provider_id;
+
+  const statusBadge = document.createElement("span");
+  statusBadge.className = "agent-surface-status";
+  statusBadge.textContent = formatHarnessSurfaceStatus(provider, currentSurface);
+
+  head.append(name, idCode, statusBadge);
+  row.append(head);
+
+  const controls = document.createElement("div");
+  controls.className = "agent-surface-controls";
+
+  const select = document.createElement("select");
+  select.className = "agent-surface-select";
+  select.setAttribute(
+    "aria-label",
+    `Preferred wire surface for ${harness.display_name || harness.id} on ${provider.provider_id}`,
+  );
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "Follow the client (auto)";
+  select.append(auto);
+
+  (provider.offered || []).forEach((surface) => {
+    const option = document.createElement("option");
+    option.value = surface.value;
+    option.textContent = surface.label;
+    select.append(option);
+  });
+  select.value = currentSurface || "";
+  controls.append(select);
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "ghost-button agent-surface-save";
+  save.textContent = "Save";
+
+  const feedback = document.createElement("span");
+  feedback.className = "models-status agent-surface-feedback";
+
+  save.addEventListener("click", () => {
+    saveHarnessSurface(
+      harness.id,
+      provider.provider_id,
+      select.value,
+      save,
+      select,
+      feedback,
+      statusBadge,
+    );
+  });
+
+  controls.append(save, feedback);
+  row.append(controls);
+  return row;
+}
+
+async function saveHarnessSurface(
+  harnessId,
+  providerId,
+  surface,
+  button,
+  select,
+  feedback,
+  statusBadge,
+) {
+  if (button) button.disabled = true;
+  if (select) select.disabled = true;
+  if (feedback) {
+    feedback.className = "models-status agent-surface-feedback";
+    feedback.textContent = "Saving...";
+  }
+  try {
+    const updated = await api("/admin/api/harness-surfaces", {
+      method: "POST",
+      body: JSON.stringify({
+        harness: harnessId,
+        provider: providerId,
+        surface: surface || "auto",
+      }),
+    });
+    state.harnessSurfaces = updated;
+    const saved =
+      ((updated.harnesses || {})[harnessId] || {})[providerId] || "";
+    if (select) select.value = saved;
+    const providerMeta = (updated.providers || []).find(
+      (entry) => entry.provider_id === providerId,
+    );
+    if (statusBadge && providerMeta) {
+      statusBadge.textContent = formatHarnessSurfaceStatus(providerMeta, saved);
+    }
+    if (feedback) {
+      feedback.textContent = "Saved";
+      feedback.className = "models-status agent-surface-feedback ok";
+    }
+    showMessage(
+      saved
+        ? `Saved ${providerId} surface for ${harnessId}.`
+        : `${harnessId} follows the client on ${providerId}.`,
+      "ok",
+    );
+  } catch (error) {
+    if (feedback) {
+      feedback.textContent = error.message;
+      feedback.className = "models-status agent-surface-feedback error";
+    }
+    showMessage(error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+    if (select) select.disabled = false;
   }
 }
 
@@ -50854,6 +51051,7 @@ const SECTION_NAVIGATOR = {
     ["Tiers", "#guide-models"],
     ["Learned facts", "#guide-learned"],
     ["Agent tiers", "#guide-agent-tiers"],
+    ["Agent surfaces", "#guide-agent-surfaces"],
     ["Reasoning", "#guide-reasoning"],
     ["Cache lifetime", "#guide-prompt-cache-lifetime"],
     ["Responses protocol", "#guide-responses-protocol"],

@@ -9776,6 +9776,77 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
+.agent-surfaces {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.agent-surfaces-summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agent-surfaces > .field-description {
+  margin: 6px 0 10px;
+}
+
+.agent-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.agent-surface:first-of-type {
+  border-top: none;
+}
+
+.agent-surface-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-surface-provider {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.agent-surface-provider-id {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.agent-surface-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.agent-surface-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-surface-select {
+  min-width: 190px;
+  flex: 1 1 auto;
+}
+
+.agent-surface-save {
+  flex: 0 0 auto;
+}
+
+.agent-surface-feedback {
+  font-size: 12px;
+}
+
 /* 7.113.3: the Coding agents page's filter box. One bar above both card
    groups (CLI agents and desktop apps). Filtering hides cards with the
    `hidden` attribute and never removes one, the same choice the Providers

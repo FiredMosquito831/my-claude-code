@@ -4884,6 +4884,14 @@ if (process.env.MCC_JSDOM_SCENARIO === "preferred_surface") {
   );
   scenario = preparePreferredSurfaceScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=harness_surfaces (8.35.0): Coding-agents card Surfaces it
+   uses controls, Q11 >=2-door filter, Q8 attribution note, and DOM XSS safety. */
+if (process.env.MCC_JSDOM_SCENARIO === "harness_surfaces") {
+  const { prepareHarnessSurfacesScenario } = await import(
+    "./admin_jsdom_harness_surfaces.mjs"
+  );
+  scenario = prepareHarnessSurfacesScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=ux_views (7.122.3): every view's DOM digests, for the
    base-tree equality of the UX pass -- the same scenario runs on the base
    tree and here (admin_jsdom_ux_views.mjs). */

@@ -73,6 +73,7 @@ from my_claude_code.config.model_overrides import (
     model_ref_for,
 )
 from my_claude_code.core.client_family import ClientFamily, current_client_family
+from my_claude_code.core.client_fingerprint import UNKNOWN_HARNESS, current_fingerprint
 from my_claude_code.providers.recovery import (
     FACT_PREFERRED_SURFACE_REFUSED,
     FACT_RESPONSE_SURFACE,
@@ -318,17 +319,36 @@ def override_surface(provider_id: str, model_id: str) -> ResponseSurface | None:
         return None
 
 
-def preferred_surface_of(provider_id: str, model_id: str) -> ResponseSurface | None:
+def preferred_surface_of(
+    provider_id: str,
+    model_id: str,
+    *,
+    client_harness: str | None = None,
+) -> ResponseSurface | None:
     """Return the operator's preferred wire surface, or ``None`` when unset.
 
-    Precedence within ``preferred_surface``: model row > provider row (with
-    ``null`` on a model row cancelling a provider-level preference). Never
-    returns ``ResponseSurface.UNSERVABLE``.
+    Precedence within ``preferred_surface``:
+    ``harness_surfaces[harness][provider]`` > ``models[ref].preferred_surface``
+    (with ``null`` cancelling a provider-level preference) >
+    ``providers[provider].preferred_surface``.
+    Never returns ``ResponseSurface.UNSERVABLE``.
     """
 
-    raw = current_model_overrides().non_body_override(
-        PREFERRED_SURFACE_OVERRIDE, provider_id, model_ref_for(provider_id, model_id)
+    overrides = current_model_overrides()
+    effective_harness = (
+        client_harness.strip().casefold()
+        if client_harness is not None
+        else current_fingerprint().harness
     )
+    raw: str | None = None
+    if effective_harness and effective_harness != UNKNOWN_HARNESS:
+        raw = overrides.harness_surface(effective_harness, provider_id)
+    if raw is None:
+        raw = overrides.non_body_override(
+            PREFERRED_SURFACE_OVERRIDE,
+            provider_id,
+            model_ref_for(provider_id, model_id),
+        )
     if raw is None:
         return None
     try:
@@ -579,8 +599,9 @@ def resolve_surface_ladder(
     Precedence, strongest first:
 
     1. Operator pin (``model_overrides.json`` ``response_surface``): exclusive.
-    2. Operator preference (``model_overrides.json`` ``preferred_surface``,
-       model > provider): leads the ladder while keeping remaining candidates
+    2. Operator preference (``model_overrides.json`` ``harness_surfaces``
+       per-harness x provider > ``models[ref].preferred_surface`` >
+       ``providers[p].preferred_surface``): leads the ladder while keeping remaining candidates
        in ``client_family`` order; probes once if declared-but-unproved (Q4);
        defers to the remaining ladder without erasing the preference if refused
        within the 7-day TTL (Q9).
