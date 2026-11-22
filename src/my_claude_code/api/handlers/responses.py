@@ -244,8 +244,21 @@ class ResponsesHandler:
             initial_force_search=spec.forced,
             search_allowed_disjoint=spec.allowed_disjoint,
         )
+        loop_request = response_request
+        if response_request.responses_envelope is not None:
+            # The local web-search tool loop rewrites messages, tools, and
+            # tool_choice across steps; drop those stale ingress keys from the
+            # envelope while preserving non-loop sidecars (text, reasoning, etc.).
+            loop_envelope = {
+                key: value
+                for key, value in response_request.responses_envelope.items()
+                if key not in {"input", "tools", "tool_choice", "instructions"}
+            }
+            loop_request = response_request.model_copy(
+                update={"responses_envelope": loop_envelope or None}
+            )
         loop_result = await run_routed_web_tool_loop(
-            response_request,
+            loop_request,
             config,
             self._settings,
             model_router=self._model_router,

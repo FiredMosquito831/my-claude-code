@@ -24,3 +24,13 @@ class OpenAIResponsesRequest(BaseModel):
     reasoning: dict[str, Any] | None = None
     previous_response_id: str | None = None
     store: bool | None = None
+    text: dict[str, Any] | None = None
+    service_tier: str | None = None
+    truncation: Any = None
+    include: list[str] | None = None
+    prompt_cache_key: str | None = None
+    client_metadata: dict[str, Any] | None = None
+    user: str | None = None
+    safety_identifier: str | None = None
+    background: bool | None = None
+    prompt_cache_retention: Any = None

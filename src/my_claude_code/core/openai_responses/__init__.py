@@ -26,6 +26,7 @@ from .tools import (
     ResponsesWebSearchSpec,
     call_id_from_item,
     extract_responses_web_search_spec,
+    responses_tool_name_to_anthropic_name,
 )
 from .web_search_response import (
     build_responses_payload_from_loop,
@@ -58,4 +59,5 @@ __all__ = [
     "openai_error_payload",
     "openai_error_type_for_failure",
     "openai_failure_payload",
+    "responses_tool_name_to_anthropic_name",
 ]

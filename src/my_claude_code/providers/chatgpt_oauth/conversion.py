@@ -35,6 +35,7 @@ from my_claude_code.providers.openai_responses.conversion import (
     RESPONSES_DEFAULT_REASONING_SUMMARY as CHATGPT_DEFAULT_REASONING_SUMMARY,
 )
 from my_claude_code.providers.openai_responses.conversion import (
+    build_responses_passthrough_body,
     build_responses_request_body,
 )
 from my_claude_code.providers.openai_responses.conversion import (
@@ -69,6 +70,8 @@ def build_chatgpt_oauth_request_body(
     plaintext_replay: bool = False,
     prompt_cache_key: str | None = None,
     unspecified_effort: str | None = None,
+    drop_reasoning_items: bool = False,
+    compact: bool = False,
 ) -> dict[str, Any]:
     """Build a ChatGPT Responses API request body from an Anthropic request.
 
@@ -109,6 +112,24 @@ def build_chatgpt_oauth_request_body(
     effective_unspecified = unspecified_effort
     if effective_unspecified is None and reasoning.control is ReasoningControl.ADAPTIVE:
         effective_unspecified = ReasoningEffort.MAX.value
+    parallel = configured_responses_parallel_tool_calls()
+    if request.responses_envelope is not None:
+        return build_responses_passthrough_body(
+            request,
+            reasoning=reasoning,
+            store=False,
+            stream=True,
+            parallel_tool_calls=parallel,
+            prompt_cache_key=prompt_cache_key,
+            tool_name_max_length=tool_name_max_length,
+            tool_schema_dialect=tool_schema_dialect,
+            wire_notes=wire_notes,
+            origin=origin,
+            plaintext_replay=plaintext_replay,
+            unspecified_effort=effective_unspecified,
+            drop_reasoning_items=drop_reasoning_items,
+            compact=compact,
+        )
     return build_responses_request_body(
         request,
         reasoning=reasoning,
@@ -116,7 +137,7 @@ def build_chatgpt_oauth_request_body(
         stream=True,
         # 8.15.0: the adapter-level switch, read here so a dashboard save
         # reaches the next request. Before it, this line hard-coded ``False``.
-        parallel_tool_calls=configured_responses_parallel_tool_calls(),
+        parallel_tool_calls=parallel,
         max_output_tokens=None,
         prompt_cache_key=prompt_cache_key,
         include_encrypted_reasoning=True,

@@ -31,6 +31,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from loguru import logger
@@ -154,6 +155,21 @@ class _ResponsesLearning:
     value: Any
     evidence: str
     log_line: str
+
+
+def _is_openai_responses_destination(provider_id: str, base_url: str) -> bool:
+    """Whether a ResponsesTransport target is OpenAI/Azure/Codex-native."""
+    pid = provider_id.strip().lower()
+    if pid in {"openai", "azure_openai", "chatgpt_oauth"}:
+        return True
+    host = (urlsplit(base_url).hostname or "").strip().lower()
+    return (
+        host == "api.openai.com"
+        or host == "chatgpt.com"
+        or host.endswith(".openai.com")
+        or host.endswith(".openai.azure.com")
+        or host.endswith(".cognitiveservices.azure.com")
+    )
 
 
 def _forces_a_tool(tool_choice: Any) -> bool:
@@ -591,6 +607,15 @@ class ResponsesTransport:
         always got.
         """
 
+        envelope = request.responses_envelope
+        has_envelope = isinstance(envelope, Mapping)
+        effective_parallel_tool_calls = configured_responses_parallel_tool_calls()
+        if has_envelope and isinstance(envelope.get("parallel_tool_calls"), bool):
+            effective_parallel_tool_calls = envelope["parallel_tool_calls"]
+        openai_destination = _is_openai_responses_destination(
+            self._provider_id, self._base_url
+        )
+
         body = build_responses_request_body(
             request,
             reasoning=reasoning,
@@ -601,7 +626,7 @@ class ResponsesTransport:
             # ``False``. The same setting serves the ChatGPT subscription
             # (``providers/chatgpt_oauth/conversion.py``): it is a property of
             # the Responses protocol, not of one host.
-            parallel_tool_calls=configured_responses_parallel_tool_calls(),
+            parallel_tool_calls=effective_parallel_tool_calls,
             max_output_tokens=max_output_tokens,
             extra_body=extra_body,
             tool_name_max_length=self.tool_name_max_length,
@@ -619,11 +644,20 @@ class ResponsesTransport:
             # carrier's: an operator whose host rejects a summary item can turn
             # this off and keep carriers.
             plaintext_replay=self.plaintext_replay(request.model),
+            apply_responses_sidecars=has_envelope,
+            allow_openai_responses_sidecars=openai_destination,
         )
         headers = self._headers(body)
         cache_key = self._prompt_cache_key(headers)
         if cache_key:
             body["prompt_cache_key"] = cache_key
+        elif (
+            openai_destination
+            and has_envelope
+            and isinstance(envelope.get("prompt_cache_key"), str)
+            and envelope["prompt_cache_key"]
+        ):
+            body["prompt_cache_key"] = envelope["prompt_cache_key"]
         if (
             self._identity is None
             and self._cache_affinity is not None
