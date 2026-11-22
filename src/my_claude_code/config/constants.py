@@ -1229,6 +1229,13 @@ PROMPT_CACHE_TTL_MAX_MINUTES = 60
 # `False` for the same reason -- a caller that says nothing keeps those bytes.
 RESPONSES_PARALLEL_TOOL_CALLS_DEFAULT = True
 
+# Whether adaptive extended thinking is preferred ("on"), forced off into manual
+# budget/effort ("off"), or left to existing client/tier policy ("client", the
+# shipped default). Read per request so Settings -> Reasoning changes take
+# effect immediately without restart.
+REASONING_ADAPTIVE_DEFAULT = "client"
+REASONING_ADAPTIVE_CHOICES: tuple[str, ...] = ("client", "on", "off")
+
 # Whether a Responses body carries the host's own opaque reasoning item back to
 # it on the next turn (8.16.0). `RESPONSES_CARRIER_REPLAY`.
 #

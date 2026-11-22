@@ -1732,6 +1732,10 @@
       "control": "field-REASONING_EFFORT_BUDGET_RATIOS",
       "page": "limits"
     },
+    "REASONING_ADAPTIVE": {
+      "control": "field-REASONING_ADAPTIVE",
+      "page": "model_config"
+    },
     "REASONING_FABLE": {
       "control": "field-REASONING_FABLE",
       "page": "model_config"

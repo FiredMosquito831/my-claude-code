@@ -942,6 +942,7 @@ def _is_adaptive_page_entry(value: Any) -> bool:
 BEFORE_8_18 = "v8.17.0"
 AFTER_8_18 = "v8.18.0"
 AFTER_8_36 = "v8.36.0"
+AFTER_8_38 = "v8.38.0"
 
 
 def _is_vision_ladder_entry(value: Any) -> bool:
@@ -954,6 +955,12 @@ def _is_codex_max_entry(value: Any) -> bool:
     """An entry 8.36.0 moves by publishing ``max`` in Codex's catalogue."""
 
     return isinstance(value, dict) and AFTER_8_36 in value
+
+
+def _is_surface_dialect_entry(value: Any) -> bool:
+    """An entry 8.38.0 moves via surface-aware OpenCode Go dialect selection."""
+
+    return isinstance(value, dict) and AFTER_8_38 in value
 
 
 def _is_ocgo1_entry(value: Any) -> bool:
@@ -971,8 +978,8 @@ def _is_ocgo3_entry(value: Any) -> bool:
 
 
 def _expected(key: str, value: Any) -> Any:
-    if _is_codex_max_entry(value):
-        return value[AFTER_8_36]
+    if _is_surface_dialect_entry(value):
+        return value[AFTER_8_38]
     if _is_codex_max_entry(value):
         return value[AFTER_8_36]
     if _is_vision_ladder_entry(value):
@@ -999,6 +1006,8 @@ def _current_answer(group: str, key: str, value: Any) -> Any:
     correction's ``before`` be the 7.113.5 answer.
     """
 
+    if _is_surface_dialect_entry(value):
+        return value[AFTER_8_38]
     if _is_codex_max_entry(value):
         return value[AFTER_8_36]
     if _is_vision_ladder_entry(value):

@@ -212,6 +212,8 @@ from .constants import (
     RATE_LIMIT_COOLDOWN_MODE_NAMES,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
+    REASONING_ADAPTIVE_CHOICES,
+    REASONING_ADAPTIVE_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
     REASONING_EFFORT_BUDGET_RATIOS_DEFAULT,
     REQUEST_LOG_COMPRESSION_LEVEL_DEFAULT,
@@ -1859,6 +1861,10 @@ class Settings(BaseSettings):
         default=ReasoningPreference.CLIENT,
         validation_alias="REASONING_POLICY",
     )
+    reasoning_adaptive: str = Field(
+        default=REASONING_ADAPTIVE_DEFAULT,
+        validation_alias="REASONING_ADAPTIVE",
+    )
     reasoning_mythos: ReasoningPreference = Field(
         default=ReasoningPreference.INHERIT,
         validation_alias="REASONING_MYTHOS",
@@ -2786,6 +2792,21 @@ class Settings(BaseSettings):
             raise ValueError("REASONING_POLICY cannot inherit")
         return value
 
+    @field_validator("reasoning_adaptive", mode="before")
+    @classmethod
+    def validate_reasoning_adaptive(cls, value: object) -> str:
+        """``client``, ``on``, or ``off``; blank defaults to ``client``."""
+        if value is None:
+            return REASONING_ADAPTIVE_DEFAULT
+        normalized = str(value).strip().lower()
+        if not normalized:
+            return REASONING_ADAPTIVE_DEFAULT
+        if normalized not in REASONING_ADAPTIVE_CHOICES:
+            raise ValueError(
+                f"REASONING_ADAPTIVE must be 'client', 'on', or 'off', got {value!r}"
+            )
+        return normalized
+
     @field_validator("prompt_cache_ttl", mode="before")
     @classmethod
     def validate_prompt_cache_ttl(cls, value: object) -> str:
@@ -3694,6 +3715,27 @@ def configured_opencode_client_runtime() -> str:
     """The ``<runtime>/<version>`` the operator pinned, or ``""``."""
     settings = get_settings()
     return str(getattr(settings, "opencode_client_runtime", "") or "")
+
+
+def configured_reasoning_adaptive() -> str:
+    """Whether adaptive extended thinking is forced on, forced off, or from client.
+
+    Read per request so a dashboard save takes effect on the very next request
+    without restarting the server. Returns ``"client"`` (the shipped default),
+    ``"on"``, or ``"off"``.
+    """
+    settings = get_settings()
+    value = (
+        str(
+            getattr(settings, "reasoning_adaptive", REASONING_ADAPTIVE_DEFAULT)
+            or REASONING_ADAPTIVE_DEFAULT
+        )
+        .strip()
+        .lower()
+    )
+    if value in REASONING_ADAPTIVE_CHOICES:
+        return value
+    return REASONING_ADAPTIVE_DEFAULT
 
 
 def configured_responses_parallel_tool_calls() -> bool:

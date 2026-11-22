@@ -29823,6 +29823,10 @@
   "v8.18.0": {
    "bytes": 227094,
    "sha256": "6442bd69bfb6fc0da4ce2ccb00992c5319b4382000766a2127ee21cf58802f9d"
+  },
+  "v8.38.0": {
+   "bytes": 227487,
+   "sha256": "949a5093fb3fe4c0e325f91de4ff6cdecb258d91d1654a07c60917a18bd72868"
   }
  },
  "kor-live/page-diff": {
@@ -32879,6 +32883,10 @@
   "v8.18.0": {
    "bytes": 202027,
    "sha256": "0d2580c96ebff2820f66934f46ca57a981e29ad9e6ea92f52e78f5775b21955d"
+  },
+  "v8.38.0": {
+   "bytes": 202420,
+   "sha256": "3fb7f2ea073ef74aa12c4895202a781c1510df1a109a806306f846a1d05d462a"
   }
  },
  "picker-kinds": {
@@ -34427,12 +34435,22 @@
   "vision": true
  },
  "routing/opencode_go/minimax-m3": {
-  "context_length": 1000000,
-  "output_limit": 131072,
-  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=false,supported_efforts=~,mandatory=~,default_enabled=~)",
-  "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
-  "thinking": null,
-  "vision": true
+  "v8.37.0": {
+   "context_length": 1000000,
+   "output_limit": 131072,
+   "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=false,supported_efforts=~,mandatory=~,default_enabled=~)",
+   "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:medium,e:minimal},toggle=false,budget=false,off=false,adaptive=false,effort_field=s:reasoning_effort,toggle_field=s:,budget_field=s:,origin=e:default,learned_rejections=[])",
+   "thinking": null,
+   "vision": true
+  },
+  "v8.38.0": {
+   "context_length": 1000000,
+   "output_limit": 131072,
+   "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=false,supported_efforts=~,mandatory=~,default_enabled=~)",
+   "reasoning_dialect": "ReasoningDialect(effort_values=~,toggle=true,budget=true,off=true,adaptive=true,effort_field=s:,toggle_field=s:thinking.type,budget_field=s:thinking.budget_tokens,origin=e:declared,learned_rejections=[])",
+   "thinking": null,
+   "vision": true
+  }
  },
  "routing/vercel/alibaba/qwen-3-14b": {
   "v7.82.0": {

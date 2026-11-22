@@ -12,6 +12,7 @@ from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_INHERIT,
     PROMPT_CACHE_TTL_MAX_MINUTES,
     PROMPT_CACHE_TTL_MIN_MINUTES,
+    REASONING_ADAPTIVE_DEFAULT,
     USAGE_LAYOUT_DEFAULT,
 )
 from my_claude_code.config.limits import describe_range, range_for
@@ -1361,6 +1362,29 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "as much as it decides it needs -- no level and no budget. Providers "
             "translate only the controls their API supports, and where a host has "
             "no adaptive channel the request log records what was sent instead."
+        ),
+    ),
+    ConfigFieldSpec(
+        "REASONING_ADAPTIVE",
+        "Adaptive Thinking",
+        "reasoning",
+        "select",
+        settings_attr="reasoning_adaptive",
+        default=REASONING_ADAPTIVE_DEFAULT,
+        options=(
+            ConfigOptionSpec("client", "From client (default)"),
+            ConfigOptionSpec("on", "On (prefer adaptive thinking)"),
+            ConfigOptionSpec("off", "Off (force fixed budget / level)"),
+        ),
+        affects_providers=False,
+        description=(
+            "Controls whether adaptive extended thinking is used on adaptive-capable "
+            "models. From client (default) preserves existing per-tier and client "
+            "behaviour. On keeps thinking type adaptive alongside configured tier "
+            "efforts (for example REASONING_OPUS=max sends adaptive plus effort max), "
+            "falling back to manual budget_tokens only on non-adaptive models. Off "
+            "never sends adaptive, forcing manual budget_tokens or explicit effort "
+            "instead. Explicit off reasoning policy still suppresses thinking."
         ),
     ),
     ConfigFieldSpec(

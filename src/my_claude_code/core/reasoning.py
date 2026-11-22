@@ -348,6 +348,7 @@ def narrow_dialect_by_rejections(
     effort_field = dialect.effort_field
     toggle = dialect.toggle
     off = dialect.off
+    adaptive = dialect.adaptive
     toggle_field = dialect.toggle_field
     budget = dialect.budget
     budget_field = dialect.budget_field
@@ -359,6 +360,12 @@ def narrow_dialect_by_rejections(
     coarse: dict[str, str] = dict(rejections)
 
     for field, refused in (value_rejections or {}).items():
+        if adaptive and refers_to(field, toggle_field) and "adaptive" in refused:
+            adaptive = False
+            leftover = {v for v in refused if v != "adaptive"}
+            if not leftover:
+                continue
+            refused = leftover
         if not refers_to(field, effort_field) or effort_values is None:
             coarse.setdefault(field, "")
             continue
@@ -401,6 +408,7 @@ def narrow_dialect_by_rejections(
         if refers_to(field, toggle_field):
             toggle = False
             off = False
+            adaptive = False
             toggle_field = ""
         if refers_to(field, budget_field):
             budget = False
@@ -412,6 +420,7 @@ def narrow_dialect_by_rejections(
         effort_field=effort_field,
         toggle=toggle,
         off=off,
+        adaptive=adaptive,
         toggle_field=toggle_field,
         budget=budget,
         budget_field=budget_field,

@@ -43,6 +43,13 @@ because the count is a three-digit number either way; only the value moved.
 Measured on the base checkout with the same pins applied: **0 of 15 cases move
 there**, and on the branch exactly this one surface moves. Every other surface
 of every case, and every other case, is byte-identical.
+
+**Two surfaces of ``every_block`` move by 34 bytes in 8.38.0 (PR1 / T2-Q2)**:
+``every_block`` carries manual ``thinking: {"type": "enabled", "budget_tokens": 1024}``
+alongside ``output_config: {"effort": "high"}``. 8.38.0 omits ``output_config.effort``
+beside manual ``budget_tokens`` (``native_anthropic`` and ``opencode_messages``);
+both the historical baseline digest and the stripped digest are asserted without
+editing ``tool_change_fold_equality_baseline.json``.
 """
 
 import hashlib
@@ -464,11 +471,28 @@ def _baseline() -> dict[str, dict[str, str]]:
     return json.loads(BASELINE.read_text(encoding="utf-8"))["cases"]
 
 
+_EVERY_BLOCK_PR1_MOVES: dict[str, tuple[str, str]] = {
+    "native_anthropic": (
+        "sha256:2f9e566205848dc9df4fdcc2f5496be11ca696eb2fe8eb8a0cc95af89021a7c0 bytes:2243",
+        "sha256:0011e3f8f844c395a5965a7c1408fb0b9755e540be199b9a8e9e0cca9c53dc36 bytes:2209",
+    ),
+    "opencode_messages": (
+        "sha256:ac79f31b326bba23fcd2e4daf8cda8a13333e1919c5e558d15683bf970fbd032 bytes:2243",
+        "sha256:71d9c379c729a4d7ee1174caae630d6aea3e292becab789e82d7ba9db296e19d bytes:2209",
+    ),
+}
+
+
 @pytest.mark.skipif(bool(WRITE_BASELINE), reason="baseline is being written")
 @pytest.mark.parametrize("case", [case for case, _body in corpus()])
 def test_every_surface_is_byte_identical_to_the_code_before(case: str) -> None:
     body = dict(corpus())[case]
-    assert surfaces(body) == _baseline()[case]
+    expected = dict(_baseline()[case])
+    if case == "every_block":
+        for surface, (before_digest, after_digest) in _EVERY_BLOCK_PR1_MOVES.items():
+            assert expected[surface] == before_digest, surface
+            expected[surface] = after_digest
+    assert surfaces(body) == expected
 
 
 @pytest.mark.skipif(bool(WRITE_BASELINE), reason="baseline is being written")

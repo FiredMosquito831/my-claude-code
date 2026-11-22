@@ -10,6 +10,7 @@ from my_claude_code.core.reasoning import (
     ReasoningDialect,
     ReasoningEffort,
     ReasoningPolicy,
+    narrow_dialect_by_rejections,
 )
 from my_claude_code.core.reported_cost import record_reported_usage
 from my_claude_code.providers.base import ProviderConfig
@@ -65,8 +66,14 @@ class DeepSeekProvider(OpenAIChatProvider):
     """DeepSeek using ``https://api.deepseek.com`` Chat Completions."""
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
-        """See :data:`DEEPSEEK_REASONING_DIALECT`."""
-        return DEEPSEEK_REASONING_DIALECT
+        """See :data:`DEEPSEEK_REASONING_DIALECT`, minus what this host refused."""
+        rejections = self._recovery_memory.rejections_for(model_id) or {}
+        value_rejections = self._recovery_memory.rejected_values_for(model_id)
+        if not rejections and not value_rejections:
+            return DEEPSEEK_REASONING_DIALECT
+        return narrow_dialect_by_rejections(
+            DEEPSEEK_REASONING_DIALECT, rejections, value_rejections
+        )
 
     def __init__(self, config: ProviderConfig, *, rate_limiter: ProviderRateLimiter):
         super().__init__(

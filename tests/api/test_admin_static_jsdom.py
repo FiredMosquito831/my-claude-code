@@ -11401,9 +11401,10 @@ def test_jsdom_the_lifetimes_sit_under_their_own_subheading_in_reasoning(
 ) -> None:
     section = prompt_cache["section"]
     assert section["heading"] == "Reasoning"
-    # The thinking levels are drawn first, exactly the fields they always were.
+    # The thinking levels (and Adaptive Thinking beside REASONING_POLICY) are drawn first.
     assert section["firstGridKeys"] == [
         "REASONING_POLICY",
+        "REASONING_ADAPTIVE",
         "REASONING_MYTHOS",
         "REASONING_FABLE",
         "REASONING_OPUS",

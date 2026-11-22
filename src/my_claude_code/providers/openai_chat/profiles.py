@@ -79,7 +79,7 @@ _LOW_TO_MAX = (
     (ReasoningEffort.LOW, "low"),
     (ReasoningEffort.MEDIUM, "medium"),
     (ReasoningEffort.HIGH, "high"),
-    (ReasoningEffort.XHIGH, "max"),
+    (ReasoningEffort.XHIGH, "high"),
     (ReasoningEffort.MAX, "max"),
 )
 # Agnes AI's effort words, as its host named them in a 400 on 2026-09-22:

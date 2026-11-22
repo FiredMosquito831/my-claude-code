@@ -886,8 +886,10 @@ def _reset_credential_digests():
     from my_claude_code.core import wire_capture
 
     wire_capture.reset_credential_digests()
+    wire_capture.set_reasoning_suppressed(False)
     yield
     wire_capture.reset_credential_digests()
+    wire_capture.set_reasoning_suppressed(False)
 
 
 @pytest.fixture(autouse=True)

@@ -381,5 +381,5 @@ def _apply_deepseek_chat_extras(
     # branching is needed to pick it.
     if policy.effort is not None:
         body["reasoning_effort"] = policy.effort.value
-    elif policy.requests_reasoning:
+    elif policy.requests_reasoning or policy.control is ReasoningControl.ADAPTIVE:
         extra_body["thinking"] = {"type": "enabled"}

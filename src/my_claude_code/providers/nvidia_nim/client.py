@@ -12,6 +12,7 @@ from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningDialect,
     ReasoningPolicy,
+    narrow_dialect_by_rejections,
 )
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import (
@@ -79,8 +80,14 @@ class NvidiaNimProvider(OpenAIChatProvider):
     """NVIDIA NIM provider using official OpenAI client."""
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
-        """See :data:`NIM_REASONING_DIALECT`."""
-        return NIM_REASONING_DIALECT
+        """See :data:`NIM_REASONING_DIALECT`, minus what this host refused."""
+        rejections = self._recovery_memory.rejections_for(model_id) or {}
+        value_rejections = self._recovery_memory.rejected_values_for(model_id)
+        if not rejections and not value_rejections:
+            return NIM_REASONING_DIALECT
+        return narrow_dialect_by_rejections(
+            NIM_REASONING_DIALECT, rejections, value_rejections
+        )
 
     def __init__(
         self,

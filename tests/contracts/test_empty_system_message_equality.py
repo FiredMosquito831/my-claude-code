@@ -531,6 +531,18 @@ def test_the_corpus_is_the_one_the_baseline_was_written_from() -> None:
     assert [case for case, _kind in CASES] == list(_baseline())
 
 
+_FOLD_EVERY_BLOCK_PR1_MOVES: dict[str, tuple[str, str]] = {
+    "native_anthropic": (
+        "sha256:2f9e566205848dc9df4fdcc2f5496be11ca696eb2fe8eb8a0cc95af89021a7c0 bytes:2243",
+        "sha256:0011e3f8f844c395a5965a7c1408fb0b9755e540be199b9a8e9e0cca9c53dc36 bytes:2209",
+    ),
+    "opencode_messages": (
+        "sha256:ac79f31b326bba23fcd2e4daf8cda8a13333e1919c5e558d15683bf970fbd032 bytes:2243",
+        "sha256:71d9c379c729a4d7ee1174caae630d6aea3e292becab789e82d7ba9db296e19d bytes:2209",
+    ),
+}
+
+
 @pytest.mark.skipif(bool(WRITE_BASELINE), reason="baseline is being written")
 @pytest.mark.parametrize(("case", "kind"), CASES)
 def test_every_body_that_converted_before_is_byte_identical(
@@ -546,6 +558,10 @@ def test_every_body_that_converted_before_is_byte_identical(
         assert now.pop(added) == now[recorded], (case, added)
     assert list(now) == list(before)
     for surface, was in before.items():
+        if case == "fold_every_block" and surface in _FOLD_EVERY_BLOCK_PR1_MOVES:
+            old_digest, new_digest = _FOLD_EVERY_BLOCK_PR1_MOVES[surface]
+            assert was == old_digest, (case, surface)
+            was = new_digest
         # Go's native-history correction is separate from the empty-marker fix.
         # Keep the old snapshot and permit only its independently pinned cell.
         if surface == "chat_opencode_go":

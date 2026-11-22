@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from my_claude_code.config.settings import configured_reasoning_adaptive
 from my_claude_code.core.reasoning import (
     ADAPTIVE_MEANING,
     ReasoningAdaptationKind,
@@ -227,7 +228,17 @@ class NamedEffortReasoning:
                 target[self.field] = self.disabled_value
             return
 
+        adaptive_mode = configured_reasoning_adaptive()
         if policy.control is ReasoningControl.ADAPTIVE:
+            if adaptive_mode == "off":
+                explicit = _clamped_effort(
+                    self.efforts, policy.effort or ReasoningEffort.HIGH
+                )
+                if explicit is not None:
+                    target[self.field] = explicit
+                elif self.enabled_value is not None:
+                    target[self.field] = self.enabled_value
+                return
             # No adaptive channel on this shape: ``enabled_value``, when there
             # is one, is written into the effort field and is therefore a
             # default *rung*, not a level-less on -- so the honest answer is
@@ -249,8 +260,15 @@ class NamedEffortReasoning:
             target[self.field] = effort
             return
 
-        if policy.control is ReasoningControl.ON and self.enabled_value is not None:
-            target[self.field] = self.enabled_value
+        if policy.control is ReasoningControl.ON:
+            if self.enabled_value is not None:
+                target[self.field] = self.enabled_value
+            elif adaptive_mode == "on" and not _encode_adaptive_rung(
+                target, self.field, self.efforts, _adaptive_model(body)
+            ):
+                _note_adaptive_nothing(
+                    model=_adaptive_model(body), dialect=self.dialect
+                )
 
     @property
     def dialect(self) -> ReasoningDialect:
@@ -278,7 +296,17 @@ class ReasoningObject:
             _extra_body(body)["reasoning"] = {"enabled": False}
             return
 
+        adaptive_mode = configured_reasoning_adaptive()
         if policy.control is ReasoningControl.ADAPTIVE:
+            if adaptive_mode == "off":
+                explicit = _clamped_effort(
+                    self.efforts, policy.effort or ReasoningEffort.HIGH
+                )
+                if explicit is not None:
+                    _extra_body(body)["reasoning"] = {"effort": explicit}
+                else:
+                    _extra_body(body)["reasoning"] = {"enabled": True}
+                return
             # ``reasoning.enabled`` is a real level-less on: it says "reason"
             # without naming a rung, which is exactly what adaptive asks for.
             # The effort field is deliberately not used -- any word in it would
@@ -367,7 +395,17 @@ class EffortOrThinkingBudgetReasoning:
             _extra_body(body)[self.thinking_field] = {"type": "disabled"}
             return
 
+        adaptive_mode = configured_reasoning_adaptive()
         if policy.control is ReasoningControl.ADAPTIVE:
+            if adaptive_mode == "off":
+                explicit = _clamped_effort(
+                    self.efforts, policy.effort or ReasoningEffort.HIGH
+                )
+                if explicit is not None:
+                    body[self.field] = explicit
+                elif self.enabled_value is not None:
+                    body[self.field] = self.enabled_value
+                return
             # The two knobs are mutually exclusive on this host, and the
             # thinking object here carries a *budget*, not a level-less on --
             # so the effort field is the only word that can say "reason".
@@ -392,8 +430,15 @@ class EffortOrThinkingBudgetReasoning:
             body[self.field] = effort
             return
 
-        if policy.control is ReasoningControl.ON and self.enabled_value is not None:
-            body[self.field] = self.enabled_value
+        if policy.control is ReasoningControl.ON:
+            if self.enabled_value is not None:
+                body[self.field] = self.enabled_value
+            elif adaptive_mode == "on" and not _encode_adaptive_rung(
+                body, self.field, self.efforts, _adaptive_model(body)
+            ):
+                _note_adaptive_nothing(
+                    model=_adaptive_model(body), dialect=self.dialect
+                )
 
     @property
     def dialect(self) -> ReasoningDialect:
@@ -441,10 +486,17 @@ class LlamaCppReasoning:
         if policy.control is ReasoningControl.OFF:
             _extra_body(body)["thinking_budget_tokens"] = 0
         elif policy.control is ReasoningControl.ADAPTIVE:
-            # This host's only reasoning field is a number, and adaptive names
-            # none. Inventing one would be exactly the fabricated control the
-            # rule forbids, so nothing is sent and the record says so.
-            _note_adaptive_nothing(model=_adaptive_model(body), dialect=self.dialect)
+            if configured_reasoning_adaptive() == "off":
+                _extra_body(body)["thinking_budget_tokens"] = (
+                    policy.numeric_budget_tokens or ReasoningEffort.HIGH.budget_tokens
+                )
+            else:
+                # This host's only reasoning field is a number, and adaptive names
+                # none. Inventing one would be exactly the fabricated control the
+                # rule forbids, so nothing is sent and the record says so.
+                _note_adaptive_nothing(
+                    model=_adaptive_model(body), dialect=self.dialect
+                )
         elif (budget := policy.numeric_budget_tokens) is not None:
             _extra_body(body)["thinking_budget_tokens"] = budget
 

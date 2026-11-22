@@ -308,6 +308,17 @@ def test_every_pre_adaptive_preference_is_byte_identical(
     the client's passed-through ``thinking`` object. Anthropic's ``thinking``
     has no such key and refused every such body from 2026-10-08 on. Only that
     key moved; every other cell is as it was.
+
+    Seven ``anthropic_messages|client_effort_high|*`` cells (``client``,
+    ``off``, ``low``, ``medium``, ``high``, ``xhigh``, ``max``) were
+    re-baselined in 8.38.0 (T2-Q2): ``build_anthropic_messages_body`` previously
+    left the client's raw ``output_config: {"effort": "high"}`` untouched on the
+    wire even on ``off`` and alongside manual ``thinking: {"type": "enabled",
+    "budget_tokens": ...}``. Per peer-aligned T2-Q2, ``output_config.effort`` is
+    stripped on ``OFF`` / ``provider_default()`` and omitted beside manual
+    ``budget_tokens`` (preserving ``output_config.format`` if present), emitted
+    only alongside ``thinking: {"type": "adaptive"}``. All other cells stay
+    byte-identical.
     """
 
     overrides = CLIENT_REQUESTS[shape]

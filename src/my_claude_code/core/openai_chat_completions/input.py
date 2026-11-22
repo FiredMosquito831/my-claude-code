@@ -107,8 +107,10 @@ def convert_request_to_anthropic_payload(
         payload["stop_sequences"] = stop_sequences
     if metadata := _metadata(request):
         payload["metadata"] = metadata
-    if output_config := _output_config(request.reasoning_effort):
+    if output_config := _output_config(request.reasoning_effort, request.reasoning):
         payload["output_config"] = output_config
+    elif thinking := _reasoning_budget_thinking(request.reasoning):
+        payload["thinking"] = thinking
 
     if allow_web_search:
         extract_chat_web_search_spec(
@@ -395,16 +397,40 @@ def _metadata(request: OpenAIChatCompletionRequest) -> dict[str, Any]:
     return metadata
 
 
-def _output_config(reasoning_effort: str | None) -> dict[str, Any] | None:
+def _output_config(
+    reasoning_effort: str | None,
+    reasoning: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Preserve the client's named effort for application-level resolution.
 
     Identical to what the Responses adapter does with ``reasoning.effort``:
     the *name* travels, and the routing layer alone decides what budget it
-    means for the model that ends up answering.
+    means for the model that ends up answering. Top-level ``reasoning_effort``
+    outranks nested ``reasoning.effort`` when both are provided.
     """
-    if not isinstance(reasoning_effort, str) or not reasoning_effort.strip():
+    if isinstance(reasoning_effort, str) and reasoning_effort.strip():
+        return {"effort": reasoning_effort.strip().lower()}
+    if isinstance(reasoning, Mapping):
+        nested_effort = reasoning.get("effort")
+        if isinstance(nested_effort, str) and nested_effort.strip():
+            return {"effort": nested_effort.strip().lower()}
+    return None
+
+
+def _reasoning_budget_thinking(
+    reasoning: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Map OpenRouter/Responses-style ``reasoning.max_tokens`` to ``thinking``."""
+    if not isinstance(reasoning, Mapping):
         return None
-    return {"effort": reasoning_effort.strip().lower()}
+    raw_max_tokens = reasoning.get("max_tokens")
+    if (
+        isinstance(raw_max_tokens, int)
+        and not isinstance(raw_max_tokens, bool)
+        and raw_max_tokens > 0
+    ):
+        return {"type": "enabled", "budget_tokens": raw_max_tokens}
+    return None
 
 
 def _response_format_instruction(response_format: Any) -> str | None:

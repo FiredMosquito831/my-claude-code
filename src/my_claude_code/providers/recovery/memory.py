@@ -133,12 +133,35 @@ class RecoveryMemory:
             self.sink(FACT_OUTPUT_CAP, model, cap, "", evidence)
         return cap
 
-    def rejections_for(self, model: str) -> dict[str, str] | None:
-        """Return the refused reasoning fields for a model, if any."""
-        return self.rejected_reasoning_fields.get(model)
+    def rejections_for(
+        self, model: str, *, surface: str | None = None
+    ) -> dict[str, str] | None:
+        """Return the refused reasoning fields for a model, optionally scoped to one surface."""
+        raw = self.rejected_reasoning_fields.get(model)
+        if not raw:
+            return raw
+        if surface is None:
+            filtered = {
+                field: when
+                for field, when in raw.items()
+                if not field.startswith(("responses:", "messages:"))
+            }
+            return filtered or None
+        prefix = f"{surface}:"
+        filtered = {
+            field[len(prefix) :]: when
+            for field, when in raw.items()
+            if field.startswith(prefix)
+        }
+        return filtered or None
 
     def remember_rejection(
-        self, model: str, rejected_field: str, *, evidence: str = ""
+        self,
+        model: str,
+        rejected_field: str,
+        *,
+        evidence: str = "",
+        surface: str | None = None,
     ) -> bool:
         """Record a proven refusal; ``False`` when it was already known.
 
@@ -148,22 +171,47 @@ class RecoveryMemory:
         the process to stop asking for thinking on a model that was never the
         problem.
         """
+        stored_field = f"{surface}:{rejected_field}" if surface else rejected_field
         rejections = self.rejected_reasoning_fields.setdefault(model, {})
-        already_known = rejected_field in rejections
-        rejections[rejected_field] = date.today().isoformat()
+        already_known = stored_field in rejections
+        rejections[stored_field] = date.today().isoformat()
         if self.sink is not None:
             self.sink(
-                FACT_REASONING_FIELD_REJECTED, model, True, rejected_field, evidence
+                FACT_REASONING_FIELD_REJECTED, model, True, stored_field, evidence
             )
         return not already_known
 
-    def rejected_values_for(self, model: str) -> dict[str, set[str]] | None:
-        """Return the refused values per reasoning field for a model, if any."""
+    def rejected_values_for(
+        self, model: str, *, surface: str | None = None
+    ) -> dict[str, set[str]] | None:
+        """Return the refused values per reasoning field for a model, optionally surface-scoped."""
 
-        return self.rejected_effort_values.get(model)
+        raw = self.rejected_effort_values.get(model)
+        if not raw:
+            return raw
+        if surface is None:
+            filtered = {
+                field: values
+                for field, values in raw.items()
+                if not field.startswith(("responses:", "messages:"))
+            }
+            return filtered or None
+        prefix = f"{surface}:"
+        filtered = {
+            field[len(prefix) :]: values
+            for field, values in raw.items()
+            if field.startswith(prefix)
+        }
+        return filtered or None
 
     def remember_rejected_values(
-        self, model: str, rejected_field: str, values: set[str], *, evidence: str = ""
+        self,
+        model: str,
+        rejected_field: str,
+        values: set[str],
+        *,
+        evidence: str = "",
+        surface: str | None = None,
     ) -> bool:
         """Record values this model refused; ``False`` when all were known.
 
@@ -180,8 +228,9 @@ class RecoveryMemory:
 
         if not values:
             return False
+        stored_field = f"{surface}:{rejected_field}" if surface else rejected_field
         known = self.rejected_effort_values.setdefault(model, {}).setdefault(
-            rejected_field, set()
+            stored_field, set()
         )
         learned = {value for value in values if value not in known}
         known.update(values)
@@ -191,7 +240,7 @@ class RecoveryMemory:
                     FACT_EFFORT_VALUE_REJECTED,
                     model,
                     True,
-                    f"{rejected_field}={value}",
+                    f"{stored_field}={value}",
                     evidence,
                 )
         return bool(learned)

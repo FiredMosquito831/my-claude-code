@@ -115,8 +115,15 @@ class AnthropicMessagesProvider(BaseProvider):
         its own 400 the declaration above is simply wrong for that model, and a
         rejection the host itself sent outranks it.
         """
-        rejections = self._recovery_memory.rejections_for(model_id) or {}
-        value_rejections = self._recovery_memory.rejected_values_for(model_id)
+        rejections = (
+            self._recovery_memory.rejections_for(
+                model_id, surface=self._recovery_surface
+            )
+            or {}
+        )
+        value_rejections = self._recovery_memory.rejected_values_for(
+            model_id, surface=self._recovery_surface
+        )
         if not rejections and not value_rejections:
             return ANTHROPIC_REASONING_DIALECT
         return narrow_dialect_by_rejections(
@@ -137,6 +144,8 @@ class AnthropicMessagesProvider(BaseProvider):
         forward_thinking_display: bool = False,
         prompt_cache_family: PromptCacheLifetimeFamily | None = None,
         signs_thinking: bool = True,
+        memory: RecoveryMemory | None = None,
+        recovery_surface: str | None = None,
     ) -> None:
         super().__init__(config)
         self._provider_name = provider_name
@@ -203,10 +212,15 @@ class AnthropicMessagesProvider(BaseProvider):
         # durable store and the same matchers as the OpenAI-chat family's --
         # only the body keys differ, because this dialect spells the output
         # budget ``max_tokens`` and its reasoning instruction ``thinking``.
+        self._recovery_surface = recovery_surface
         self._recovery_memory = (
-            learned_fact_store().memory_for(provider_id)
-            if provider_id
-            else RecoveryMemory()
+            memory
+            if memory is not None
+            else (
+                learned_fact_store().memory_for(provider_id)
+                if provider_id
+                else RecoveryMemory()
+            )
         )
         log_tag = f"{provider_name}_STREAM"
         self._output_cap_recovery = OutputCapRecovery(
@@ -519,7 +533,11 @@ class AnthropicMessagesProvider(BaseProvider):
             return
         if values:
             if not self._recovery_memory.remember_rejected_values(
-                model, field, set(values), evidence=evidence
+                model,
+                field,
+                set(values),
+                evidence=evidence,
+                surface=self._recovery_surface,
             ):
                 return
             spelled = ", ".join(sorted(values))
@@ -540,7 +558,7 @@ class AnthropicMessagesProvider(BaseProvider):
             )
             return
         if not self._recovery_memory.remember_rejection(
-            model, field, evidence=evidence
+            model, field, evidence=evidence, surface=self._recovery_surface
         ):
             return
         record_reasoning_adaptation(
@@ -624,6 +642,7 @@ class AnthropicMessagesProvider(BaseProvider):
             forward_thinking_display=self._forward_thinking_display,
             prompt_cache=prompt_cache,
             signs_thinking=self._signs_thinking_for(request.model),
+            adaptive_capable=self.reasoning_dialect(request.model).adaptive,
         )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what

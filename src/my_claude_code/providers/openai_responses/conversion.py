@@ -16,6 +16,7 @@ from typing import Any
 from loguru import logger
 
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.config.settings import configured_reasoning_adaptive
 from my_claude_code.core.anthropic.content import get_block_attr, get_block_type
 from my_claude_code.core.anthropic.conversion import (
     AnthropicToOpenAIConverter,
@@ -624,14 +625,20 @@ def _reasoning_block(
     escaped both the adaptation record and the request log from 5.61.1 until
     6.68.1.
     """
+    adaptive_mode = configured_reasoning_adaptive()
     if policy.control is ReasoningControl.OFF:
         return None
     if policy.effort is not None:
         effort = policy.effort.value
-    elif unspecified_effort and policy.control in {
-        ReasoningControl.ADAPTIVE,
-        ReasoningControl.ON,
-    }:
+    elif (
+        adaptive_mode != "off"
+        and unspecified_effort
+        and policy.control
+        in {
+            ReasoningControl.ADAPTIVE,
+            ReasoningControl.ON,
+        }
+    ):
         effort = unspecified_effort
     else:
         effort = RESPONSES_DEFAULT_REASONING_EFFORT
@@ -669,6 +676,8 @@ def _note_adaptive_substitution(
     """
 
     if policy.control is not ReasoningControl.ADAPTIVE:
+        return
+    if configured_reasoning_adaptive() == "off":
         return
     effort = sent_effort or RESPONSES_DEFAULT_REASONING_EFFORT
     rationale = (

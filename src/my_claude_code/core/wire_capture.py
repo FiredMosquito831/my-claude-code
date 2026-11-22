@@ -126,6 +126,7 @@ _REASONING_KEYS = (
     "enable_thinking",
     "include_reasoning",
     "chat_template_kwargs",
+    "output_config",
 )
 
 _DISABLED_VALUES = frozenset({"none", "disabled", "off", "false", "0", ""})
@@ -456,7 +457,14 @@ def reasoning_was_emitted(body: Mapping[str, Any]) -> bool:
     adaptation for a policy that was then thrown away.
     """
     for raw_key, value in body.items():
-        if is_reasoning_key(str(raw_key)) and _looks_enabled(value):
+        key = str(raw_key)
+        if key.lower() == "output_config":
+            # Only ``output_config.effort`` is a reasoning instruction; bare
+            # structured-output ``{"format": ...}`` carries no reasoning ask.
+            if isinstance(value, Mapping) and _looks_enabled(value.get("effort")):
+                return True
+            continue
+        if is_reasoning_key(key) and _looks_enabled(value):
             return True
     extra = body.get("extra_body")
     return isinstance(extra, Mapping) and reasoning_was_emitted(extra)
@@ -733,6 +741,19 @@ class WireTrace:
 
 
 _WIRE_TRACE: ContextVar[WireTrace | None] = ContextVar("fcc_wire_trace", default=None)
+_REASONING_SUPPRESSED: ContextVar[bool] = ContextVar(
+    "mcc_reasoning_suppressed", default=False
+)
+
+
+def set_reasoning_suppressed(suppressed: bool) -> None:
+    """Record whether gating suppressed/dropped reasoning for the attempt in flight."""
+    _REASONING_SUPPRESSED.set(suppressed)
+
+
+def reasoning_suppressed() -> bool:
+    """Whether gating suppressed/dropped reasoning for the current routed attempt."""
+    return _REASONING_SUPPRESSED.get()
 
 
 def install_wire_trace(
@@ -742,6 +763,7 @@ def install_wire_trace(
     """Start recording outbound bodies for the current request."""
     slot = WireTrace(body_limit=body_limit, tool_argument_limit=tool_argument_limit)
     _WIRE_TRACE.set(slot)
+    _REASONING_SUPPRESSED.set(False)
     return slot
 
 
@@ -757,9 +779,11 @@ def paused_wire_trace() -> Iterator[None]:
     no body at all.
     """
     token = _WIRE_TRACE.set(None)
+    suppressed_token = _REASONING_SUPPRESSED.set(False)
     try:
         yield
     finally:
+        _REASONING_SUPPRESSED.reset(suppressed_token)
         _WIRE_TRACE.reset(token)
 
 

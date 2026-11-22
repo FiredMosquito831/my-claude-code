@@ -167,8 +167,13 @@ def test_mistral_provider_preserves_baseline_for_on_without_effort_off_and_adapt
     assert "reasoning_effort" not in provider._build_request_body(
         req, reasoning=ReasoningPolicy.provider_default()
     )
-    assert "reasoning_effort" not in provider._build_request_body(
-        req, reasoning=ReasoningPolicy.adaptive()
+    # 8.38.0 (PR3): Mistral handles ReasoningControl.ADAPTIVE explicitly via
+    # TOP_RUNG (highest active dialect rung: "max").
+    assert (
+        provider._build_request_body(req, reasoning=ReasoningPolicy.adaptive())[
+            "reasoning_effort"
+        ]
+        == "max"
     )
 
 

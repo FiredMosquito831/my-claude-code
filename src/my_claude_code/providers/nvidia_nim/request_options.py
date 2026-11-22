@@ -112,7 +112,11 @@ def apply_nim_request_options(
         if not request_template_kwargs:
             extra_body.pop("chat_template_kwargs", None)
 
-    if reasoning.control is ReasoningControl.OFF or reasoning.requests_reasoning:
+    if (
+        reasoning.control is ReasoningControl.OFF
+        or reasoning.requests_reasoning
+        or reasoning.control is ReasoningControl.ADAPTIVE
+    ):
         chat_template_kwargs = extra_body.setdefault("chat_template_kwargs", {})
         if isinstance(chat_template_kwargs, dict):
             enabled = reasoning.control is not ReasoningControl.OFF

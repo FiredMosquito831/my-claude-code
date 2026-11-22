@@ -27,6 +27,7 @@ of the real ``opencode-ai@1.18.30`` CLI taken on 2026-09-11
   work unchanged.
 """
 
+import re
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -54,9 +55,18 @@ from my_claude_code.core.openai_responses import (
     connection_id,
     normalise_endpoint,
 )
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    EFFORT_BY_VALUE,
+    ReasoningAdaptationKind,
+    ReasoningDialect,
+    ReasoningEffort,
+    ReasoningPolicy,
+    narrow_dialect_by_rejections,
+    nearest_effort,
+)
 from my_claude_code.core.upstream_ladder import note_recovery_rung, note_response_head
 from my_claude_code.core.wire_capture import (
+    record_reasoning_adaptation,
     record_response_shape,
     record_wire_request,
     start_response_shape,
@@ -98,8 +108,10 @@ from my_claude_code.providers.recovery import (
     ToolsCountRecovery,
     apply_learned_tool_schema_refusals,
     apply_tools_max_count,
+    clone_body_without_reasoning_field,
     clone_body_without_tool_choice,
     complaint_evidence_snippet,
+    complaint_is_about_the_body,
     complaint_refuses_a_replayed_reasoning_item,
     effective_tools_max_count,
     input_carries_reasoning_items,
@@ -108,6 +120,8 @@ from my_claude_code.providers.recovery import (
     merge_tool_schema_markers,
     merge_tools_trimmed_markers,
     refusal_from_detail,
+    rejected_effort_values,
+    rejected_reasoning_field,
     rejected_tool_name_max_length,
     tool_schema_recovery,
     tools_count_recovery,
@@ -138,6 +152,19 @@ PROBE_PROMPT = "hi"
 
 #: The three rungs this surface adds, named once so the ladder row, the log
 #: line and the learning all agree on the word the operator reads.
+#: The reasoning dialect spoken by OpenAI Responses endpoints.
+RESPONSES_REASONING_DIALECT = ReasoningDialect(
+    effort_values=frozenset(ReasoningEffort),
+    toggle=True,
+    off=False,
+    adaptive=False,
+    effort_field="reasoning.effort",
+    toggle_field="reasoning.effort",
+)
+
+_RESPONSES_SURFACE = "responses"
+_RUNG_REASONING_SUMMARY = "responses_reasoning_summary"
+_RUNG_REASONING_FIELD = "reasoning_field"
 _RUNG_TOOL_NAME_LENGTH = RUNG_TOOL_NAME_LENGTH
 _RUNG_TOOL_CHOICE = "responses_tool_choice"
 #: Shared with ``chatgpt_oauth``, which registers the same recovery on its own
@@ -269,6 +296,54 @@ def _next_responses_recovery(
                 evidence=complaint_evidence_snippet(upstream_complaint(error)),
                 log_line="host states only tool_choice=auto is supported",
             )
+    if _RUNG_REASONING_SUMMARY not in used and is_bad_request(error):
+        reasoning_block = body.get("reasoning")
+        if isinstance(reasoning_block, Mapping) and "summary" in reasoning_block:
+            complaint = upstream_complaint(error)
+            lowered = complaint.lower()
+            names_summary = bool(
+                re.search(r"\breasoning\.summary\b", lowered)
+                or (
+                    re.search(r"\bsummary\b", lowered)
+                    and not re.search(r"\beffort\b", lowered)
+                )
+            )
+            if names_summary:
+                retry = dict(body)
+                updated_reasoning = dict(reasoning_block)
+                updated_reasoning.pop("summary", None)
+                if updated_reasoning:
+                    retry["reasoning"] = updated_reasoning
+                else:
+                    retry.pop("reasoning", None)
+                used.add(_RUNG_REASONING_SUMMARY)
+                return _ResponsesLearning(
+                    kind=_RUNG_REASONING_SUMMARY,
+                    body=retry,
+                    value=("reasoning.summary", frozenset(), True),
+                    evidence=complaint_evidence_snippet(complaint),
+                    log_line="host rejects reasoning.summary",
+                )
+    if _RUNG_REASONING_FIELD not in used:
+        stripped = rejected_reasoning_field(error, body)
+        if stripped is not None:
+            retry = clone_body_without_reasoning_field(dict(body), stripped)
+            if retry is not None:
+                used.add(_RUNG_REASONING_FIELD)
+                complaint = upstream_complaint(error)
+                if complaint_is_about_the_body(complaint, stripped):
+                    values: frozenset[str] = frozenset()
+                    record = False
+                else:
+                    values = frozenset(rejected_effort_values(error, body, stripped))
+                    record = True
+                return _ResponsesLearning(
+                    kind=_RUNG_REASONING_FIELD,
+                    body=retry,
+                    value=(stripped, values, record),
+                    evidence=complaint_evidence_snippet(complaint),
+                    log_line=f"host rejected {stripped!r}",
+                )
     return None
 
 
@@ -581,6 +656,20 @@ class ResponsesTransport:
                 complaint_evidence_snippet(complaint),
             )
 
+    def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
+        """Return the Responses dialect narrowed by surface-scoped rejections."""
+        rejections = (
+            self._memory.rejections_for(model_id, surface=_RESPONSES_SURFACE) or {}
+        )
+        value_rejections = self._memory.rejected_values_for(
+            model_id, surface=_RESPONSES_SURFACE
+        )
+        if not rejections and not value_rejections:
+            return RESPONSES_REASONING_DIALECT
+        return narrow_dialect_by_rejections(
+            RESPONSES_REASONING_DIALECT, rejections, value_rejections
+        )
+
     def build_body(
         self,
         request: MessagesRequest,
@@ -647,6 +736,29 @@ class ResponsesTransport:
             apply_responses_sidecars=has_envelope,
             allow_openai_responses_sidecars=openai_destination,
         )
+        dialect = self.reasoning_dialect(request.model)
+        surface_rejections = (
+            self._memory.rejections_for(request.model, surface=_RESPONSES_SURFACE) or {}
+        )
+        reasoning_block = body.get("reasoning")
+        if isinstance(reasoning_block, dict):
+            if dialect.effort_values is None:
+                body.pop("reasoning", None)
+            else:
+                effort_word = reasoning_block.get("effort")
+                if isinstance(effort_word, str):
+                    requested_effort = EFFORT_BY_VALUE.get(effort_word)
+                    if (
+                        requested_effort is not None
+                        and requested_effort not in dialect.effort_values
+                    ):
+                        reasoning_block["effort"] = nearest_effort(
+                            requested_effort, dialect.effort_values
+                        ).value
+                if "reasoning.summary" in surface_rejections:
+                    reasoning_block.pop("summary", None)
+                if not reasoning_block:
+                    body.pop("reasoning", None)
         headers = self._headers(body)
         cache_key = self._prompt_cache_key(headers)
         if cache_key:
@@ -1064,6 +1176,58 @@ class ResponsesTransport:
                 self._provider_name,
                 learning.value,
             )
+            return
+        if learning.kind in {_RUNG_REASONING_SUMMARY, _RUNG_REASONING_FIELD}:
+            field_name, values, should_record = learning.value
+            if not should_record:
+                return
+            learned_field = (
+                "reasoning.effort" if field_name == "reasoning" else field_name
+            )
+            if values:
+                if self._memory.remember_rejected_values(
+                    request.model,
+                    learned_field,
+                    set(values),
+                    evidence=learning.evidence,
+                    surface=_RESPONSES_SURFACE,
+                ):
+                    spelled = ", ".join(sorted(values))
+                    record_reasoning_adaptation(
+                        ReasoningAdaptationKind.DROPPED,
+                        f"{self._provider_name} refused effort {spelled} on "
+                        f"{learned_field!r} for {request.model}; later requests pick "
+                        f"from the efforts that remain instead of losing "
+                        f"{learned_field!r} altogether.",
+                    )
+                    logger.warning(
+                        "{}_RESPONSES: effort {} learned as rejected for {} on {!r} -- "
+                        "the channel stays",
+                        self._provider_name,
+                        spelled,
+                        request.model,
+                        learned_field,
+                    )
+                return
+            if self._memory.remember_rejection(
+                request.model,
+                learned_field,
+                evidence=learning.evidence,
+                surface=_RESPONSES_SURFACE,
+            ):
+                if learned_field != "reasoning.summary":
+                    record_reasoning_adaptation(
+                        ReasoningAdaptationKind.SUPPRESSED,
+                        f"{self._provider_name} rejected {learned_field!r} for "
+                        f"{request.model}; the request was retried without it "
+                        f"and this model will not be sent it again.",
+                    )
+                logger.warning(
+                    "{}_RESPONSES: {!r} learned as rejected for {} -- later requests omit it",
+                    self._provider_name,
+                    learned_field,
+                    request.model,
+                )
             return
         if self._memory.remember_responses_tool_choice_refusal(
             request.model, evidence=learning.evidence
