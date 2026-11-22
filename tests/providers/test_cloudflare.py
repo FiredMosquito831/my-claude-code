@@ -176,8 +176,24 @@ async def test_lists_models_from_cloudflare_model_search_endpoint(
         json={
             "object": "list",
             "data": [
-                {"id": "@cf/moonshotai/kimi-k2.6", "object": "model"},
-                {"id": "@cf/meta/llama-4-scout-17b-16e-instruct", "object": "model"},
+                {
+                    "id": "@cf/moonshotai/kimi-k2.6",
+                    "object": "model",
+                    "context_length": 262144,
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
+                    "pricing": {"prompt": "0.0000005", "completion": "0.000002"},
+                },
+                {
+                    "id": "@cf/meta/llama-4-scout-17b-16e-instruct",
+                    "object": "model",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                    },
+                },
             ],
         },
         request=httpx.Request("GET", _MODEL_SEARCH_URL),
@@ -188,12 +204,19 @@ async def test_lists_models_from_cloudflare_model_search_endpoint(
         new_callable=AsyncMock,
         return_value=response,
     ) as mock_get:
-        assert await cloudflare_provider.list_model_ids() == frozenset(
-            {
-                "@cf/moonshotai/kimi-k2.6",
-                "@cf/meta/llama-4-scout-17b-16e-instruct",
-            }
-        )
+        infos = {
+            info.model_id: info for info in await cloudflare_provider.list_model_infos()
+        }
+        assert set(infos) == {
+            "@cf/moonshotai/kimi-k2.6",
+            "@cf/meta/llama-4-scout-17b-16e-instruct",
+        }
+        kimi = infos["@cf/moonshotai/kimi-k2.6"]
+        assert kimi.supports_vision is True
+        assert kimi.context_length == 262144
+        assert (kimi.input_price, kimi.output_price) == (0.5, 2.0)
+        assert kimi.declared is not None and kimi.declared.modalities is not None
+        assert infos["@cf/meta/llama-4-scout-17b-16e-instruct"].supports_vision is False
 
     mock_get.assert_awaited_once_with(
         _MODEL_SEARCH_URL,

@@ -113,11 +113,25 @@ def test_every_word_of_the_spec_table_maps_to_its_kind() -> None:
 
 
 def test_words_that_name_no_kind_are_a_stated_none() -> None:
-    """An embedding or rerank model is stated "none of these", as its pair is."""
+    """An auxiliary non-chat model is stated "none of these", while non-rail categories have named chips."""
 
-    for word in ("embedding", "embeddings", "rerank", "reranking", "jina-rerank"):
+    for word in (
+        "extraction",
+        "music",
+        "evaluation",
+        "search",
+        "guardrail",
+        "vector_store",
+        "completion",
+        "fim",
+        "non_chat",
+    ):
         assert kinds_from_words((word,)) == frozenset(), word
-    assert kinds_from_words(("moderation",)) == frozenset()
+    assert kinds_from_words(("embedding", "embeddings")) == frozenset({"embedding"})
+    assert kinds_from_words(("rerank", "reranking", "jina-rerank")) == frozenset(
+        {"rerank"}
+    )
+    assert kinds_from_words(("moderation",)) == frozenset({"moderation"})
 
 
 def test_unknown_words_state_nothing() -> None:
@@ -126,10 +140,7 @@ def test_unknown_words_state_nothing() -> None:
     for words in (
         ("model",),
         ("batch-api",),
-        ("realtime",),
-        ("evaluation",),
-        ("ocr",),
-        ("search",),
+        ("base",),
         ("model", "batch-api"),
         (),
     ):
@@ -139,7 +150,8 @@ def test_unknown_words_state_nothing() -> None:
 def test_recognised_words_union_and_unknown_ones_are_skipped() -> None:
     assert kinds_from_words(("chat", "/images/generations")) == {CHAT_KIND, "image"}
     assert kinds_from_words(("batch-api", "chat/completions")) == {CHAT_KIND}
-    assert kinds_from_words(("embeddings", "chat")) == {CHAT_KIND}
+    assert kinds_from_words(("non_chat", "chat")) == {CHAT_KIND}
+    assert kinds_from_words(("embeddings", "chat")) == {CHAT_KIND, "embedding"}
 
 
 def test_word_keys_drop_only_a_leading_slash_and_a_v1_segment() -> None:
@@ -168,13 +180,13 @@ def test_a_lists_speech_and_transcription_read_as_audio_and_text() -> None:
 
 
 def test_the_two_novita_ming_rows_are_what_novita_declares() -> None:
-    """User decision 15:43: they stay as Novita declares them -- every kind."""
+    """User decision 15:43: they stay as Novita declares them -- every media rail plus chat."""
 
     ming = DeclaredModalities(
         inputs=("audio", "image", "text", "video"),
         outputs=("audio", "image", "text", "video"),
     )
-    assert kinds_from_modalities(ming) == set(MODEL_KINDS)
+    assert kinds_from_modalities(ming) == {"chat", "image", "tts", "asr", "video"}
 
 
 def test_declaration_words_are_the_type_then_the_endpoints() -> None:
@@ -304,8 +316,16 @@ def test_a_stated_none_word_is_stated_not_unknown() -> None:
     )
 
     assert kind.known
-    assert kind.kinds == frozenset()
+    assert kind.kinds == frozenset({"embedding"})
     assert not kind.chat_listable
+
+    aux = _resolve(
+        "vercel/extract",
+        records={"vercel/extract": ProviderModelDeclaration(model_type="extraction")},
+    )
+    assert aux.known
+    assert aux.kinds == frozenset()
+    assert not aux.chat_listable
 
 
 def test_without_the_words_lookup_the_ladder_is_7_78_2s() -> None:
@@ -365,3 +385,202 @@ def test_the_words_lookup_reports_nothing_for_a_silent_record() -> None:
 
     assert lookup("p", "pair-only") == (None, None)
     assert lookup("p", "absent") == (None, None)
+
+
+def test_same_rung_type_refines_models_dev_and_provider_modalities() -> None:
+    """R3 / T4-Q2: exclusive non-chat types strip false ``chat`` from ``text -> text`` or ``audio, text -> text``."""
+
+    def md_type_lookup(types: dict[str, str]):
+        def lookup(
+            provider_id: str, model_id: str
+        ) -> tuple[str | None, ResolutionTier | None]:
+            found = types.get(f"{provider_id}/{model_id}")
+            return (
+                (None, None)
+                if found is None
+                else (found, ResolutionTier.MODELS_DEV_BUCKET_EXACT)
+            )
+
+        return lookup
+
+    catalogue = _catalogue(
+        {
+            "p/embed": TEXT,
+            "p/rerank": TEXT,
+            "p/gpt-transcribe": HEARS,
+            "p/gemini-2.5-flash": HEARS,
+            "p/gpt-live-1": DeclaredModalities(
+                inputs=("audio", "text"), outputs=("audio", "text")
+            ),
+        },
+        ResolutionTier.MODELS_DEV_BUCKET_EXACT,
+    )
+    types = md_type_lookup(
+        {
+            "p/embed": "embedding",
+            "p/rerank": "reranking",
+            "p/gpt-transcribe": "transcription",
+            "p/gemini-2.5-flash": "chat",
+            "p/gpt-live-1": "realtime",
+        }
+    )
+
+    embed = resolve_model_kind(
+        "p/embed", modalities=catalogue, placements={}, models_dev_type=types
+    )
+    assert embed.kinds == frozenset({"embedding"})
+    assert not embed.chat_listable
+
+    rerank = resolve_model_kind(
+        "p/rerank", modalities=catalogue, placements={}, models_dev_type=types
+    )
+    assert rerank.kinds == frozenset({"rerank"})
+    assert not rerank.chat_listable
+
+    transcribe = resolve_model_kind(
+        "p/gpt-transcribe", modalities=catalogue, placements={}, models_dev_type=types
+    )
+    assert transcribe.kinds == frozenset({"asr"})
+    assert not transcribe.chat_listable
+
+    # T4-Q2 Option (a): multimodal audio chat keeps both ``chat`` and ``asr``.
+    flash = resolve_model_kind(
+        "p/gemini-2.5-flash",
+        modalities=catalogue,
+        placements={},
+        models_dev_type=types,
+    )
+    assert flash.kinds == frozenset({"chat", "asr"})
+    assert flash.chat_listable
+
+    realtime = resolve_model_kind(
+        "p/gpt-live-1", modalities=catalogue, placements={}, models_dev_type=types
+    )
+    assert realtime.kinds == frozenset({"realtime"})
+    assert not realtime.chat_listable
+
+    # Provider Rung 1 same-row refinement (e.g. opencode/gpt-live-1 or vercel embedding).
+    opencode_live = _resolve(
+        "opencode/gpt-live-1",
+        records={
+            "opencode/gpt-live-1": ProviderModelDeclaration(
+                model_type="realtime",
+                modalities=DeclaredModalities(
+                    inputs=("audio/pcm", "text"), outputs=("audio/pcm", "text")
+                ),
+            )
+        },
+    )
+    assert opencode_live.kinds == frozenset({"realtime"})
+    assert opencode_live.source == KIND_SOURCE_PROVIDER_LISTING
+    assert not opencode_live.chat_listable
+
+
+def test_mistral_capabilities_resolve_through_the_kind_ladder() -> None:
+    """R2 / T4-Q6: Mistral capability flags and ``non_chat`` specificity precedence."""
+
+    from my_claude_code.providers.model_listing import declared_from_row
+
+    codestral = declared_from_row(
+        {
+            "id": "codestral-latest",
+            "type": "base",
+            "capabilities": {"completion_chat": True, "completion_fim": True},
+        }
+    )
+    ocr = declared_from_row(
+        {
+            "id": "mistral-ocr-latest",
+            "type": "base",
+            "capabilities": {"completion_chat": False, "ocr": True},
+        }
+    )
+    moderation = declared_from_row(
+        {
+            "id": "mistral-moderation",
+            "type": "base",
+            "capabilities": {"completion_chat": False, "moderation": True},
+        }
+    )
+    tts = declared_from_row(
+        {
+            "id": "voxtral-mini-tts",
+            "type": "base",
+            "capabilities": {"completion_chat": False, "audio_speech": True},
+        }
+    )
+    asr = declared_from_row(
+        {
+            "id": "voxtral-mini-transcribe",
+            "type": "base",
+            "capabilities": {"completion_chat": False, "audio_transcription": True},
+        }
+    )
+    embed = declared_from_row(
+        {
+            "id": "codestral-embed",
+            "type": "base",
+            "capabilities": {"completion_chat": False, "ocr": False},
+        }
+    )
+    records = {
+        "mistral/codestral-latest": codestral,
+        "mistral/mistral-ocr-latest": ocr,
+        "mistral/mistral-moderation": moderation,
+        "mistral/voxtral-mini-tts": tts,
+        "mistral/voxtral-mini-transcribe": asr,
+        "mistral/codestral-embed": embed,
+    }
+
+    assert _resolve("mistral/codestral-latest", records=records).kinds == frozenset(
+        {"chat"}
+    )
+    assert _resolve("mistral/mistral-ocr-latest", records=records).kinds == frozenset(
+        {"ocr"}
+    )
+    assert _resolve("mistral/mistral-moderation", records=records).kinds == frozenset(
+        {"moderation"}
+    )
+    assert _resolve("mistral/voxtral-mini-tts", records=records).kinds == frozenset(
+        {"tts"}
+    )
+    assert _resolve(
+        "mistral/voxtral-mini-transcribe", records=records
+    ).kinds == frozenset({"asr"})
+
+    # When models.dev has no entry (or says "chat"), codestral-embed resolves to stated non-chat frozenset().
+    embed_no_md = _resolve("mistral/codestral-embed", records=records)
+    assert embed_no_md.kinds == frozenset()
+    assert embed_no_md.source == KIND_SOURCE_PROVIDER_WORDS
+    assert not embed_no_md.chat_listable
+
+    embed_chat_md = _resolve(
+        "mistral/codestral-embed",
+        records=records,
+        catalogue={"mistral/codestral-embed": TEXT},
+    )
+    assert embed_chat_md.kinds == frozenset()
+    assert embed_chat_md.source == KIND_SOURCE_PROVIDER_WORDS
+    assert not embed_chat_md.chat_listable
+
+    # When models.dev knows type="embedding", codestral-embed resolves to frozenset({"embedding"}).
+    declared_at = _records(records)
+    embed_with_md_type = resolve_model_kind(
+        "mistral/codestral-embed",
+        modalities=provider_first_modalities(
+            declared_at,
+            _catalogue(
+                {"mistral/codestral-embed": TEXT},
+                ResolutionTier.MODELS_DEV_BUCKET_EXACT,
+            ),
+        ),
+        placements={},
+        kind_words=provider_kind_words(declared_at),
+        models_dev_type=lambda _p, _m: (
+            "embedding",
+            ResolutionTier.MODELS_DEV_BUCKET_EXACT,
+        ),
+    )
+    assert embed_with_md_type.kinds == frozenset({"embedding"})
+    assert embed_with_md_type.source == KIND_SOURCE_MODELS_DEV
+    assert not embed_with_md_type.chat_listable

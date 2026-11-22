@@ -225,8 +225,12 @@ async def test_model_infos_filter_tool_models_and_thinking_metadata(
 
     infos = await open_router_provider.list_model_infos()
 
+    open_router_provider._client.models.list.assert_awaited_once_with(
+        extra_query={"output_modalities": "all"}
+    )
     assert {(info.model_id, info.supports_thinking) for info in infos} == {
-        ("tool-model", True)
+        ("tool-model", True),
+        ("plain-model", False),
     }
 
 

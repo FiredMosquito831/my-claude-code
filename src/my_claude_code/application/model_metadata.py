@@ -219,6 +219,10 @@ class ProviderModelDeclaration:
     reasoning: bool | None = None
     #: Whether the row states the model takes tool calls, under the same rule.
     tool_calls: bool | None = None
+    #: Whether the row explicitly states the model reads images via a boolean
+    #: capability flag (Mistral ``capabilities.vision``, HyperCharm
+    #: ``capabilities.vision``). ``None`` when absent.
+    vision: bool | None = None
     # -- 7.85.0: what the row says about the model beside its numbers, appended
     # -- so nothing above moves. Shown on the Models page; nothing routes, lists
     # -- or prices on any of them.
@@ -626,6 +630,7 @@ _DECLARATION_FIELDS: tuple[str, ...] = (
     "output_price",
     "reasoning",
     "tool_calls",
+    "vision",
     "published_at",
     "retires_at",
     "knowledge_cutoff",
@@ -750,6 +755,7 @@ def _declaration_document(
         "output_price": declared.output_price,
         "reasoning": declared.reasoning,
         "tool_calls": declared.tool_calls,
+        "vision": declared.vision,
         # 7.85.0, appended: a 7.83-7.84 reader reads every key above by name
         # and passes over these.
         "published_at": declared.published_at,
@@ -858,6 +864,7 @@ def _declaration_from_document(value: object) -> ProviderModelDeclaration | None
         output_price=_float_or_none(value.get("output_price")),
         reasoning=_bool_or_none(value.get("reasoning")),
         tool_calls=_bool_or_none(value.get("tool_calls")),
+        vision=_bool_or_none(value.get("vision")),
         published_at=_str_or_none(value.get("published_at")),
         retires_at=_str_or_none(value.get("retires_at")),
         knowledge_cutoff=_str_or_none(value.get("knowledge_cutoff")),

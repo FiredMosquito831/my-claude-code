@@ -747,6 +747,12 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
             "tts": "Speech",
             "asr": "Transcription",
             "video": "Video",
+            "embedding": "Embedding",
+            "rerank": "Rerank",
+            "realtime": "Realtime",
+            "ocr": "OCR",
+            "moderation": "Moderation",
+            "decision": "Decision",
         },
     }
 
@@ -821,6 +827,12 @@ def test_admin_model_refresh_returns_the_updated_canonical_catalog():
             "tts": "Speech",
             "asr": "Transcription",
             "video": "Video",
+            "embedding": "Embedding",
+            "rerank": "Rerank",
+            "realtime": "Realtime",
+            "ocr": "OCR",
+            "moderation": "Moderation",
+            "decision": "Decision",
         },
     }
     runtime.refresh_models.assert_awaited_once_with()
@@ -852,6 +864,12 @@ def test_admin_model_refresh_reports_partial_provider_failures():
             "tts": "Speech",
             "asr": "Transcription",
             "video": "Video",
+            "embedding": "Embedding",
+            "rerank": "Rerank",
+            "realtime": "Realtime",
+            "ocr": "OCR",
+            "moderation": "Moderation",
+            "decision": "Decision",
         },
     }
 

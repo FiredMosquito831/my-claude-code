@@ -228,12 +228,14 @@ def build_models_list_response(
     # is not an id a chat client may send. Configured refs are never filtered.
     # OpenRouter's live list is one more rung of the same kind ladder (7.84.0),
     # and LiteLLM's map two more while LiteLLM pricing is on (7.85.0).
+    type_lookup_fn = getattr(runtime, "models_dev_type_lookup", None)
     chat_listable = chat_listing_filter(
         settings,
         runtime.model_modalities_lookup(),
         kind_words=runtime.model_kind_words_lookup(),
         live=runtime.openrouter_live_catalogue(),
         litellm=runtime.litellm_model_catalogue(),
+        models_dev_type=None if type_lookup_fn is None else type_lookup_fn(),
     )
 
     for ref in configured_chat_model_refs(settings):

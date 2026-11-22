@@ -111,6 +111,12 @@ def test_the_pickers_are_told_each_refs_stated_kind(monkeypatch, tmp_path) -> No
         "tts": "Speech",
         "asr": "Transcription",
         "video": "Video",
+        "embedding": "Embedding",
+        "rerank": "Rerank",
+        "realtime": "Realtime",
+        "ocr": "OCR",
+        "moderation": "Moderation",
+        "decision": "Decision",
     }
 
 

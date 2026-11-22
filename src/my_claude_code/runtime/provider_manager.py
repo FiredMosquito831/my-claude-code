@@ -88,6 +88,7 @@ from my_claude_code.providers.runtime.models_dev import (
     model_tool_call_tiered,
     model_vision_tiered,
     models_dev_cache_generation,
+    models_dev_type_lookup,
     resolve_model_reasoning_capability,
 )
 from my_claude_code.providers.runtime.openrouter_catalogue import (
@@ -545,6 +546,12 @@ class ProviderRuntimeManager:
         reads them as the coarse kind rung, after both modality rungs.
         """
         return provider_kind_words(self._declaration_at)
+
+    def models_dev_type_lookup(
+        self,
+    ) -> Callable[[str, str], tuple[str | None, ResolutionTier | None]]:
+        """models.dev's ``type`` field for each model, bound to the current cache."""
+        return models_dev_type_lookup()
 
     def openrouter_live_catalogue(self) -> LiveCatalogue | None:
         """OpenRouter's live model list as a rung for every provider (7.84.0).

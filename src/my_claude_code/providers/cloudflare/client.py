@@ -15,8 +15,7 @@ from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.http import maybe_await_aclose
 from my_claude_code.providers.model_listing import (
     ModelListResponseError,
-    extract_openai_model_ids,
-    model_infos_from_ids,
+    extract_openai_model_infos,
 )
 from my_claude_code.providers.openai_chat import (
     ChatTemplateReasoning,
@@ -122,9 +121,7 @@ class CloudflareProvider(OpenAIChatProvider):
                 raise ModelListResponseError(
                     "CLOUDFLARE model-list response is malformed: invalid JSON"
                 ) from exc
-            return model_infos_from_ids(
-                extract_openai_model_ids(payload, provider_name="CLOUDFLARE")
-            )
+            return extract_openai_model_infos(payload, provider_name="CLOUDFLARE")
         finally:
             await maybe_await_aclose(response)
 

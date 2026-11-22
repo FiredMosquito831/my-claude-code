@@ -140,6 +140,7 @@ async def test_nous_reports_thinking_capability(nous_provider):
 
     assert thinking == {
         "deepseek/deepseek-v4-flash-0731": True,
+        "nousresearch/hermes-4-405b": True,
         "some/plain-model": False,
     }
 

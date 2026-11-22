@@ -596,6 +596,39 @@ def extract_openrouter_tool_model_infos(
     return frozenset(model_infos)
 
 
+def extract_openrouter_model_infos(
+    payload: Any, *, provider_name: str
+) -> frozenset[_ProviderModelInfo]:
+    """Extract all OpenRouter-dialect model records, including non-tool and media models."""
+    data = _field(payload, "data")
+    if not _is_sequence(data):
+        raise _malformed(provider_name, "expected top-level data array")
+
+    model_infos: set[_ProviderModelInfo] = set()
+    for item in data:
+        model_id = _field(item, "id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise _malformed(provider_name, "expected every data item to include id")
+
+        supported_parameters = _field(item, "supported_parameters")
+        supported_parameter_names = (
+            {param for param in supported_parameters if isinstance(param, str)}
+            if _is_sequence(supported_parameters)
+            else set()
+        )
+        model_infos.add(
+            _openrouter_dialect_model_info(
+                item,
+                model_id=model_id,
+                supported_parameter_names=supported_parameter_names,
+                read_vision=True,
+                published_row=published_row_text(item),
+            )
+        )
+
+    return frozenset(model_infos)
+
+
 def published_row_text(item: Any) -> str | None:
     """One provider list row, verbatim, as compact JSON text (7.86.0).
 
@@ -899,11 +932,15 @@ _MODALITY_PAIR_PATHS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
 _MODALITY_SUMMARY_PATH: tuple[str, ...] = ("architecture", "modality")
 _MODALITY_SUMMARY_ARROW = "->"
 #: A provider's one-word model type: Novita ``model_type``, Vercel and
-#: together ``type``, deepinfra ``reported_type``. First that states wins.
+#: together ``type``, deepinfra ``reported_type``, LiteLLM ``mode``, and
+#: HuggingFace-style ``task`` / ``pipeline_tag``. First that states wins.
 _MODEL_TYPE_PATHS: tuple[tuple[str, ...], ...] = (
     ("model_type",),
     ("type",),
     ("reported_type",),
+    ("mode",),
+    ("task",),
+    ("pipeline_tag",),
 )
 #: The endpoints a provider says serve a model: new-api's
 #: ``supported_endpoint_types``, Command Code's and LiteLLM proxies'
@@ -912,6 +949,23 @@ _ENDPOINT_PATHS: tuple[tuple[str, ...], ...] = (
     ("supported_endpoint_types",),
     ("supported_endpoints",),
     ("endpoints",),
+)
+#: Gemini / Vertex generation method lists (``generateContent``,
+#: ``embedContent``, ``predict``, ``predictLongRunning``).
+_GENERATION_METHOD_PATHS: tuple[tuple[str, ...], ...] = (
+    ("supportedGenerationMethods",),
+    ("supported_generation_methods",),
+)
+#: Structured boolean capability flags on ``capabilities`` (Mistral) mapped
+#: declaratively to endpoint / task words.
+_CAPABILITY_ENDPOINT_FLAGS: tuple[tuple[str, str], ...] = (
+    ("completion_chat", "chat"),
+    ("audio_speech", "audio_speech"),
+    ("audio_transcription", "audio_transcription"),
+    ("audio_transcription_realtime", "realtime_transcription"),
+    ("ocr", "ocr"),
+    ("moderation", "moderation"),
+    ("classification", "classification"),
 )
 
 # -- 7.83.0: the row's own numbers and flags, for fields the record carries --
@@ -1017,6 +1071,10 @@ _TOOL_CALL_WORDS = frozenset(
 _REASONING_BOOLEAN_PATHS: tuple[tuple[str, ...], ...] = (("capabilities", "reasoning"),)
 _TOOL_CALL_BOOLEAN_PATHS: tuple[tuple[str, ...], ...] = (
     ("capabilities", "function_calling"),
+)
+_VISION_BOOLEAN_PATHS: tuple[tuple[str, ...], ...] = (
+    ("capabilities", "vision"),
+    ("vision",),
 )
 #: A ``reasoning`` object states the model reasons only when it lists an
 #: effort level or makes thinking mandatory: OpenRouter publishes
@@ -1167,7 +1225,7 @@ def declared_from_row(
         description = _first_stated(item, _DESCRIPTION_PATHS, _text)
         modalities = _declared_modalities(item)
         model_type = _first_stated(item, _MODEL_TYPE_PATHS, _word)
-        endpoints = _first_stated(item, _ENDPOINT_PATHS, _words)
+        endpoints = _declared_endpoints(item)
         context_length = _first_stated(
             item, _CONTEXT_LENGTH_PATHS, _positive_int_or_none
         )
@@ -1178,6 +1236,7 @@ def declared_from_row(
         output_price = _listed_price(item, input_half=False)
         reasoning = _declared_reasoning(item)
         tool_calls = _declared_tool_calls(item)
+        vision = _first_stated(item, _VISION_BOOLEAN_PATHS, _boolean)
     except Exception:
         # Belt and braces for a payload object whose attribute access itself
         # misbehaves: an optional field is never worth a failed sweep.
@@ -1192,6 +1251,7 @@ def declared_from_row(
         output_price=output_price,
         reasoning=reasoning,
         tool_calls=tool_calls,
+        vision=vision,
         published_at=published_at,
         retires_at=retires_at,
         knowledge_cutoff=knowledge_cutoff,
@@ -1252,7 +1312,8 @@ def record_with_declared(info: _ProviderModelInfo) -> _ProviderModelInfo:
             info.max_output_tokens, declared.max_output_tokens
         ),
         supports_vision=_first_known(
-            info.supports_vision, declared_accepts_images(declared)
+            _first_known(info.supports_vision, declared_accepts_images(declared)),
+            declared.vision,
         ),
     )
     return info if filled == info else filled
@@ -1356,6 +1417,46 @@ def _declared_tool_calls(item: Any) -> bool | None:
     if words is not None and words & _TOOL_CALL_WORDS:
         return True
     return None
+
+
+def _generation_methods(value: Any) -> tuple[str, ...] | None:
+    words = _words(value)
+    if words is None:
+        return None
+    if "generatecontent" in words or "generateanswer" in words:
+        filtered = tuple(
+            word for word in words if word not in ("predict", "predictlongrunning")
+        )
+        return filtered or None
+    return words
+
+
+def _capability_endpoint_words(item: Any) -> tuple[str, ...] | None:
+    caps = _field(item, "capabilities")
+    if not isinstance(caps, Mapping):
+        return None
+    found: set[str] = set()
+    for flag, word in _CAPABILITY_ENDPOINT_FLAGS:
+        if caps.get(flag) is True:
+            found.add(word)
+    if caps.get("audio") is True and caps.get("completion_chat") is True:
+        found.add("audio_transcription")
+    if caps.get("completion_fim") is True and caps.get("completion_chat") is not True:
+        found.add("fim")
+    if caps.get("completion_chat") is False:
+        found.add("non_chat")
+    return tuple(sorted(found)) if found else None
+
+
+def _declared_endpoints(item: Any) -> tuple[str, ...] | None:
+    explicit = _first_stated(item, _ENDPOINT_PATHS, _words)
+    if explicit is None:
+        explicit = _first_stated(item, _GENERATION_METHOD_PATHS, _generation_methods)
+    capability = _capability_endpoint_words(item)
+    if explicit is None and capability is None:
+        return None
+    combined = set(explicit or ()) | set(capability or ())
+    return tuple(sorted(combined)) if combined else None
 
 
 def _capability_words(item: Any) -> frozenset[str] | None:
