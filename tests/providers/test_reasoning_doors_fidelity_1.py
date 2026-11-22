@@ -6,12 +6,17 @@ from typing import Any
 import httpx
 import pytest
 
+from my_claude_code.application.reasoning import (
+    client_reasoning_policy,
+    resolve_reasoning_policy,
+)
 from my_claude_code.config.admin.manifest import FIELDS
 from my_claude_code.config.constants import (
     REASONING_ADAPTIVE_CHOICES,
     REASONING_ADAPTIVE_DEFAULT,
 )
 from my_claude_code.config.nim import NimSettings
+from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.config.settings import (
     Settings,
     configured_reasoning_adaptive,
@@ -41,6 +46,7 @@ from my_claude_code.core.wire_capture import (
 )
 from my_claude_code.providers.anthropic_messages import (
     ANTHROPIC_REASONING_DIALECT,
+    AnthropicMessagesProvider,
     build_anthropic_messages_body,
 )
 from my_claude_code.providers.base import ProviderConfig
@@ -48,6 +54,8 @@ from my_claude_code.providers.chatgpt_oauth.conversion import (
     build_chatgpt_oauth_request_body,
 )
 from my_claude_code.providers.deepseek import DeepSeekProvider
+from my_claude_code.providers.gemini import GeminiProvider
+from my_claude_code.providers.google_openai.reasoning import VertexReasoningEncoder
 from my_claude_code.providers.mistral import MistralProvider
 from my_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from my_claude_code.providers.nvidia_nim.request_options import build_nim_request_body
@@ -598,3 +606,270 @@ def test_t2_new_setting_manifest_and_wire_adherence(
     finally:
         monkeypatch.delenv("REASONING_ADAPTIVE", raising=False)
         get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# PR4 (T2-Q1 Option A): Client adaptive preservation & per-door explicit effort
+# ---------------------------------------------------------------------------
+
+
+def test_pr4_anthropic_client_adaptive_with_effort_and_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fmt = {"type": "json_schema", "schema": {"type": "object"}}
+    req = _anthropic_request(
+        model="claude-opus-4-7",
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": "high", "format": fmt},
+    )
+    policy = resolve_reasoning_policy(req, ReasoningPreference.CLIENT)
+    assert policy == ReasoningPolicy(
+        control=ReasoningControl.ADAPTIVE,
+        effort=ReasoningEffort.HIGH,
+        budget_tokens=None,
+    )
+
+    # Adaptive-capable model (Opus 4.7): preserves thinking.type="adaptive",
+    # display="summarized", output_config.effort="high", and output_config.format.
+    adaptive_body = build_anthropic_messages_body(
+        req,
+        reasoning=policy,
+        forward_thinking_display=True,
+        adaptive_capable=True,
+    )
+    assert adaptive_body["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert adaptive_body["output_config"] == {"effort": "high", "format": fmt}
+
+    # Legacy non-adaptive model (Haiku 4.5 / adaptive_capable=False): falls back
+    # to manual enabled + budget_tokens=2048 and strips output_config.effort.
+    haiku_req = _anthropic_request(
+        model="claude-haiku-4-5-20251001",
+        thinking={"type": "adaptive"},
+        output_config={"effort": "high", "format": fmt},
+    )
+    haiku_policy = resolve_reasoning_policy(haiku_req, ReasoningPreference.CLIENT)
+    legacy_body = build_anthropic_messages_body(
+        haiku_req,
+        reasoning=haiku_policy,
+        adaptive_capable=False,
+    )
+    assert legacy_body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert legacy_body["output_config"] == {"format": fmt}
+
+    # With REASONING_ADAPTIVE="off": falls back to enabled + budget_tokens=2048
+    # and strips output_config.effort even when adaptive_capable is True.
+    monkeypatch.setenv("REASONING_ADAPTIVE", "off")
+    get_settings.cache_clear()
+    try:
+        off_body = build_anthropic_messages_body(
+            req,
+            reasoning=policy,
+            adaptive_capable=True,
+        )
+        assert off_body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+        assert off_body["output_config"] == {"format": fmt}
+    finally:
+        monkeypatch.delenv("REASONING_ADAPTIVE", raising=False)
+        get_settings.cache_clear()
+
+
+def test_pr4_non_anthropic_doors_client_adaptive_bare_and_explicit_effort() -> None:
+    req_bare = _anthropic_request(
+        model="gpt-5",
+        thinking={"type": "adaptive"},
+    )
+    policy_bare = resolve_reasoning_policy(req_bare, ReasoningPreference.CLIENT)
+    assert policy_bare == ReasoningPolicy.adaptive()
+
+    req_low = _anthropic_request(
+        model="gpt-5",
+        thinking={"type": "adaptive"},
+        output_config={"effort": "low"},
+    )
+    policy_low = resolve_reasoning_policy(req_low, ReasoningPreference.CLIENT)
+    assert policy_low == ReasoningPolicy.adaptive(effort=ReasoningEffort.LOW)
+
+    req_high = _anthropic_request(
+        model="gpt-5",
+        thinking={"type": "adaptive"},
+        output_config={"effort": "high"},
+    )
+    policy_high = resolve_reasoning_policy(req_high, ReasoningPreference.CLIENT)
+    assert policy_high == ReasoningPolicy.adaptive(effort=ReasoningEffort.HIGH)
+
+    # 1. NamedEffortReasoning (OpenAI Chat / groq / opencode / fireworks / vercel / llamacpp)
+    for profile_id, expected_top in (
+        ("groq", "high"),
+        ("opencode", "max"),
+        ("fireworks", "high"),
+    ):
+        chat_bare: dict[str, Any] = {"model": "m", "messages": []}
+        OPENAI_CHAT_PROFILES[profile_id].reasoning.encode(chat_bare, policy_bare)
+        assert chat_bare["reasoning_effort"] == expected_top, profile_id
+
+        chat_low: dict[str, Any] = {"model": "m", "messages": []}
+        OPENAI_CHAT_PROFILES[profile_id].reasoning.encode(chat_low, policy_low)
+        assert chat_low["reasoning_effort"] == "low", profile_id
+
+    vercel_low: dict[str, Any] = {"model": "m", "messages": []}
+    OPENAI_CHAT_PROFILES["vercel"].reasoning.encode(vercel_low, policy_low)
+    assert vercel_low["extra_body"]["reasoning"] == {"effort": "low"}
+
+    llama_low: dict[str, Any] = {"model": "m", "messages": []}
+    OPENAI_CHAT_PROFILES["llamacpp"].reasoning.encode(llama_low, policy_low)
+    assert llama_low["extra_body"]["thinking_budget_tokens"] == 1024
+
+    # 2. MistralProvider: bare adaptive -> top rung ("max") + SUBSTITUTED note;
+    # explicit effort="low" -> honors "low" without forcing "max".
+    mistral = MistralProvider(
+        ProviderConfig(api_key="sk-test", base_url="https://api.mistral.ai/v1"),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+    trace_mistral_bare = install_wire_trace()
+    mistral_bare = mistral._build_request_body(req_bare, reasoning=policy_bare)
+    assert mistral_bare["reasoning_effort"] == "max"
+    assert len(trace_mistral_bare.reasoning_adaptations) == 1
+
+    trace_mistral_low = install_wire_trace()
+    mistral_low = mistral._build_request_body(req_low, reasoning=policy_low)
+    assert mistral_low["reasoning_effort"] == "low"
+    assert trace_mistral_low.reasoning_adaptations == []
+
+    # 3. Responses / build_responses_request_body:
+    # - bare adaptive (effort=None): sends "medium" and records SUBSTITUTED adaptation note.
+    # - adaptive + effort="low" or "high": sends explicit "low" / "high" and records NO bogus "medium" note.
+    trace_resp_bare = install_wire_trace()
+    resp_bare = build_responses_request_body(req_bare, reasoning=policy_bare)
+    assert resp_bare["reasoning"]["effort"] == "medium"
+    assert len(trace_resp_bare.reasoning_adaptations) == 1
+    assert "medium" in (trace_resp_bare.reasoning_adaptations[0].message or "")
+
+    trace_resp_low = install_wire_trace()
+    resp_low = build_responses_request_body(req_low, reasoning=policy_low)
+    assert resp_low["reasoning"]["effort"] == "low"
+    assert trace_resp_low.reasoning_adaptations == []
+
+    trace_resp_high = install_wire_trace()
+    resp_high = build_responses_request_body(req_high, reasoning=policy_high)
+    assert resp_high["reasoning"]["effort"] == "high"
+    assert trace_resp_high.reasoning_adaptations == []
+
+    # 4. GeminiProvider & VertexReasoningEncoder:
+    gemini = GeminiProvider(
+        ProviderConfig(
+            api_key="sk-test",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        ),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+    gemini_bare = gemini._build_request_body(req_bare, reasoning=policy_bare)
+    assert gemini_bare["reasoning_effort"] == "high"
+    gemini_low = gemini._build_request_body(req_low, reasoning=policy_low)
+    assert gemini_low["reasoning_effort"] == "low"
+
+    vertex_bare: dict[str, Any] = {"model": "gemini-2.5-pro", "messages": []}
+    VertexReasoningEncoder().encode(vertex_bare, policy_bare)
+    assert vertex_bare["extra_body"]["extra_body"]["google"]["thinking_config"] == {
+        "include_thoughts": True
+    }
+    vertex_low: dict[str, Any] = {"model": "gemini-2.5-pro", "messages": []}
+    VertexReasoningEncoder().encode(vertex_low, policy_low)
+    assert vertex_low["extra_body"]["extra_body"]["google"]["thinking_config"] == {
+        "thinking_budget": 1024,
+        "include_thoughts": True,
+    }
+
+    # 5.Mixed adaptive + explicit budget_tokens stays ON(budget_tokens=4096)
+    req_mixed = _anthropic_request(
+        thinking={"type": "adaptive", "budget_tokens": 4096},
+    )
+    assert client_reasoning_policy(req_mixed) == ReasoningPolicy.on(budget_tokens=4096)
+
+
+@pytest.mark.asyncio
+async def test_pr4_anthropic_messages_provider_recovers_from_adaptive_rejection_to_manual_budget() -> (
+    None
+):
+    seen_bodies: list[dict[str, Any]] = []
+    sse = (
+        b"event: message_start\n"
+        b'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-haiku-4-5-20251001","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}\n\n'
+        b"event: content_block_start\n"
+        b'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n'
+        b"event: content_block_stop\n"
+        b'data: {"type":"content_block_stop","index":0}\n\n'
+        b"event: message_delta\n"
+        b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}\n\n'
+        b"event: message_stop\n"
+        b'data: {"type":"message_stop"}\n\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen_bodies.append(body)
+        thinking = body.get("thinking") or {}
+        if thinking.get("type") == "adaptive":
+            return httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "thinking.type: 'adaptive' thinking is not supported for claude-haiku-4-5-20251001",
+                    },
+                },
+                request=request,
+            )
+
+        async def _sse_body():
+            yield sse
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse_body(),
+        )
+
+    provider = AnthropicMessagesProvider(
+        ProviderConfig(api_key="sk-ant-test", base_url="https://api.anthropic.com"),
+        provider_name="ANTHROPIC",
+        rate_limiter=ImmediateRetryProviderRateLimiter(),
+        provider_id="anthropic",
+    )
+    provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    req = _anthropic_request(
+        model="claude-haiku-4-5-20251001",
+        thinking={"type": "adaptive"},
+        output_config={"effort": "high"},
+    )
+    policy = resolve_reasoning_policy(req, ReasoningPreference.CLIENT)
+    try:
+        install_wire_trace()
+        async for _ev in provider.stream_response(
+            req,
+            input_tokens=10,
+            reasoning=policy,
+        ):
+            pass
+        assert len(seen_bodies) == 2
+        assert seen_bodies[0]["thinking"] == {"type": "adaptive"}
+        assert seen_bodies[0]["output_config"] == {"effort": "high"}
+        assert seen_bodies[1]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+        assert "output_config" not in seen_bodies[1]
+        assert provider.reasoning_dialect("claude-haiku-4-5-20251001").adaptive is False
+
+        # Subsequent request uses adaptive_capable=False up-front without extra 400!
+        seen_bodies.clear()
+        async for _ev in provider.stream_response(
+            req,
+            input_tokens=10,
+            reasoning=policy,
+        ):
+            pass
+        assert len(seen_bodies) == 1
+        assert seen_bodies[0]["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+        assert "output_config" not in seen_bodies[0]
+    finally:
+        await provider._client.aclose()

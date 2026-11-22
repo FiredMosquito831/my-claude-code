@@ -48,6 +48,8 @@ def client_reasoning_policy(request: MessagesRequest) -> ReasoningPolicy:
             control=ReasoningControl.OFF,
             effort=effort,
         )
+    if thinking_control is ReasoningControl.ADAPTIVE:
+        return ReasoningPolicy.adaptive(effort=effort)
     if thinking_control is ReasoningControl.ON or budget_tokens is not None:
         return ReasoningPolicy.on(
             effort=effort,
@@ -70,6 +72,8 @@ def _thinking_control(
         "enabled" in thinking.model_fields_set and thinking.enabled is False
     ):
         return ReasoningControl.OFF
+    if thinking.type == "adaptive" and budget_tokens is None:
+        return ReasoningControl.ADAPTIVE
     if (
         thinking.type in {"adaptive", "enabled"}
         or ("enabled" in thinking.model_fields_set and thinking.enabled is True)

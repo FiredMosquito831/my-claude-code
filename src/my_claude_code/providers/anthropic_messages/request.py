@@ -729,6 +729,19 @@ def _apply_output_config_effort(
         body["output_config"] = {"effort": mapped}
 
 
+def apply_manual_thinking_fallback(
+    body: dict[str, Any],
+    budget: int,
+) -> dict[str, Any] | None:
+    """Clone ``body`` downgraded from adaptive thinking to a manual budget."""
+
+    cloned = deepcopy(body)
+    _apply_manual_budget(cloned, budget)
+    if "thinking" not in cloned:
+        return None
+    return cloned
+
+
 def _apply_manual_budget(body: dict[str, Any], budget: int) -> None:
     """Emit manual ``enabled`` + bounded ``budget_tokens``, omitting ``output_config.effort``."""
 

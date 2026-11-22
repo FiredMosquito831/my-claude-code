@@ -188,6 +188,42 @@ def _encode_adaptive_rung(
     return True
 
 
+def _encode_adaptive_effort_field(
+    target: dict[str, Any],
+    *,
+    field: str,
+    efforts: EffortValues,
+    enabled_value: str | bool | None,
+    policy: ReasoningPolicy,
+    model: str,
+    dialect: ReasoningDialect,
+    adaptive_mode: str,
+) -> None:
+    """Encode ``ReasoningControl.ADAPTIVE`` onto a string-effort field."""
+
+    if policy.effort is not None:
+        explicit = _clamped_effort(efforts, policy.effort)
+        if explicit is not None:
+            target[field] = explicit
+        elif adaptive_mode == "off" and enabled_value is not None:
+            target[field] = enabled_value
+        elif adaptive_mode != "off":
+            _note_adaptive_nothing(model=model, dialect=dialect)
+        return
+    if adaptive_mode == "off":
+        explicit = _clamped_effort(efforts, ReasoningEffort.HIGH)
+        if explicit is not None:
+            target[field] = explicit
+        elif enabled_value is not None:
+            target[field] = enabled_value
+        return
+    # No adaptive channel on this shape: ``enabled_value``, when there is one,
+    # is written into the effort field and is therefore a default *rung*, not a
+    # level-less on -- so the honest answer is this host's own highest rung.
+    if not _encode_adaptive_rung(target, field, efforts, model):
+        _note_adaptive_nothing(model=model, dialect=dialect)
+
+
 def _adaptive_model(body: dict[str, Any]) -> str:
     """The model this body names, for an adaptation message."""
 
@@ -230,25 +266,16 @@ class NamedEffortReasoning:
 
         adaptive_mode = configured_reasoning_adaptive()
         if policy.control is ReasoningControl.ADAPTIVE:
-            if adaptive_mode == "off":
-                explicit = _clamped_effort(
-                    self.efforts, policy.effort or ReasoningEffort.HIGH
-                )
-                if explicit is not None:
-                    target[self.field] = explicit
-                elif self.enabled_value is not None:
-                    target[self.field] = self.enabled_value
-                return
-            # No adaptive channel on this shape: ``enabled_value``, when there
-            # is one, is written into the effort field and is therefore a
-            # default *rung*, not a level-less on -- so the honest answer is
-            # this host's own highest rung, read from its declared map.
-            if not _encode_adaptive_rung(
-                target, self.field, self.efforts, _adaptive_model(body)
-            ):
-                _note_adaptive_nothing(
-                    model=_adaptive_model(body), dialect=self.dialect
-                )
+            _encode_adaptive_effort_field(
+                target,
+                field=self.field,
+                efforts=self.efforts,
+                enabled_value=self.enabled_value,
+                policy=policy,
+                model=_adaptive_model(body),
+                dialect=self.dialect,
+                adaptive_mode=adaptive_mode,
+            )
             return
 
         if policy.budget_tokens is not None and self.budget_field is not None:
@@ -298,6 +325,13 @@ class ReasoningObject:
 
         adaptive_mode = configured_reasoning_adaptive()
         if policy.control is ReasoningControl.ADAPTIVE:
+            if (
+                policy.effort is not None
+                and (explicit := _clamped_effort(self.efforts, policy.effort))
+                is not None
+            ):
+                _extra_body(body)["reasoning"] = {"effort": explicit}
+                return
             if adaptive_mode == "off":
                 explicit = _clamped_effort(
                     self.efforts, policy.effort or ReasoningEffort.HIGH
@@ -397,24 +431,16 @@ class EffortOrThinkingBudgetReasoning:
 
         adaptive_mode = configured_reasoning_adaptive()
         if policy.control is ReasoningControl.ADAPTIVE:
-            if adaptive_mode == "off":
-                explicit = _clamped_effort(
-                    self.efforts, policy.effort or ReasoningEffort.HIGH
-                )
-                if explicit is not None:
-                    body[self.field] = explicit
-                elif self.enabled_value is not None:
-                    body[self.field] = self.enabled_value
-                return
-            # The two knobs are mutually exclusive on this host, and the
-            # thinking object here carries a *budget*, not a level-less on --
-            # so the effort field is the only word that can say "reason".
-            if not _encode_adaptive_rung(
-                body, self.field, self.efforts, _adaptive_model(body)
-            ):
-                _note_adaptive_nothing(
-                    model=_adaptive_model(body), dialect=self.dialect
-                )
+            _encode_adaptive_effort_field(
+                body,
+                field=self.field,
+                efforts=self.efforts,
+                enabled_value=self.enabled_value,
+                policy=policy,
+                model=_adaptive_model(body),
+                dialect=self.dialect,
+                adaptive_mode=adaptive_mode,
+            )
             return
 
         if policy.budget_tokens is not None:
@@ -486,7 +512,11 @@ class LlamaCppReasoning:
         if policy.control is ReasoningControl.OFF:
             _extra_body(body)["thinking_budget_tokens"] = 0
         elif policy.control is ReasoningControl.ADAPTIVE:
-            if configured_reasoning_adaptive() == "off":
+            if policy.effort is not None and (
+                (budget := policy.numeric_budget_tokens) is not None
+            ):
+                _extra_body(body)["thinking_budget_tokens"] = budget
+            elif configured_reasoning_adaptive() == "off":
                 _extra_body(body)["thinking_budget_tokens"] = (
                     policy.numeric_budget_tokens or ReasoningEffort.HIGH.budget_tokens
                 )

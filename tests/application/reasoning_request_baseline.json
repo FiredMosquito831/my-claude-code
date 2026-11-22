@@ -627,7 +627,7 @@
     "reasoning_effort": "high"
   },
   "groq|client_thinking_adaptive|client": {
-    "reasoning_effort": "medium"
+    "reasoning_effort": "high"
   },
   "groq|client_thinking_adaptive|high": {
     "reasoning_effort": "high"
@@ -1714,7 +1714,9 @@
   "xai|client_effort_high|xhigh": {
     "reasoning_effort": "high"
   },
-  "xai|client_thinking_adaptive|client": {},
+  "xai|client_thinking_adaptive|client": {
+    "reasoning_effort": "high"
+  },
   "xai|client_thinking_adaptive|high": {
     "reasoning_effort": "high"
   },

@@ -319,6 +319,17 @@ def test_every_pre_adaptive_preference_is_byte_identical(
     ``budget_tokens`` (preserving ``output_config.format`` if present), emitted
     only alongside ``thinking: {"type": "adaptive"}``. All other cells stay
     byte-identical.
+
+    Two ``*|client_thinking_adaptive|client`` cells (``groq|client_thinking_adaptive|client``
+    and ``xai|client_thinking_adaptive|client``) were re-baselined in 8.38.1
+    (T2-Q1 Option A / PR4): ``client_reasoning_policy`` now preserves
+    ``ReasoningControl.ADAPTIVE`` (instead of downgrading to ``ReasoningControl.ON``)
+    when the client sends ``thinking: {"type": "adaptive"}`` without an explicit
+    ``budget_tokens``. On ``NamedEffortReasoning`` Chat profiles with no native
+    adaptive channel, ``ReasoningControl.ADAPTIVE`` encodes to the host's top
+    published effort rung (``"high"`` on both ``groq`` and ``xai``), replacing
+    ``groq``'s bare-``ON`` default ``"medium"`` and ``xai``'s bare-``ON`` ``{}``.
+    None of the other 348 cells moved.
     """
 
     overrides = CLIENT_REQUESTS[shape]

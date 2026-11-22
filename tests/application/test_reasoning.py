@@ -29,6 +29,50 @@ def test_client_without_reasoning_control_uses_provider_default() -> None:
     assert client_reasoning_policy(_request()) == ReasoningPolicy.provider_default()
 
 
+def test_client_thinking_adaptive_preserves_adaptive_control_without_effort() -> None:
+    """8.38.1 (PR4 / T2-Q1 Option A): client ``thinking: {"type": "adaptive"}`` resolves to ``ReasoningControl.ADAPTIVE``."""
+    policy = client_reasoning_policy(_request(thinking={"type": "adaptive"}))
+
+    assert policy == ReasoningPolicy.adaptive()
+    assert policy.control is ReasoningControl.ADAPTIVE
+    assert policy.effort is None
+    assert policy.budget_tokens is None
+    assert policy.requests_reasoning is False
+
+
+def test_client_thinking_adaptive_with_output_config_effort_preserves_both() -> None:
+    """8.38.1 (PR4 / T2-Q1 Option A): ``thinking: {"type": "adaptive"}`` + ``output_config.effort`` preserves ``ADAPTIVE(effort=...)``."""
+    policy = client_reasoning_policy(
+        _request(
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+        )
+    )
+
+    assert policy == ReasoningPolicy.adaptive(effort=ReasoningEffort.HIGH)
+    assert policy.control is ReasoningControl.ADAPTIVE
+    assert policy.effort is ReasoningEffort.HIGH
+    assert policy.budget_tokens is None
+    assert policy.numeric_budget_tokens == 2048
+
+
+def test_client_thinking_adaptive_with_explicit_budget_tokens_stays_on() -> None:
+    """8.38.1 (PR4 / T2-Q1 Option A): ``thinking: {"type": "adaptive", "budget_tokens": 4096}`` stays ``ON(budget_tokens=4096)``."""
+    policy = client_reasoning_policy(
+        _request(
+            thinking={"type": "adaptive", "budget_tokens": 4096},
+            output_config={"effort": "low"},
+        )
+    )
+
+    assert policy == ReasoningPolicy.on(
+        effort=ReasoningEffort.LOW,
+        budget_tokens=4096,
+    )
+    assert policy.control is ReasoningControl.ON
+    assert policy.budget_tokens == 4096
+
+
 def test_client_reasoning_preserves_effort_and_exact_budget() -> None:
     policy = client_reasoning_policy(
         _request(

@@ -128,10 +128,14 @@ class ReasoningPolicy:
         return cls(control=ReasoningControl.OFF)
 
     @classmethod
-    def adaptive(cls) -> ReasoningPolicy:
+    def adaptive(
+        cls,
+        *,
+        effort: ReasoningEffort | None = None,
+    ) -> ReasoningPolicy:
         """Ask the model itself to choose how much to think."""
 
-        return cls(control=ReasoningControl.ADAPTIVE)
+        return cls(control=ReasoningControl.ADAPTIVE, effort=effort)
 
     @classmethod
     def on(

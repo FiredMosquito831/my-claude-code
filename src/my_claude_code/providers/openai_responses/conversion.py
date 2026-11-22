@@ -677,6 +677,8 @@ def _note_adaptive_substitution(
 
     if policy.control is not ReasoningControl.ADAPTIVE:
         return
+    if policy.effort is not None:
+        return
     if configured_reasoning_adaptive() == "off":
         return
     effort = sent_effort or RESPONSES_DEFAULT_REASONING_EFFORT
