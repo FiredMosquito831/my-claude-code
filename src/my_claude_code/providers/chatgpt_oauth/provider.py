@@ -1055,6 +1055,9 @@ class ChatGPTOAuthProvider(BaseProvider):
             thread_id = None
 
         unspecified_effort = self._unspecified_effort(request.model, reasoning)
+        drop_reasoning_items = (
+            self._recovery_memory.responses_reasoning_item_refused_for(request.model)
+        )
         body = build_chatgpt_oauth_request_body(
             request,
             reasoning=reasoning,
@@ -1067,6 +1070,7 @@ class ChatGPTOAuthProvider(BaseProvider):
             # carrier's: an operator whose host rejects a summary item can turn
             # this off and keep carriers.
             plaintext_replay=self._plaintext_replay(request.model),
+            **({"drop_reasoning_items": True} if drop_reasoning_items else {}),
             **(
                 {"prompt_cache_key": prompt_cache_key}
                 if prompt_cache_key is not None

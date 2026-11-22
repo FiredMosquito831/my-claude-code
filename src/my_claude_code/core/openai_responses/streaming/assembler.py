@@ -77,7 +77,7 @@ class ResponsesStreamAssembler:
     def response_payload(
         self, *, status: str, error: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "id": self._response_id,
             "object": "response",
             "created_at": self._created_at,
@@ -100,6 +100,11 @@ class ResponsesStreamAssembler:
             "usage": self._ledger.usage(),
             "error": error,
         }
+        if self._request.text is not None:
+            payload["text"] = self._request.text
+        if self._request.truncation is not None:
+            payload["truncation"] = self._request.truncation
+        return payload
 
     def complete_response(self) -> list[str]:
         chunks = self._flush_active_blocks()

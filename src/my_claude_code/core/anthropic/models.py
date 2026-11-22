@@ -225,6 +225,17 @@ class MessagesRequest(BaseModel):
     mcp_servers: list[dict[str, Any]] | None = None
     extra_body: dict[str, Any] | None = None
     betas: list[str] | None = Field(default=None, exclude=True)
+    #: Lossless ``/v1/responses`` ingress envelope (8.37.0), or ``None``.
+    #:
+    #: Preserves Responses-native structures (``instructions`` separate from
+    #: ``role: "developer"`` items, raw ``input[]`` items including
+    #: ``compaction``/``local_shell_call*``/``custom_tool_call*``, ``tools``
+    #: including ``type: "custom"``/``namespace``/``strict``, ``text``,
+    #: ``reasoning.{summary,context}``, ``service_tier``, ``truncation``,
+    #: ``include``, ``prompt_cache_key``, ``client_metadata``) across
+    #: ``model_copy(deep=True)`` for same-protocol Responses egress while
+    #: remaining invisible to ``model_dump()`` and cross-door conversions.
+    responses_envelope: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @property
     def prompt_cache_ask(self) -> PromptCacheAsk | None:

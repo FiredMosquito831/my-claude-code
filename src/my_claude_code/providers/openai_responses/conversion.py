@@ -10,6 +10,7 @@ necessary. Nothing in this module names a backend, a base URL or a credential
 
 import json
 from collections.abc import Iterator, Mapping
+from copy import deepcopy
 from typing import Any
 
 from loguru import logger
@@ -34,6 +35,7 @@ from my_claude_code.core.openai_responses import (
     call_id_from_item,
     decode_carrier,
     is_carrier,
+    responses_tool_name_to_anthropic_name,
 )
 from my_claude_code.core.reasoning import (
     ReasoningAdaptationKind,
@@ -246,8 +248,9 @@ def alias_responses_body_tool_names(
             name = item.get("name") if isinstance(item, dict) else None
             if (
                 isinstance(item, dict)
-                and item.get("type") == "function_call"
+                and item.get("type") in {"function_call", "custom_tool_call"}
                 and isinstance(name, str)
+                and not item.get("namespace")
             ):
                 alias = tool_names.encode(name)
                 if alias != name:
@@ -450,10 +453,63 @@ def _openai_messages_to_responses_input(
     return items
 
 
+def _envelope_tool_metadata(
+    envelope_tools: list[Any] | None,
+    tool_catalogue: Mapping[str, str],
+) -> tuple[dict[str, bool], dict[str, dict[str, Any]]]:
+    """Index inbound ``strict`` flags and ``type: 'custom'`` tools by Anthropic name."""
+    strict_by_name: dict[str, bool] = {}
+    custom_by_name: dict[str, dict[str, Any]] = {}
+    if not isinstance(envelope_tools, list):
+        return strict_by_name, custom_by_name
+
+    def _visit(raw_tool: Any, *, namespace: str | None) -> None:
+        if not isinstance(raw_tool, Mapping):
+            return
+        tool_type = raw_tool.get("type")
+        if tool_type == "namespace":
+            ns_name = raw_tool.get("name")
+            nested = raw_tool.get("tools")
+            if isinstance(ns_name, str) and ns_name and isinstance(nested, list):
+                for item in nested:
+                    _visit(item, namespace=ns_name)
+            return
+        if tool_type == "function":
+            fn = raw_tool.get("function")
+            source = fn if isinstance(fn, Mapping) else raw_tool
+            name = source.get("name")
+            if not isinstance(name, str) or not name:
+                return
+            key = responses_tool_name_to_anthropic_name(name, namespace=namespace)
+            strict_val = source.get("strict")
+            if isinstance(strict_val, bool):
+                strict_by_name[key] = strict_val
+            return
+        if tool_type == "custom":
+            custom = raw_tool.get("custom")
+            source = custom if isinstance(custom, Mapping) else raw_tool
+            name = source.get("name")
+            if not isinstance(name, str) or not name:
+                return
+            key = responses_tool_name_to_anthropic_name(name, namespace=namespace)
+            if key not in tool_catalogue:
+                copied = deepcopy(dict(raw_tool))
+                if namespace:
+                    copied.pop("namespace", None)
+                custom_by_name[key] = copied
+
+    for entry in envelope_tools:
+        _visit(entry, namespace=None)
+    return strict_by_name, custom_by_name
+
+
 def _convert_tools(
     tools: list[Any] | None,
     tool_names: OpenAIToolNameCodec | None = None,
     tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
+    *,
+    envelope_tools: list[Any] | None = None,
+    tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
 ) -> DialectSweep | None:
     """Convert Anthropic tools to ChatGPT Responses API tool definitions.
 
@@ -471,29 +527,44 @@ def _convert_tools(
     """
     if not tools:
         return None
+    strict_by_name, custom_by_name = _envelope_tool_metadata(
+        envelope_tools, tool_catalogue
+    )
     result: list[dict[str, Any]] = []
     for tool in tools:
         schema = getattr(tool, "input_schema", None) or {
             "type": "object",
             "properties": {},
         }
-        name = getattr(tool, "name", "unknown")
-        if tool_names is not None:
-            name = tool_names.encode(name)
-        result.append(
-            {
-                "type": "function",
-                "name": name,
-                "description": getattr(tool, "description", None) or "",
-                "parameters": schema,
-            }
-        )
+        raw_name = getattr(tool, "name", "unknown")
+        wire_name = tool_names.encode(raw_name) if tool_names is not None else raw_name
+        custom_tool = custom_by_name.get(raw_name)
+        if custom_tool is not None:
+            if isinstance(custom_tool.get("custom"), dict):
+                custom_inner = dict(custom_tool["custom"])
+                custom_inner["name"] = wire_name
+                custom_tool["custom"] = custom_inner
+            else:
+                custom_tool["name"] = wire_name
+            result.append(custom_tool)
+            continue
+        converted_tool: dict[str, Any] = {
+            "type": "function",
+            "name": wire_name,
+            "description": getattr(tool, "description", None) or "",
+            "parameters": schema,
+        }
+        if raw_name in strict_by_name:
+            converted_tool["strict"] = strict_by_name[raw_name]
+        result.append(converted_tool)
     return sweep_tool_catalogue(result, tool_schema_dialect)
 
 
 def _convert_tool_choice(
     tool_choice: Any,
     tool_names: OpenAIToolNameCodec | None = None,
+    *,
+    custom_tool_names: frozenset[str] = frozenset(),
 ) -> Any:
     """Convert Anthropic tool_choice to OpenAI Responses API tool_choice.
 
@@ -511,6 +582,8 @@ def _convert_tool_choice(
         name = tool_choice.get("name")
         if name:
             wire_name = tool_names.encode(name) if tool_names is not None else name
+            if name in custom_tool_names:
+                return {"type": "custom", "name": wire_name}
             return {"type": "function", "name": wire_name}
     if choice_type in {"auto", "none", "required"}:
         return choice_type
@@ -523,6 +596,8 @@ def _reasoning_block(
     policy: ReasoningPolicy,
     *,
     unspecified_effort: str | None = None,
+    envelope_reasoning: Mapping[str, Any] | None = None,
+    allow_context: bool = False,
 ) -> dict[str, Any] | None:
     """Return the Responses API ``reasoning`` block for one policy, or None.
 
@@ -560,10 +635,18 @@ def _reasoning_block(
         effort = unspecified_effort
     else:
         effort = RESPONSES_DEFAULT_REASONING_EFFORT
-    return {
-        "effort": effort,
-        "summary": RESPONSES_DEFAULT_REASONING_SUMMARY,
-    }
+    block: dict[str, Any] = {"effort": effort}
+    if isinstance(envelope_reasoning, Mapping) and "summary" in envelope_reasoning:
+        summary = envelope_reasoning.get("summary")
+        if summary is not None:
+            block["summary"] = summary
+    else:
+        block["summary"] = RESPONSES_DEFAULT_REASONING_SUMMARY
+    if allow_context and isinstance(envelope_reasoning, Mapping):
+        context = envelope_reasoning.get("context")
+        if context is not None:
+            block["context"] = context
+    return block
 
 
 def _note_adaptive_substitution(
@@ -1191,6 +1274,8 @@ def build_responses_request_body(
     origin: ReplayOrigin | None = None,
     plaintext_replay: bool = False,
     unspecified_effort: str | None = None,
+    apply_responses_sidecars: bool = False,
+    allow_openai_responses_sidecars: bool = False,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -1370,18 +1455,46 @@ def build_responses_request_body(
     if instructions:
         body["instructions"] = instructions
 
-    converted = _convert_tools(request.tools, tool_names, tool_schema_dialect)
+    envelope = request.responses_envelope if apply_responses_sidecars else None
+    envelope_tools = (
+        envelope.get("tools")
+        if isinstance(envelope, Mapping) and isinstance(envelope.get("tools"), list)
+        else None
+    )
+    _, custom_by_name = _envelope_tool_metadata(envelope_tools, tool_catalogue)
+    converted = _convert_tools(
+        request.tools,
+        tool_names,
+        tool_schema_dialect,
+        envelope_tools=envelope_tools,
+        tool_catalogue=tool_catalogue,
+    )
     tools = converted.tools if converted is not None else None
     if converted is not None and wire_notes is not None:
         wire_notes.update(converted.wire_marker(tool_schema_dialect))
     if tools:
         body["tools"] = tools
         if include_tool_choice:
-            tool_choice = _convert_tool_choice(request.tool_choice, tool_names)
+            tool_choice = _convert_tool_choice(
+                request.tool_choice,
+                tool_names,
+                custom_tool_names=frozenset(custom_by_name),
+            )
             if tool_choice is not None:
                 body["tool_choice"] = tool_choice
 
-    reasoning_block = _reasoning_block(reasoning, unspecified_effort=unspecified_effort)
+    envelope_reasoning = (
+        envelope.get("reasoning")
+        if isinstance(envelope, Mapping)
+        and isinstance(envelope.get("reasoning"), Mapping)
+        else None
+    )
+    reasoning_block = _reasoning_block(
+        reasoning,
+        unspecified_effort=unspecified_effort,
+        envelope_reasoning=envelope_reasoning,
+        allow_context=allow_openai_responses_sidecars,
+    )
     if reasoning_block is not None:
         body["reasoning"] = reasoning_block
         if include_encrypted_reasoning:
@@ -1389,6 +1502,47 @@ def build_responses_request_body(
             # backend cannot carry encrypted reasoning across turns of a
             # ``store: false`` conversation.
             body["include"] = ["reasoning.encrypted_content"]
+
+    if isinstance(envelope, Mapping):
+        if isinstance(envelope.get("text"), Mapping):
+            raw_text = envelope["text"]
+            text_out: dict[str, Any] = {}
+            if raw_text.get("format") is not None:
+                text_out["format"] = deepcopy(raw_text["format"])
+            if (
+                allow_openai_responses_sidecars
+                and raw_text.get("verbosity") is not None
+            ):
+                text_out["verbosity"] = raw_text["verbosity"]
+            if text_out:
+                body["text"] = text_out
+        if allow_openai_responses_sidecars:
+            if envelope.get("truncation") is not None:
+                body["truncation"] = deepcopy(envelope["truncation"])
+            service_tier = envelope.get("service_tier")
+            if isinstance(service_tier, str) and service_tier:
+                body["service_tier"] = service_tier
+        raw_include = envelope.get("include")
+        if isinstance(raw_include, list):
+            merged_include: list[str] = list(body.get("include", ()))
+            for item in raw_include:
+                if not isinstance(item, str) or not item:
+                    continue
+                if (
+                    not allow_openai_responses_sidecars
+                    and item == "output.encrypted_content"
+                ):
+                    continue
+                if (
+                    not include_encrypted_reasoning
+                    and item == "reasoning.encrypted_content"
+                ):
+                    continue
+                if item not in merged_include:
+                    merged_include.append(item)
+            if merged_include:
+                body["include"] = merged_include
+
     # Recorded beside the body it describes, at the one site both Responses
     # callers (``chatgpt_oauth`` and the OpenCode Responses transport) go
     # through, so the two cannot disagree about what an adaptive request was
@@ -1405,6 +1559,376 @@ def build_responses_request_body(
 
     if extra_body:
         body.update({str(key): value for key, value in extra_body.items()})
+
+    return body
+
+
+def _is_const_oneof_matching_enum(one_of: Any, enum_values: Any) -> bool:
+    if not isinstance(one_of, list) or not isinstance(enum_values, list) or not one_of:
+        return False
+    const_values: list[Any] = []
+    for entry in one_of:
+        if not isinstance(entry, Mapping) or "const" not in entry:
+            return False
+        const_values.append(entry["const"])
+    return len(const_values) == len(enum_values) and all(
+        value in enum_values for value in const_values
+    )
+
+
+def _clean_redundant_oneof_with_enum(node: Any) -> Any:
+    """Drop redundant ``oneOf: [{const}]`` alongside matching ``enum`` copy-on-write."""
+    if isinstance(node, list):
+        rebuilt = [_clean_redundant_oneof_with_enum(item) for item in node]
+        if all(new is old for new, old in zip(rebuilt, node, strict=True)):
+            return node
+        return rebuilt
+    if not isinstance(node, Mapping):
+        return node
+    drop_oneof = _is_const_oneof_matching_enum(node.get("oneOf"), node.get("enum"))
+    changed = drop_oneof
+    out: dict[str, Any] = {}
+    for key, value in node.items():
+        if drop_oneof and key == "oneOf":
+            continue
+        cleaned = _clean_redundant_oneof_with_enum(value)
+        if cleaned is not value:
+            changed = True
+        out[str(key)] = cleaned
+    return out if changed else node
+
+
+def _sanitize_passthrough_tool(
+    tool: Any,
+    *,
+    tool_names: OpenAIToolNameCodec | None,
+) -> Any:
+    if not isinstance(tool, Mapping):
+        return deepcopy(tool)
+    copied = deepcopy(dict(tool))
+    tool_type = copied.get("type")
+    if tool_type == "namespace":
+        nested = copied.get("tools")
+        if isinstance(nested, list):
+            copied["tools"] = [
+                _sanitize_passthrough_tool(item, tool_names=None) for item in nested
+            ]
+        return copied
+    if tool_type == "function":
+        fn = copied.get("function")
+        if isinstance(fn, dict):
+            if tool_names is not None and isinstance(fn.get("name"), str):
+                fn["name"] = tool_names.encode(fn["name"])
+            if "parameters" in fn:
+                fn["parameters"] = _clean_redundant_oneof_with_enum(fn["parameters"])
+        else:
+            if tool_names is not None and isinstance(copied.get("name"), str):
+                copied["name"] = tool_names.encode(copied["name"])
+            if "parameters" in copied:
+                copied["parameters"] = _clean_redundant_oneof_with_enum(
+                    copied["parameters"]
+                )
+        return copied
+    if tool_type == "custom":
+        custom = copied.get("custom")
+        if isinstance(custom, dict):
+            if tool_names is not None and isinstance(custom.get("name"), str):
+                custom["name"] = tool_names.encode(custom["name"])
+        elif tool_names is not None and isinstance(copied.get("name"), str):
+            copied["name"] = tool_names.encode(copied["name"])
+        return copied
+    return copied
+
+
+def _sweep_passthrough_tools(
+    raw_tools: list[Any],
+    *,
+    tool_names: OpenAIToolNameCodec | None,
+    tool_schema_dialect: ToolSchemaDialect,
+    wire_notes: dict[str, str] | None,
+) -> list[Any]:
+    prepared = [
+        _sanitize_passthrough_tool(tool, tool_names=tool_names) for tool in raw_tools
+    ]
+    top_sweep = sweep_tool_catalogue(prepared, tool_schema_dialect)
+    result = list(top_sweep.tools)
+    all_removals = list(top_sweep.removals)
+    all_applied = list(top_sweep.applied)
+    all_translations = list(top_sweep.translations)
+
+    for index, tool in enumerate(result):
+        if not isinstance(tool, Mapping) or tool.get("type") != "namespace":
+            continue
+        nested = tool.get("tools")
+        if not isinstance(nested, list) or not nested:
+            continue
+        ns_sweep = sweep_tool_catalogue(nested, tool_schema_dialect)
+        if ns_sweep.tools is not nested:
+            updated_ns = dict(tool)
+            updated_ns["tools"] = list(ns_sweep.tools)
+            result[index] = updated_ns
+        all_removals.extend(ns_sweep.removals)
+        all_applied.extend(ns_sweep.applied)
+        all_translations.extend(ns_sweep.translations)
+
+    if wire_notes is not None and (all_removals or all_translations):
+        combined_sweep = DialectSweep(
+            tools=result,
+            removals=tuple(all_removals),
+            applied=tuple(dict.fromkeys(all_applied)),
+            translations=tuple(all_translations),
+        )
+        wire_notes.update(combined_sweep.wire_marker(tool_schema_dialect))
+    return result
+
+
+def _sanitize_passthrough_reasoning_item(
+    item: Mapping[str, Any],
+    *,
+    origin: ReplayOrigin | None,
+    plaintext_replay: bool,
+    drop_reasoning_items: bool,
+    history_counts: dict[str, int],
+) -> dict[str, Any] | None:
+    if drop_reasoning_items:
+        return None
+    encrypted = item.get("encrypted_content")
+    if isinstance(encrypted, str) and encrypted:
+        if is_carrier(encrypted):
+            native = _decode_accepted_carrier(encrypted, origin, history_counts)
+            if native is None:
+                if plaintext_replay:
+                    summary = item.get("summary")
+                    if isinstance(summary, list) and summary:
+                        return {"type": "reasoning", "summary": deepcopy(summary)}
+                return None
+            sanitized = deepcopy(native)
+            if sanitized.get("content") != []:
+                sanitized.pop("content", None)
+            history_counts[HISTORY_CARRIER_REPLAYED] = (
+                history_counts.get(HISTORY_CARRIER_REPLAYED, 0) + 1
+            )
+            return sanitized
+        sanitized = deepcopy(dict(item))
+        # Strip non-empty reasoning_text content blocks (maxItems: 0 on Codex input[]).
+        if sanitized.get("content") != []:
+            sanitized.pop("content", None)
+        return sanitized
+
+    summary = item.get("summary")
+    if isinstance(summary, list) and summary:
+        return {"type": "reasoning", "summary": deepcopy(summary)}
+    return None
+
+
+def _sanitize_passthrough_input(
+    raw_input: Any,
+    *,
+    tool_names: OpenAIToolNameCodec | None,
+    origin: ReplayOrigin | None,
+    plaintext_replay: bool,
+    drop_reasoning_items: bool,
+    history_counts: dict[str, int],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_input, list):
+        return []
+    sanitized_items: list[dict[str, Any]] = []
+    for raw_item in raw_input:
+        if not isinstance(raw_item, Mapping):
+            continue
+        item_type = raw_item.get("type")
+        if item_type == "reasoning":
+            cleaned = _sanitize_passthrough_reasoning_item(
+                raw_item,
+                origin=origin,
+                plaintext_replay=plaintext_replay,
+                drop_reasoning_items=drop_reasoning_items,
+                history_counts=history_counts,
+            )
+            if cleaned is not None:
+                sanitized_items.append(cleaned)
+            continue
+        copied = deepcopy(dict(raw_item))
+        if item_type == "message" or (
+            "role" in copied
+            and item_type
+            not in {
+                "compaction",
+                "function_call",
+                "function_call_output",
+                "custom_tool_call",
+                "custom_tool_call_output",
+                "local_shell_call",
+                "local_shell_call_output",
+                "web_search_call",
+                "additional_tools",
+                "configuration_update",
+            }
+        ):
+            copied.pop("encrypted_content", None)
+            if copied.get("role") == "system":
+                copied["role"] = "developer"
+            sanitized_items.append(copied)
+            continue
+        if item_type in {"function_call", "custom_tool_call"}:
+            name = copied.get("name")
+            if (
+                tool_names is not None
+                and isinstance(name, str)
+                and not copied.get("namespace")
+            ):
+                copied["name"] = tool_names.encode(name)
+            sanitized_items.append(copied)
+            continue
+        sanitized_items.append(copied)
+    return sanitized_items
+
+
+def build_responses_passthrough_body(
+    request: MessagesRequest,
+    *,
+    reasoning: ReasoningPolicy,
+    store: bool = False,
+    stream: bool = True,
+    parallel_tool_calls: bool = False,
+    prompt_cache_key: str | None = None,
+    tool_name_max_length: int | None = None,
+    tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
+    wire_notes: dict[str, str] | None = None,
+    origin: ReplayOrigin | None = None,
+    plaintext_replay: bool = False,
+    unspecified_effort: str | None = None,
+    drop_reasoning_items: bool = False,
+    compact: bool = False,
+) -> dict[str, Any]:
+    """Reconstruct a Codex Responses body from ``request.responses_envelope``.
+
+    Preserves native Codex CLI structures (separate ``instructions``, in-order
+    ``role: "developer"`` items, ``type: "custom"`` and ``namespace`` tools,
+    ``compaction``/``local_shell_call*``/``additional_tools``, ``text``,
+    ``service_tier``, ``client_metadata``, ``reasoning.{summary,context}``)
+    while respecting MCC model routing, ``ReasoningPolicy``, schema dialect,
+    tool-name aliasing, carrier provenance, and Codex parameter sanitization.
+    """
+    envelope = request.responses_envelope
+    if not isinstance(envelope, Mapping) or "input" not in envelope:
+        fallback_body = build_responses_request_body(
+            request,
+            reasoning=reasoning,
+            store=store,
+            stream=stream,
+            parallel_tool_calls=parallel_tool_calls,
+            prompt_cache_key=prompt_cache_key,
+            tool_name_max_length=tool_name_max_length,
+            tool_schema_dialect=tool_schema_dialect,
+            wire_notes=wire_notes,
+            origin=origin,
+            plaintext_replay=plaintext_replay,
+            unspecified_effort=unspecified_effort,
+            apply_responses_sidecars=isinstance(envelope, Mapping),
+            allow_openai_responses_sidecars=True,
+        )
+        fallback_body.pop("truncation", None)
+        return fallback_body
+
+    tool_names = responses_tool_name_codec(
+        request, tool_name_max_length, EMPTY_TOOL_CATALOGUE
+    )
+    history_counts: dict[str, int] = {}
+    sanitized_input = _sanitize_passthrough_input(
+        envelope.get("input"),
+        tool_names=tool_names,
+        origin=origin,
+        plaintext_replay=plaintext_replay,
+        drop_reasoning_items=drop_reasoning_items,
+        history_counts=history_counts,
+    )
+    if wire_notes is not None and history_counts:
+        wire_notes.update(_carrier_note(history_counts))
+
+    caller_parallel = envelope.get("parallel_tool_calls")
+    effective_parallel = (
+        caller_parallel if isinstance(caller_parallel, bool) else parallel_tool_calls
+    )
+
+    body: dict[str, Any] = {
+        "model": request.model,
+        "input": sanitized_input,
+    }
+    if not compact:
+        body["store"] = store
+    body["stream"] = stream
+    body["parallel_tool_calls"] = effective_parallel
+
+    effective_cache_key = prompt_cache_key or envelope.get("prompt_cache_key")
+    if isinstance(effective_cache_key, str) and effective_cache_key:
+        body["prompt_cache_key"] = effective_cache_key
+
+    instructions = envelope.get("instructions")
+    if isinstance(instructions, str) and instructions:
+        body["instructions"] = instructions
+
+    raw_tools = envelope.get("tools")
+    if isinstance(raw_tools, list) and raw_tools:
+        body["tools"] = _sweep_passthrough_tools(
+            raw_tools,
+            tool_names=tool_names,
+            tool_schema_dialect=tool_schema_dialect,
+            wire_notes=wire_notes,
+        )
+    if "tool_choice" in envelope and envelope["tool_choice"] is not None:
+        choice = deepcopy(envelope["tool_choice"])
+        if (
+            tool_names is not None
+            and isinstance(choice, dict)
+            and isinstance(choice.get("name"), str)
+            and not choice.get("namespace")
+        ):
+            choice["name"] = tool_names.encode(choice["name"])
+        body["tool_choice"] = choice
+
+    if isinstance(envelope.get("text"), Mapping):
+        body["text"] = deepcopy(dict(envelope["text"]))
+    service_tier = envelope.get("service_tier")
+    if isinstance(service_tier, str) and service_tier:
+        body["service_tier"] = service_tier
+    if isinstance(envelope.get("client_metadata"), Mapping):
+        body["client_metadata"] = deepcopy(dict(envelope["client_metadata"]))
+
+    envelope_reasoning = (
+        envelope.get("reasoning")
+        if isinstance(envelope.get("reasoning"), Mapping)
+        else None
+    )
+    reasoning_block = _reasoning_block(
+        reasoning,
+        unspecified_effort=unspecified_effort,
+        envelope_reasoning=envelope_reasoning,
+        allow_context=True,
+    )
+    if reasoning_block is not None:
+        body["reasoning"] = reasoning_block
+
+    if not compact:
+        include_list: list[str] = []
+        raw_include = envelope.get("include")
+        if isinstance(raw_include, list):
+            for entry in raw_include:
+                if isinstance(entry, str) and entry and entry not in include_list:
+                    include_list.append(entry)
+        if "reasoning.encrypted_content" not in include_list:
+            include_list.append("reasoning.encrypted_content")
+        body["include"] = include_list
+
+    _note_adaptive_substitution(
+        reasoning,
+        request.model,
+        sent_effort=(
+            str(reasoning_block["effort"])
+            if reasoning_block is not None and "effort" in reasoning_block
+            else None
+        ),
+    )
 
     return body
 

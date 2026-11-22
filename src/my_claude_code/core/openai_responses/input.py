@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -113,6 +114,11 @@ def convert_request_to_anthropic_payload(
     )
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
+
+    payload["responses_envelope"] = _build_responses_envelope(
+        request,
+        quarantined_function_call_ids=quarantined_function_call_ids,
+    )
 
     return payload
 
@@ -234,9 +240,128 @@ def _append_input_item(
         )
         return _PendingReasoning()
 
+    if item_type == "compaction":
+        _append_pending_reasoning(messages, pending)
+        summary = optional_str(item.get("summary")) or optional_str(item.get("text"))
+        messages.append(
+            {
+                "role": "assistant",
+                "content": summary if summary else "[Prior context compacted]",
+            }
+        )
+        return _PendingReasoning()
+    if item_type == "local_shell_call":
+        call_id = call_id_from_item(item)
+        action = item.get("action")
+        tool_input = (
+            dict(action)
+            if isinstance(action, Mapping)
+            else {"action": action}
+            if action is not None
+            else {}
+        )
+        tool_use = {
+            "type": "tool_use",
+            "id": call_id,
+            "name": "local_shell",
+            "input": tool_input,
+        }
+        _append_tool_use_message(
+            messages,
+            tool_use,
+            reasoning_content=pending.text,
+            encrypted_reasoning=pending.items,
+        )
+        return _PendingReasoning()
+    if item_type == "local_shell_call_output":
+        call_id = call_id_from_item(item)
+        _append_pending_reasoning_before_tool_output(messages, pending)
+        _append_tool_result_message(
+            messages,
+            {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": _function_call_output_text(item.get("output", "")),
+            },
+        )
+        return _PendingReasoning()
+    if item_type in {"additional_tools", "configuration_update"}:
+        return pending
+
     raise ResponsesConversionError(
         f"Unsupported Responses input item type: {item_type!r}"
     )
+
+
+def _normalize_envelope_input_item(
+    item: Any,
+    *,
+    quarantined_function_call_ids: set[str],
+) -> dict[str, Any] | None:
+    if isinstance(item, str):
+        return {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": item}],
+        }
+    if not isinstance(item, Mapping):
+        return None
+    item_type = item.get("type")
+    if item_type in {"input_text", "output_text", "text"}:
+        return {
+            "type": "message",
+            "role": "user",
+            "content": [deepcopy(dict(item))],
+        }
+    if item_type in {"function_call", "function_call_output"}:
+        call_id = optional_str(item.get("call_id")) or optional_str(item.get("id"))
+        if call_id and call_id in quarantined_function_call_ids:
+            return None
+    copied = deepcopy(dict(item))
+    if (item_type is None or "role" in copied) and "type" not in copied:
+        copied["type"] = "message"
+    return copied
+
+
+def _build_responses_envelope(
+    request: OpenAIResponsesRequest,
+    *,
+    quarantined_function_call_ids: set[str],
+) -> dict[str, Any]:
+    """Capture the lossless inbound ``/v1/responses`` structures for same-protocol egress."""
+    envelope_input: list[dict[str, Any]] = []
+    for item in _iter_input_items(request.input):
+        normalized = _normalize_envelope_input_item(
+            item,
+            quarantined_function_call_ids=quarantined_function_call_ids,
+        )
+        if normalized is not None:
+            envelope_input.append(normalized)
+
+    envelope: dict[str, Any] = {"input": envelope_input}
+    if request.instructions is not None:
+        envelope["instructions"] = request.instructions
+    if request.tools is not None:
+        envelope["tools"] = deepcopy(request.tools)
+    if request.tool_choice is not None:
+        envelope["tool_choice"] = deepcopy(request.tool_choice)
+    if request.parallel_tool_calls is not None:
+        envelope["parallel_tool_calls"] = request.parallel_tool_calls
+    if request.text is not None:
+        envelope["text"] = deepcopy(request.text)
+    if isinstance(request.reasoning, Mapping):
+        envelope["reasoning"] = deepcopy(dict(request.reasoning))
+    if request.service_tier is not None:
+        envelope["service_tier"] = request.service_tier
+    if request.truncation is not None:
+        envelope["truncation"] = deepcopy(request.truncation)
+    if request.include is not None:
+        envelope["include"] = list(request.include)
+    if request.prompt_cache_key is not None:
+        envelope["prompt_cache_key"] = request.prompt_cache_key
+    if request.client_metadata is not None:
+        envelope["client_metadata"] = deepcopy(request.client_metadata)
+    return envelope
 
 
 def _encrypted_content_of(item: Mapping[str, Any]) -> str | None:

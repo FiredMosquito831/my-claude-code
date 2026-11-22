@@ -134,6 +134,14 @@ def resolve_conversation_seed(
         if isinstance(meta_session_id, str) and meta_session_id.strip():
             return ("metadata", meta_session_id.strip()[:MAX_CHATGPT_SESSION_CHARS])
 
+    if isinstance(request.responses_envelope, Mapping):
+        raw_cache_key = request.responses_envelope.get("prompt_cache_key")
+        if isinstance(raw_cache_key, str) and raw_cache_key.strip():
+            return (
+                "responses_cache_key",
+                raw_cache_key.strip()[:MAX_CHATGPT_SESSION_CHARS],
+            )
+
     system_text = _extract_system_text(request.system)
     user_text = _first_user_text(request.messages)
     if not system_text and not user_text:

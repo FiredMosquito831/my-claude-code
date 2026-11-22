@@ -26,6 +26,7 @@ from my_claude_code.core.openai_responses import (
     ReplayOrigin,
     call_id_from_item,
     encode_carrier,
+    responses_tool_name_to_anthropic_name,
 )
 from my_claude_code.core.reported_cost import (
     record_reported_reasoning,
@@ -330,7 +331,7 @@ class ResponsesStreamConverter:
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
             item_type = item.get("type")
-            if item_type in {"reasoning", "function_call"}:
+            if item_type in {"reasoning", "function_call", "custom_tool_call"}:
                 # An item the host opened is output the host produced, even
                 # when its text is withheld (``encrypted_content``).
                 self._output_seen = True
@@ -339,18 +340,14 @@ class ResponsesStreamConverter:
                 # payload is ``encrypted_content`` carries no text anybody may
                 # read, and an empty thinking block would claim otherwise.
                 return
-            if item_type == "function_call":
+            if item_type in {"function_call", "custom_tool_call"}:
                 # Two ids, and the protocol gives them different jobs. The
                 # item ``id`` names this output item and is what the
-                # ``function_call_arguments.delta`` and ``.done`` frames are
-                # keyed by, so it is the key of ``_active_tool_calls`` and
-                # nothing may take its place there. The ``call_id`` is what
-                # pairs the call with its ``function_call_output``, so it is
-                # the only id the client may see: the client echoes it back as
-                # ``tool_use_id``, and that value becomes both the replayed
-                # ``function_call.call_id`` and the ``function_call_output``'s
-                # ``call_id`` on the next request. Sending the item id there
-                # orphans every tool result upstream.
+                # ``function_call_arguments.delta`` / ``custom_tool_call_input.delta``
+                # and ``.done`` frames are keyed by, so it is the key of
+                # ``_active_tool_calls`` and nothing may take its place there.
+                # The ``call_id`` is what pairs the call with its
+                # ``*_call_output``, so it is the only id the client may see.
                 item_id = item.get("id") or f"call_{len(self._active_tool_calls)}"
                 tool_id = call_id_from_item(item)
                 name = item.get("name") or "unknown"
@@ -359,14 +356,22 @@ class ResponsesStreamConverter:
                     # tool_use block is opened here, and the argument and
                     # ``.done`` frames are matched by item id, never by name.
                     name = self._tool_names.decode(name)
+                namespace = item.get("namespace")
+                if isinstance(namespace, str) and namespace:
+                    name = responses_tool_name_to_anthropic_name(
+                        name, namespace=namespace
+                    )
                 self._active_tool_calls[item_id] = {
                     "id": item_id,
                     # The ``call_id`` this entry's tool_use block was opened
                     # with. Recorded so the two ids stay legible side by side
                     # at the one site that has both; nothing reads it back.
                     "client_id": tool_id,
+                    "kind": item_type,
                     "name": name,
                     "arguments": "",
+                    "raw_input": "",
+                    "input_started": False,
                     "index": len(self._active_tool_calls),
                 }
                 # Answer text the tag parser still holds belongs before the
@@ -384,15 +389,38 @@ class ResponsesStreamConverter:
             item_id = event.get("item_id")
             delta = event.get("delta")
             tool = self._active_tool_calls.get(item_id)
-            if tool is not None and isinstance(delta, str):
+            if (
+                tool is not None
+                and tool.get("kind") == "function_call"
+                and isinstance(delta, str)
+            ):
                 tool["arguments"] += delta
                 yield self._ledger.emit_tool_delta(tool["index"], delta)
+            return
+
+        if event_type == "response.custom_tool_call_input.delta":
+            item_id = event.get("item_id")
+            delta = event.get("delta")
+            tool = self._active_tool_calls.get(item_id)
+            if (
+                tool is not None
+                and tool.get("kind") == "custom_tool_call"
+                and isinstance(delta, str)
+                and delta
+            ):
+                if not tool["input_started"]:
+                    yield self._ledger.emit_tool_delta(tool["index"], '{"input":"')
+                    tool["input_started"] = True
+                tool["raw_input"] += delta
+                yield self._ledger.emit_tool_delta(
+                    tool["index"], json.dumps(delta, ensure_ascii=False)[1:-1]
+                )
             return
 
         if event_type == "response.output_item.done":
             item = event.get("item") or {}
             item_type = item.get("type")
-            if item_type in {"reasoning", "function_call"}:
+            if item_type in {"reasoning", "function_call", "custom_tool_call"}:
                 self._output_seen = True
             if item_type == "reasoning":
                 yield from self._flush_reasoning_item(item)
@@ -418,6 +446,34 @@ class ResponsesStreamConverter:
                         if remaining:
                             yield self._ledger.emit_tool_delta(tool["index"], remaining)
                             tool["arguments"] = full_args
+                    yield self._ledger.stop_tool_block(tool["index"])
+                return
+            if item_type == "custom_tool_call":
+                tool_id = item.get("id")
+                tool = self._active_tool_calls.get(tool_id)
+                if tool is not None:
+                    raw_item_input = item.get("input")
+                    full_input = (
+                        raw_item_input
+                        if isinstance(raw_item_input, str)
+                        else tool["raw_input"]
+                    )
+                    if not tool["input_started"]:
+                        yield self._ledger.emit_tool_delta(
+                            tool["index"],
+                            json.dumps({"input": full_input}, ensure_ascii=False),
+                        )
+                    else:
+                        if full_input != tool["raw_input"] and full_input.startswith(
+                            tool["raw_input"]
+                        ):
+                            remaining = full_input[len(tool["raw_input"]) :]
+                            if remaining:
+                                yield self._ledger.emit_tool_delta(
+                                    tool["index"],
+                                    json.dumps(remaining, ensure_ascii=False)[1:-1],
+                                )
+                        yield self._ledger.emit_tool_delta(tool["index"], '"}')
                     yield self._ledger.stop_tool_block(tool["index"])
             return
 
@@ -823,6 +879,7 @@ _RESPONSES_SHAPE_FIELDS = {
     "response.reasoning_summary_text.delta": "reasoning",
     "response.reasoning_text.delta": "reasoning",
     "response.function_call_arguments.delta": "tool_calls",
+    "response.custom_tool_call_input.delta": "tool_calls",
 }
 
 
