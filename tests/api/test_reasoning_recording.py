@@ -289,12 +289,15 @@ def test_every_exportable_request_column_exists_in_the_schema(tmp_path) -> None:
 
 
 def test_client_adaptive_is_recorded_without_changing_the_wire() -> None:
-    """A client asking for adaptive is legible in the log, and only in the log.
+    """A client asking for adaptive resolves to ``ReasoningControl.ADAPTIVE`` (8.38.1 / PR4, T2-Q1 Option A).
 
-    ``adaptive`` is not representable on providers with no adaptive channel, so
-    the resolved control stays ``on`` and every encoder keeps sending its
-    thinking request. Only the recorded *requested* string carries the client's
-    own wording.
+    Under 8.38.1 (PR4, T2-Q1 Option A), ``thinking: {"type": "adaptive"}``
+    without an explicit ``budget_tokens`` preserves ``ReasoningControl.ADAPTIVE``
+    (carrying ``effort`` when ``output_config.effort`` is also supplied), while
+    ``_describe_reasoning`` continues to record ``client=adaptive`` in the
+    request log and encoders express adaptive via their declared ``IV.23``
+    adaptive expression (top rung on effort-only encoders, level-less on for
+    toggle encoders).
     """
     from my_claude_code.api.request_capture import (
         _client_thinking_type,
@@ -317,24 +320,28 @@ def test_client_adaptive_is_recorded_without_changing_the_wire() -> None:
     )
 
     policy = resolve_reasoning_policy(adaptive, ReasoningPreference.CLIENT)
-    # The resolved control must NOT move: that is what keeps the wire stable.
-    assert policy.control is ReasoningControl.ON
-    assert policy.requests_reasoning is True
+    # 8.38.1 (PR4 / T2-Q1 Option A): client thinking.type == "adaptive" resolves
+    # to ReasoningControl.ADAPTIVE rather than downgrading to ReasoningControl.ON.
+    assert policy.control is ReasoningControl.ADAPTIVE
+    assert policy.requests_reasoning is False
 
     described = _describe_reasoning(
         policy, client_thinking_type=_client_thinking_type(adaptive)
     )
-    assert described is not None and "client=adaptive" in described
+    assert described == "control=adaptive,client=adaptive"
 
     enabled_policy = resolve_reasoning_policy(enabled, ReasoningPreference.CLIENT)
+    assert enabled_policy.control is ReasoningControl.ON
     enabled_described = _describe_reasoning(
         enabled_policy, client_thinking_type=_client_thinking_type(enabled)
     )
     assert enabled_described is not None and "client=adaptive" not in enabled_described
 
-    # And the emitted body is identical for both, on every representative
-    # encoder family -- the recording note cannot reach a provider.
-    for name in ("groq", "fireworks", "zai", "featherless", "gemini"):
+    # Toggle-only encoders (zai, featherless) emit the identical level-less on
+    # for both adaptive and enabled, while effort-ladder encoders (groq,
+    # fireworks) send their top published rung ("high") on adaptive vs their
+    # bare-on enabled_value on enabled.
+    for name in ("zai", "featherless"):
         profile = OPENAI_CHAT_PROFILES.get(name)
         if profile is None:
             continue
@@ -343,6 +350,12 @@ def test_client_adaptive_is_recorded_without_changing_the_wire() -> None:
         profile.apply_reasoning(body_a, adaptive, policy)
         profile.apply_reasoning(body_b, enabled, enabled_policy)
         assert body_a == body_b, name
+
+    for name in ("groq", "fireworks"):
+        profile = OPENAI_CHAT_PROFILES[name]
+        body_a = {"model": "m", "messages": []}
+        profile.apply_reasoning(body_a, adaptive, policy)
+        assert body_a["reasoning_effort"] == "high", name
 
 
 def test_a_provider_adaptation_merges_with_the_routing_verdict(store) -> None:

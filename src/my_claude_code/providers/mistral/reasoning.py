@@ -65,35 +65,51 @@ def apply_mistral_reasoning_request_shape(
         else:
             body.pop("reasoning_effort", None)
     elif reasoning.control is ReasoningControl.ADAPTIVE:
-        top = top_stated_effort(active_dialect.effort_values)
         model = body.get("model")
         model_label = model if isinstance(model, str) else "this model"
-        if top is not None:
-            body["reasoning_effort"] = top.value
-            record_reasoning_adaptation(
-                ReasoningAdaptationKind.SUBSTITUTED,
-                f"REASONING ADAPTIVE SUBSTITUTED: '{model_label}' has no adaptive "
-                f"channel; sending effort '{top.value}' via `reasoning_effort` -- "
-                f"its highest published rung -- because a host that can only be "
-                f"told a level cannot be told to choose one. Adaptive asks to "
-                f"{ADAPTIVE_MEANING}.",
-            )
-            logger.info(
-                "REASONING ADAPTIVE: '{}' has no adaptive channel; sent effort '{}' "
-                "via `reasoning_effort` (its top published rung)",
-                model_label,
-                top.value,
-            )
+        if reasoning.effort is not None:
+            if active_dialect.effort_values:
+                body["reasoning_effort"] = nearest_effort(
+                    reasoning.effort, active_dialect.effort_values
+                ).value
+            else:
+                body.pop("reasoning_effort", None)
+                if dialect_declares_a_reasoning_channel(active_dialect):
+                    record_reasoning_adaptation(
+                        ReasoningAdaptationKind.NOTHING_SENT,
+                        f"REASONING ADAPTIVE NOTHING SENT: '{model_label}' parses a "
+                        f"reasoning field but none that can carry 'let the model "
+                        f"choose'; nothing was sent and the model's own default "
+                        f"applies",
+                    )
         else:
-            body.pop("reasoning_effort", None)
-            if dialect_declares_a_reasoning_channel(active_dialect):
+            top = top_stated_effort(active_dialect.effort_values)
+            if top is not None:
+                body["reasoning_effort"] = top.value
                 record_reasoning_adaptation(
-                    ReasoningAdaptationKind.NOTHING_SENT,
-                    f"REASONING ADAPTIVE NOTHING SENT: '{model_label}' parses a "
-                    f"reasoning field but none that can carry 'let the model "
-                    f"choose'; nothing was sent and the model's own default "
-                    f"applies",
+                    ReasoningAdaptationKind.SUBSTITUTED,
+                    f"REASONING ADAPTIVE SUBSTITUTED: '{model_label}' has no adaptive "
+                    f"channel; sending effort '{top.value}' via `reasoning_effort` -- "
+                    f"its highest published rung -- because a host that can only be "
+                    f"told a level cannot be told to choose one. Adaptive asks to "
+                    f"{ADAPTIVE_MEANING}.",
                 )
+                logger.info(
+                    "REASONING ADAPTIVE: '{}' has no adaptive channel; sent effort '{}' "
+                    "via `reasoning_effort` (its top published rung)",
+                    model_label,
+                    top.value,
+                )
+            else:
+                body.pop("reasoning_effort", None)
+                if dialect_declares_a_reasoning_channel(active_dialect):
+                    record_reasoning_adaptation(
+                        ReasoningAdaptationKind.NOTHING_SENT,
+                        f"REASONING ADAPTIVE NOTHING SENT: '{model_label}' parses a "
+                        f"reasoning field but none that can carry 'let the model "
+                        f"choose'; nothing was sent and the model's own default "
+                        f"applies",
+                    )
     elif reasoning.requests_reasoning:
         if active_dialect.effort_values:
             if reasoning.effort is not None:

@@ -1,6 +1,7 @@
 """Native Anthropic Messages upstream provider family."""
 
 import asyncio
+import re
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any
@@ -25,6 +26,7 @@ from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningAdaptationKind,
     ReasoningDialect,
+    ReasoningEffort,
     ReasoningPolicy,
     narrow_dialect_by_rejections,
 )
@@ -84,7 +86,11 @@ from .probe import (
     MESSAGES_PROBE_PROMPT,
 )
 from .prompt_cache import note_prompt_cache_refusal, refused_prompt_cache_lifetimes
-from .request import PROMPT_CACHE_TTL_NOTE, build_anthropic_messages_body
+from .request import (
+    PROMPT_CACHE_TTL_NOTE,
+    apply_manual_thinking_fallback,
+    build_anthropic_messages_body,
+)
 from .streaming import iter_anthropic_sse_frames
 
 ANTHROPIC_REASONING_DIALECT = ReasoningDialect(
@@ -101,6 +107,24 @@ The one host in the fleet with a genuine adaptive channel, which is why
 ``ReasoningControl.ADAPTIVE`` encodes to something here and to nothing
 everywhere else. No effort field: the wire takes a number.
 """
+
+
+def _is_adaptive_type_rejection(error: Exception, body: Mapping[str, Any]) -> bool:
+    """Return whether a 400 specifically refuses ``thinking.type == 'adaptive'``."""
+
+    thinking = body.get("thinking")
+    if not isinstance(thinking, Mapping) or thinking.get("type") != "adaptive":
+        return False
+    if not is_bad_request(error):
+        return False
+    complaint = upstream_complaint(error)
+    if complaint_is_about_the_body(complaint, "thinking"):
+        return False
+    lowered = complaint.lower()
+    return (
+        re.search(r"\badaptive\b", lowered) is not None
+        and re.search(r"\bthinking\b", lowered) is not None
+    )
 
 
 class AnthropicMessagesProvider(BaseProvider):
@@ -792,6 +816,33 @@ class AnthropicMessagesProvider(BaseProvider):
                         # what it did before; this only decides what the next
                         # request leaves out.
                         self._remember_refused_history_thinking(error, body)
+                        if "adaptive_fallback" not in used_retry_kinds and (
+                            _is_adaptive_type_rejection(error, body)
+                        ):
+                            used_retry_kinds.add("adaptive_fallback")
+                            fallback_budget = (
+                                reasoning.numeric_budget_tokens
+                                or ReasoningEffort.HIGH.budget_tokens
+                            )
+                            retry_body = apply_manual_thinking_fallback(
+                                body, fallback_budget
+                            )
+                            if retry_body is not None:
+                                stripped_reasoning = "thinking.type"
+                                stripped_evidence = complaint_evidence_snippet(
+                                    upstream_complaint(error)
+                                )
+                                stripped_values = frozenset({"adaptive"})
+                                stripped_about_the_body = False
+                                logger.warning(
+                                    "{}_STREAM: adaptive thinking rejected for {}; "
+                                    "falling back to manual budget ({})",
+                                    tag,
+                                    body.get("model"),
+                                    stripped_evidence,
+                                )
+                                body = retry_body
+                                continue
                         recovered = self._recovery_ladder.next_body(
                             error, body, used_retry_kinds
                         )
