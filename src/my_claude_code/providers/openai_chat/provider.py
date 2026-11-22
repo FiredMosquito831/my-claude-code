@@ -88,6 +88,9 @@ from my_claude_code.core.wire_capture import (
     record_wire_request,
     start_response_shape,
 )
+from my_claude_code.providers.anthropic_messages import (
+    ANTHROPIC_REASONING_DIALECT,
+)
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import (
@@ -166,6 +169,7 @@ from .response_surface import (
     alternative_surfaces,
     clear_preferred_surface_refusal,
     preferred_surface_of,
+    preferred_surface_refusal_fact,
     remember_preferred_surface_refusal,
     remember_response_surfaces,
     resolve_surface_ladder,
@@ -173,6 +177,7 @@ from .response_surface import (
 from .responses_transport import (
     PROBE_MAX_OUTPUT_TOKENS,
     PROBE_PROMPT,
+    RESPONSES_REASONING_DIALECT,
     ResponsesTransport,
 )
 from .tool_calls import (
@@ -450,14 +455,42 @@ class OpenAIChatProvider(BaseProvider):
         declaration: the profile is a claim about the gateway, a 400 is the
         gateway itself, and where they disagree the gateway is right.
 
-        The per-model narrowing from the gateway's own ``supported_parameters``
-        happens above this, in the provider manager, which is the layer that
-        holds the model cache. Both only ever remove, so they compose in either
-        order.
+        For multi-surface profiles, the active surface determines which
+        protocol dialect and surface-scoped rejection bucket apply so
+        rejections on one door never poison another.
         """
-        dialect = self._declared_reasoning_dialect()
-        rejections = self._recovery_memory.rejections_for(model_id) or {}
-        value_rejections = self._recovery_memory.rejected_values_for(model_id)
+        if not self._profile.response_surfaces:
+            dialect = self._declared_reasoning_dialect()
+            rejections = self._recovery_memory.rejections_for(model_id) or {}
+            value_rejections = self._recovery_memory.rejected_values_for(model_id)
+            if not rejections and not value_rejections:
+                return dialect
+            return narrow_dialect_by_rejections(dialect, rejections, value_rejections)
+
+        surface = self.resolved_surface(model_id).surface
+        preferred = preferred_surface_of(self._provider_id, model_id)
+        if (
+            preferred is not None
+            and preferred in self._profile.response_surfaces
+            and preferred_surface_refusal_fact(self._provider_id, model_id, preferred)
+            is None
+        ):
+            surface = preferred
+        if surface is ResponseSurface.MESSAGES:
+            dialect = ANTHROPIC_REASONING_DIALECT
+            mem_surface: str | None = ResponseSurface.MESSAGES.value
+        elif surface is ResponseSurface.RESPONSES:
+            dialect = RESPONSES_REASONING_DIALECT
+            mem_surface = ResponseSurface.RESPONSES.value
+        else:
+            dialect = self._declared_reasoning_dialect()
+            mem_surface = None
+        rejections = (
+            self._recovery_memory.rejections_for(model_id, surface=mem_surface) or {}
+        )
+        value_rejections = self._recovery_memory.rejected_values_for(
+            model_id, surface=mem_surface
+        )
         if not rejections and not value_rejections:
             return dialect
         return narrow_dialect_by_rejections(dialect, rejections, value_rejections)

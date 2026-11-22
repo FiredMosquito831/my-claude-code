@@ -522,6 +522,13 @@ def _apply_thinking_config(
     )
     if thinking is None:
         return False
+    effort = _thinking_level_effort(thinking.thinking_level)
+    if effort is not None:
+        if effort == "none":
+            payload["thinking"] = {"type": "disabled", "enabled": False}
+        payload["output_config"] = {"effort": effort}
+        return thinking.include_thoughts is True
+
     budget = thinking.thinking_budget
     if isinstance(budget, int) and not isinstance(budget, bool):
         if budget == 0:
@@ -533,11 +540,6 @@ def _apply_thinking_config(
     elif thinking.include_thoughts is True:
         # Asking for thoughts and naming no budget is still asking to think.
         payload["thinking"] = {"type": "enabled"}
-
-    if effort := _thinking_level_effort(thinking.thinking_level):
-        if effort == "none":
-            payload["thinking"] = {"type": "disabled", "enabled": False}
-        payload["output_config"] = {"effort": effort}
     return thinking.include_thoughts is True
 
 
@@ -553,6 +555,7 @@ THINKING_LEVEL_EFFORTS: dict[str, str] = {
     "LOW": "low",
     "MEDIUM": "medium",
     "HIGH": "high",
+    "XHIGH": "xhigh",
 }
 
 
@@ -567,7 +570,7 @@ def _thinking_level_effort(value: str | None) -> str | None:
     except KeyError:
         raise GeminiConversionError(
             f"Unsupported thinkingConfig.thinkingLevel: {value!r}. "
-            "MCC accepts OFF, MINIMAL, LOW, MEDIUM and HIGH.",
+            "MCC accepts OFF, MINIMAL, LOW, MEDIUM, HIGH and XHIGH.",
             field="generationConfig.thinkingConfig.thinkingLevel",
         ) from None
 

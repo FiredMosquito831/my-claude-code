@@ -336,6 +336,8 @@ class MessagesTransport:
             # -- every profile but OpenCode Go's -- builds exactly the body
             # this transport has always built.
             signs_thinking=signs_thinking,
+            memory=self._memory,
+            recovery_surface="messages",
         )
         if marketplace is not None:
             dialect = marketplace

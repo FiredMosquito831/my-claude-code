@@ -3808,6 +3808,246 @@
    "after": "374e26bf3b2a",
    "before": "379e4ba054f7"
   },
+  "deepseek/anthropic_ciphertext/adaptive/adaptive": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/anthropic_ciphertext/adaptive/disabled": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/anthropic_ciphertext/adaptive/enabled_4000": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/anthropic_ciphertext/adaptive/none": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/assistant_arrived_empty/adaptive/adaptive": {
+   "after": "f0dbb3419fa2",
+   "before": "bc4f5e42834f"
+  },
+  "deepseek/assistant_arrived_empty/adaptive/disabled": {
+   "after": "f0dbb3419fa2",
+   "before": "bc4f5e42834f"
+  },
+  "deepseek/assistant_arrived_empty/adaptive/enabled_4000": {
+   "after": "f0dbb3419fa2",
+   "before": "bc4f5e42834f"
+  },
+  "deepseek/assistant_arrived_empty/adaptive/none": {
+   "after": "f0dbb3419fa2",
+   "before": "bc4f5e42834f"
+  },
+  "deepseek/assistant_prefill_last/adaptive/adaptive": {
+   "after": "1274ae135e21",
+   "before": "af216bea11e5"
+  },
+  "deepseek/assistant_prefill_last/adaptive/disabled": {
+   "after": "1274ae135e21",
+   "before": "af216bea11e5"
+  },
+  "deepseek/assistant_prefill_last/adaptive/enabled_4000": {
+   "after": "1274ae135e21",
+   "before": "af216bea11e5"
+  },
+  "deepseek/assistant_prefill_last/adaptive/none": {
+   "after": "1274ae135e21",
+   "before": "af216bea11e5"
+  },
+  "deepseek/cache_control_everywhere/adaptive/adaptive": {
+   "after": "6162ffebcc67",
+   "before": "86a10a955a12"
+  },
+  "deepseek/cache_control_everywhere/adaptive/disabled": {
+   "after": "6162ffebcc67",
+   "before": "86a10a955a12"
+  },
+  "deepseek/cache_control_everywhere/adaptive/enabled_4000": {
+   "after": "6162ffebcc67",
+   "before": "86a10a955a12"
+  },
+  "deepseek/cache_control_everywhere/adaptive/none": {
+   "after": "6162ffebcc67",
+   "before": "86a10a955a12"
+  },
+  "deepseek/consecutive_same_role/adaptive/adaptive": {
+   "after": "43d980232b98",
+   "before": "dd511db7aeb7"
+  },
+  "deepseek/consecutive_same_role/adaptive/disabled": {
+   "after": "43d980232b98",
+   "before": "dd511db7aeb7"
+  },
+  "deepseek/consecutive_same_role/adaptive/enabled_4000": {
+   "after": "43d980232b98",
+   "before": "dd511db7aeb7"
+  },
+  "deepseek/consecutive_same_role/adaptive/none": {
+   "after": "43d980232b98",
+   "before": "dd511db7aeb7"
+  },
+  "deepseek/consecutive_signed_blocks/adaptive/adaptive": {
+   "after": "7f2c928cbd96",
+   "before": "004ab72a3b70"
+  },
+  "deepseek/consecutive_signed_blocks/adaptive/disabled": {
+   "after": "7f2c928cbd96",
+   "before": "004ab72a3b70"
+  },
+  "deepseek/consecutive_signed_blocks/adaptive/enabled_4000": {
+   "after": "7f2c928cbd96",
+   "before": "004ab72a3b70"
+  },
+  "deepseek/consecutive_signed_blocks/adaptive/none": {
+   "after": "7f2c928cbd96",
+   "before": "004ab72a3b70"
+  },
+  "deepseek/document_and_inline_system/adaptive/adaptive": {
+   "after": "6e9f4c26f5d9",
+   "before": "361ea7e3c984"
+  },
+  "deepseek/document_and_inline_system/adaptive/disabled": {
+   "after": "6e9f4c26f5d9",
+   "before": "361ea7e3c984"
+  },
+  "deepseek/document_and_inline_system/adaptive/enabled_4000": {
+   "after": "6e9f4c26f5d9",
+   "before": "361ea7e3c984"
+  },
+  "deepseek/document_and_inline_system/adaptive/none": {
+   "after": "6e9f4c26f5d9",
+   "before": "361ea7e3c984"
+  },
+  "deepseek/plain_strings/adaptive/adaptive": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/plain_strings/adaptive/disabled": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/plain_strings/adaptive/enabled_4000": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/plain_strings/adaptive/none": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/relay_signature_kept/adaptive/adaptive": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/relay_signature_kept/adaptive/disabled": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/relay_signature_kept/adaptive/enabled_4000": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/relay_signature_kept/adaptive/none": {
+   "after": "5dd0c69c2cbd",
+   "before": "94b53eb028f8"
+  },
+  "deepseek/replay.redacted_thinking/adaptive/adaptive": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/replay.redacted_thinking/adaptive/disabled": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/replay.redacted_thinking/adaptive/enabled_4000": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/replay.redacted_thinking/adaptive/none": {
+   "after": "ee241bd7ea7d",
+   "before": "8c9d4c254702"
+  },
+  "deepseek/replay.string_turn_with_reasoning_content/adaptive/adaptive": {
+   "after": "f878d9f41984",
+   "before": "b23b84935efb"
+  },
+  "deepseek/replay.string_turn_with_reasoning_content/adaptive/disabled": {
+   "after": "f878d9f41984",
+   "before": "b23b84935efb"
+  },
+  "deepseek/replay.string_turn_with_reasoning_content/adaptive/enabled_4000": {
+   "after": "f878d9f41984",
+   "before": "b23b84935efb"
+  },
+  "deepseek/replay.string_turn_with_reasoning_content/adaptive/none": {
+   "after": "f878d9f41984",
+   "before": "b23b84935efb"
+  },
+  "deepseek/replay.thinking_only_turn/adaptive/adaptive": {
+   "after": "f63368d95362",
+   "before": "40a30c7a1337"
+  },
+  "deepseek/replay.thinking_only_turn/adaptive/disabled": {
+   "after": "f63368d95362",
+   "before": "40a30c7a1337"
+  },
+  "deepseek/replay.thinking_only_turn/adaptive/enabled_4000": {
+   "after": "f63368d95362",
+   "before": "40a30c7a1337"
+  },
+  "deepseek/replay.thinking_only_turn/adaptive/none": {
+   "after": "f63368d95362",
+   "before": "40a30c7a1337"
+  },
+  "deepseek/replay.thinking_then_text/adaptive/adaptive": {
+   "after": "44f22894e287",
+   "before": "057e0fe97c5d"
+  },
+  "deepseek/replay.thinking_then_text/adaptive/disabled": {
+   "after": "44f22894e287",
+   "before": "057e0fe97c5d"
+  },
+  "deepseek/replay.thinking_then_text/adaptive/enabled_4000": {
+   "after": "44f22894e287",
+   "before": "057e0fe97c5d"
+  },
+  "deepseek/replay.thinking_then_text/adaptive/none": {
+   "after": "44f22894e287",
+   "before": "057e0fe97c5d"
+  },
+  "deepseek/replay.thinking_tool_loop/adaptive/adaptive": {
+   "after": "949c2a2b228a",
+   "before": "456479dd20f6"
+  },
+  "deepseek/replay.thinking_tool_loop/adaptive/disabled": {
+   "after": "949c2a2b228a",
+   "before": "456479dd20f6"
+  },
+  "deepseek/replay.thinking_tool_loop/adaptive/enabled_4000": {
+   "after": "949c2a2b228a",
+   "before": "456479dd20f6"
+  },
+  "deepseek/replay.thinking_tool_loop/adaptive/none": {
+   "after": "949c2a2b228a",
+   "before": "456479dd20f6"
+  },
+  "deepseek/replay.thinking_with_images/adaptive/adaptive": {
+   "after": "4cc2c6d7ef5e",
+   "before": "fb2babcccbd0"
+  },
+  "deepseek/replay.thinking_with_images/adaptive/disabled": {
+   "after": "4cc2c6d7ef5e",
+   "before": "fb2babcccbd0"
+  },
+  "deepseek/replay.thinking_with_images/adaptive/enabled_4000": {
+   "after": "4cc2c6d7ef5e",
+   "before": "fb2babcccbd0"
+  },
+  "deepseek/replay.thinking_with_images/adaptive/none": {
+   "after": "4cc2c6d7ef5e",
+   "before": "fb2babcccbd0"
+  },
   "featherless/anthropic_ciphertext/adaptive/adaptive": {
    "after": "6074618c4812",
    "before": "d7490637cf2b"
@@ -6800,6 +7040,278 @@
    "after": "ab1df4674165",
    "before": "d62729eb08b0"
   },
+  "mistral/anthropic_ciphertext/adaptive/adaptive": {
+   "after": "f259bebe1b2a",
+   "before": "188e1968a787"
+  },
+  "mistral/anthropic_ciphertext/adaptive/disabled": {
+   "after": "f259bebe1b2a",
+   "before": "188e1968a787"
+  },
+  "mistral/anthropic_ciphertext/adaptive/enabled_4000": {
+   "after": "f259bebe1b2a",
+   "before": "188e1968a787"
+  },
+  "mistral/anthropic_ciphertext/adaptive/none": {
+   "after": "f259bebe1b2a",
+   "before": "188e1968a787"
+  },
+  "mistral/assistant_arrived_empty/adaptive/adaptive": {
+   "after": "7330190d5974",
+   "before": "a0d0f4c79e91"
+  },
+  "mistral/assistant_arrived_empty/adaptive/disabled": {
+   "after": "7330190d5974",
+   "before": "a0d0f4c79e91"
+  },
+  "mistral/assistant_arrived_empty/adaptive/enabled_4000": {
+   "after": "7330190d5974",
+   "before": "a0d0f4c79e91"
+  },
+  "mistral/assistant_arrived_empty/adaptive/none": {
+   "after": "7330190d5974",
+   "before": "a0d0f4c79e91"
+  },
+  "mistral/assistant_prefill_last/adaptive/adaptive": {
+   "after": "a0d7a1aac459",
+   "before": "ed77b1ae218d"
+  },
+  "mistral/assistant_prefill_last/adaptive/disabled": {
+   "after": "a0d7a1aac459",
+   "before": "ed77b1ae218d"
+  },
+  "mistral/assistant_prefill_last/adaptive/enabled_4000": {
+   "after": "a0d7a1aac459",
+   "before": "ed77b1ae218d"
+  },
+  "mistral/assistant_prefill_last/adaptive/none": {
+   "after": "a0d7a1aac459",
+   "before": "ed77b1ae218d"
+  },
+  "mistral/cache_control_everywhere/adaptive/adaptive": {
+   "after": "5d176561e0f5",
+   "before": "d208127021a4"
+  },
+  "mistral/cache_control_everywhere/adaptive/disabled": {
+   "after": "5d176561e0f5",
+   "before": "d208127021a4"
+  },
+  "mistral/cache_control_everywhere/adaptive/enabled_4000": {
+   "after": "5d176561e0f5",
+   "before": "d208127021a4"
+  },
+  "mistral/cache_control_everywhere/adaptive/none": {
+   "after": "5d176561e0f5",
+   "before": "d208127021a4"
+  },
+  "mistral/consecutive_same_role/adaptive/adaptive": {
+   "after": "c6cb57017ea7",
+   "before": "1d0192b764b5"
+  },
+  "mistral/consecutive_same_role/adaptive/disabled": {
+   "after": "c6cb57017ea7",
+   "before": "1d0192b764b5"
+  },
+  "mistral/consecutive_same_role/adaptive/enabled_4000": {
+   "after": "c6cb57017ea7",
+   "before": "1d0192b764b5"
+  },
+  "mistral/consecutive_same_role/adaptive/none": {
+   "after": "c6cb57017ea7",
+   "before": "1d0192b764b5"
+  },
+  "mistral/consecutive_signed_blocks/adaptive/adaptive": {
+   "after": "225fca9f9f34",
+   "before": "d2a03c7e248c"
+  },
+  "mistral/consecutive_signed_blocks/adaptive/disabled": {
+   "after": "225fca9f9f34",
+   "before": "d2a03c7e248c"
+  },
+  "mistral/consecutive_signed_blocks/adaptive/enabled_4000": {
+   "after": "225fca9f9f34",
+   "before": "d2a03c7e248c"
+  },
+  "mistral/consecutive_signed_blocks/adaptive/none": {
+   "after": "225fca9f9f34",
+   "before": "d2a03c7e248c"
+  },
+  "mistral/document_and_inline_system/adaptive/adaptive": {
+   "after": "e8d5f09f147c",
+   "before": "b1cdaf4d8918"
+  },
+  "mistral/document_and_inline_system/adaptive/disabled": {
+   "after": "e8d5f09f147c",
+   "before": "b1cdaf4d8918"
+  },
+  "mistral/document_and_inline_system/adaptive/enabled_4000": {
+   "after": "e8d5f09f147c",
+   "before": "b1cdaf4d8918"
+  },
+  "mistral/document_and_inline_system/adaptive/none": {
+   "after": "e8d5f09f147c",
+   "before": "b1cdaf4d8918"
+  },
+  "mistral/plain_strings/adaptive/adaptive": {
+   "after": "a79af1ed5e45",
+   "before": "42bc4b055d94"
+  },
+  "mistral/plain_strings/adaptive/disabled": {
+   "after": "a79af1ed5e45",
+   "before": "42bc4b055d94"
+  },
+  "mistral/plain_strings/adaptive/enabled_4000": {
+   "after": "a79af1ed5e45",
+   "before": "42bc4b055d94"
+  },
+  "mistral/plain_strings/adaptive/none": {
+   "after": "a79af1ed5e45",
+   "before": "42bc4b055d94"
+  },
+  "mistral/relay_signature_kept/adaptive/adaptive": {
+   "after": "8cd120083fed",
+   "before": "c6777b09989b"
+  },
+  "mistral/relay_signature_kept/adaptive/disabled": {
+   "after": "8cd120083fed",
+   "before": "c6777b09989b"
+  },
+  "mistral/relay_signature_kept/adaptive/enabled_4000": {
+   "after": "8cd120083fed",
+   "before": "c6777b09989b"
+  },
+  "mistral/relay_signature_kept/adaptive/none": {
+   "after": "8cd120083fed",
+   "before": "c6777b09989b"
+  },
+  "mistral/replay.long_mcp_name_and_no_thinking/adaptive/adaptive": {
+   "after": "594339565f22",
+   "before": "f093b78aeb96"
+  },
+  "mistral/replay.long_mcp_name_and_no_thinking/adaptive/disabled": {
+   "after": "594339565f22",
+   "before": "f093b78aeb96"
+  },
+  "mistral/replay.long_mcp_name_and_no_thinking/adaptive/enabled_4000": {
+   "after": "594339565f22",
+   "before": "f093b78aeb96"
+  },
+  "mistral/replay.long_mcp_name_and_no_thinking/adaptive/none": {
+   "after": "594339565f22",
+   "before": "f093b78aeb96"
+  },
+  "mistral/replay.redacted_thinking/adaptive/adaptive": {
+   "after": "9a3fff35e352",
+   "before": "03d79a7ea227"
+  },
+  "mistral/replay.redacted_thinking/adaptive/disabled": {
+   "after": "9a3fff35e352",
+   "before": "03d79a7ea227"
+  },
+  "mistral/replay.redacted_thinking/adaptive/enabled_4000": {
+   "after": "9a3fff35e352",
+   "before": "03d79a7ea227"
+  },
+  "mistral/replay.redacted_thinking/adaptive/none": {
+   "after": "9a3fff35e352",
+   "before": "03d79a7ea227"
+  },
+  "mistral/replay.string_turn_with_reasoning_content/adaptive/adaptive": {
+   "after": "ea8a7d9fed48",
+   "before": "c541e964cfa1"
+  },
+  "mistral/replay.string_turn_with_reasoning_content/adaptive/disabled": {
+   "after": "ea8a7d9fed48",
+   "before": "c541e964cfa1"
+  },
+  "mistral/replay.string_turn_with_reasoning_content/adaptive/enabled_4000": {
+   "after": "ea8a7d9fed48",
+   "before": "c541e964cfa1"
+  },
+  "mistral/replay.string_turn_with_reasoning_content/adaptive/none": {
+   "after": "ea8a7d9fed48",
+   "before": "c541e964cfa1"
+  },
+  "mistral/replay.thinking_after_tool_call/adaptive/adaptive": {
+   "after": "d486d1091a21",
+   "before": "d7df4c87a433"
+  },
+  "mistral/replay.thinking_after_tool_call/adaptive/disabled": {
+   "after": "d486d1091a21",
+   "before": "d7df4c87a433"
+  },
+  "mistral/replay.thinking_after_tool_call/adaptive/enabled_4000": {
+   "after": "d486d1091a21",
+   "before": "d7df4c87a433"
+  },
+  "mistral/replay.thinking_after_tool_call/adaptive/none": {
+   "after": "d486d1091a21",
+   "before": "d7df4c87a433"
+  },
+  "mistral/replay.thinking_only_turn/adaptive/adaptive": {
+   "after": "3eed8286e7c8",
+   "before": "c1d4a96855ba"
+  },
+  "mistral/replay.thinking_only_turn/adaptive/disabled": {
+   "after": "3eed8286e7c8",
+   "before": "c1d4a96855ba"
+  },
+  "mistral/replay.thinking_only_turn/adaptive/enabled_4000": {
+   "after": "3eed8286e7c8",
+   "before": "c1d4a96855ba"
+  },
+  "mistral/replay.thinking_only_turn/adaptive/none": {
+   "after": "3eed8286e7c8",
+   "before": "c1d4a96855ba"
+  },
+  "mistral/replay.thinking_then_text/adaptive/adaptive": {
+   "after": "963520c5f148",
+   "before": "da1296ac4499"
+  },
+  "mistral/replay.thinking_then_text/adaptive/disabled": {
+   "after": "963520c5f148",
+   "before": "da1296ac4499"
+  },
+  "mistral/replay.thinking_then_text/adaptive/enabled_4000": {
+   "after": "963520c5f148",
+   "before": "da1296ac4499"
+  },
+  "mistral/replay.thinking_then_text/adaptive/none": {
+   "after": "963520c5f148",
+   "before": "da1296ac4499"
+  },
+  "mistral/replay.thinking_tool_loop/adaptive/adaptive": {
+   "after": "55eaa9a114b9",
+   "before": "1178aa6a9cf7"
+  },
+  "mistral/replay.thinking_tool_loop/adaptive/disabled": {
+   "after": "55eaa9a114b9",
+   "before": "1178aa6a9cf7"
+  },
+  "mistral/replay.thinking_tool_loop/adaptive/enabled_4000": {
+   "after": "55eaa9a114b9",
+   "before": "1178aa6a9cf7"
+  },
+  "mistral/replay.thinking_tool_loop/adaptive/none": {
+   "after": "55eaa9a114b9",
+   "before": "1178aa6a9cf7"
+  },
+  "mistral/replay.thinking_with_images/adaptive/adaptive": {
+   "after": "63052ebcefde",
+   "before": "b8b093ed97a9"
+  },
+  "mistral/replay.thinking_with_images/adaptive/disabled": {
+   "after": "63052ebcefde",
+   "before": "b8b093ed97a9"
+  },
+  "mistral/replay.thinking_with_images/adaptive/enabled_4000": {
+   "after": "63052ebcefde",
+   "before": "b8b093ed97a9"
+  },
+  "mistral/replay.thinking_with_images/adaptive/none": {
+   "after": "63052ebcefde",
+   "before": "b8b093ed97a9"
+  },
   "mistral_codestral/anthropic_ciphertext/adaptive/adaptive": {
    "after": "429f21006fb4",
    "before": "a6abc9ae351f"
@@ -8159,6 +8671,278 @@
   "novita/replay.thinking_with_images/adaptive/none": {
    "after": "2d161baeb4ca",
    "before": "7ae0970871bf"
+  },
+  "nvidia_nim/anthropic_ciphertext/adaptive/adaptive": {
+   "after": "709c6fe69387",
+   "before": "d7490637cf2b"
+  },
+  "nvidia_nim/anthropic_ciphertext/adaptive/disabled": {
+   "after": "709c6fe69387",
+   "before": "d7490637cf2b"
+  },
+  "nvidia_nim/anthropic_ciphertext/adaptive/enabled_4000": {
+   "after": "709c6fe69387",
+   "before": "d7490637cf2b"
+  },
+  "nvidia_nim/anthropic_ciphertext/adaptive/none": {
+   "after": "709c6fe69387",
+   "before": "d7490637cf2b"
+  },
+  "nvidia_nim/assistant_arrived_empty/adaptive/adaptive": {
+   "after": "8e53b9b93ff4",
+   "before": "a0d0f4c79e91"
+  },
+  "nvidia_nim/assistant_arrived_empty/adaptive/disabled": {
+   "after": "8e53b9b93ff4",
+   "before": "a0d0f4c79e91"
+  },
+  "nvidia_nim/assistant_arrived_empty/adaptive/enabled_4000": {
+   "after": "8e53b9b93ff4",
+   "before": "a0d0f4c79e91"
+  },
+  "nvidia_nim/assistant_arrived_empty/adaptive/none": {
+   "after": "8e53b9b93ff4",
+   "before": "a0d0f4c79e91"
+  },
+  "nvidia_nim/assistant_prefill_last/adaptive/adaptive": {
+   "after": "335b7b1c4762",
+   "before": "ed77b1ae218d"
+  },
+  "nvidia_nim/assistant_prefill_last/adaptive/disabled": {
+   "after": "335b7b1c4762",
+   "before": "ed77b1ae218d"
+  },
+  "nvidia_nim/assistant_prefill_last/adaptive/enabled_4000": {
+   "after": "335b7b1c4762",
+   "before": "ed77b1ae218d"
+  },
+  "nvidia_nim/assistant_prefill_last/adaptive/none": {
+   "after": "335b7b1c4762",
+   "before": "ed77b1ae218d"
+  },
+  "nvidia_nim/cache_control_everywhere/adaptive/adaptive": {
+   "after": "ccd5f84362d4",
+   "before": "1d558416d68d"
+  },
+  "nvidia_nim/cache_control_everywhere/adaptive/disabled": {
+   "after": "ccd5f84362d4",
+   "before": "1d558416d68d"
+  },
+  "nvidia_nim/cache_control_everywhere/adaptive/enabled_4000": {
+   "after": "ccd5f84362d4",
+   "before": "1d558416d68d"
+  },
+  "nvidia_nim/cache_control_everywhere/adaptive/none": {
+   "after": "ccd5f84362d4",
+   "before": "1d558416d68d"
+  },
+  "nvidia_nim/consecutive_same_role/adaptive/adaptive": {
+   "after": "de9b70ba9c90",
+   "before": "170e5cf94f7b"
+  },
+  "nvidia_nim/consecutive_same_role/adaptive/disabled": {
+   "after": "de9b70ba9c90",
+   "before": "170e5cf94f7b"
+  },
+  "nvidia_nim/consecutive_same_role/adaptive/enabled_4000": {
+   "after": "de9b70ba9c90",
+   "before": "170e5cf94f7b"
+  },
+  "nvidia_nim/consecutive_same_role/adaptive/none": {
+   "after": "de9b70ba9c90",
+   "before": "170e5cf94f7b"
+  },
+  "nvidia_nim/consecutive_signed_blocks/adaptive/adaptive": {
+   "after": "547bfa4bd2ea",
+   "before": "2b6dfb1d0c85"
+  },
+  "nvidia_nim/consecutive_signed_blocks/adaptive/disabled": {
+   "after": "547bfa4bd2ea",
+   "before": "2b6dfb1d0c85"
+  },
+  "nvidia_nim/consecutive_signed_blocks/adaptive/enabled_4000": {
+   "after": "547bfa4bd2ea",
+   "before": "2b6dfb1d0c85"
+  },
+  "nvidia_nim/consecutive_signed_blocks/adaptive/none": {
+   "after": "547bfa4bd2ea",
+   "before": "2b6dfb1d0c85"
+  },
+  "nvidia_nim/document_and_inline_system/adaptive/adaptive": {
+   "after": "eb92519b8387",
+   "before": "b1cdaf4d8918"
+  },
+  "nvidia_nim/document_and_inline_system/adaptive/disabled": {
+   "after": "eb92519b8387",
+   "before": "b1cdaf4d8918"
+  },
+  "nvidia_nim/document_and_inline_system/adaptive/enabled_4000": {
+   "after": "eb92519b8387",
+   "before": "b1cdaf4d8918"
+  },
+  "nvidia_nim/document_and_inline_system/adaptive/none": {
+   "after": "eb92519b8387",
+   "before": "b1cdaf4d8918"
+  },
+  "nvidia_nim/plain_strings/adaptive/adaptive": {
+   "after": "0a47a33ce1b9",
+   "before": "42bc4b055d94"
+  },
+  "nvidia_nim/plain_strings/adaptive/disabled": {
+   "after": "0a47a33ce1b9",
+   "before": "42bc4b055d94"
+  },
+  "nvidia_nim/plain_strings/adaptive/enabled_4000": {
+   "after": "0a47a33ce1b9",
+   "before": "42bc4b055d94"
+  },
+  "nvidia_nim/plain_strings/adaptive/none": {
+   "after": "0a47a33ce1b9",
+   "before": "42bc4b055d94"
+  },
+  "nvidia_nim/relay_signature_kept/adaptive/adaptive": {
+   "after": "0c5cbd375e7f",
+   "before": "19108b1c95e5"
+  },
+  "nvidia_nim/relay_signature_kept/adaptive/disabled": {
+   "after": "0c5cbd375e7f",
+   "before": "19108b1c95e5"
+  },
+  "nvidia_nim/relay_signature_kept/adaptive/enabled_4000": {
+   "after": "0c5cbd375e7f",
+   "before": "19108b1c95e5"
+  },
+  "nvidia_nim/relay_signature_kept/adaptive/none": {
+   "after": "0c5cbd375e7f",
+   "before": "19108b1c95e5"
+  },
+  "nvidia_nim/replay.long_mcp_name_and_no_thinking/adaptive/adaptive": {
+   "after": "7ce60dd9b4f4",
+   "before": "f093b78aeb96"
+  },
+  "nvidia_nim/replay.long_mcp_name_and_no_thinking/adaptive/disabled": {
+   "after": "7ce60dd9b4f4",
+   "before": "f093b78aeb96"
+  },
+  "nvidia_nim/replay.long_mcp_name_and_no_thinking/adaptive/enabled_4000": {
+   "after": "7ce60dd9b4f4",
+   "before": "f093b78aeb96"
+  },
+  "nvidia_nim/replay.long_mcp_name_and_no_thinking/adaptive/none": {
+   "after": "7ce60dd9b4f4",
+   "before": "f093b78aeb96"
+  },
+  "nvidia_nim/replay.redacted_thinking/adaptive/adaptive": {
+   "after": "6193c6b89421",
+   "before": "03d79a7ea227"
+  },
+  "nvidia_nim/replay.redacted_thinking/adaptive/disabled": {
+   "after": "6193c6b89421",
+   "before": "03d79a7ea227"
+  },
+  "nvidia_nim/replay.redacted_thinking/adaptive/enabled_4000": {
+   "after": "6193c6b89421",
+   "before": "03d79a7ea227"
+  },
+  "nvidia_nim/replay.redacted_thinking/adaptive/none": {
+   "after": "6193c6b89421",
+   "before": "03d79a7ea227"
+  },
+  "nvidia_nim/replay.string_turn_with_reasoning_content/adaptive/adaptive": {
+   "after": "4b5dfeadba56",
+   "before": "f1b551015c2c"
+  },
+  "nvidia_nim/replay.string_turn_with_reasoning_content/adaptive/disabled": {
+   "after": "4b5dfeadba56",
+   "before": "f1b551015c2c"
+  },
+  "nvidia_nim/replay.string_turn_with_reasoning_content/adaptive/enabled_4000": {
+   "after": "4b5dfeadba56",
+   "before": "f1b551015c2c"
+  },
+  "nvidia_nim/replay.string_turn_with_reasoning_content/adaptive/none": {
+   "after": "4b5dfeadba56",
+   "before": "f1b551015c2c"
+  },
+  "nvidia_nim/replay.thinking_after_tool_call/adaptive/adaptive": {
+   "after": "d44b1401e678",
+   "before": "c462683c686b"
+  },
+  "nvidia_nim/replay.thinking_after_tool_call/adaptive/disabled": {
+   "after": "d44b1401e678",
+   "before": "c462683c686b"
+  },
+  "nvidia_nim/replay.thinking_after_tool_call/adaptive/enabled_4000": {
+   "after": "d44b1401e678",
+   "before": "c462683c686b"
+  },
+  "nvidia_nim/replay.thinking_after_tool_call/adaptive/none": {
+   "after": "d44b1401e678",
+   "before": "c462683c686b"
+  },
+  "nvidia_nim/replay.thinking_only_turn/adaptive/adaptive": {
+   "after": "4e0b6d452ac1",
+   "before": "3860a216b216"
+  },
+  "nvidia_nim/replay.thinking_only_turn/adaptive/disabled": {
+   "after": "4e0b6d452ac1",
+   "before": "3860a216b216"
+  },
+  "nvidia_nim/replay.thinking_only_turn/adaptive/enabled_4000": {
+   "after": "4e0b6d452ac1",
+   "before": "3860a216b216"
+  },
+  "nvidia_nim/replay.thinking_only_turn/adaptive/none": {
+   "after": "4e0b6d452ac1",
+   "before": "3860a216b216"
+  },
+  "nvidia_nim/replay.thinking_then_text/adaptive/adaptive": {
+   "after": "2f20270d1719",
+   "before": "930e2d3b5f6d"
+  },
+  "nvidia_nim/replay.thinking_then_text/adaptive/disabled": {
+   "after": "2f20270d1719",
+   "before": "930e2d3b5f6d"
+  },
+  "nvidia_nim/replay.thinking_then_text/adaptive/enabled_4000": {
+   "after": "2f20270d1719",
+   "before": "930e2d3b5f6d"
+  },
+  "nvidia_nim/replay.thinking_then_text/adaptive/none": {
+   "after": "2f20270d1719",
+   "before": "930e2d3b5f6d"
+  },
+  "nvidia_nim/replay.thinking_tool_loop/adaptive/adaptive": {
+   "after": "65c30ccca9a5",
+   "before": "e24d2475a147"
+  },
+  "nvidia_nim/replay.thinking_tool_loop/adaptive/disabled": {
+   "after": "65c30ccca9a5",
+   "before": "e24d2475a147"
+  },
+  "nvidia_nim/replay.thinking_tool_loop/adaptive/enabled_4000": {
+   "after": "65c30ccca9a5",
+   "before": "e24d2475a147"
+  },
+  "nvidia_nim/replay.thinking_tool_loop/adaptive/none": {
+   "after": "65c30ccca9a5",
+   "before": "e24d2475a147"
+  },
+  "nvidia_nim/replay.thinking_with_images/adaptive/adaptive": {
+   "after": "44873f71a9a0",
+   "before": "0129f106606a"
+  },
+  "nvidia_nim/replay.thinking_with_images/adaptive/disabled": {
+   "after": "44873f71a9a0",
+   "before": "0129f106606a"
+  },
+  "nvidia_nim/replay.thinking_with_images/adaptive/enabled_4000": {
+   "after": "44873f71a9a0",
+   "before": "0129f106606a"
+  },
+  "nvidia_nim/replay.thinking_with_images/adaptive/none": {
+   "after": "44873f71a9a0",
+   "before": "0129f106606a"
   },
   "ollama/anthropic_ciphertext/adaptive/adaptive": {
    "after": "249f8666d29e",

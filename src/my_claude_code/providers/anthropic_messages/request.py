@@ -9,14 +9,19 @@ from loguru import logger
 
 from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.application.prompt_cache import PromptCacheLifetimeChoice
-from my_claude_code.config.settings import configured_default_max_output_tokens
+from my_claude_code.config.settings import (
+    configured_default_max_output_tokens,
+    configured_reasoning_adaptive,
+)
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
 from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.reasoning import (
     MINIMUM_BUDGET_TOKENS,
     ReasoningControl,
+    ReasoningEffort,
     ReasoningPolicy,
 )
+from my_claude_code.core.wire_capture import reasoning_suppressed
 from my_claude_code.providers.openai_responses import (
     HISTORY_CARRIER_FOREIGN,
     HISTORY_CARRIER_STRIPPED,
@@ -65,6 +70,8 @@ def build_anthropic_messages_body(
     forward_thinking_display: bool = False,
     prompt_cache: PromptCacheLifetimeChoice | None = None,
     signs_thinking: bool = True,
+    adaptive_capable: bool | None = None,
+    suppress_thinking: bool = False,
 ) -> dict[str, Any]:
     """Build one native Messages request without exposing FCC-only fields.
 
@@ -117,7 +124,13 @@ def build_anthropic_messages_body(
             body.pop("max_tokens", None)
         else:
             body["max_tokens"] = configured
-    _apply_reasoning(body, request, reasoning)
+    _apply_reasoning(
+        body,
+        request,
+        reasoning,
+        adaptive_capable=adaptive_capable,
+        suppress_thinking=suppress_thinking,
+    )
     # Manual thinking makes Anthropic require its own thinking at the start of
     # the final assistant turn of a tool loop. When that turn's thinking was
     # another model's and has just been dropped, no such block can exist, so
@@ -678,40 +691,122 @@ def _drop_mcc_enabled_default(body: dict[str, Any]) -> None:
         }
 
 
+_ANTHROPIC_ADAPTIVE_EFFORTS: dict[ReasoningEffort, str] = {
+    ReasoningEffort.MINIMAL: "low",
+    ReasoningEffort.LOW: "low",
+    ReasoningEffort.MEDIUM: "medium",
+    ReasoningEffort.HIGH: "high",
+    ReasoningEffort.XHIGH: "xhigh",
+    ReasoningEffort.MAX: "max",
+}
+
+
+def _strip_output_config_effort(body: dict[str, Any]) -> None:
+    """Remove ``output_config['effort']`` while keeping ``format`` and dropping ``{}``."""
+
+    output_config = body.get("output_config")
+    if not isinstance(output_config, dict):
+        body.pop("output_config", None)
+        return
+    output_config.pop("effort", None)
+    if not output_config:
+        body.pop("output_config", None)
+
+
+def _apply_output_config_effort(
+    body: dict[str, Any], effort: ReasoningEffort | None
+) -> None:
+    """Sync ``output_config['effort']`` for adaptive thinking, preserving ``format``."""
+
+    if effort is None:
+        _strip_output_config_effort(body)
+        return
+    mapped = _ANTHROPIC_ADAPTIVE_EFFORTS[effort]
+    output_config = body.get("output_config")
+    if isinstance(output_config, dict):
+        output_config["effort"] = mapped
+    else:
+        body["output_config"] = {"effort": mapped}
+
+
+def _apply_manual_budget(body: dict[str, Any], budget: int) -> None:
+    """Emit manual ``enabled`` + bounded ``budget_tokens``, omitting ``output_config.effort``."""
+
+    bounded = _budget_within_max_tokens(body, budget)
+    _strip_output_config_effort(body)
+    if bounded is None:
+        # No legal budget exists inside this allowance. Sending the answer
+        # without thinking is the only outcome that is neither a 400 nor a
+        # max_tokens the client never asked for.
+        body.pop("thinking", None)
+        return
+    body["thinking"] = {"type": "enabled", "budget_tokens": bounded}
+
+
 def _apply_reasoning(
     body: dict[str, Any],
     request: MessagesRequest,
     policy: ReasoningPolicy,
+    *,
+    adaptive_capable: bool | None = None,
+    suppress_thinking: bool = False,
 ) -> None:
     if policy.control is ReasoningControl.OFF:
         body.pop("thinking", None)
+        _strip_output_config_effort(body)
         return
+
+    adaptive_mode = configured_reasoning_adaptive()
+    allow_adaptive = adaptive_mode != "off" and adaptive_capable is not False
+
     if policy.control is ReasoningControl.ADAPTIVE:
-        # An explicit adaptive tier overrides whatever the client asked for.
+        if not allow_adaptive:
+            fallback_budget = (
+                policy.numeric_budget_tokens or ReasoningEffort.HIGH.budget_tokens
+            )
+            _apply_manual_budget(body, fallback_budget)
+            return
         body["thinking"] = {"type": "adaptive"}
+        _apply_output_config_effort(body, policy.effort)
         return
+
     if not policy.requests_reasoning:
-        # The client's own object passes through.
+        _strip_output_config_effort(body)
+        if suppress_thinking or reasoning_suppressed():
+            body.pop("thinking", None)
+            return
         _drop_mcc_enabled_default(body)
+        thinking = body.get("thinking")
+        if (
+            adaptive_mode == "off"
+            and isinstance(thinking, dict)
+            and thinking.get("type") == "adaptive"
+        ):
+            _apply_manual_budget(body, ReasoningEffort.HIGH.budget_tokens)
+        return
+
+    if adaptive_mode == "on" and allow_adaptive and policy.budget_tokens is None:
+        body["thinking"] = {"type": "adaptive"}
+        _apply_output_config_effort(body, policy.effort)
         return
 
     budget = policy.numeric_budget_tokens
     if budget is not None:
-        bounded = _budget_within_max_tokens(body, budget)
-        if bounded is None:
-            # No legal budget exists inside this allowance. Sending the answer
-            # without thinking is the only outcome that is neither a 400 nor a
-            # max_tokens the client never asked for.
-            body.pop("thinking", None)
-            return
-        body["thinking"] = {"type": "enabled", "budget_tokens": bounded}
+        _apply_manual_budget(body, budget)
         return
 
     requested = request.thinking
+    if not allow_adaptive:
+        _apply_manual_budget(body, ReasoningEffort.HIGH.budget_tokens)
+        return
     if requested is not None and requested.type in {"adaptive", "enabled"}:
-        # The client's own object passes through.
+        # The client's own object passes through; manual ``enabled`` cannot
+        # coexist with ``output_config.effort``, while ``adaptive`` keeps it.
+        if requested.type != "adaptive":
+            _strip_output_config_effort(body)
         _drop_mcc_enabled_default(body)
         return
+    _strip_output_config_effort(body)
     body["thinking"] = {"type": "adaptive"}
 
 

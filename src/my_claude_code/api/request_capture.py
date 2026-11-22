@@ -99,6 +99,7 @@ from my_claude_code.core.wire_capture import (
     DEFAULT_WIRE_BODY_MAX_CHARS,
     WireRequest,
     install_wire_trace,
+    set_reasoning_suppressed,
 )
 
 
@@ -933,6 +934,13 @@ class RequestCapture:
         self._attempt_provider = routed.resolved.provider_id
         self._attempt_model = routed.resolved.provider_model
         self._attempt_model_ref = routed.resolved.provider_model_ref
+        set_reasoning_suppressed(
+            routed.reasoning_adaptation.kind
+            in {
+                ReasoningAdaptationKind.SUPPRESSED,
+                ReasoningAdaptationKind.NOTHING_SENT,
+            }
+        )
         if not self.enabled:
             return
         # Attempt boundary for recovery attribution: everything a provider

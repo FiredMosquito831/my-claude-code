@@ -16,7 +16,10 @@ field, and the wire baseline compares the serialised bytes.
 from typing import Any
 
 from my_claude_code.application.errors import InvalidRequestError
-from my_claude_code.config.settings import configured_responses_parallel_tool_calls
+from my_claude_code.config.settings import (
+    configured_reasoning_adaptive,
+    configured_responses_parallel_tool_calls,
+)
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.openai_responses import ReplayOrigin
 from my_claude_code.core.reasoning import (
@@ -109,8 +112,22 @@ def build_chatgpt_oauth_request_body(
     # not impose an explicit output limit. ``default_max_tokens`` is kept in
     # the signature for backward compatibility with existing callers.
     _ = default_max_tokens
+    adaptive_mode = configured_reasoning_adaptive()
     effective_unspecified = unspecified_effort
-    if effective_unspecified is None and reasoning.control is ReasoningControl.ADAPTIVE:
+    if (
+        effective_unspecified is None
+        and adaptive_mode != "off"
+        and (
+            reasoning.control is ReasoningControl.ADAPTIVE
+            or (
+                adaptive_mode == "on"
+                and reasoning.control is ReasoningControl.ON
+                and reasoning.effort is None
+                and request.thinking is not None
+                and request.thinking.type == "adaptive"
+            )
+        )
+    ):
         effective_unspecified = ReasoningEffort.MAX.value
     parallel = configured_responses_parallel_tool_calls()
     if request.responses_envelope is not None:

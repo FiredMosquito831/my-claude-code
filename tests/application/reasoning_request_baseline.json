@@ -42,9 +42,6 @@
   },
   "anthropic_messages|client_effort_high|client": {
     "max_tokens": 4096,
-    "output_config": {
-      "effort": "high"
-    },
     "thinking": {
       "budget_tokens": 2048,
       "type": "enabled"
@@ -52,9 +49,6 @@
   },
   "anthropic_messages|client_effort_high|high": {
     "max_tokens": 4096,
-    "output_config": {
-      "effort": "high"
-    },
     "thinking": {
       "budget_tokens": 2048,
       "type": "enabled"
@@ -62,9 +56,6 @@
   },
   "anthropic_messages|client_effort_high|low": {
     "max_tokens": 4096,
-    "output_config": {
-      "effort": "high"
-    },
     "thinking": {
       "budget_tokens": 1024,
       "type": "enabled"
@@ -72,9 +63,6 @@
   },
   "anthropic_messages|client_effort_high|max": {
     "max_tokens": 4096,
-    "output_config": {
-      "effort": "high"
-    },
     "thinking": {
       "budget_tokens": 4095,
       "type": "enabled"
@@ -82,25 +70,16 @@
   },
   "anthropic_messages|client_effort_high|medium": {
     "max_tokens": 4096,
-    "output_config": {
-      "effort": "high"
-    },
     "thinking": {
       "budget_tokens": 1024,
       "type": "enabled"
     }
   },
   "anthropic_messages|client_effort_high|off": {
-    "max_tokens": 4096,
-    "output_config": {
-      "effort": "high"
-    }
+    "max_tokens": 4096
   },
   "anthropic_messages|client_effort_high|xhigh": {
     "max_tokens": 4096,
-    "output_config": {
-      "effort": "high"
-    },
     "thinking": {
       "budget_tokens": 4095,
       "type": "enabled"

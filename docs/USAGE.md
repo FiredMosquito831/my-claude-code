@@ -4957,6 +4957,18 @@ Model Config's settings and the override rows reach every host with a lifetime l
 
 Each attempt's request detail records `prompt_cache_ttl` beside the body whenever a setting applied: the minutes asked and which setting asked them (`from`: `model_override`, `provider_override`, the tier setting such as `PROMPT_CACHE_TTL_OPUS`, or `PROMPT_CACHE_TTL`), the lifetime sent, the lifetimes the host takes, how many markers there were and how many were changed, whether one was added (or, on Azure, the `field` written), and any lifetime the host refused. With nothing set the key is absent and every stored row is exactly what it was.
 
+### Adaptive Thinking (`REASONING_ADAPTIVE`)
+
+**New in 8.38.0.** Under **Model Config → Reasoning**, `REASONING_ADAPTIVE` controls whether adaptive extended thinking (`thinking: {"type": "adaptive"}`) is preferred or suppressed alongside `REASONING_POLICY` and per-tier efforts (`REASONING_MYTHOS`, `REASONING_FABLE`, `REASONING_OPUS`, `REASONING_SONNET`, `REASONING_HAIKU`):
+
+| Value | Meaning |
+| --- | --- |
+| `client` *(default)* | Preserves existing per-tier and client behaviour. |
+| `on` | Prefers `thinking: {"type": "adaptive"}` plus `output_config.effort` on adaptive-capable Anthropic Messages hosts even when a tier effort such as `REASONING_OPUS=max` is configured, falling back to manual `enabled` + `budget_tokens` only when the host/model is non-adaptive. |
+| `off` | Never sends `thinking: {"type": "adaptive"}`, forcing manual `enabled` + `budget_tokens` on Anthropic Messages or explicit effort on other doors. |
+
+Explicit `off` reasoning policy (`REASONING_POLICY=off` or a tier set to `off`) always suppresses thinking regardless of `REASONING_ADAPTIVE`. A save applies to the next request with no restart.
+
 ### Responses protocol
 
 **New in 8.15.0.** The Responses API has a field the Anthropic Messages protocol does not: `parallel_tool_calls`, which tells the host whether the model may answer one turn with several tool calls at once. Two of MCC's doors speak that protocol — the **ChatGPT subscription** (`chatgpt_oauth`, and its `openai` alias) and the **shared Responses transport** that OpenCode Zen and OpenCode Go are served on. Until 8.15.0 both senders hard-coded it to `false`.

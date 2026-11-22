@@ -26,6 +26,13 @@ passed-through ``thinking`` object. No variant of Anthropic's ``thinking``
 has that key and Anthropic refused every such body from 2026-10-08 on
 (``Extra inputs are not permitted``). Nothing else in that cell, and no other
 cell, moved.
+
+Three cells under ``anthropic_messages/client_effort_high/`` (``client_default``,
+``off``, and ``on_high``) strip ``output_config.effort`` in 8.38.0 (PR1 / T2-Q2):
+Anthropic rejects/ignores ``output_config.effort`` when ``thinking`` is absent
+(``client_default``/``off``) or uses manual ``enabled + budget_tokens``
+(``on_high``). The committed 7.24.0 baseline stays untouched and only those
+three cells are pinned with their stripped ``output_config``.
 """
 
 import json
@@ -174,6 +181,19 @@ def test_the_snapshot_covers_every_family_and_shape() -> None:
     assert len(BASELINE) >= 4 * len(CLIENT_SHAPES) * len(POLICIES)
 
 
+_PR1_STRIPPED_EFFORT_KEYS = frozenset(
+    {
+        "anthropic_messages/client_effort_high/client_default",
+        "anthropic_messages/client_effort_high/off",
+        "anthropic_messages/client_effort_high/on_high",
+    }
+)
+
+
 @pytest.mark.parametrize("key", sorted(BASELINE))
 def test_the_wire_is_byte_identical_to_v7_24_0(key: str) -> None:
-    assert _canonical(bodies()[key]) == _canonical(BASELINE[key])
+    expected = BASELINE[key]
+    if key in _PR1_STRIPPED_EFFORT_KEYS:
+        assert expected.get("output_config") == {"effort": "high"}
+        expected = {k: v for k, v in expected.items() if k != "output_config"}
+    assert _canonical(bodies()[key]) == _canonical(expected)
