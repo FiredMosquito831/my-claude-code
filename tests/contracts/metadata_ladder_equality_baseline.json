@@ -11,6 +11,10 @@
   "v8.18.0": {
    "bytes": 237556,
    "sha256": "5f0cf0727a684d007790abc476d3bcc844a519430728ba488bb1335e7ee13f96"
+  },
+  "v8.36.0": {
+   "bytes": 237888,
+   "sha256": "939ad127512f9918467a20bb62c8d6eabdab9989798f3c5da486427afc96b76f"
   }
  },
  "admin/catalogue-models?provenance=1": {
@@ -25,6 +29,10 @@
   "v8.18.0": {
    "bytes": 379328,
    "sha256": "d68e953e63c21218014d614dcfdf333ac8dcb33ab6948b4d7d7e23c9251fe4d8"
+  },
+  "v8.36.0": {
+   "bytes": 379660,
+   "sha256": "839d1b41a3f845024dcfda68d52031afb579b4434b43f4d8bc233317b0db659b"
   }
  },
  "admin/models": {
@@ -21408,6 +21416,10 @@
   "v8.18.0": {
    "bytes": 236084,
    "sha256": "451d0064e8d6a2e36c4267bb8a971d778f354f348274200f17662cc24ed5d16a"
+  },
+  "v8.36.0": {
+   "bytes": 236416,
+   "sha256": "b8a39098d4e6a23bc53261109c66e9d3533f96f2404d1b60c65b3c1fd7b1afba"
   }
  },
  "kor-live/admin/catalogue-models?provenance=1": {
@@ -21422,6 +21434,10 @@
   "v8.18.0": {
    "bytes": 400396,
    "sha256": "7b43df8dba2b423bca8edc7c844e316c67d0bf2d92903131d7ad9c7ad4ed2e9d"
+  },
+  "v8.36.0": {
+   "bytes": 400728,
+   "sha256": "fc15898c21a83aeb53944825853e92945e492c579151c142eab967578c37e478"
   }
  },
  "kor-live/capabilities/cline/cline-pass/deepseek-v4.1-flash": {
@@ -31100,6 +31116,10 @@
   "v8.18.0": {
    "bytes": 40875,
    "sha256": "a98fb643e406cad1a5769ca11d7558203c1e1dfebee450b82c2d9cffc465e338"
+  },
+  "v8.36.0": {
+   "bytes": 41183,
+   "sha256": "5195a6fa31a67270372d504eda6044ab04e4bc2ab7404229eb4eb4cdc22e50ce"
   }
  },
  "kor-live/serialiser/commandcode": {
@@ -32774,8 +32794,8 @@
   "sha256": "9332753f5d78a08e3703ba2f199de054b70c9f32a3a06dadc0d00000bca7587c"
  },
  "kor-substituted/serialiser/codex": {
-  "bytes": 42231,
-  "sha256": "445c87a0152a7313364aa9af5e59746f7e2d3ac9e2bb50385abdda0f540381e1"
+  "bytes": 42539,
+  "sha256": "6816bb49d5565ee5ceaa07cb0397ca45aa37def0aa43a8a48500cf0ab0dbd8b0"
  },
  "kor-substituted/serialiser/commandcode": {
   "bytes": 9930,
@@ -34492,6 +34512,10 @@
   "v8.18.0": {
    "bytes": 42231,
    "sha256": "445c87a0152a7313364aa9af5e59746f7e2d3ac9e2bb50385abdda0f540381e1"
+  },
+  "v8.36.0": {
+   "bytes": 42539,
+   "sha256": "6816bb49d5565ee5ceaa07cb0397ca45aa37def0aa43a8a48500cf0ab0dbd8b0"
   }
  },
  "serialiser/commandcode": {

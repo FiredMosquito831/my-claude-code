@@ -48,10 +48,13 @@ from my_claude_code.core.openai_responses import (
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningAdaptationKind,
+    ReasoningControl,
     ReasoningDialect,
     ReasoningEffort,
     ReasoningPolicy,
+    effort_intersection,
     narrow_dialect_by_rejections,
+    top_stated_effort,
 )
 from my_claude_code.core.request_log import observed_served_models
 from my_claude_code.core.trace import trace_event
@@ -112,6 +115,9 @@ from my_claude_code.providers.recovery import (
     tool_schema_recovery,
     tools_count_recovery,
     upstream_complaint,
+)
+from my_claude_code.providers.runtime.models_dev import (
+    model_reasoning_capability_from_models_dev,
 )
 from my_claude_code.providers.runtime.served_models import resolve_served_models
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
@@ -547,6 +553,39 @@ class ChatGPTOAuthProvider(BaseProvider):
             CHATGPT_OAUTH_REASONING_DIALECT, rejections, value_rejections
         )
 
+    def _top_effort_for(self, model_id: str) -> str | None:
+        """Return the highest supported effort rung for ``model_id``, or ``None``.
+
+        Combines this provider's learned dialect (``RecoveryMemory`` field and
+        value rejections) with any published ``models.dev`` capability so an
+        ``ADAPTIVE`` or level-less ``ON`` request targets the model's top
+        rung instead of silently falling back to ``"medium"``.
+        """
+        dialect_efforts = self.reasoning_dialect(model_id).effort_values
+        if not dialect_efforts:
+            return None
+        capability = model_reasoning_capability_from_models_dev(
+            CHATGPT_OAUTH_PROVIDER_ID, model_id
+        )
+        if capability is not None and (
+            capability.can_reason is False
+            or capability.supports_effort_control is False
+        ):
+            return None
+        model_efforts = capability.supported_efforts if capability is not None else None
+        top = top_stated_effort(effort_intersection(model_efforts, dialect_efforts))
+        return top.value if top is not None else None
+
+    def _unspecified_effort(
+        self, model_id: str, reasoning: ReasoningPolicy
+    ) -> str | None:
+        """Effort rung for ``ADAPTIVE`` or level-less ``ON`` on this model."""
+        if reasoning.control is ReasoningControl.ADAPTIVE or (
+            reasoning.control is ReasoningControl.ON and reasoning.effort is None
+        ):
+            return self._top_effort_for(model_id)
+        return None
+
     def _replay_origin(self, credentials: Any, model: str) -> ReplayOrigin | None:
         """This backend as the five strings a carrier is bound to (8.16.0).
 
@@ -851,7 +890,16 @@ class ChatGPTOAuthProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> None:
         """Validate the upstream request before streaming."""
-        build_chatgpt_oauth_request_body(request, reasoning=reasoning)
+        unspecified_effort = self._unspecified_effort(request.model, reasoning)
+        build_chatgpt_oauth_request_body(
+            request,
+            reasoning=reasoning,
+            **(
+                {"unspecified_effort": unspecified_effort}
+                if unspecified_effort is not None
+                else {}
+            ),
+        )
 
     async def _send_stream_request(
         self,
@@ -1006,6 +1054,7 @@ class ChatGPTOAuthProvider(BaseProvider):
             session_id = self._session_id
             thread_id = None
 
+        unspecified_effort = self._unspecified_effort(request.model, reasoning)
         body = build_chatgpt_oauth_request_body(
             request,
             reasoning=reasoning,
@@ -1021,6 +1070,11 @@ class ChatGPTOAuthProvider(BaseProvider):
             **(
                 {"prompt_cache_key": prompt_cache_key}
                 if prompt_cache_key is not None
+                else {}
+            ),
+            **(
+                {"unspecified_effort": unspecified_effort}
+                if unspecified_effort is not None
                 else {}
             ),
         )

@@ -564,14 +564,19 @@ async def test_chatgpt_oauth_records_the_note_beside_the_body() -> None:
     )
     trace = install_wire_trace()
 
-    async def _raw_stream():
-        yield b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
-        yield b'data: {"type":"response.completed","response":{}}\n\n'
+    def _fresh_response() -> MagicMock:
+        async def _raw_stream():
+            yield b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+            yield b'data: {"type":"response.completed","response":{}}\n\n'
 
-    response = MagicMock(status_code=200)
-    response.aiter_raw = _raw_stream
-    response.aclose = AsyncMock()
-    provider._send_stream_request = AsyncMock(return_value=response)
+        resp = MagicMock(status_code=200)
+        resp.aiter_raw = _raw_stream
+        resp.aclose = AsyncMock()
+        return resp
+
+    provider._send_stream_request = AsyncMock(
+        side_effect=lambda *_, **__: _fresh_response()
+    )
 
     request = _request(LAYOUTS["after_the_summary"], model="gpt-5.6-terra")
     chunks = [
@@ -582,11 +587,14 @@ async def test_chatgpt_oauth_records_the_note_beside_the_body() -> None:
     assert any("ok" in chunk for chunk in chunks)
     assert EMPTY_SYSTEM_MESSAGES_DROPPED not in sent
     assert _params(trace)[EMPTY_SYSTEM_MESSAGES_DROPPED] == NOTE_ONE
-    assert _wire(sent) == _wire(
-        build_chatgpt_oauth_request_body(
-            _request(
-                _without_markers(LAYOUTS["after_the_summary"]), model="gpt-5.6-terra"
-            ),
-            reasoning=REASONING,
-        )
+
+    plain_request = _request(
+        _without_markers(LAYOUTS["after_the_summary"]), model="gpt-5.6-terra"
     )
+    plain_chunks = [
+        chunk
+        async for chunk in provider.stream_response(plain_request, reasoning=REASONING)
+    ]
+    plain_sent = provider._send_stream_request.await_args_list[1].kwargs["body"]
+    assert any("ok" in chunk for chunk in plain_chunks)
+    assert _wire(sent) == _wire(plain_sent)

@@ -91,6 +91,54 @@ def test_xhigh_absent_when_model_does_not_support_it() -> None:
     assert efforts == ["low", "medium", "high"]
 
 
+def test_max_is_published_when_model_supports_it() -> None:
+    capability = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supported_efforts=frozenset(
+            {
+                ReasoningEffort.LOW,
+                ReasoningEffort.MEDIUM,
+                ReasoningEffort.HIGH,
+                ReasoningEffort.XHIGH,
+                ReasoningEffort.MAX,
+            }
+        ),
+    )
+
+    entries = _entries([_model("chatgpt_oauth/gpt-6-luna", reasoning=capability)])
+    efforts = [
+        rung["effort"]
+        for rung in entries["chatgpt_oauth/gpt-6-luna"]["supported_reasoning_levels"]
+    ]
+
+    assert efforts == ["low", "medium", "high", "xhigh", "max"]
+
+
+def test_max_absent_when_model_only_supports_up_to_xhigh() -> None:
+    capability = ModelReasoningCapability(
+        can_reason=True,
+        supports_effort_control=True,
+        supported_efforts=frozenset(
+            {
+                ReasoningEffort.LOW,
+                ReasoningEffort.MEDIUM,
+                ReasoningEffort.HIGH,
+                ReasoningEffort.XHIGH,
+            }
+        ),
+    )
+
+    entries = _entries([_model("chatgpt_oauth/gpt-5.5", reasoning=capability)])
+    efforts = [
+        rung["effort"]
+        for rung in entries["chatgpt_oauth/gpt-5.5"]["supported_reasoning_levels"]
+    ]
+
+    assert efforts == ["low", "medium", "high", "xhigh"]
+    assert "max" not in efforts
+
+
 def test_a_model_that_cannot_reason_advertises_no_rungs() -> None:
     entries = _entries(
         [

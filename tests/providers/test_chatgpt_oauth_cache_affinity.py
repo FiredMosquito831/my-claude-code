@@ -125,21 +125,21 @@ def _ok_sse_response(*, turn_state: str | None = None) -> httpx.Response:
     return httpx.Response(200, headers=headers, content=_body())
 
 
-# ------------------------------------------------------------------ M1: OFF default
+# ------------------------------------------------------------------ M1: ON default
 
 
-def test_session_affinity_defaults_to_false(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_session_affinity_defaults_to_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CHATGPT_OAUTH_SESSION_AFFINITY", raising=False)
-    assert CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT is False
-    assert Settings.model_validate({}).chatgpt_oauth_session_affinity is False
-    assert configured_chatgpt_oauth_session_affinity() is False
+    assert CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT is True
+    assert Settings.model_validate({}).chatgpt_oauth_session_affinity is True
+    assert configured_chatgpt_oauth_session_affinity() is True
 
 
 @pytest.mark.asyncio
 async def test_off_mode_is_byte_identical_to_v827(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When unset or false, outbound headers and JSON body match v8.27.0 byte-for-byte."""
+    """When false, outbound headers and JSON body match v8.27.0 byte-for-byte."""
     captured: list[tuple[dict[str, str], dict[str, Any]]] = []
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -164,12 +164,10 @@ async def test_off_mode_is_byte_identical_to_v827(
     )
 
     req = _sample_request()
-    _set_affinity(None, monkeypatch)
-    _ = [chunk async for chunk in provider.stream_response(req)]
     _set_affinity(False, monkeypatch)
     _ = [chunk async for chunk in provider.stream_response(req)]
 
-    assert len(captured) == 2
+    assert len(captured) == 1
     expected_headers = {
         k.lower(): v for k, v in _build_headers(creds, provider._session_id).items()
     }
@@ -188,6 +186,44 @@ async def test_off_mode_is_byte_identical_to_v827(
         assert body == expected_body
     # Capturing turn-state on 200 is disabled while OFF.
     assert len(get_chatgpt_turn_state_cache()) == 1
+
+
+@pytest.mark.asyncio
+async def test_unset_env_enables_session_affinity_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With CHATGPT_OAUTH_SESSION_AFFINITY unset, per-conversation affinity is ON."""
+    captured: list[tuple[dict[str, str], dict[str, Any]]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(
+            (dict(request.headers), json.loads(request.content.decode("utf-8")))
+        )
+        return _ok_sse_response(turn_state="ts-default-on")
+
+    provider = ChatGPTOAuthProvider(
+        _provider_config(),
+        rate_limiter=passthrough_rate_limiter(),
+        account_id="acct_default_on",
+    )
+    _install_mock_transport(provider, _handler)
+    install_fingerprint({"x-claude-code-session-id": "root-default-on"})
+    req = _sample_request()
+
+    _set_affinity(None, monkeypatch)
+    _ = [chunk async for chunk in provider.stream_response(req)]
+    _ = [chunk async for chunk in provider.stream_response(req)]
+
+    assert len(captured) == 2
+    h1, b1 = captured[0]
+    h2, b2 = captured[1]
+    assert "prompt_cache_key" in b1
+    assert b1["prompt_cache_key"] == b2["prompt_cache_key"]
+    assert h1["session-id"] != provider._session_id
+    assert h1["session-id"] == h1["thread-id"] == h2["session-id"] == h2["thread-id"]
+    assert "x-client-request-id" in h1
+    assert "x-codex-turn-state" not in h1
+    assert h2["x-codex-turn-state"] == "ts-default-on"
 
 
 # --------------------------------------------------------- M2/M3/M8: extraction & fallback

@@ -573,10 +573,11 @@ class Settings(BaseSettings):
     chatgpt_oauth_write_back: bool = Field(
         default=True, validation_alias="CHATGPT_OAUTH_WRITE_BACK"
     )
-    # Whether ChatGPT OAuth / ``openai`` requests opt into per-conversation
-    # cache affinity (session-id / thread-id / x-client-request-id /
+    # Whether ChatGPT OAuth / ``openai`` requests use per-conversation cache
+    # affinity (session-id / thread-id / x-client-request-id /
     # prompt_cache_key <= 64 chars) and account-fenced x-codex-turn-state
-    # echo (8.28.0). Off by default so v8.27.0 bytes stay identical.
+    # echo (8.28.0; default ``True`` since 8.36.0). Set ``false`` to keep
+    # v8.27.0 wire bytes identical.
     chatgpt_oauth_session_affinity: bool = Field(
         default=CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
         validation_alias="CHATGPT_OAUTH_SESSION_AFFINITY",
@@ -3728,8 +3729,8 @@ def configured_chatgpt_oauth_session_affinity() -> bool:
 
     Read per request so a dashboard toggle takes effect on the very next
     request without restarting the server or rebuilding providers. Defaults to
-    ``False`` (``CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT``) so v8.27.0 wire
-    headers and bodies stay byte-identical until opted in.
+    ``True`` (``CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT``) since 8.36.0; set
+    ``false`` to preserve v8.27.0 wire headers and bodies byte-for-byte.
     """
     settings = get_settings()
     return bool(

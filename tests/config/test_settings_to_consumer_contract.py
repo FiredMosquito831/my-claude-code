@@ -1533,7 +1533,7 @@ async def test_the_chatgpt_oauth_session_affinity_setting_reaches_the_wire(
     from my_claude_code.providers.chatgpt_oauth.provider import ChatGPTOAuthProvider
     from tests.providers.support import passthrough_rate_limiter
 
-    expected = value == "true"
+    expected = True if value is None else value == "true"
     if value is None:
         monkeypatch.delenv("CHATGPT_OAUTH_SESSION_AFFINITY", raising=False)
     else:

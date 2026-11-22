@@ -651,8 +651,14 @@ class ResponsesStreamConverter:
             yield self._ledger.content_block_delta(
                 self._ledger.blocks.thinking_index, "signature_delta", carrier
             )
+            # Close the finished item's thinking block immediately so a
+            # consecutive reasoning item opens its own thinking block instead
+            # of concatenating a second signature_delta onto the same block.
+            yield from self._ledger.close_content_blocks()
+            self._thinking_block_item = None
             return
         yield from self._ledger.close_content_blocks()
+        self._thinking_block_item = None
         index = self._ledger.blocks.allocate_index()
         yield self._ledger.content_block_start(index, "redacted_thinking", data=carrier)
         yield self._ledger.content_block_stop(index)

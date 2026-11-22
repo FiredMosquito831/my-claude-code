@@ -941,12 +941,19 @@ def _is_adaptive_page_entry(value: Any) -> bool:
 #: ``ADAPTIVE_PAGE`` do; the release's own rule test names the moved set.
 BEFORE_8_18 = "v8.17.0"
 AFTER_8_18 = "v8.18.0"
+AFTER_8_36 = "v8.36.0"
 
 
 def _is_vision_ladder_entry(value: Any) -> bool:
     """An entry 8.18.0 moves, which therefore carries this release's answer."""
 
     return isinstance(value, dict) and AFTER_8_18 in value
+
+
+def _is_codex_max_entry(value: Any) -> bool:
+    """An entry 8.36.0 moves by publishing ``max`` in Codex's catalogue."""
+
+    return isinstance(value, dict) and AFTER_8_36 in value
 
 
 def _is_ocgo1_entry(value: Any) -> bool:
@@ -964,6 +971,10 @@ def _is_ocgo3_entry(value: Any) -> bool:
 
 
 def _expected(key: str, value: Any) -> Any:
+    if _is_codex_max_entry(value):
+        return value[AFTER_8_36]
+    if _is_codex_max_entry(value):
+        return value[AFTER_8_36]
     if _is_vision_ladder_entry(value):
         return value[AFTER_8_18]
     if _is_adaptive_page_entry(value):
@@ -988,6 +999,8 @@ def _current_answer(group: str, key: str, value: Any) -> Any:
     correction's ``before`` be the 7.113.5 answer.
     """
 
+    if _is_codex_max_entry(value):
+        return value[AFTER_8_36]
     if _is_vision_ladder_entry(value):
         # 8.18.0's answer, resolved here for the same reason the 8.13.0 and
         # 7.113.5 ones are: the entry carries its own newest answer, so the

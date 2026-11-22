@@ -64,27 +64,29 @@ from my_claude_code.core.reasoning import ReasoningEffort
 #: The two rungs above ``max`` are deliberately **not** added here, and this is
 #: decision Q7 of 2026-09-13 rather than an oversight. This table is
 #: intersected with a model's ``supported_efforts``, which are
-#: :class:`ReasoningEffort` members -- and Q7 keeps that enum as it is, so no
-#: model can ever publish ``ultra`` and the entry would be unreachable. Where
-#: those words *do* matter is on the wire, per model, from what the host itself
-#: named: see ``providers/openai_chat/learned_dialect._ladder_with_super_rungs``.
+#: :class:`ReasoningEffort` members -- and Q7 keeps that enum capped at ``max``,
+#: so no model can ever publish ``ultra`` and the entry would be unreachable.
+#: Where those words *do* matter is on the wire, per model, from what the host
+#: itself named: see
+#: ``providers/openai_chat/learned_dialect._ladder_with_super_rungs``.
 CODEX_REASONING_LEVELS: dict[str, str] = {
     "low": "Fast responses with lighter reasoning",
     "medium": "Balances speed and reasoning depth for everyday tasks",
     "high": "Greater reasoning depth for complex problems",
     "xhigh": "Extra high reasoning depth for complex problems",
+    "max": "Maximum reasoning depth for complex problems",
 }
 
-#: MCC effort -> nearest Codex rung. ``minimal`` and ``max`` have no Codex
-#: counterpart of their own and fold onto the adjacent rung rather than being
-#: dropped, so a model that only publishes them still gets a usable control.
+#: MCC effort -> nearest Codex rung. ``minimal`` has no Codex counterpart in
+#: this table and folds onto ``low`` rather than being dropped, while ``max``
+#: maps directly to ``"max"``.
 CODEX_EFFORT_BY_REASONING_EFFORT: dict[ReasoningEffort, str] = {
     ReasoningEffort.MINIMAL: "low",
     ReasoningEffort.LOW: "low",
     ReasoningEffort.MEDIUM: "medium",
     ReasoningEffort.HIGH: "high",
     ReasoningEffort.XHIGH: "xhigh",
-    ReasoningEffort.MAX: "xhigh",
+    ReasoningEffort.MAX: "max",
 }
 
 CODEX_BASE_INSTRUCTIONS = (

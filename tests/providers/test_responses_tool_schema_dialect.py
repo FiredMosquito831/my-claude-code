@@ -456,7 +456,13 @@ async def test_chatgpt_oauths_first_request_is_one_call_and_says_what_left() -> 
     provider = _chatgpt_provider()
     trace = install_wire_trace()
 
-    async def _send(*, url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+    async def _send(
+        *,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        **_kwargs: Any,
+    ) -> Any:
         if _refuses_lookaround(body):
             request = httpx.Request("POST", url)
             raise httpx.HTTPStatusError(

@@ -580,11 +580,11 @@ async def test_an_opencode_identity_field_is_read_by_the_next_request(hot, key) 
 
 @pytest.mark.asyncio
 async def test_chatgpt_oauth_session_affinity_is_hot_without_restart(hot) -> None:
-    assert configured_chatgpt_oauth_session_affinity() is False
-    await hot.apply_hot({"CHATGPT_OAUTH_SESSION_AFFINITY": "true"})
     assert configured_chatgpt_oauth_session_affinity() is True
     await hot.apply_hot({"CHATGPT_OAUTH_SESSION_AFFINITY": "false"})
     assert configured_chatgpt_oauth_session_affinity() is False
+    await hot.apply_hot({"CHATGPT_OAUTH_SESSION_AFFINITY": "true"})
+    assert configured_chatgpt_oauth_session_affinity() is True
 
 
 @pytest.mark.asyncio
