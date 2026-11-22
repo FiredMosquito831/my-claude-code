@@ -138,14 +138,20 @@ def test_openrouter_s_own_list_never_feeds_its_own_kind() -> None:
 
 
 def test_a_word_no_kind_rule_reads_states_no_kind() -> None:
-    """``text -> decisions`` must not take a model out of the chat lists."""
+    """OpenRouter's ``text -> decisions`` resolves to ``decision``; an unread word states no kind."""
 
-    kind = _kind(_modalities(None, None), _live(DECISIONS))
+    decision_kind = _kind(_modalities(None, None), _live(DECISIONS))
+    assert decision_kind.kinds == frozenset({"decision"})
+    assert decision_kind.source == KIND_SOURCE_OPENROUTER_LIVE
+    assert not decision_kind.chat_listable
+
+    unread = DeclaredModalities(inputs=("text",), outputs=("3d",))
+    kind = _kind(_modalities(None, None), _live(unread))
     assert kind.kinds is None
     listable = chat_listing_filter(
         Settings.model_validate({}),
         _modalities(None, None),
-        live=lambda _p, _m: _live(DECISIONS),
+        live=lambda _p, _m: _live(unread),
     )
     assert listable("acme/vendor/model")
 

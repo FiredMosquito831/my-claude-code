@@ -224,6 +224,7 @@ def build_catalogue_models(
     # Discovered models only, and the same predicate ``/v1/models`` applies:
     # a model whose stated kind is not chat (an image, speech or video model)
     # is not offered as one. A configured ref is listed whatever its kind.
+    type_lookup_fn = getattr(runtime, "models_dev_type_lookup", None)
     chat_listable = chat_listing_filter(
         settings,
         runtime.model_modalities_lookup(),
@@ -233,6 +234,7 @@ def build_catalogue_models(
         # LiteLLM's map (7.85.0): two kind rungs, only while LiteLLM pricing is
         # on; ``None`` otherwise, the predicate before 7.85.0 exactly.
         litellm=runtime.litellm_model_catalogue(),
+        models_dev_type=None if type_lookup_fn is None else type_lookup_fn(),
     )
     primary_ref = settings.model.strip()
     infos_by_ref: dict[str, ProviderModelInfo] = {}

@@ -439,7 +439,12 @@ def _poisoned(row: dict[str, Any]) -> dict[str, Any]:
         "features": "reasoning",
         "supported_features": [None],
         "tags": [{"name": "tool-use"}],
-        "capabilities": {"reasoning": "yes", "function_calling": 1},
+        "capabilities": {
+            "reasoning": "yes",
+            "function_calling": 1,
+            "vision": "yes",
+            "completion_chat": "yes",
+        },
         "reasoning": {"mandatory": False},
         "reasoning_options": {},
         # 7.85.0 paths, likewise unreadable: a bool epoch, a list date, a number
@@ -564,3 +569,125 @@ def test_membership_filters_are_unchanged_by_the_reader() -> None:
         tags_field="supported_features",
     )
     assert [info.model_id for info in infos] == ["keep"]
+
+
+def test_mistral_capabilities_extract_vision_and_endpoint_words() -> None:
+    """R2 / T4-Q5 / T4-Q6: Mistral's ``capabilities.*`` booleans feed Rung 1."""
+
+    rows = [
+        {
+            "id": "codestral-latest",
+            "type": "base",
+            "capabilities": {
+                "completion_chat": True,
+                "completion_fim": True,
+                "vision": False,
+                "function_calling": True,
+            },
+        },
+        {
+            "id": "pixtral-large-latest",
+            "type": "base",
+            "capabilities": {
+                "completion_chat": True,
+                "vision": True,
+            },
+        },
+        {
+            "id": "mistral-ocr-latest",
+            "type": "base",
+            "capabilities": {
+                "completion_chat": False,
+                "ocr": True,
+            },
+        },
+        {
+            "id": "mistral-moderation-2603",
+            "type": "base",
+            "capabilities": {
+                "completion_chat": False,
+                "moderation": True,
+            },
+        },
+        {
+            "id": "voxtral-mini-tts-latest",
+            "type": "base",
+            "capabilities": {
+                "completion_chat": False,
+                "audio_speech": True,
+            },
+        },
+        {
+            "id": "voxtral-mini-transcribe-latest",
+            "type": "base",
+            "capabilities": {
+                "completion_chat": False,
+                "audio_transcription": True,
+            },
+        },
+        {
+            "id": "codestral-embed-2505",
+            "type": "base",
+            "capabilities": {
+                "completion_chat": False,
+                "completion_fim": False,
+                "vision": False,
+                "ocr": False,
+            },
+        },
+    ]
+    infos = _by_id(extract_openai_model_infos({"data": rows}, provider_name="M"))
+
+    assert infos["codestral-latest"].supports_vision is False
+    assert infos["codestral-latest"].declared == ProviderModelDeclaration(
+        model_type="base",
+        endpoints=("chat",),
+        tool_calls=True,
+        vision=False,
+    )
+    assert infos["pixtral-large-latest"].supports_vision is True
+    assert infos["pixtral-large-latest"].declared == ProviderModelDeclaration(
+        model_type="base",
+        endpoints=("chat",),
+        vision=True,
+    )
+    assert infos["mistral-ocr-latest"].declared == ProviderModelDeclaration(
+        model_type="base",
+        endpoints=("non_chat", "ocr"),
+    )
+    assert infos["mistral-moderation-2603"].declared == ProviderModelDeclaration(
+        model_type="base",
+        endpoints=("moderation", "non_chat"),
+    )
+    assert infos["voxtral-mini-tts-latest"].declared == ProviderModelDeclaration(
+        model_type="base",
+        endpoints=("audio_speech", "non_chat"),
+    )
+    assert infos["voxtral-mini-transcribe-latest"].declared == ProviderModelDeclaration(
+        model_type="base",
+        endpoints=("audio_transcription", "non_chat"),
+    )
+    assert infos["codestral-embed-2505"].supports_vision is False
+    assert infos["codestral-embed-2505"].declared == ProviderModelDeclaration(
+        model_type="base",
+        endpoints=("non_chat",),
+        vision=False,
+    )
+
+
+def test_mode_task_pipeline_tag_and_supported_generation_methods_are_read() -> None:
+    assert declared_from_row({"id": "a", "mode": "image_generation"}) == (
+        ProviderModelDeclaration(model_type="image_generation")
+    )
+    assert declared_from_row({"id": "b", "task": "text-to-image"}) == (
+        ProviderModelDeclaration(model_type="text-to-image")
+    )
+    assert declared_from_row(
+        {"id": "c", "pipeline_tag": "automatic-speech-recognition"}
+    ) == ProviderModelDeclaration(model_type="automatic-speech-recognition")
+    assert declared_from_row(
+        {"id": "d", "supportedGenerationMethods": ["embedContent"]}
+    ) == ProviderModelDeclaration(endpoints=("embedcontent",))
+    assert declared_from_row(
+        {"id": "e", "supportedGenerationMethods": ["generateContent", "predict"]}
+    ) == ProviderModelDeclaration(endpoints=("generatecontent",))

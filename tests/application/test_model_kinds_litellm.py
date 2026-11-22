@@ -114,10 +114,12 @@ def test_openrouter_live_answers_before_it() -> None:
 
 
 def test_a_word_no_kind_rule_reads_states_no_kind() -> None:
-    """LiteLLM writes ``code`` as an output on 8 entries."""
+    """LiteLLM's ``code`` output normalizes to ``text``, while an unread word states no kind."""
 
     kind = _resolve(None, None, _lite(CODE))
-    assert kind.kinds is None
+    assert kind.kinds == frozenset({"chat"})
+    unread = DeclaredModalities(inputs=("text",), outputs=("3d",))
+    assert _resolve(None, None, _lite(unread)).kinds is None
 
 
 def test_the_coarse_rung_comes_after_the_provider_s_own_words() -> None:
@@ -137,10 +139,14 @@ def test_the_coarse_rung_comes_before_the_media_rail() -> None:
     )
     assert kind.source == KIND_SOURCE_LITELLM_WORDS
     assert kind.kinds == frozenset({"chat"})
-    silent = _resolve(
+    silent = _resolve(None, None, _lite(words=("/v1/batch",)), placements=placed)
+    assert silent.source == KIND_SOURCE_MEDIA_RAIL  # words no rule reads state nothing
+    legacy_completion = _resolve(
         None, None, _lite(words=("completion", "/v1/batch")), placements=placed
     )
-    assert silent.source == KIND_SOURCE_MEDIA_RAIL  # words no rule reads state nothing
+    assert legacy_completion.source == KIND_SOURCE_LITELLM_WORDS
+    assert legacy_completion.kinds == frozenset()
+    assert not legacy_completion.chat_listable
 
 
 def test_the_coarse_rung_never_answers_where_a_pair_was_stated() -> None:

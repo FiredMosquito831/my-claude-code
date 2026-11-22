@@ -20,8 +20,8 @@ from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.reasoning import ReasoningEffort
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.model_listing import (
+    extract_openrouter_model_infos,
     extract_openrouter_tool_model_ids,
-    extract_openrouter_tool_model_infos,
 )
 from my_claude_code.providers.openai_chat import (
     OpenAIChatProfile,
@@ -89,11 +89,21 @@ class OpenRouterGatewayProvider(OpenAIChatProvider):
         )
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
-        """Advertise tool-capable gateway models with reasoning capability metadata."""
-        payload = await self._client.models.list()
-        return extract_openrouter_tool_model_infos(
+        """Return all gateway models with capability and modality metadata."""
+        payload = await self._list_models_payload()
+        return extract_openrouter_model_infos(
             payload, provider_name=self._provider_name
         )
+
+    async def _list_models_payload(self) -> Any:
+        if self._provider_id == "open_router":
+            try:
+                return await self._client.models.list(
+                    extra_query={"output_modalities": "all"}
+                )
+            except TypeError:
+                return await self._client.models.list()
+        return await self._client.models.list()
 
 
 def assistant_reasoning_details(messages: Any) -> dict[int, list[dict[str, Any]]]:

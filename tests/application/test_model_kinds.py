@@ -2,11 +2,20 @@
 
 from my_claude_code.application.model_kinds import (
     CHAT_KIND,
+    DECISION_KIND,
+    EMBEDDING_KIND,
     KIND_SOURCE_MEDIA_RAIL,
     KIND_SOURCE_MODELS_DEV,
+    MODEL_KINDS,
+    MODERATION_KIND,
+    NON_RAIL_KIND_LABELS,
+    OCR_KIND,
+    REALTIME_KIND,
+    RERANK_KIND,
     UNKNOWN_KIND,
     chat_listing_filter,
     kinds_from_modalities,
+    kinds_from_words,
     media_rail_placements,
     resolve_model_kind,
 )
@@ -58,17 +67,65 @@ def test_each_declared_pair_maps_to_the_rail_it_belongs_on() -> None:
 
 
 def test_a_declaration_that_fits_no_rail_is_stated_none_not_unknown() -> None:
-    """An embedding model is a stated "none of these", which hides it from chat."""
+    """An auxiliary non-chat modality is a stated "none of these", which hides it from chat."""
 
-    stated = kinds_from_modalities(_declared(("text",), ("embedding",)))
+    stated = kinds_from_modalities(_declared(("text",), ("music",)))
     assert stated == frozenset()
     kind = resolve_model_kind(
-        "p/embed",
-        modalities=_lookup({"p/embed": _declared(("text",), ("embedding",))}),
+        "p/music-gen",
+        modalities=_lookup({"p/music-gen": _declared(("text",), ("music",))}),
         placements={},
     )
     assert kind.known
     assert not kind.chat_listable
+
+
+def test_all_six_visible_non_rail_kinds_resolve_and_are_not_chat_listable() -> None:
+    assert len(MODEL_KINDS) == 11
+    cases = {
+        EMBEDDING_KIND: ("embedding", "embeddings", "/v1/embeddings", "embedContent"),
+        RERANK_KIND: ("rerank", "reranking", "jina-rerank", "/v1/rerank"),
+        REALTIME_KIND: ("realtime", "/v1/realtime"),
+        OCR_KIND: ("ocr", "/v1/ocr"),
+        MODERATION_KIND: (
+            "moderation",
+            "moderations",
+            "/v1/moderations",
+            "classification",
+            "text-classification",
+            "token-classification",
+        ),
+        DECISION_KIND: ("decision", "decisions", "/v1/decisions"),
+    }
+    for expected_kind, words in cases.items():
+        assert expected_kind in NON_RAIL_KIND_LABELS
+        for word in words:
+            assert kinds_from_words((word,)) == frozenset({expected_kind}), word
+        kind = resolve_model_kind(
+            f"p/{expected_kind}",
+            modalities=_lookup(
+                {f"p/{expected_kind}": _declared(("text",), (expected_kind,))}
+            ),
+            placements={},
+        )
+        assert kind.known
+        assert kind.kinds == frozenset({expected_kind})
+        assert not kind.chat_listable
+
+
+def test_auxiliary_non_chat_words_resolve_to_empty_frozenset() -> None:
+    for word in (
+        "extraction",
+        "music",
+        "evaluation",
+        "search",
+        "guardrail",
+        "vector_store",
+        "completion",
+        "fim",
+        "non_chat",
+    ):
+        assert kinds_from_words((word,)) == frozenset(), word
 
 
 def test_unknown_is_offered_everywhere() -> None:
@@ -169,6 +226,10 @@ def test_no_name_decides_a_kind() -> None:
         "novita/ming-image-0.1-design",
         "groq/whisper-large-v3",
         "p/tts-1",
+        "p/text-embedding-3-large",
+        "p/rerank-v3",
+        "p/mistral-ocr-latest",
+        "p/gpt-realtime-2.1",
     ):
         kind = resolve_model_kind(ref, modalities=lookup, placements={})
         assert kind is UNKNOWN_KIND, ref

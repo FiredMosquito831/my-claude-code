@@ -943,6 +943,27 @@ BEFORE_8_18 = "v8.17.0"
 AFTER_8_18 = "v8.18.0"
 AFTER_8_36 = "v8.36.0"
 AFTER_8_38 = "v8.38.0"
+BEFORE_8_39 = "v8.38.1"
+AFTER_8_39 = "v8.39.0"
+
+#: 8.39.0 (MODEL-DISCOVERY-AND-CATEGORIZATION) classifies
+#: ``vercel/alibaba/qwen3-embedding-0.6b`` (which declares ``type: "embedding"``
+#: alongside ``text -> text`` modalities) as ``["embedding"]`` instead of
+#: ``["chat"]``, so ``chat_listing_filter`` excludes it from ``/v1/models``,
+#: ``/v1beta/models`` and ``build_catalogue_models``; and folds
+#: ``capabilities.vision`` on ``hypercharm/deepseek-v4.1-flash`` at Rung 1.
+EXCLUDED_8_39_CATALOGUE_KEYS = frozenset(
+    {
+        "catalogue-k4/anthropic/vercel/alibaba/qwen3-embedding-0.6b",
+        "catalogue-k4/claude-3-freecc-no-thinking/vercel/alibaba/qwen3-embedding-0.6b",
+    }
+)
+
+
+def _is_discovery_categorization_entry(value: Any) -> bool:
+    """An entry 8.39.0 moves via same-rung type refinement or Rung 1 vision fold."""
+
+    return isinstance(value, dict) and AFTER_8_39 in value
 
 
 def _is_vision_ladder_entry(value: Any) -> bool:
@@ -978,6 +999,8 @@ def _is_ocgo3_entry(value: Any) -> bool:
 
 
 def _expected(key: str, value: Any) -> Any:
+    if _is_discovery_categorization_entry(value):
+        return value[AFTER_8_39]
     if _is_surface_dialect_entry(value):
         return value[AFTER_8_38]
     if _is_codex_max_entry(value):
@@ -1006,6 +1029,8 @@ def _current_answer(group: str, key: str, value: Any) -> Any:
     correction's ``before`` be the 7.113.5 answer.
     """
 
+    if _is_discovery_categorization_entry(value):
+        return value[AFTER_8_39]
     if _is_surface_dialect_entry(value):
         return value[AFTER_8_38]
     if _is_codex_max_entry(value):
@@ -1053,13 +1078,19 @@ def _is_kinv_key(key: str) -> bool:
 
 
 def _is_kinv_entry(value: Any) -> bool:
-    return isinstance(value, dict) and set(value) == {BEFORE_KINV, AFTER_KINV}
+    return isinstance(value, dict) and {BEFORE_KINV, AFTER_KINV} <= set(value)
 
 
 def _kinv_answer(value: Any, version: str = AFTER_KINV) -> Any:
     """A recorded k3 entry as ``version`` answers it (one value for both)."""
 
-    return value[version] if _is_kinv_entry(value) else value
+    if version == AFTER_KINV and _is_discovery_categorization_entry(value):
+        return value[AFTER_8_39]
+    if _is_kinv_entry(value):
+        return value[version]
+    if _is_discovery_categorization_entry(value) and BEFORE_8_39 in value:
+        return value[BEFORE_8_39]
+    return value
 
 
 def _assert_unchanged(
@@ -1072,6 +1103,7 @@ def _assert_unchanged(
         and not _is_k3_key(key)
         and not _is_kinv_key(key)
         and not _is_ocgo2_key(key)
+        and key not in EXCLUDED_8_39_CATALOGUE_KEYS
     }
     differing = [
         key
@@ -1124,6 +1156,7 @@ def test_with_the_live_list_on_only_the_recorded_entries_move(
         and not _is_k3_key(key)
         and not _is_kinv_key(key)
         and not _is_ocgo2_key(key)
+        and key not in EXCLUDED_8_39_CATALOGUE_KEYS
     }
     assert moved <= plain
     assert set(current) == plain | {
@@ -1266,14 +1299,17 @@ def test_7_84_0_fills_gaps_and_moves_no_stated_value() -> None:
             filled += 1
     assert filled, "the fixture would prove nothing if no page field changed"
 
-    catalogue_diff = baseline[KOR_CATALOGUE_DIFF]
+    catalogue_diff = _expected(KOR_CATALOGUE_DIFF, baseline[KOR_CATALOGUE_DIFF])
     assert catalogue_diff
     for gateway_id, fields in catalogue_diff.items():
         for name, (before, after) in fields.items():
             assert name in KOR_CATALOGUE_FIELDS, name
             assert before is None and after is not None, (gateway_id, name)
     for format_id in SERIALISERS:
-        assert baseline[f"{KOR_SUBSTITUTED}serialiser/{format_id}"] == _expected(
+        assert _expected(
+            f"{KOR_SUBSTITUTED}serialiser/{format_id}",
+            baseline[f"{KOR_SUBSTITUTED}serialiser/{format_id}"],
+        ) == _expected(
             f"serialiser/{format_id}", baseline[f"serialiser/{format_id}"]
         ), format_id
 
@@ -1405,7 +1441,7 @@ def test_the_snapshot_covers_every_dialect_and_every_list() -> None:
     assert capability_refs <= kind_refs
     for key in baseline:
         if _is_kind_entry(key):
-            assert set(baseline[key]) == {BEFORE_K2, AFTER_K2}, key
+            assert {BEFORE_K2, AFTER_K2} <= set(baseline[key]), key
     # Each digested output 7.83.0 may move has its K4-blanked twin.
     for key in baseline:
         if key.startswith(K4_DIGESTED) or key == "v1beta/models":
@@ -2042,3 +2078,30 @@ def test_7_115_1_adds_a_route_beside_the_page(monkeypatch, tmp_path) -> None:
     assert not [
         model for model in rows if any("in_loop" in str(key) for key in model)
     ], "the in-loop count belongs to /admin/api/requests/in-loop, not the page"
+
+
+def test_8_39_0_refines_same_rung_type_and_folds_provider_vision() -> None:
+    """8.39.0 moves only the embedding row's kind/exclusion and HyperCharm's Rung-1 vision."""
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {
+        key: value
+        for key, value in baseline.items()
+        if _is_discovery_categorization_entry(value)
+    }
+    assert moved
+    assert not [
+        key
+        for key in moved
+        if key.startswith(("prices/", "routing/", "canonical/", "declared-k4/"))
+    ]
+    embed_kind = baseline["kinds/vercel/alibaba/qwen3-embedding-0.6b"]
+    assert embed_kind[AFTER_K2]["kinds"] == ["chat"]
+    assert embed_kind[AFTER_8_39]["kinds"] == ["embedding"]
+    assert embed_kind[AFTER_8_39]["labels"] == ["Embedding"]
+
+    hyper_cap = baseline["capabilities/hypercharm/deepseek-v4.1-flash"]
+    assert hyper_cap[AFTER_8_18]["supports_vision"]["source"] == "models_dev"
+    assert hyper_cap[AFTER_8_39]["supports_vision"]["source"] == "provider"
+    assert hyper_cap[AFTER_8_39]["supports_vision"]["value"] is True
+    assert hyper_cap[AFTER_8_39]["supports_vision"]["tier"] == 1

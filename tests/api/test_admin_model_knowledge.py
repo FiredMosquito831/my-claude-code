@@ -436,3 +436,38 @@ def test_litellm_is_shown_only_while_its_pricing_is_on(monkeypatch, tmp_path) ->
     assert [r["key"] for r in on["rows"] if r["source"] == "litellm"] == [
         "novita/acme/bucketed"
     ]
+
+
+def test_provider_said_reflects_mime_images_and_declared_vision(
+    monkeypatch, tmp_path
+) -> None:
+    app = _app(monkeypatch, tmp_path)
+    parsed = extract_openai_model_infos(
+        {
+            "data": [
+                {
+                    "id": "acme/mime-vlm",
+                    "input_modalities": ["text", "image/png"],
+                    "output_modalities": ["text"],
+                },
+                {
+                    "id": "acme/cap-vision",
+                    "capabilities": {"vision": True, "completion_chat": True},
+                },
+            ]
+        },
+        provider_name="novita",
+    )
+    provider_manager_for_app(app).cache_model_infos("novita", parsed)
+    admin = _admin(app)
+
+    mime_payload = _knowledge(admin, "novita/acme/mime-vlm")
+    assert _said(_field(mime_payload, "supports_vision"), "provider_list")["value"] is (
+        True
+    )
+
+    cap_payload = _knowledge(admin, "novita/acme/cap-vision")
+    assert _said(_field(cap_payload, "supports_vision"), "provider_list")["value"] is (
+        True
+    )
+    assert _said(_field(cap_payload, "kind"), "provider_list")["value"] == ["Chat"]

@@ -787,7 +787,11 @@ def test_vendor_keys_are_read_at_rung_one_and_never_mis_parsed():
     ``max_output_tokens`` and ``pricing.input``/``output`` (USD per million,
     written as numbers) as rung 1 of the ladder for those fields -- the user's
     decision of 2026-10-08: provider official first, then models.dev for what
-    the list left out. Its ``capabilities.vision`` is still not read.
+    the list left out. Since 8.39.0 (``T4-Q5``) its ``capabilities.vision`` is
+    read the same way: a row that states ``false`` says "does not read images"
+    and a row that states ``true`` says that it does -- a stated negative stays
+    distinct from "not reported" (``IV.16``), exactly as the modality pair
+    already was since 8.18.0.
 
     ``reasoning`` must still NOT become "does not reason": 21 of the 32 entries
     omit it while still reasoning on the wire, so an absent block states
@@ -808,13 +812,17 @@ def test_vendor_keys_are_read_at_rung_one_and_never_mis_parsed():
         assert info.max_output_tokens == entry["max_output_tokens"], entry["id"]
         assert info.input_price == entry["pricing"]["input"], entry["id"]
         assert info.output_price == entry["pricing"]["output"], entry["id"]
-        assert info.supports_vision is None
+        assert info.supports_vision is entry["capabilities"]["vision"], entry["id"]
         assert info.supported_parameters is None
         if "reasoning" in entry:
             assert info.supports_thinking is True, entry["id"]
         else:
             omitted += 1
             assert info.supports_thinking is None, entry["id"]
+    # Anti-vacuity: the fixture states both values, so neither direction of the
+    # fold above can pass on a payload that only ever says one thing.
+    assert sum(1 for info in infos.values() if info.supports_vision is True) == 12
+    assert sum(1 for info in infos.values() if info.supports_vision is False) == 20
     assert omitted == 21
     assert infos["gpt-oss-120b"].supports_thinking is True
     assert infos["qwen3.6-flash"].supports_thinking is None

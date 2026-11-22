@@ -2341,6 +2341,17 @@ DEPRECATED_FIELD: _LadderField[bool] = _LadderField(
     tie_break=lambda value: not value,
     minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
 )
+#: models.dev's ``type`` (``"chat"``, ``"image"``, ``"video"``, ``"embedding"``,
+#: ``"reranking"``, ``"decision"``, ``"transcription"``, ``"speech"``,
+#: ``"realtime"``). Read beside the modality pair so an embedding, reranking,
+#: transcription or realtime row whose modalities are ``text -> text`` or
+#: ``audio, text -> text`` is not misclassified as a chat model.
+MODEL_TYPE_FIELD: _LadderField[str] = _LadderField(
+    name="model_type",
+    reader=_models_dev_text("type"),
+    tie_break=lambda value: value,
+    minimum=MIN_APPROXIMATE_BOOLEAN_REPORTERS,
+)
 
 
 def _build_field_index[T](
@@ -2439,6 +2450,7 @@ def prewarm_models_dev_indexes(path: Path | None = None) -> bool:
         *PRICE_FIELDS,
         OUTPUT_MODALITIES_FIELD,
         INPUT_MODALITIES_FIELD,
+        MODEL_TYPE_FIELD,
     ):
         _cached_field_index(field, path)
         _cached_field_cross_index(field, path)
@@ -2668,6 +2680,32 @@ def model_input_modalities_tiered(
     """models.dev's input modalities for one model, plus its rung (7.78.2)."""
 
     return _model_field_tiered(INPUT_MODALITIES_FIELD, provider_id, model_id, path)
+
+
+def model_type_tiered(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> tuple[str | None, ResolutionTier | None]:
+    """models.dev's ``type`` for one model, plus its rung."""
+
+    return _model_field_tiered(MODEL_TYPE_FIELD, provider_id, model_id, path)
+
+
+def models_dev_type_lookup(
+    path: Path | None = None,
+) -> Callable[[str, str], tuple[str | None, ResolutionTier | None]]:
+    """:func:`model_type_tiered` bound to the file as it is now."""
+
+    cache_path = path if path is not None else models_dev_cache_path()
+    mtime = _cache_mtime(cache_path)
+
+    def lookup(
+        provider_id: str, model_id: str
+    ) -> tuple[str | None, ResolutionTier | None]:
+        return _model_field_tiered_at(
+            MODEL_TYPE_FIELD, provider_id, model_id, path, cache_path, mtime
+        )
+
+    return lookup
 
 
 def declared_modalities_tiered(
@@ -3023,6 +3061,7 @@ _KNOWLEDGE_LADDER_FIELDS: tuple[tuple[str, _LadderField[Any]], ...] = (
     ("knowledge_cutoff", KNOWLEDGE_CUTOFF_FIELD),
     ("description", DESCRIPTION_FIELD),
     ("deprecated", DEPRECATED_FIELD),
+    ("declared_type", MODEL_TYPE_FIELD),
 )
 
 #: The reasoning record's fields, each stated per rung.

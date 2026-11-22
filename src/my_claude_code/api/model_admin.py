@@ -62,6 +62,7 @@ from my_claude_code.application.model_kinds import (
     KindWordsLookup,
     ModalitiesLookup,
     ModelKind,
+    ModelTypeLookup,
     declaration_words,
     kinds_from_modalities,
     kinds_from_words,
@@ -69,6 +70,8 @@ from my_claude_code.application.model_kinds import (
     modalities_source,
     provider_first_modalities,
     provider_kind_words,
+    refine_kinds_with_type,
+    refine_kinds_with_words,
     resolve_model_kind,
 )
 from my_claude_code.application.model_knowledge import (
@@ -190,6 +193,7 @@ from my_claude_code.providers.runtime.models_dev import (
     models_dev_cache_path,
     models_dev_describes_provider,
     models_dev_knowledge,
+    models_dev_type_lookup,
 )
 
 #: The ``model_id`` a fact about the whole provider is stored under.
@@ -926,6 +930,8 @@ def _vision_field(
     """
 
     stated = declared_accepts_images(declared)
+    if stated is None and declared is not None:
+        stated = declared.vision
     ladder_value, ladder_tier = resolved
     second = None
     if ladder_value is not None:
@@ -1151,6 +1157,7 @@ def declared_model_kind(
     kind_words: KindWordsLookup | None = None,
     live: LiveCatalogue | None = None,
     litellm: LiteLLMCatalogue | None = None,
+    models_dev_type: ModelTypeLookup | None = None,
 ) -> ModelKind:
     """One ref's stated kind, from the ladder the caller hands in.
 
@@ -1175,6 +1182,9 @@ def declared_model_kind(
         kind_words=kind_words,
         live=live,
         litellm=litellm,
+        models_dev_type=models_dev_type
+        if models_dev_type is not None
+        else models_dev_type_lookup(),
     )
 
 
@@ -3763,15 +3773,19 @@ def _provider_said(info: ProviderModelInfo | None) -> list[_Said]:
         pair = declared.modalities
         if tools is None:
             tools = declared.tool_calls
+        vision_said = declared_accepts_images(declared)
+        if vision_said is None:
+            vision_said = declared.vision
+        words = declaration_words(declared)
         values.update(
             {
                 "context_length": declared.context_length,
-                "supports_vision": None if pair is None else "image" in pair.inputs,
+                "supports_vision": vision_said,
                 "declared_modalities": None if pair is None else _modalities_text(pair),
                 "kind": _kind_labels(
-                    kinds_from_modalities(pair)
+                    refine_kinds_with_words(kinds_from_modalities(pair), words)
                     if pair is not None
-                    else kinds_from_words(declaration_words(declared))
+                    else kinds_from_words(words)
                 ),
                 "declared_type": declared.model_type,
                 "declared_endpoints": (
@@ -3874,6 +3888,10 @@ def _models_dev_said(knowledge: ModelsDevKnowledge) -> list[_Said]:
         )
         for key, value in knowledge.discovery_fill.items()
     ]
+    type_by_rung = {
+        stmt.rung: stmt for stmt in knowledge.statements.get("declared_type", ())
+    }
+    modalities_rungs: set[str] = set()
     for name, statements in knowledge.statements.items():
         key = "retires_at" if name == "deprecated" else name
         for statement in statements:
@@ -3891,16 +3909,40 @@ def _models_dev_said(knowledge: ModelsDevKnowledge) -> list[_Said]:
                 )
             )
             if name == "declared_modalities":
+                modalities_rungs.add(statement.rung)
+                raw_kinds = kinds_from_modalities(statement.value)
+                type_stmt = type_by_rung.get(statement.rung)
+                if type_stmt is not None and type_stmt.tier <= statement.tier:
+                    raw_kinds = refine_kinds_with_type(raw_kinds, type_stmt.value)
                 said.append(
                     _Said(
                         "kind",
                         source,
-                        _pair_kind(statement.value),
+                        _kind_labels(raw_kinds),
                         rung,
                         statement.consulted,
                         note,
                     )
                 )
+    for rung_name, type_stmt in type_by_rung.items():
+        if rung_name in modalities_rungs:
+            continue
+        type_kinds = kinds_from_words((type_stmt.value,))
+        if type_kinds is None:
+            continue
+        source = _MODELS_DEV_RUNG_SOURCES[type_stmt.rung]
+        rung = TIER_LABELS.get(type_stmt.tier, type_stmt.tier.name)
+        note = _models_dev_note(type_stmt)
+        said.append(
+            _Said(
+                "kind",
+                source,
+                _kind_labels(type_kinds),
+                rung,
+                type_stmt.consulted,
+                note,
+            )
+        )
     return said
 
 
@@ -3972,11 +4014,14 @@ def _litellm_said(
                     pair.tier_label,
                 )
             )
+            lite_kinds = kinds_from_modalities(pair.value)
+            if model.words is not None:
+                lite_kinds = refine_kinds_with_words(lite_kinds, model.words.value)
             said.append(
                 _Said(
                     "kind",
                     KNOWLEDGE_SOURCE_LITELLM,
-                    _pair_kind(pair.value),
+                    _kind_labels(lite_kinds),
                     pair.tier_label,
                 )
             )

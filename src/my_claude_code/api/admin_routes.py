@@ -3309,6 +3309,8 @@ def _model_options(
     placements = media_rail_placements(settings)
     modalities = services.requests.model_modalities_lookup()
     kind_words = services.requests.model_kind_words_lookup()
+    type_lookup_fn = getattr(services.requests, "models_dev_type_lookup", None)
+    models_dev_type = None if type_lookup_fn is None else type_lookup_fn()
     # OpenRouter's live list, the same rung every other kind consumer reads,
     # and LiteLLM's map while LiteLLM pricing is on (7.85.0).
     live = services.requests.openrouter_live_catalogue()
@@ -3322,6 +3324,7 @@ def _model_options(
             kind_words=kind_words,
             live=live,
             litellm=litellm,
+            models_dev_type=models_dev_type,
         )
         if kind.kinds is not None:
             kinds[ref] = [name for name in MODEL_KINDS if name in kind.kinds]

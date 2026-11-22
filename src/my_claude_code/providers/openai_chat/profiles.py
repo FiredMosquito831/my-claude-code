@@ -856,7 +856,6 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         model_listing=OpenAIModelListing(
             path="/models",
             collection_field=None,
-            required_path_values=((("type",), ("chat",)),),
         ),
         reasoning_delta_field="reasoning",
     ),
@@ -878,7 +877,6 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             path="https://api.deepinfra.com/models/list",
             collection_field=None,
             id_field="model_name",
-            required_path_values=((("reported_type",), ("text-generation",)),),
             required_null_field="deprecated",
             tags_field="tags",
             non_thinking_tag="non-reasoning",
@@ -919,7 +917,6 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         model_listing=OpenAIModelListing(
             path="/models",
             query_params=(("verbose", "true"),),
-            required_path_values=((("architecture", "modality"), ("text->text",)),),
         ),
     ),
     "chutes": OpenAIChatProfile(
@@ -933,12 +930,6 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         OPENAI_STANDARD_REASONING,
         model_listing=OpenAIModelListing(
             path="/models",
-            required_sequence_items=(
-                ("input_modalities", "text"),
-                ("output_modalities", "text"),
-                ("supported_features", "tools"),
-            ),
-            exclude_missing_sequence_fields=True,
             tags_field="supported_features",
         ),
     ),
@@ -1013,10 +1004,6 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         ReasoningObject(_MINIMAL_TO_XHIGH),
         model_listing=OpenAIModelListing(
-            required_sequence_items=(
-                ("input_modalities", "text"),
-                ("output_modalities", "text"),
-            ),
             thinking_boolean_path=("capabilities", "reasoning"),
         ),
         reasoning_delta_field="reasoning",

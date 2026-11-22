@@ -91,16 +91,36 @@ from my_claude_code.core.model_ids import ResolutionTier
 
 #: The kind every chat rail, tier alias and harness catalogue serves.
 CHAT_KIND = "chat"
+EMBEDDING_KIND = "embedding"
+RERANK_KIND = "rerank"
+REALTIME_KIND = "realtime"
+OCR_KIND = "ocr"
+MODERATION_KIND = "moderation"
+DECISION_KIND = "decision"
+
+NON_RAIL_KIND_LABELS: Mapping[str, str] = {
+    EMBEDDING_KIND: "Embedding",
+    RERANK_KIND: "Rerank",
+    REALTIME_KIND: "Realtime",
+    OCR_KIND: "OCR",
+    MODERATION_KIND: "Moderation",
+    DECISION_KIND: "Decision",
+}
 
 #: Every kind, in display order: chat first, then the media rails in the order
-#: Model Config draws them.
-MODEL_KINDS: tuple[str, ...] = (CHAT_KIND, *(rail.value for rail in MediaRail))
+#: Model Config draws them, then the six visible non-rail categories.
+MODEL_KINDS: tuple[str, ...] = (
+    CHAT_KIND,
+    *(rail.value for rail in MediaRail),
+    *NON_RAIL_KIND_LABELS,
+)
 
 #: The words the dashboard uses for each kind -- the rail labels themselves, so
 #: a kind and the rail it belongs on can never be called two different things.
 KIND_LABELS: Mapping[str, str] = {
     CHAT_KIND: "Chat",
     **{rail.value: RAIL_SETTINGS[rail].label for rail in MediaRail},
+    **NON_RAIL_KIND_LABELS,
 }
 
 #: Where a stated kind came from, in ladder order. The strings are part of the
@@ -151,17 +171,21 @@ type DeclarationLookup = Callable[
     [str, str], tuple[ProviderModelDeclaration | None, ResolutionTier] | None
 ]
 
+#: ``(provider_id, model_id) -> (model_type, rung)``: models.dev's own ``type``
+#: field for one model, or ``(None, None)``.
+type ModelTypeLookup = Callable[[str, str], tuple[str | None, ResolutionTier | None]]
+
 #: The provider's own words for a kind, as the coarse rung reads them (7.80.0).
 #:
 #: Declared data, not a branch per provider: every key is a word some list
 #: publishes as a model type or an endpoint (Novita, Vercel, Command Code,
 #: new-api gateways, LiteLLM proxies, OpenAI's own paths), compared after
 #: :func:`kind_word_key` has dropped a leading ``/`` and ``v1/``. A word that
-#: names no kind -- an embedding or rerank model's -- maps to the empty set,
-#: which is a stated "none of these", exactly as an embedding model's
-#: modalities already are. A word that is not here at all (``batch-api``,
-#: ``realtime``, ``evaluation``, Anthropic's ``model``, ``ocr``, ``search``)
-#: states nothing.
+#: names a visible non-rail category maps to that category's chip; an auxiliary
+#: non-chat word (``extraction``, ``music``, ``evaluation``, ``search``,
+#: ``guardrail``, ``vector_store``, ``completion``, ``fim``, ``non_chat``) maps
+#: to the empty set, which is a stated "none of these". A word that is not here
+#: at all (``batch-api``, Anthropic's ``model``) states nothing.
 KIND_WORDS: Mapping[str, frozenset[str]] = {
     **dict.fromkeys(
         (
@@ -176,6 +200,13 @@ KIND_WORDS: Mapping[str, frozenset[str]] = {
             "openai",
             "openai-response",
             "gemini",
+            "conversational",
+            "generatecontent",
+            "generateanswer",
+            "image-text-to-text",
+            "audio-text-to-text",
+            "video-text-to-text",
+            "llm",
         ),
         frozenset({CHAT_KIND}),
     ),
@@ -187,6 +218,10 @@ KIND_WORDS: Mapping[str, frozenset[str]] = {
             "images/generations",
             "image_edit",
             "images/edits",
+            "text-to-image",
+            "image-to-image",
+            "predict",
+            "images",
         ),
         frozenset({MediaRail.IMAGE.value}),
     ),
@@ -197,11 +232,14 @@ KIND_WORDS: Mapping[str, frozenset[str]] = {
             "video_generation",
             "video-generation",
             "videos",
+            "text-to-video",
+            "image-to-video",
+            "predictlongrunning",
         ),
         frozenset({MediaRail.VIDEO.value}),
     ),
     **dict.fromkeys(
-        ("speech", "audio_speech", "audio/speech"),
+        ("speech", "audio_speech", "audio/speech", "text-to-speech", "tts"),
         frozenset({MediaRail.TTS.value}),
     ),
     **dict.fromkeys(
@@ -210,6 +248,11 @@ KIND_WORDS: Mapping[str, frozenset[str]] = {
             "audio_transcription",
             "audio/transcriptions",
             "audio/translations",
+            "listen",
+            "automatic-speech-recognition",
+            "asr",
+            "stt",
+            "transcribe",
         ),
         frozenset({MediaRail.ASR.value}),
     ),
@@ -217,23 +260,90 @@ KIND_WORDS: Mapping[str, frozenset[str]] = {
         (
             "embedding",
             "embeddings",
-            "rerank",
-            "reranking",
-            "jina-rerank",
+            "embedcontent",
+            "text-embedding",
+            "feature-extraction",
+        ),
+        frozenset({EMBEDDING_KIND}),
+    ),
+    **dict.fromkeys(
+        ("rerank", "reranking", "jina-rerank"),
+        frozenset({RERANK_KIND}),
+    ),
+    **dict.fromkeys(
+        ("realtime",),
+        frozenset({REALTIME_KIND}),
+    ),
+    **dict.fromkeys(
+        ("realtime_transcription", "realtime/transcription_sessions"),
+        frozenset({MediaRail.ASR.value, REALTIME_KIND}),
+    ),
+    **dict.fromkeys(
+        ("ocr",),
+        frozenset({OCR_KIND}),
+    ),
+    **dict.fromkeys(
+        (
             "moderation",
+            "moderations",
+            "classification",
+            "text-classification",
+            "token-classification",
+        ),
+        frozenset({MODERATION_KIND}),
+    ),
+    **dict.fromkeys(
+        ("decision", "decisions"),
+        frozenset({DECISION_KIND}),
+    ),
+    **dict.fromkeys(
+        (
+            "extraction",
+            "music",
+            "evaluation",
+            "search",
+            "guardrail",
+            "vector_store",
+            "completion",
+            "fim",
+            "non_chat",
         ),
         frozenset(),
     ),
 }
 
 #: Words a modality list may use for what models.dev calls ``audio`` and
-#: ``text``: OpenRouter-dialect lists write a speech model's output as
-#: ``speech`` and a transcriber's as ``transcription``. models.dev's own
-#: vocabulary is only ``text image audio video pdf``, so no models.dev answer
-#: can change by this.
+#: ``text``, plus OpenRouter and LiteLLM output modality words that map onto a
+#: canonical kind or ``text``.
 MODALITY_SYNONYMS: Mapping[str, str] = {
     "speech": "audio",
     "transcription": "text",
+    "code": "text",
+    "embeddings": EMBEDDING_KIND,
+    "reranking": RERANK_KIND,
+    "decisions": DECISION_KIND,
+    "moderations": MODERATION_KIND,
+}
+
+#: Same-rung type words that designate an exclusive non-chat category and strip
+#: the false ``chat`` kind that ``text -> text`` or ``audio, text -> text``
+#: modalities would otherwise imply.
+EXCLUSIVE_NON_CHAT_TYPES: Mapping[str, frozenset[str]] = {
+    key: kinds
+    for key, kinds in KIND_WORDS.items()
+    if CHAT_KIND not in kinds
+    and not (
+        kinds <= frozenset({MediaRail.IMAGE.value, MediaRail.VIDEO.value}) and kinds
+    )
+}
+
+#: Same-rung type words for image or video generation, which union into the
+#: modality-derived kind set so multimodal ``text + image`` generators keep
+#: both ``chat`` and ``image``.
+ADDITIVE_MEDIA_TYPES: Mapping[str, frozenset[str]] = {
+    key: kinds
+    for key, kinds in KIND_WORDS.items()
+    if kinds and kinds <= frozenset({MediaRail.IMAGE.value, MediaRail.VIDEO.value})
 }
 
 #: The media families a provider may publish as a MIME type instead of the bare
@@ -325,7 +435,57 @@ def kinds_from_modalities(modalities: DeclaredModalities) -> frozenset[str]:
         kinds.add(MediaRail.ASR.value)
     if "video" in outputs:
         kinds.add(MediaRail.VIDEO.value)
+    for non_rail in NON_RAIL_KIND_LABELS:
+        if non_rail in outputs:
+            kinds.add(non_rail)
     return frozenset(kinds)
+
+
+def refine_kinds_with_type(
+    kinds: frozenset[str], model_type: str | None
+) -> frozenset[str]:
+    """Refine a modality-derived kind set with a same-rung ``type`` word."""
+
+    if model_type is None:
+        return kinds
+    key = kind_word_key(model_type)
+    exclusive = EXCLUSIVE_NON_CHAT_TYPES.get(key)
+    if exclusive is not None:
+        return exclusive
+    additive = ADDITIVE_MEDIA_TYPES.get(key)
+    if additive is not None:
+        return kinds | additive
+    return kinds
+
+
+def refine_kinds_with_words(
+    kinds: frozenset[str], words: Iterable[str] | None
+) -> frozenset[str]:
+    """Refine a modality-derived kind set with same-rung type/mode words."""
+
+    if words is None:
+        return kinds
+    normalized = [kind_word_key(word) for word in words]
+    if any(CHAT_KIND in (KIND_WORDS.get(key) or frozenset()) for key in normalized):
+        refined = set(kinds)
+        for key in normalized:
+            additive = ADDITIVE_MEDIA_TYPES.get(key)
+            if additive is not None:
+                refined.update(additive)
+        return frozenset(refined)
+    exclusive_found: set[str] | None = None
+    for key in normalized:
+        exclusive = EXCLUSIVE_NON_CHAT_TYPES.get(key)
+        if exclusive is not None:
+            exclusive_found = (exclusive_found or set()) | exclusive
+    if exclusive_found is not None:
+        return frozenset(exclusive_found)
+    refined = set(kinds)
+    for key in normalized:
+        additive = ADDITIVE_MEDIA_TYPES.get(key)
+        if additive is not None:
+            refined.update(additive)
+    return frozenset(refined)
 
 
 def _modality_words(items: Iterable[str]) -> set[str]:
@@ -497,11 +657,19 @@ LIVE_KIND_MODALITY_WORDS = frozenset(
         "video",
         "pdf",
         "file",
+        "code",
         "speech",
         "transcription",
         "embeddings",
         "embedding",
         "rerank",
+        "reranking",
+        "realtime",
+        "ocr",
+        "moderation",
+        "moderations",
+        "decision",
+        "decisions",
     }
 )
 
@@ -577,6 +745,7 @@ def resolve_model_kind(
     kind_words: KindWordsLookup | None = None,
     live: LiveLookup | None = None,
     litellm: LiteLLMLookup | None = None,
+    models_dev_type: ModelTypeLookup | None = None,
 ) -> ModelKind:
     """The stated kind of one ``provider/model`` ref, or :data:`UNKNOWN_KIND`.
 
@@ -602,6 +771,44 @@ def resolve_model_kind(
         provider_id = parse_provider_type(model_ref)
         model_id = parse_model_name(model_ref)
         declared, tier = modalities(provider_id, model_id)
+        provider_words: tuple[str, ...] | None = None
+        provider_words_tier: ResolutionTier | None = None
+        provider_stated_words: frozenset[str] | None = None
+        provider_forbids_chat = False
+        if kind_words is not None:
+            provider_words, provider_words_tier = kind_words(provider_id, model_id)
+            if provider_words is not None:
+                provider_stated_words = kinds_from_words(provider_words)
+                normalized_words = {kind_word_key(word) for word in provider_words}
+                provider_forbids_chat = (
+                    "non_chat" in normalized_words
+                    and CHAT_KIND not in (provider_stated_words or frozenset())
+                )
+        if (
+            provider_forbids_chat
+            and provider_stated_words
+            and (
+                declared is None
+                or modalities_source(tier) != KIND_SOURCE_PROVIDER_LISTING
+            )
+        ):
+            return ModelKind(
+                kinds=provider_stated_words,
+                source=KIND_SOURCE_PROVIDER_WORDS,
+                tier=provider_words_tier,
+            )
+
+        def _respect_provider_non_chat(candidate: ModelKind) -> ModelKind:
+            if not provider_forbids_chat:
+                return candidate
+            if candidate.kinds and CHAT_KIND not in candidate.kinds:
+                return candidate
+            return ModelKind(
+                kinds=provider_stated_words or frozenset(),
+                source=KIND_SOURCE_PROVIDER_WORDS,
+                tier=provider_words_tier,
+            )
+
         if declared is None or modalities_source(tier) != KIND_SOURCE_PROVIDER_LISTING:
             answer = None if live is None else live(provider_id, model_id)
             pair = _live_pair(answer)
@@ -610,10 +817,12 @@ def resolve_model_kind(
                 and pair is not None
                 and live_wins_intrinsic(declared, tier, pair)
             ):
-                return ModelKind(
-                    kinds=kinds_from_modalities(pair),
-                    source=KIND_SOURCE_OPENROUTER_LIVE,
-                    match=answer.tier_label,
+                return _respect_provider_non_chat(
+                    ModelKind(
+                        kinds=kinds_from_modalities(pair),
+                        source=KIND_SOURCE_OPENROUTER_LIVE,
+                        match=answer.tier_label,
+                    )
                 )
         lite: LiteLLMModel | None = None
         if litellm is not None:
@@ -624,31 +833,69 @@ def resolve_model_kind(
                 else None
             )
             if stated_pair is not None:
-                return ModelKind(
-                    kinds=kinds_from_modalities(stated_pair[0]),
-                    source=KIND_SOURCE_LITELLM,
-                    match=stated_pair[1],
+                lite_kinds = kinds_from_modalities(stated_pair[0])
+                if lite is not None and lite.words is not None:
+                    lite_kinds = refine_kinds_with_words(lite_kinds, lite.words.value)
+                return _respect_provider_non_chat(
+                    ModelKind(
+                        kinds=lite_kinds,
+                        source=KIND_SOURCE_LITELLM,
+                        match=stated_pair[1],
+                    )
                 )
         if declared is not None:
-            return ModelKind(
-                kinds=kinds_from_modalities(declared),
-                source=modalities_source(tier),
-                tier=tier,
-            )
-        if kind_words is not None:
-            words, words_tier = kind_words(provider_id, model_id)
-            stated = None if words is None else kinds_from_words(words)
-            if stated is not None:
-                return ModelKind(
-                    kinds=stated, source=KIND_SOURCE_PROVIDER_WORDS, tier=words_tier
+            source = modalities_source(tier)
+            resolved_kinds = kinds_from_modalities(declared)
+            if source == KIND_SOURCE_PROVIDER_LISTING:
+                if (
+                    provider_words is not None
+                    and provider_words_tier is not None
+                    and tier is not None
+                    and provider_words_tier <= tier
+                ):
+                    resolved_kinds = refine_kinds_with_words(
+                        resolved_kinds, provider_words
+                    )
+            elif models_dev_type is not None:
+                md_type, md_type_tier = models_dev_type(provider_id, model_id)
+                if md_type is not None and (
+                    md_type_tier is None or tier is None or md_type_tier <= tier
+                ):
+                    resolved_kinds = refine_kinds_with_type(resolved_kinds, md_type)
+            return _respect_provider_non_chat(
+                ModelKind(
+                    kinds=resolved_kinds,
+                    source=source,
+                    tier=tier,
                 )
+            )
+        if models_dev_type is not None:
+            md_type, md_type_tier = models_dev_type(provider_id, model_id)
+            if md_type is not None:
+                md_stated = kinds_from_words((md_type,))
+                if md_stated is not None:
+                    return _respect_provider_non_chat(
+                        ModelKind(
+                            kinds=md_stated,
+                            source=KIND_SOURCE_MODELS_DEV,
+                            tier=md_type_tier,
+                        )
+                    )
+        if provider_stated_words is not None:
+            return ModelKind(
+                kinds=provider_stated_words,
+                source=KIND_SOURCE_PROVIDER_WORDS,
+                tier=provider_words_tier,
+            )
         if lite is not None and lite.words is not None:
             stated = kinds_from_words(lite.words.value)
             if stated is not None:
-                return ModelKind(
-                    kinds=stated,
-                    source=KIND_SOURCE_LITELLM_WORDS,
-                    match=lite.words.tier_label,
+                return _respect_provider_non_chat(
+                    ModelKind(
+                        kinds=stated,
+                        source=KIND_SOURCE_LITELLM_WORDS,
+                        match=lite.words.tier_label,
+                    )
                 )
     placed = placements.get(model_ref)
     if placed:
@@ -663,6 +910,7 @@ def chat_listing_filter(
     kind_words: KindWordsLookup | None = None,
     live: LiveLookup | None = None,
     litellm: LiteLLMLookup | None = None,
+    models_dev_type: ModelTypeLookup | None = None,
 ) -> Callable[[str], bool]:
     """The one predicate every chat listing applies to a *discovered* ref.
 
@@ -684,6 +932,7 @@ def chat_listing_filter(
             kind_words=kind_words,
             live=live,
             litellm=litellm,
+            models_dev_type=models_dev_type,
         ).chat_listable
 
     return listable

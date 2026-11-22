@@ -55,3 +55,39 @@ def test_build_request_body_openai_chat(chutes_provider):
 
 def test_default_base_url_constant():
     assert CHUTES_DEFAULT_BASE == "https://llm.chutes.ai/v1"
+
+
+def test_chutes_profile_retains_non_tool_and_media_rows():
+    from my_claude_code.providers.model_listing import extract_openai_model_infos
+    from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+
+    listing = OPENAI_CHAT_PROFILES["chutes"].model_listing
+    infos = {
+        info.model_id: info
+        for info in extract_openai_model_infos(
+            {
+                "data": [
+                    {
+                        "id": "Qwen/Qwen3-32B-TEE",
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "supported_features": ["tools", "reasoning"],
+                    },
+                    {
+                        "id": "chutes/flux-2",
+                        "input_modalities": ["text"],
+                        "output_modalities": ["image"],
+                        "supported_features": [],
+                    },
+                ]
+            },
+            provider_name="CHUTES",
+            required_sequence_items=listing.required_sequence_items,
+            exclude_missing_sequence_fields=listing.exclude_missing_sequence_fields,
+            tags_field=listing.tags_field,
+        )
+    }
+    assert set(infos) == {"Qwen/Qwen3-32B-TEE", "chutes/flux-2"}
+    assert infos["chutes/flux-2"].declared is not None
+    assert infos["chutes/flux-2"].declared.modalities is not None
+    assert infos["chutes/flux-2"].declared.modalities.outputs == ("image",)

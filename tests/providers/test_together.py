@@ -55,3 +55,32 @@ def test_build_request_body_openai_chat(together_provider):
 
 def test_default_base_url_constant():
     assert TOGETHER_DEFAULT_BASE == "https://api.together.ai/v1"
+
+
+def test_together_profile_retains_non_chat_rows_with_declared_type():
+    from my_claude_code.providers.model_listing import extract_openai_model_infos
+    from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
+
+    listing = OPENAI_CHAT_PROFILES["together"].model_listing
+    infos = {
+        info.model_id: info
+        for info in extract_openai_model_infos(
+            [
+                {"id": "zai-org/GLM-5.2", "type": "chat"},
+                {"id": "black-forest-labs/FLUX.2-pro", "type": "image"},
+                {"id": "BAAI/bge-large-en-v1.5", "type": "embedding"},
+            ],
+            provider_name="TOGETHER",
+            collection_field=listing.collection_field,
+            required_path_values=listing.required_path_values,
+        )
+    }
+    assert set(infos) == {
+        "zai-org/GLM-5.2",
+        "black-forest-labs/FLUX.2-pro",
+        "BAAI/bge-large-en-v1.5",
+    }
+    assert infos["black-forest-labs/FLUX.2-pro"].declared is not None
+    assert infos["black-forest-labs/FLUX.2-pro"].declared.model_type == "image"
+    assert infos["BAAI/bge-large-en-v1.5"].declared is not None
+    assert infos["BAAI/bge-large-en-v1.5"].declared.model_type == "embedding"

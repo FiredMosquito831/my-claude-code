@@ -259,6 +259,17 @@ async def test_openrouter_lists_tool_metadata_with_thinking_support() -> None:
                 supports_thinking=False,
                 supported_parameters=frozenset({"tool_choice", "include_reasoning"}),
             ),
+            ProviderModelInfo(
+                "chat-only",
+                supports_thinking=True,
+                supported_parameters=frozenset({"reasoning", "max_tokens"}),
+                reasoning_capability=ModelReasoningCapability(
+                    can_reason=True,
+                    supports_toggle_control=True,
+                    supports_budget_control=True,
+                ),
+                declared=ProviderModelDeclaration(reasoning=True),
+            ),
         }
     )
 
