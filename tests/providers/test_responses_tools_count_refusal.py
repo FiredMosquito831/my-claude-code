@@ -923,21 +923,29 @@ async def test_chatgpt_oauth_with_no_cut_possible_raises_the_original_400() -> N
 
 
 @pytest.mark.asyncio
-async def test_a_chatgpt_oauth_body_with_no_cap_is_byte_identical() -> None:
+async def test_a_chatgpt_oauth_body_with_no_cap_is_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """212 tools, nothing learned: the very body the converter produced."""
+    from my_claude_code.config import settings as config_settings
 
-    request = _request()
-    baseline = build_chatgpt_oauth_request_body(
-        request, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
-    )
+    monkeypatch.setenv("CHATGPT_OAUTH_SESSION_AFFINITY", "false")
+    config_settings.get_settings.cache_clear()
+    try:
+        request = _request()
+        baseline = build_chatgpt_oauth_request_body(
+            request, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
+        )
 
-    provider = _chatgpt_provider()
-    provider._send_stream_request = AsyncMock(side_effect=[_success()])
-    await _drain(provider, request)
+        provider = _chatgpt_provider()
+        provider._send_stream_request = AsyncMock(side_effect=[_success()])
+        await _drain(provider, request)
 
-    sent = provider._send_stream_request.await_args_list[0].kwargs["body"]
-    assert _wire(sent) == _wire(baseline)
-    assert len(sent["tools"]) == CATALOGUE_SIZE
+        sent = provider._send_stream_request.await_args_list[0].kwargs["body"]
+        assert _wire(sent) == _wire(baseline)
+        assert len(sent["tools"]) == CATALOGUE_SIZE
+    finally:
+        config_settings.get_settings.cache_clear()
 
 
 # --------------------------------------------------------------------------

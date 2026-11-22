@@ -601,3 +601,90 @@ def test_the_diagnostics_tally_still_sees_every_reasoning_event():
 
     payload = json.loads(json.dumps(shape.payload(), default=str))
     assert "reasoning" in payload["fields"]
+
+
+def test_consecutive_reasoning_items_with_carriers_emit_separate_thinking_blocks():
+    """Two consecutive reasoning items must each mint their own thinking block and signature.
+
+    Without closing the open thinking block after emitting ``signature_delta``,
+    a second consecutive ``reasoning`` item with summary text and
+    ``encrypted_content`` appended its text and second ``signature_delta`` onto
+    the same block, concatenating two ``mcc:reasoning:v1:`` envelopes.
+    """
+    from my_claude_code.core.openai_responses import ReplayOrigin, decode_carrier
+
+    origin = ReplayOrigin(
+        provider="chatgpt_oauth",
+        protocol="responses",
+        endpoint="https://chatgpt.com/backend-api",
+        connection="acct_test",
+        model="gpt-6-luna",
+    )
+    first_item = {
+        "id": "rs_first",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "First thought."}],
+        "encrypted_content": "gAAAAABn_first_blob",
+    }
+    second_item = {
+        "id": "rs_second",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "Second thought."}],
+        "encrypted_content": "gAAAAABn_second_blob",
+    }
+    sse = _run(
+        [
+            _reasoning_item_added("rs_first"),
+            *_summary_part_frames(
+                "First thought.", summary_index=0, item_id="rs_first"
+            ),
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": first_item,
+            },
+            _reasoning_item_added("rs_second"),
+            *_summary_part_frames(
+                "Second thought.", summary_index=0, item_id="rs_second"
+            ),
+            {
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": second_item,
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "delta": "Done.",
+            },
+            _completed(),
+        ],
+        origin=origin,
+        carrier_replay=True,
+    )
+
+    events = parse_sse_text(sse)
+    assert_anthropic_stream_contract(events)
+    assert _block_types(sse) == ["thinking", "thinking", "text"]
+
+    signatures_by_index: dict[int, list[str]] = {}
+    thinking_by_index: dict[int, list[str]] = {}
+    for event in events:
+        if event.event == "content_block_delta":
+            idx = int(event.data["index"])
+            delta = event.data["delta"]
+            if delta.get("type") == "signature_delta":
+                signatures_by_index.setdefault(idx, []).append(str(delta["signature"]))
+            elif delta.get("type") == "thinking_delta":
+                thinking_by_index.setdefault(idx, []).append(str(delta["thinking"]))
+
+    assert "".join(thinking_by_index[0]) == "First thought."
+    assert "".join(thinking_by_index[1]) == "Second thought."
+    assert len(signatures_by_index[0]) == 1
+    assert len(signatures_by_index[1]) == 1
+    decoded_first = decode_carrier(signatures_by_index[0][0])
+    decoded_second = decode_carrier(signatures_by_index[1][0])
+    assert decoded_first is not None
+    assert decoded_second is not None
+    assert decoded_first.native["encrypted_content"] == "gAAAAABn_first_blob"
+    assert decoded_second.native["encrypted_content"] == "gAAAAABn_second_blob"

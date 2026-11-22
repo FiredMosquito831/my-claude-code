@@ -934,18 +934,18 @@ def _chatgpt_oauth_account_field_specs() -> tuple[dict[str, Any], ...]:
             "section_id": "providers",
             "provider": "chatgpt_oauth",
             "field_type": "boolean",
-            "default": "false",
+            "default": "true",
             "settings_attr": "chatgpt_oauth_session_affinity",
             "description": (
-                "Off (default) preserves the v8.27.0 provider-wide session-id "
-                "with no prompt_cache_key and no sticky turn-state headers. On "
-                "derives per-conversation session-id, thread-id, "
+                "On (default) derives per-conversation session-id, thread-id, "
                 "x-client-request-id, and prompt_cache_key (<= 64 chars) from "
                 "root session headers, metadata, or opening turns (so Claude "
                 "Code subagents share the root session cache), and echoes "
                 "x-codex-turn-state per (base_url, account, conversation) with "
                 "a 2-hour TTL (cleared on error, never shared across "
-                "accounts). Applies on the next request without a restart."
+                "accounts). Off preserves the v8.27.0 provider-wide session-id "
+                "with no prompt_cache_key and no sticky turn-state headers. "
+                "Applies on the next request without a restart."
             ),
         },
         {

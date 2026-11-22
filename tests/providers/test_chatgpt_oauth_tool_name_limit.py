@@ -400,18 +400,26 @@ async def test_a_refusal_that_states_no_number_learns_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_nothing_learned_sends_the_7_58_body_byte_for_byte() -> None:
+async def test_nothing_learned_sends_the_7_58_body_byte_for_byte(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """No fact: the first body is the one the builder always made, long names and all."""
+    from my_claude_code.config import settings as config_settings
 
-    learned_store.set_learned_fact_store(LearnedFactStore())
-    upstream = FakeChatGPT()
-    with pytest.raises(ExecutionFailure):
-        # A single-shot upstream that refuses: only the first body matters.
-        await _drain(_provider(_refuse_everything(upstream)))
+    monkeypatch.setenv("CHATGPT_OAUTH_SESSION_AFFINITY", "false")
+    config_settings.get_settings.cache_clear()
+    try:
+        learned_store.set_learned_fact_store(LearnedFactStore())
+        upstream = FakeChatGPT()
+        with pytest.raises(ExecutionFailure):
+            # A single-shot upstream that refuses: only the first body matters.
+            await _drain(_provider(_refuse_everything(upstream)))
 
-    baseline = build_chatgpt_oauth_request_body(_request(), reasoning=REASONING)
-    assert json.dumps(upstream.sent[0]) == json.dumps(baseline)
-    assert LONG_TOOL in [name for _where, name in _body_names(upstream.sent[0])]
+        baseline = build_chatgpt_oauth_request_body(_request(), reasoning=REASONING)
+        assert json.dumps(upstream.sent[0]) == json.dumps(baseline)
+        assert LONG_TOOL in [name for _where, name in _body_names(upstream.sent[0])]
+    finally:
+        config_settings.get_settings.cache_clear()
 
 
 def _refuse_everything(upstream: FakeChatGPT) -> Any:

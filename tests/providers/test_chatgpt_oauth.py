@@ -1460,3 +1460,196 @@ async def test_cache_read_reaches_the_request_log_row(tmp_path):
     assert row["tokens_in"] == 100
     # The prompt really was 1,000 tokens; 900 of them came from the cache.
     assert row["tokens_in"] + row["cache_read_tokens"] == 1000
+
+
+def test_adaptive_body_uses_top_rung_and_records_actual_effort() -> None:
+    """P3: ADAPTIVE on ChatGPT OAuth sends top rung and logs the actual effort."""
+    from my_claude_code.core.wire_capture import _WIRE_TRACE, install_wire_trace
+
+    trace = install_wire_trace()
+    try:
+        body = build_chatgpt_oauth_request_body(
+            _reasoning_request("gpt-6-luna"),
+            reasoning=ReasoningPolicy.adaptive(),
+        )
+        adaptations = list(trace.reasoning_adaptations)
+    finally:
+        _WIRE_TRACE.set(None)
+
+    assert body["reasoning"] == {"effort": "max", "summary": "auto"}
+    assert len(adaptations) == 1
+    assert adaptations[0].message is not None
+    assert "'max'" in adaptations[0].message
+    assert "'medium'" not in adaptations[0].message
+
+
+def test_responses_builder_without_override_keeps_medium_byte_identical() -> None:
+    """Non-ChatGPT Responses callers stay byte-identical when unspecified_effort=None."""
+    from my_claude_code.providers.openai_responses.conversion import (
+        build_responses_request_body,
+    )
+
+    for policy in (
+        DEFAULT_REASONING_POLICY,
+        ReasoningPolicy.on(),
+        ReasoningPolicy.adaptive(),
+    ):
+        body = build_responses_request_body(_reasoning_request(), reasoning=policy)
+        assert body["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
+@pytest.mark.asyncio
+async def test_provider_adaptive_and_unspecified_on_use_top_rung_and_clamp_via_capability_and_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P3: ChatGPTOAuthProvider sends TOP_RUNG for ADAPTIVE and ON(effort=None),
+    clamped by models.dev capability and RecoveryMemory rejections, while keeping
+    DEFAULT and explicit efforts unchanged.
+    """
+    from my_claude_code.application.model_metadata import ModelReasoningCapability
+    from my_claude_code.core.wire_capture import _WIRE_TRACE, install_wire_trace
+    from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+
+    sent_bodies: list[dict[str, object]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        sent_bodies.append(body)
+        if (
+            body.get("reasoning", {}).get("effort") == "max"
+            and body.get("model") == "gpt-6-reject-max"
+        ):
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Unsupported value: 'max' is not supported with this model. Supported values are: 'low', 'medium', 'high', 'xhigh'.",
+                        "type": "invalid_request_error",
+                        "param": "reasoning.effort",
+                        "code": "unsupported_value",
+                    }
+                },
+            )
+
+        async def _sse():
+            yield b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+            yield b'data: {"type":"response.completed","response":{}}\n\n'
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(),
+        )
+
+    provider = ChatGPTOAuthProvider(
+        _provider_config(),
+        rate_limiter=passthrough_rate_limiter(),
+        account_id="acct_p3",
+    )
+    provider._client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+
+    # 1. Model with full/unknown capability: ADAPTIVE & ON(effort=None) send "max".
+    monkeypatch.setattr(
+        provider_module,
+        "model_reasoning_capability_from_models_dev",
+        lambda _pid, model_id: (
+            ModelReasoningCapability(
+                can_reason=True,
+                supports_effort_control=True,
+                supported_efforts=frozenset(
+                    {
+                        ReasoningEffort.LOW,
+                        ReasoningEffort.MEDIUM,
+                        ReasoningEffort.HIGH,
+                        ReasoningEffort.XHIGH,
+                    }
+                ),
+            )
+            if model_id == "gpt-5.5"
+            else None
+        ),
+    )
+
+    trace = install_wire_trace()
+    try:
+        _ = [
+            c
+            async for c in provider.stream_response(
+                _reasoning_request("gpt-6-luna"),
+                reasoning=ReasoningPolicy.adaptive(),
+            )
+        ]
+        _ = [
+            c
+            async for c in provider.stream_response(
+                _reasoning_request("gpt-6-luna"),
+                reasoning=ReasoningPolicy.on(),
+            )
+        ]
+        _ = [
+            c
+            async for c in provider.stream_response(
+                _reasoning_request("gpt-5.5"),
+                reasoning=ReasoningPolicy.adaptive(),
+            )
+        ]
+        _ = [
+            c
+            async for c in provider.stream_response(
+                _reasoning_request("gpt-6-luna"),
+                reasoning=DEFAULT_REASONING_POLICY,
+            )
+        ]
+        _ = [
+            c
+            async for c in provider.stream_response(
+                _reasoning_request("gpt-6-luna"),
+                reasoning=ReasoningPolicy.on(effort=ReasoningEffort.LOW),
+            )
+        ]
+        _ = [
+            c
+            async for c in provider.stream_response(
+                _reasoning_request("gpt-6-luna"),
+                reasoning=ReasoningPolicy.off(),
+            )
+        ]
+        adaptations = list(trace.reasoning_adaptations)
+    finally:
+        _WIRE_TRACE.set(None)
+
+    assert sent_bodies[0]["reasoning"] == {"effort": "max", "summary": "auto"}
+    assert sent_bodies[1]["reasoning"] == {"effort": "max", "summary": "auto"}
+    assert sent_bodies[2]["reasoning"] == {"effort": "xhigh", "summary": "auto"}
+    assert sent_bodies[3]["reasoning"] == {"effort": "medium", "summary": "auto"}
+    assert sent_bodies[4]["reasoning"] == {"effort": "low", "summary": "auto"}
+    assert "reasoning" not in sent_bodies[5]
+    assert [
+        a.message for a in adaptations if a.message is not None and "'max'" in a.message
+    ]
+    assert [
+        a.message
+        for a in adaptations
+        if a.message is not None and "'xhigh'" in a.message
+    ]
+
+    # 2. Model whose host rejects "max" with 400: RecoveryMemory learns "max"
+    # is rejected and the next ADAPTIVE / ON(effort=None) request picks "xhigh".
+    sent_bodies.clear()
+    _ = [
+        c
+        async for c in provider.stream_response(
+            _reasoning_request("gpt-6-reject-max"),
+            reasoning=ReasoningPolicy.adaptive(),
+        )
+    ]
+    assert sent_bodies[0]["reasoning"] == {"effort": "max", "summary": "auto"}
+    assert "reasoning" not in sent_bodies[1]
+    _ = [
+        c
+        async for c in provider.stream_response(
+            _reasoning_request("gpt-6-reject-max"),
+            reasoning=ReasoningPolicy.on(),
+        )
+    ]
+    assert sent_bodies[2]["reasoning"] == {"effort": "xhigh", "summary": "auto"}

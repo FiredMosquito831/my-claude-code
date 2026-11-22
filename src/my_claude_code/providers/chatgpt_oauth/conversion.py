@@ -19,7 +19,11 @@ from my_claude_code.application.errors import InvalidRequestError
 from my_claude_code.config.settings import configured_responses_parallel_tool_calls
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.openai_responses import ReplayOrigin
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import (
+    ReasoningControl,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
 from my_claude_code.providers.openai_responses import (
     RESPONSES_TOOL_SCHEMA_DIALECT,
     ToolSchemaDialect,
@@ -64,6 +68,7 @@ def build_chatgpt_oauth_request_body(
     origin: ReplayOrigin | None = None,
     plaintext_replay: bool = False,
     prompt_cache_key: str | None = None,
+    unspecified_effort: str | None = None,
 ) -> dict[str, Any]:
     """Build a ChatGPT Responses API request body from an Anthropic request.
 
@@ -101,6 +106,9 @@ def build_chatgpt_oauth_request_body(
     # not impose an explicit output limit. ``default_max_tokens`` is kept in
     # the signature for backward compatibility with existing callers.
     _ = default_max_tokens
+    effective_unspecified = unspecified_effort
+    if effective_unspecified is None and reasoning.control is ReasoningControl.ADAPTIVE:
+        effective_unspecified = ReasoningEffort.MAX.value
     return build_responses_request_body(
         request,
         reasoning=reasoning,
@@ -117,4 +125,5 @@ def build_chatgpt_oauth_request_body(
         wire_notes=wire_notes,
         origin=origin,
         plaintext_replay=plaintext_replay,
+        unspecified_effort=effective_unspecified,
     )

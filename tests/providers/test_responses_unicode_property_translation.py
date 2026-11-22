@@ -319,7 +319,13 @@ async def test_chatgpt_oauth_sends_the_repaired_pattern_in_one_call() -> None:
     provider = _chatgpt_provider()
     trace = install_wire_trace()
 
-    async def _send(*, url: str, headers: dict[str, str], body: dict[str, Any]) -> Any:
+    async def _send(
+        *,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        **_kwargs: Any,
+    ) -> Any:
         if _refuses_property_escape(body):
             request = httpx.Request("POST", url)
             raise httpx.HTTPStatusError(

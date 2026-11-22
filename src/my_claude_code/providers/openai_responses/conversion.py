@@ -519,7 +519,11 @@ def _convert_tool_choice(
     return tool_choice
 
 
-def _reasoning_block(policy: ReasoningPolicy) -> dict[str, Any] | None:
+def _reasoning_block(
+    policy: ReasoningPolicy,
+    *,
+    unspecified_effort: str | None = None,
+) -> dict[str, Any] | None:
     """Return the Responses API ``reasoning`` block for one policy, or None.
 
     Capability is deliberately *not* decided here. ``adapt_reasoning_policy``
@@ -532,7 +536,8 @@ def _reasoning_block(policy: ReasoningPolicy) -> dict[str, Any] | None:
     ``effort`` of "none": omission is accepted by every model this backend
     serves, whereas the sentinel value is not documented for all of them.
     A policy that names no effort keeps the endpoint's long-standing
-    ``medium`` so nobody's default silently changes.
+    ``medium`` unless ``unspecified_effort`` overrides ``ADAPTIVE`` /
+    level-less ``ON`` (``DEFAULT`` always keeps ``medium``).
 
     The rung itself is written out verbatim -- ``policy.effort.value``, no
     lookup, no narrowing. The two-fact rule has already constrained it: the
@@ -546,23 +551,35 @@ def _reasoning_block(policy: ReasoningPolicy) -> dict[str, Any] | None:
     """
     if policy.control is ReasoningControl.OFF:
         return None
-    effort = policy.effort.value if policy.effort is not None else None
+    if policy.effort is not None:
+        effort = policy.effort.value
+    elif unspecified_effort and policy.control in {
+        ReasoningControl.ADAPTIVE,
+        ReasoningControl.ON,
+    }:
+        effort = unspecified_effort
+    else:
+        effort = RESPONSES_DEFAULT_REASONING_EFFORT
     return {
-        "effort": effort or RESPONSES_DEFAULT_REASONING_EFFORT,
+        "effort": effort,
         "summary": RESPONSES_DEFAULT_REASONING_SUMMARY,
     }
 
 
-def _note_adaptive_substitution(policy: ReasoningPolicy, model: str) -> None:
-    """Record that an ADAPTIVE request left as the endpoint's default rung.
+def _note_adaptive_substitution(
+    policy: ReasoningPolicy,
+    model: str,
+    *,
+    sent_effort: str | None = None,
+) -> None:
+    """Record that an ADAPTIVE request left as a named effort rung.
 
     This door has no adaptive channel: ``reasoning.effort`` takes a word and
-    nothing else, so "let the model choose" cannot be spelled. It has been
-    answered with ``medium`` since long before adaptive existed, and that is
-    kept -- changing it would move the bytes of every adaptive request this
-    backend has ever served. What changes here is only that the substitution
-    is *stated*: the request row carries it and the dashboard shows it, where
-    until now the body silently said ``medium`` and nothing recorded why.
+    nothing else, so "let the model choose" cannot be spelled. When
+    ``sent_effort`` is the endpoint default ``medium`` that wording is kept
+    verbatim; when a caller supplies a model's top rung (such as ``"max"`` or
+    ``"xhigh"`` on ``chatgpt_oauth``) the recorded message and warning name the
+    actual effort sent.
 
     A no-op outside a tracked request (``record_reasoning_adaptation``), so
     the body builder stays usable from tests and from token counting.
@@ -570,19 +587,24 @@ def _note_adaptive_substitution(policy: ReasoningPolicy, model: str) -> None:
 
     if policy.control is not ReasoningControl.ADAPTIVE:
         return
+    effort = sent_effort or RESPONSES_DEFAULT_REASONING_EFFORT
+    rationale = (
+        "the endpoint's own default rung"
+        if effort == RESPONSES_DEFAULT_REASONING_EFFORT
+        else "its highest supported rung"
+    )
     record_reasoning_adaptation(
         ReasoningAdaptationKind.SUBSTITUTED,
         f"REASONING ADAPTIVE SUBSTITUTED: '{model}' has no adaptive channel on"
         f" the Responses door; sending effort"
-        f" '{RESPONSES_DEFAULT_REASONING_EFFORT}' via `reasoning.effort` -- the"
-        f" endpoint's own default rung -- because a host that can only be told"
-        f" a level cannot be told to choose one",
+        f" '{effort}' via `reasoning.effort` -- {rationale} -- because a host"
+        f" that can only be told a level cannot be told to choose one",
     )
     logger.warning(
         "REASONING ADAPTIVE: '{}' has no adaptive channel on the Responses"
         " door; sent effort '{}'",
         model,
-        RESPONSES_DEFAULT_REASONING_EFFORT,
+        effort,
     )
 
 
@@ -1168,6 +1190,7 @@ def build_responses_request_body(
     wire_notes: dict[str, str] | None = None,
     origin: ReplayOrigin | None = None,
     plaintext_replay: bool = False,
+    unspecified_effort: str | None = None,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -1248,6 +1271,10 @@ def build_responses_request_body(
         -- and an assistant turn's non-blank top-level ``reasoning_content``
         each become one ``{"type": "reasoning", "summary": [...]}`` item at the
         head of their own turn's run, after any carrier item for the same turn.
+    ``unspecified_effort``
+        effort word used when ``reasoning`` is ``ADAPTIVE`` or level-less
+        ``ON`` (``effort is None``), or ``None`` to keep the protocol default
+        (``"medium"``) so non-ChatGPT callers stay byte-identical.
 
     Earlier assistant thinking is never replayed **as text** on this surface
     (:data:`RESPONSES_REASONING_REPLAY`); what was left out is counted into
@@ -1354,7 +1381,7 @@ def build_responses_request_body(
             if tool_choice is not None:
                 body["tool_choice"] = tool_choice
 
-    reasoning_block = _reasoning_block(reasoning)
+    reasoning_block = _reasoning_block(reasoning, unspecified_effort=unspecified_effort)
     if reasoning_block is not None:
         body["reasoning"] = reasoning_block
         if include_encrypted_reasoning:
@@ -1366,7 +1393,15 @@ def build_responses_request_body(
     # callers (``chatgpt_oauth`` and the OpenCode Responses transport) go
     # through, so the two cannot disagree about what an adaptive request was
     # sent. A no-op outside a tracked request.
-    _note_adaptive_substitution(reasoning, request.model)
+    _note_adaptive_substitution(
+        reasoning,
+        request.model,
+        sent_effort=(
+            str(reasoning_block["effort"])
+            if reasoning_block is not None and "effort" in reasoning_block
+            else None
+        ),
+    )
 
     if extra_body:
         body.update({str(key): value for key, value in extra_body.items()})

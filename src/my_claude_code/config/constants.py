@@ -112,17 +112,18 @@ REASONING_EFFORT_BUDGET_RATIOS_DEFAULT = "0.10,0.20,0.50,0.80,0.95,0.95"
 # Non-secret marker stored in Settings when FCC owns renewable ChatGPT credentials.
 CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-oauth"
 
-# Whether ChatGPT OAuth / ``openai`` alias inference requests opt into
-# per-conversation cache affinity and sticky turn-state headers (8.28.0).
+# Whether ChatGPT OAuth / ``openai`` alias inference requests use
+# per-conversation cache affinity and sticky turn-state headers (8.28.0;
+# default ``True`` since 8.36.0).
 #
-# ``False`` by default (IV.7): preserves v8.27.0 outbound headers and bodies
-# byte for byte (provider-wide ``session-id``, ``prompt_cache_key`` omitted, no
+# When ``False``, preserves v8.27.0 outbound headers and bodies byte for byte
+# (provider-wide ``session-id``, ``prompt_cache_key`` omitted, no
 # ``thread-id`` / ``x-client-request-id`` / ``x-codex-turn-state``). When
-# ``True``, derives per-conversation ``session-id``, ``thread-id``,
+# ``True`` (default), derives per-conversation ``session-id``, ``thread-id``,
 # ``x-client-request-id``, and ``prompt_cache_key`` (<= 64 chars) from root
 # session headers, metadata, or opening turns, and echoes ``x-codex-turn-state``
 # per ``(base_url, account, conversation)`` with a 2-hour TTL.
-CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT = False
+CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT = True
 
 # Whether built-in Mistral Studio (``mistral``) and Mistral Vibe
 # (``mistral_vibe``) requests on ``api.mistral.ai`` send an opaque,

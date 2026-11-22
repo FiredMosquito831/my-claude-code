@@ -997,7 +997,9 @@ async def test_chatgpt_oauth_keeps_its_fall_through_when_the_sweep_does_not_help
 
 
 @pytest.mark.asyncio
-async def test_a_chatgpt_oauth_body_with_nothing_to_sweep_is_byte_identical() -> None:
+async def test_a_chatgpt_oauth_body_with_nothing_to_sweep_is_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The equality contract on the surface that has a byte golden.
 
     With no learned fact and no offending keyword, the first body this
@@ -1006,18 +1008,24 @@ async def test_a_chatgpt_oauth_body_with_nothing_to_sweep_is_byte_identical() ->
     ``chatgpt_oauth_long_tool_names_golden.json`` pins, unmodified by this
     change.
     """
+    from my_claude_code.config import settings as config_settings
 
-    request = _messages_request()
-    baseline = build_chatgpt_oauth_request_body(
-        request,
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-        tool_schema_dialect=PERMISSIVE_TOOL_SCHEMA_DIALECT,
-    )
+    monkeypatch.setenv("CHATGPT_OAUTH_SESSION_AFFINITY", "false")
+    config_settings.get_settings.cache_clear()
+    try:
+        request = _messages_request()
+        baseline = build_chatgpt_oauth_request_body(
+            request,
+            reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+            tool_schema_dialect=PERMISSIVE_TOOL_SCHEMA_DIALECT,
+        )
 
-    provider = _chatgpt_provider()
-    provider._send_stream_request = AsyncMock(side_effect=[_success()])
-    await _drain(provider, request)
+        provider = _chatgpt_provider()
+        provider._send_stream_request = AsyncMock(side_effect=[_success()])
+        await _drain(provider, request)
 
-    sent = provider._send_stream_request.await_args_list[0].kwargs["body"]
-    assert _wire(sent) == _wire(baseline)
-    assert VIDEO_SCALE_ON_THE_WIRE in _wire(sent)
+        sent = provider._send_stream_request.await_args_list[0].kwargs["body"]
+        assert _wire(sent) == _wire(baseline)
+        assert VIDEO_SCALE_ON_THE_WIRE in _wire(sent)
+    finally:
+        config_settings.get_settings.cache_clear()
