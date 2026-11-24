@@ -104,7 +104,9 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
         return build_openai_chat_request_body(
             request,
             reasoning=reasoning,
-            policy=self._profile.request_policy,
+            policy=self.effective_request_policy_for(
+                request.model, self._profile.request_policy
+            ),
             postprocessors=(
                 lambda body, _request_data, _policy: apply_google_thought_signatures(
                     body,

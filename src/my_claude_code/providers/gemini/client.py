@@ -122,7 +122,7 @@ class GeminiProvider(OpenAIChatProvider):
         return build_openai_chat_request_body(
             request,
             reasoning=reasoning,
-            policy=_REQUEST_POLICY,
+            policy=self.effective_request_policy_for(request.model, _REQUEST_POLICY),
             postprocessors=(
                 lambda body, request_data, policy: apply_gemini_request_quirks(
                     body,

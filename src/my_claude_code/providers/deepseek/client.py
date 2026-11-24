@@ -1,6 +1,6 @@
 """DeepSeek provider implementation (OpenAI-compatible Chat Completions)."""
 
-from typing import Any
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -64,6 +64,8 @@ profile encoder, so this cannot be read off the profile.
 
 class DeepSeekProvider(OpenAIChatProvider):
     """DeepSeek using ``https://api.deepseek.com`` Chat Completions."""
+
+    _supports_observed_reasoning_replay: ClassVar[bool] = False
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
         """See :data:`DEEPSEEK_REASONING_DIALECT`, minus what this host refused."""

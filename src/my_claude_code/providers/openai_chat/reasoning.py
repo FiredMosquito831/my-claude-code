@@ -211,11 +211,12 @@ def _encode_adaptive_effort_field(
             _note_adaptive_nothing(model=model, dialect=dialect)
         return
     if adaptive_mode == "off":
+        if enabled_value is not None:
+            target[field] = enabled_value
+            return
         explicit = _clamped_effort(efforts, ReasoningEffort.HIGH)
         if explicit is not None:
             target[field] = explicit
-        elif enabled_value is not None:
-            target[field] = enabled_value
         return
     # No adaptive channel on this shape: ``enabled_value``, when there is one,
     # is written into the effort field and is therefore a default *rung*, not a
@@ -542,6 +543,8 @@ class SplitReasoningOutput:
     """Request separate reasoning output where compute is not controllable."""
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
+        if policy.control is ReasoningControl.OFF:
+            return
         _extra_body(body)["reasoning_split"] = True
 
     @property

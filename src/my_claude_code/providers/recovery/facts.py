@@ -218,6 +218,17 @@ FACT_RESPONSES_REASONING_ITEM_REJECTED = "responses_reasoning_item_rejected"
 #: retry is added and it fails over exactly as any 400 does (IV.8).
 FACT_PROMPT_CACHE_LIFETIME_REFUSED = "prompt_cache_lifetime_refused"
 
+#: Which OpenAI Chat reasoning wire channel this model actually emitted on a
+#: completed reply (``"reasoning_content"``, ``"reasoning"``, or
+#: ``"think_tags"``), stored per ``(provider_id, model_id)`` with
+#: ``detail`` scoping the wire surface (``"chat_completions"``).
+#:
+#: ``source="observation"``. Positive wire evidence: unlike negative
+#: rejections, every new reasoned reply refreshes or updates the observed
+#: channel in place, while keeping the 7-day inferred clock so gateway migrations
+#: expire cleanly when unused.
+FACT_REASONING_CHANNEL = "reasoning_channel"
+
 #: The allow-list. Whatever lands in this document is read back into live
 #: request-shaping state, so an unknown kind is dropped with one log line
 #: rather than carried -- the rule ``config/model_overrides.py`` already
@@ -245,6 +256,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_PROMPT_CACHE_LIFETIME_REFUSED,
         FACT_HISTORY_THINKING_REJECTED,
         FACT_RESPONSES_REASONING_ITEM_REJECTED,
+        FACT_REASONING_CHANNEL,
     }
 )
 
@@ -340,6 +352,7 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     FACT_STREAM_USAGE_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_VISION_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_TOOL_CALLS_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
+    FACT_REASONING_CHANNEL: INFERRED_FACT_TTL_SECONDS,
     FACT_MODEL_WITHHELD: WITHHELD_FACT_TTL_SECONDS,
 }
 

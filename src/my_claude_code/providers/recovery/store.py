@@ -46,6 +46,7 @@ from .facts import (
     FACT_MODEL_WITHHELD,
     FACT_MODELS_ETAG,
     FACT_OUTPUT_CAP,
+    FACT_REASONING_CHANNEL,
     FACT_REASONING_FIELD_REJECTED,
     FACT_RESPONSES_REASONING_ITEM_REJECTED,
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
@@ -56,6 +57,7 @@ from .facts import (
     FACTS_KEY,
     MAX_FACT_ROWS,
     PROVIDER_WIDE_MODEL_ID,
+    SOURCE_OBSERVATION,
     SOURCE_REJECTION,
     VERSION_KEY,
     FactSink,
@@ -630,6 +632,14 @@ class LearnedFactStore:
                 memory.responses_tool_schema_keywords[fact.detail] = (
                     fact.last_confirmed_at[:10]
                 )
+            elif (
+                fact.fact_kind == FACT_REASONING_CHANNEL
+                and isinstance(fact.value, str)
+                and fact.value in ("reasoning_content", "reasoning", "think_tags")
+            ):
+                memory.reasoning_channels.setdefault(fact.model_id, {})[fact.detail] = (
+                    fact.value
+                )
 
     def _resync_memories(self) -> None:
         """Rebuild the handed-out memories after a forget.
@@ -646,6 +656,7 @@ class LearnedFactStore:
             memory.stream_usage_unsupported.clear()
             memory.history_thinking_rejected.clear()
             memory.responses_reasoning_item_rejected.clear()
+            memory.reasoning_channels.clear()
             memory.responses_tool_name_max_length = None
             memory.responses_tools_max_count = None
             memory.responses_tool_choice_auto_only.clear()
@@ -712,6 +723,11 @@ def _write_failed(write: asyncio.Future[bool | None]) -> bool:
     return write.result() is None
 
 
+_SINK_FACT_SOURCES: Mapping[str, str] = {
+    FACT_REASONING_CHANNEL: SOURCE_OBSERVATION,
+}
+
+
 def _sink_for(store: LearnedFactStore, provider_id: str) -> FactSink:
     def sink(
         fact_kind: str, model_id: str, value: Any, detail: str, evidence: str
@@ -721,7 +737,7 @@ def _sink_for(store: LearnedFactStore, provider_id: str) -> FactSink:
             model_id,
             fact_kind,
             value,
-            source=SOURCE_REJECTION,
+            source=_SINK_FACT_SOURCES.get(fact_kind, SOURCE_REJECTION),
             detail=detail,
             evidence=evidence,
         )

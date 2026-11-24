@@ -368,18 +368,21 @@ def test_caller_extra_body_reaches_the_gateway_but_cannot_forge_reasoning() -> N
 
 
 def test_reasoning_is_read_and_replayed_on_the_field_it_arrives_on() -> None:
-    """The gateway streams ``reasoning`` deltas, never ``<think>`` tags."""
-    assert _COMMANDCODE_PROFILE.reasoning_delta_field == "reasoning"
+    """The gateway streams ``reasoning_content`` deltas, with ``reasoning`` fallback."""
+    assert _COMMANDCODE_PROFILE.reasoning_delta_field == "reasoning_content"
+    assert _COMMANDCODE_PROFILE.reasoning_delta_fallback_field == "reasoning"
     assert (
         _COMMANDCODE_PROFILE.request_policy.reasoning_replay
-        is ReasoningReplayMode.REASONING
+        is ReasoningReplayMode.REASONING_CONTENT
     )
 
-    delta = SimpleNamespace(reasoning="thought", reasoning_content=None)
-    assert _COMMANDCODE_PROFILE.reasoning_delta(delta) == "thought"
+    primary_delta = SimpleNamespace(reasoning_content="thought", reasoning=None)
+    assert _COMMANDCODE_PROFILE.reasoning_delta(primary_delta) == "thought"
+    fallback_delta = SimpleNamespace(reasoning="fb thought", reasoning_content=None)
+    assert _COMMANDCODE_PROFILE.reasoning_delta(fallback_delta) == "fb thought"
 
     body = _chat_body(
-        "z-ai/glm-5.3-flash",
+        "deepseek/deepseek-v4.1-flash",
         ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
         messages=[
             {"role": "user", "content": "hi"},
@@ -394,8 +397,83 @@ def test_reasoning_is_read_and_replayed_on_the_field_it_arrives_on() -> None:
         ],
     )
     assistant = next(m for m in body["messages"] if m["role"] == "assistant")
-    assert assistant["reasoning"] == "earlier thought"
-    assert "reasoning_content" not in assistant
+    assert assistant["reasoning_content"] == "earlier thought"
+    assert "reasoning" not in assistant
+    assert "<think>" not in json.dumps(assistant)
+
+
+@pytest.mark.asyncio
+async def test_stream_observing_reasoning_content_replays_reasoning_content_on_turn_2() -> (
+    None
+):
+    """Turn 1 streaming ``delta.reasoning_content`` keeps Turn 2 aligned to ``reasoning_content``."""
+    provider = _provider()
+
+    async def _turn1_stream():
+        yield SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        reasoning_content="step 1 plan",
+                        reasoning=None,
+                        tool_calls=None,
+                    ),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        )
+        yield SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content="turn 1 answer",
+                        reasoning_content=None,
+                        reasoning=None,
+                        tool_calls=None,
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
+        )
+
+    provider._openai._client.chat.completions.create = AsyncMock(
+        return_value=_turn1_stream()
+    )
+    req1 = MessagesRequest.model_validate(
+        {
+            "model": "deepseek/deepseek-v4.1-flash",
+            "max_tokens": 128,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    )
+    _ = [event async for event in provider.stream_response(req1)]
+
+    req2 = MessagesRequest.model_validate(
+        {
+            "model": "deepseek/deepseek-v4.1-flash",
+            "max_tokens": 128,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "step 1 plan"},
+                        {"type": "text", "text": "turn 1 answer"},
+                    ],
+                },
+                {"role": "user", "content": "continue"},
+            ],
+        }
+    )
+    body2 = provider._openai._build_request_body(
+        req2, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX)
+    )
+    assistant = next(m for m in body2["messages"] if m["role"] == "assistant")
+    assert assistant["reasoning_content"] == "step 1 plan"
+    assert "reasoning" not in assistant
     assert "<think>" not in json.dumps(assistant)
 
 

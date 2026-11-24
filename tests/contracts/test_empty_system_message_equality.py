@@ -78,6 +78,9 @@ from my_claude_code.providers.openai_responses import build_responses_request_bo
 from tests.contracts.carrier_replay_note_expectations import (
     corrected_note,
 )
+from tests.contracts.chat_reasoning_expectations import (
+    chat_corrected_expectation,
+)
 from tests.contracts.go_reasoning_expectations import corrected_expectation
 from tests.contracts.test_tool_change_fold_equality import (
     _session_minted,
@@ -566,6 +569,8 @@ def test_every_body_that_converted_before_is_byte_identical(
         # Keep the old snapshot and permit only its independently pinned cell.
         if surface == "chat_opencode_go":
             was = corrected_expectation("empty", case, was)
+        if case == "fold_every_block" and surface == "commandcode_chat":
+            was = chat_corrected_expectation("empty", surface, was)
         # 8.16.0's one deliberate note change: ``history_thinking_omitted`` now
         # counts a ``redacted_thinking`` block too, because that block is
         # reasoning the Responses surface leaves out. The historical baseline

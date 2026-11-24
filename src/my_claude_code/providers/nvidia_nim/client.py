@@ -1,7 +1,7 @@
 """NVIDIA NIM provider implementation."""
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -78,6 +78,8 @@ effort word has nowhere to go here and must not be claimed.
 
 class NvidiaNimProvider(OpenAIChatProvider):
     """NVIDIA NIM provider using official OpenAI client."""
+
+    _supports_observed_reasoning_replay: ClassVar[bool] = False
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect:
         """See :data:`NIM_REASONING_DIALECT`, minus what this host refused."""

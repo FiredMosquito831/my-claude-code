@@ -881,11 +881,7 @@
       "reasoning_split": true
     }
   },
-  "minimax|bare|off": {
-    "extra_body": {
-      "reasoning_split": true
-    }
-  },
+  "minimax|bare|off": {},
   "minimax|bare|xhigh": {
     "extra_body": {
       "reasoning_split": true
@@ -916,11 +912,7 @@
       "reasoning_split": true
     }
   },
-  "minimax|client_effort_high|off": {
-    "extra_body": {
-      "reasoning_split": true
-    }
-  },
+  "minimax|client_effort_high|off": {},
   "minimax|client_effort_high|xhigh": {
     "extra_body": {
       "reasoning_split": true
@@ -951,11 +943,7 @@
       "reasoning_split": true
     }
   },
-  "minimax|client_thinking_adaptive|off": {
-    "extra_body": {
-      "reasoning_split": true
-    }
-  },
+  "minimax|client_thinking_adaptive|off": {},
   "minimax|client_thinking_adaptive|xhigh": {
     "extra_body": {
       "reasoning_split": true
@@ -986,21 +974,13 @@
       "reasoning_split": true
     }
   },
-  "minimax|client_thinking_budget|off": {
-    "extra_body": {
-      "reasoning_split": true
-    }
-  },
+  "minimax|client_thinking_budget|off": {},
   "minimax|client_thinking_budget|xhigh": {
     "extra_body": {
       "reasoning_split": true
     }
   },
-  "minimax|client_thinking_disabled|client": {
-    "extra_body": {
-      "reasoning_split": true
-    }
-  },
+  "minimax|client_thinking_disabled|client": {},
   "minimax|client_thinking_disabled|high": {
     "extra_body": {
       "reasoning_split": true
@@ -1021,11 +1001,7 @@
       "reasoning_split": true
     }
   },
-  "minimax|client_thinking_disabled|off": {
-    "extra_body": {
-      "reasoning_split": true
-    }
-  },
+  "minimax|client_thinking_disabled|off": {},
   "minimax|client_thinking_disabled|xhigh": {
     "extra_body": {
       "reasoning_split": true

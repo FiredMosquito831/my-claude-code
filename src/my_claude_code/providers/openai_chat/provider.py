@@ -1,6 +1,7 @@
 """Concrete OpenAI-compatible provider and per-request stream execution."""
 
 import asyncio
+import json
 import sys
 import time
 import uuid
@@ -11,9 +12,11 @@ from collections.abc import (
     Iterable,
     Iterator,
     Mapping,
+    Sequence,
 )
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 from loguru import logger
@@ -38,6 +41,7 @@ from my_claude_code.core.anthropic import (
     ContentChunk,
     ContentType,
     HeuristicToolParser,
+    ReasoningReplayMode,
     ThinkTagParser,
     empty_system_messages_note,
 )
@@ -153,7 +157,7 @@ from .marketplace import (
 from .messages_transport import MessagesTransport
 from .opencode_catalogue import STAND_IN_INPUT_SCHEMA, model_is_zero_cost
 from .opencode_identity import identity_wire_record
-from .profiles import OpenAIChatProfile
+from .profiles import OpenAIChatProfile, ReasoningWireField
 from .prompt_cache import (
     apply_chat_prompt_cache_lifetime,
     chat_prompt_cache_choice,
@@ -163,7 +167,11 @@ from .reasoning_details import (
     carrier_foreign_note_for_history,
     iter_reasoning_detail_events,
 )
-from .request_policy import build_openai_chat_request_body, chat_tool_schema_note
+from .request_policy import (
+    OpenAIChatRequestPolicy,
+    build_openai_chat_request_body,
+    chat_tool_schema_note,
+)
 from .response_surface import (
     ResolvedSurfaceLadder,
     alternative_surfaces,
@@ -314,8 +322,17 @@ def _chat_probe_tools(declared: Iterable[tuple[str, str]]) -> list[Any]:
     ]
 
 
+_OBSERVED_REPLAY_MODES: Mapping[str, ReasoningReplayMode] = {
+    "reasoning_content": ReasoningReplayMode.REASONING_CONTENT,
+    "reasoning": ReasoningReplayMode.REASONING,
+    "think_tags": ReasoningReplayMode.THINK_TAGS,
+}
+
+
 class OpenAIChatProvider(BaseProvider):
     """OpenAI-compatible ``/chat/completions`` provider configured by a profile."""
+
+    _supports_observed_reasoning_replay: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -823,6 +840,39 @@ class OpenAIChatProvider(BaseProvider):
         )
         return codec if codec.has_aliases else None
 
+    def effective_request_policy_for(
+        self, model_id: str, policy: OpenAIChatRequestPolicy
+    ) -> OpenAIChatRequestPolicy:
+        """Align ``policy.reasoning_replay`` to the wire channel observed for ``model_id``."""
+        if (
+            not self._supports_observed_reasoning_replay
+            or policy.reasoning_replay is ReasoningReplayMode.DISABLED
+        ):
+            return policy
+        observed = self._recovery_memory.reasoning_channel_for(
+            model_id, surface=ResponseSurface.CHAT_COMPLETIONS.value
+        )
+        if observed is None:
+            observed = self._recovery_memory.reasoning_channel_for(model_id)
+        if observed is None:
+            return policy
+        mode = _OBSERVED_REPLAY_MODES.get(observed)
+        if mode is None or mode is policy.reasoning_replay:
+            return policy
+        return replace(policy, reasoning_replay=mode)
+
+    def _remember_observed_reasoning_channel(
+        self, model_id: str, channel: str, *, evidence: str = ""
+    ) -> None:
+        if not self._supports_observed_reasoning_replay:
+            return
+        self._recovery_memory.remember_reasoning_channel(
+            model_id,
+            channel,
+            surface=ResponseSurface.CHAT_COMPLETIONS.value,
+            evidence=evidence,
+        )
+
     def _build_request_body(
         self,
         request: MessagesRequest,
@@ -838,10 +888,13 @@ class OpenAIChatProvider(BaseProvider):
         caller that does not record, and every host with no such note --
         builds exactly the body it always did.
         """
+        effective_policy = self.effective_request_policy_for(
+            request.model, self._profile.request_policy
+        )
         body = build_openai_chat_request_body(
             request,
             reasoning=reasoning,
-            policy=self._profile.request_policy,
+            policy=effective_policy,
             postprocessors=self._profile.request_postprocessors,
             provider_id=self._provider_id,
             tool_catalogue=self.tool_catalogue_for_request(request),
@@ -851,7 +904,7 @@ class OpenAIChatProvider(BaseProvider):
             body,
             request,
             self._profile.cache_affinity,
-            unsupported_body_keys=self._profile.request_policy.unsupported_body_keys,
+            unsupported_body_keys=effective_policy.unsupported_body_keys,
         )
         return body
 
@@ -1943,6 +1996,74 @@ def _legacy_function_call_chars(call: object) -> int:
     )
 
 
+def _delta_reasoning_details(delta: Any) -> Sequence[Any] | None:
+    """Return non-empty ``delta.reasoning_details`` sequence, or ``None``."""
+    details = getattr(delta, "reasoning_details", None)
+    if details is None:
+        extra = getattr(delta, "model_extra", None)
+        if isinstance(extra, Mapping):
+            details = extra.get("reasoning_details")
+    if (
+        isinstance(details, Sequence)
+        and not isinstance(details, (str, bytes))
+        and details
+    ):
+        return details
+    return None
+
+
+def _reasoning_details_chars(details: Sequence[Any]) -> int:
+    """Return bounded character count for a ``reasoning_details`` delta payload."""
+    try:
+        return len(
+            json.dumps(details, ensure_ascii=False, separators=(",", ":"), default=str)
+        )
+    except TypeError, ValueError, RecursionError:
+        return len(str(details))
+
+
+def _iter_chat_content_parts(
+    content: Any,
+    think_parser: ThinkTagParser,
+) -> Iterator[tuple[ContentChunk, bool]]:
+    """Yield ``(chunk, from_think_tag)`` pairs from Chat Completions content."""
+    if isinstance(content, str):
+        for chunk in think_parser.feed(content):
+            yield chunk, True
+        return
+    if not isinstance(content, list):
+        return
+
+    for item in content:
+        if isinstance(item, str):
+            for chunk in think_parser.feed(item):
+                yield chunk, True
+            continue
+        if not isinstance(item, Mapping):
+            continue
+
+        item_type = item.get("type")
+        if item_type == "text":
+            text = item.get("text")
+            if isinstance(text, str):
+                for chunk in think_parser.feed(text):
+                    yield chunk, True
+        elif item_type == "thinking":
+            thinking = item.get("thinking")
+            if isinstance(thinking, str):
+                yield ContentChunk(ContentType.THINKING, thinking), False
+            elif isinstance(thinking, list):
+                for part in thinking:
+                    if isinstance(part, str):
+                        yield ContentChunk(ContentType.THINKING, part), False
+                    elif (
+                        isinstance(part, Mapping)
+                        and part.get("type") == "text"
+                        and isinstance(part.get("text"), str)
+                    ):
+                        yield ContentChunk(ContentType.THINKING, part["text"]), False
+
+
 def _iter_chat_content(
     content: Any,
     think_parser: ThinkTagParser,
@@ -1954,38 +2075,8 @@ def _iter_chat_content(
     chunks contain nested text chunks, and answer text can arrive beside them
     in the transition frame.
     """
-    if isinstance(content, str):
-        yield from think_parser.feed(content)
-        return
-    if not isinstance(content, list):
-        return
-
-    for item in content:
-        if isinstance(item, str):
-            yield from think_parser.feed(item)
-            continue
-        if not isinstance(item, Mapping):
-            continue
-
-        item_type = item.get("type")
-        if item_type == "text":
-            text = item.get("text")
-            if isinstance(text, str):
-                yield from think_parser.feed(text)
-        elif item_type == "thinking":
-            thinking = item.get("thinking")
-            if isinstance(thinking, str):
-                yield ContentChunk(ContentType.THINKING, thinking)
-            elif isinstance(thinking, list):
-                for part in thinking:
-                    if isinstance(part, str):
-                        yield ContentChunk(ContentType.THINKING, part)
-                    elif (
-                        isinstance(part, Mapping)
-                        and part.get("type") == "text"
-                        and isinstance(part.get("text"), str)
-                    ):
-                        yield ContentChunk(ContentType.THINKING, part["text"])
+    for chunk, _from_think_tag in _iter_chat_content_parts(content, think_parser):
+        yield chunk
 
 
 class _OpenAIChatStreamRunner:
@@ -2123,6 +2214,8 @@ class _OpenAIChatStreamRunner:
         usage_info = None
         tool_argument_aliases: dict[str, dict[str, str]] = {}
         tool_argument_alias_buffers: dict[int, str] = {}
+        observed_native_field: ReasoningWireField | None = None
+        observed_think_tags = False
 
         async with self._provider._rate_limiter.concurrency_slot():
             while True:
@@ -2176,7 +2269,10 @@ class _OpenAIChatStreamRunner:
                                 shape.note_finish(finish_reason)
                             logger.debug("{} finish_reason: {}", tag, finish_reason)
 
-                        reasoning = self._provider._profile.reasoning_delta(delta)
+                        reasoning_field, reasoning = (
+                            self._provider._profile.reasoning_delta_with_field(delta)
+                        )
+                        details = _delta_reasoning_details(delta)
                         legacy_call = getattr(delta, "function_call", None)
                         # Where this model actually generated. Stamped on the
                         # raw chunk, not on the SSE MCC forwards, because the
@@ -2192,10 +2288,15 @@ class _OpenAIChatStreamRunner:
                             or legacy_call
                         ):
                             recovery.generation.stamp()
-                        if shape is not None and reasoning:
+                        if reasoning and reasoning_field is not None:
+                            if observed_native_field is None:
+                                observed_native_field = reasoning_field
+                            if shape is not None:
+                                shape.note_field(reasoning_field, len(reasoning))
+                        if shape is not None and details is not None:
                             shape.note_field(
-                                self._provider._profile.reasoning_delta_field,
-                                len(reasoning),
+                                "reasoning_details",
+                                _reasoning_details_chars(details),
                             )
                         if shape is not None and delta.content:
                             shape.note_field("content", len(delta.content))
@@ -2240,11 +2341,18 @@ class _OpenAIChatStreamRunner:
                                 yield out_event
 
                         if delta.content:
-                            for part in _iter_chat_content(
+                            for part, from_think_tag in _iter_chat_content_parts(
                                 delta.content,
                                 think_parser,
                             ):
                                 if part.type == ContentType.THINKING:
+                                    if from_think_tag and part.content:
+                                        observed_think_tags = True
+                                        if shape is not None:
+                                            shape.count_reasoning("think_tag_deltas", 1)
+                                            shape.count_reasoning(
+                                                "think_tag_chars", len(part.content)
+                                            )
                                     if not output_reasoning:
                                         continue
                                     for event in hold_events(
@@ -2373,6 +2481,8 @@ class _OpenAIChatStreamRunner:
                         usage_info = None
                         tool_argument_aliases = {}
                         tool_argument_alias_buffers = {}
+                        observed_native_field = None
+                        observed_think_tags = False
                         continue
 
                     if decision.action == RecoveryFailureAction.MIDSTREAM_RECOVERY:
@@ -2458,6 +2568,12 @@ class _OpenAIChatStreamRunner:
         remaining = think_parser.flush()
         if remaining:
             if remaining.type == ContentType.THINKING:
+                if remaining.content:
+                    observed_think_tags = True
+                    if shape is not None:
+                        shape.count_reasoning("think_tag_deltas", 1)
+                        shape.count_reasoning("think_tag_chars", len(remaining.content))
+                        record_response_shape(shape)
                 if not output_reasoning:
                     remaining = None
                 else:
@@ -2535,6 +2651,17 @@ class _OpenAIChatStreamRunner:
             # the OpenAI number under the Anthropic name double-counts every
             # cache hit, which on a warm 268k-token prompt is nearly 2x.
             input_tokens = max(0, provider_input - cache_read)
+        observed_channel: str | None = (
+            observed_native_field
+            if observed_native_field is not None
+            else ("think_tags" if observed_think_tags else None)
+        )
+        if observed_channel is not None:
+            self._provider._remember_observed_reasoning_channel(
+                self._request.model,
+                observed_channel,
+                evidence=f"stream {observed_channel}",
+            )
         trace_event(
             stage="provider",
             event="provider.response.completed",

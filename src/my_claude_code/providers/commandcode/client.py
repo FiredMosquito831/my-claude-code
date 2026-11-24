@@ -78,10 +78,12 @@ COMMANDCODE_CHAT_TOOL_SCHEMA_DIALECT = ToolSchemaDialect(
 _PROFILE = OpenAIChatProfile(
     OpenAIChatRequestPolicy(
         provider_name="COMMANDCODE",
-        # The gateway streams reasoning as OpenRouter-style ``reasoning``
-        # deltas, never as ``<think>`` tags in ``content``, so assistant
-        # history must be replayed through the same field it was received on.
-        reasoning_replay=ReasoningReplayMode.REASONING,
+        # Live captures of ``deepseek/deepseek-v4.1-flash`` stream
+        # ``delta.reasoning_content`` (27,520 / 27,520 deltas vs 0 on
+        # ``delta.reasoning``), so assistant history replays on
+        # ``reasoning_content`` at cold start while runtime observation adapts
+        # per model if another backend streams ``delta.reasoning``.
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         include_extra_body=True,
         extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
     ),
@@ -111,11 +113,10 @@ _PROFILE = OpenAIChatProfile(
     # body left carrying no reasoning instruction at all, on every Command Code
     # model whose models.dev row publishes no effort control.
     NamedEffortReasoning(_EFFORTS, enabled_value="max"),
-    # Delta field, not the ``reasoning_content`` default: the gateway emits
-    # ``reasoning`` (plus ``reasoning_details``). Reading the wrong field is
-    # why reasoning that did arrive was dropped before reaching the client.
-    reasoning_delta_field="reasoning",
-    reasoning_delta_fallback_field="reasoning_content",
+    # Primary delta field matches live ``delta.reasoning_content`` captures,
+    # keeping ``reasoning`` as configured fallback for OpenRouter-style models.
+    reasoning_delta_field="reasoning_content",
+    reasoning_delta_fallback_field="reasoning",
     chat_tool_schema_dialect=COMMANDCODE_CHAT_TOOL_SCHEMA_DIALECT,
 )
 
