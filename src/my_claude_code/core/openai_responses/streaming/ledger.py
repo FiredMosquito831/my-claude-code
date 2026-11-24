@@ -16,6 +16,8 @@ class ResponsesOutputLedger:
         self._fallback_text_index = -1
         self._input_tokens: int | None = None
         self._output_tokens: int | None = None
+        self._cache_read_tokens = 0
+        self._cache_write_tokens = 0
         self._reasoning_tokens_estimate = 0
 
     def active_block(self, index: int) -> BlockState | None:
@@ -63,33 +65,60 @@ class ResponsesOutputLedger:
         self._absorb_usage(data.get("usage"))
 
     def _absorb_usage(self, usage: object) -> None:
-        if not isinstance(usage, dict):
+        if not isinstance(usage, Mapping):
             return
         input_tokens = usage.get("input_tokens")
         # A zero in a later report must not erase a positive count seeded by
         # ``message_start``; it means the provider did not recount, not that
         # nobody sent anything.
-        if isinstance(input_tokens, int) and (
-            self._input_tokens is None or input_tokens > 0
+        if (
+            isinstance(input_tokens, int)
+            and not isinstance(input_tokens, bool)
+            and (self._input_tokens is None or input_tokens > 0)
         ):
             self._input_tokens = input_tokens
         output_tokens = usage.get("output_tokens")
-        if isinstance(output_tokens, int):
+        if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
             self._output_tokens = output_tokens
+        cache_read = usage.get("cache_read_input_tokens")
+        if (
+            isinstance(cache_read, int)
+            and not isinstance(cache_read, bool)
+            and cache_read > 0
+        ):
+            self._cache_read_tokens = cache_read
+        cache_write = usage.get("cache_creation_input_tokens")
+        if (
+            isinstance(cache_write, int)
+            and not isinstance(cache_write, bool)
+            and cache_write > 0
+        ):
+            self._cache_write_tokens = cache_write
 
     def add_reasoning_text(self, text: str) -> None:
         self._reasoning_tokens_estimate += estimate_text_tokens(text)
 
     def usage(self) -> dict[str, Any] | None:
-        if self._input_tokens is None and self._output_tokens is None:
+        if (
+            self._input_tokens is None
+            and self._output_tokens is None
+            and self._cache_read_tokens == 0
+            and self._cache_write_tokens == 0
+        ):
             return None
-        input_tokens = self._input_tokens or 0
+        input_tokens = (
+            (self._input_tokens or 0)
+            + self._cache_read_tokens
+            + self._cache_write_tokens
+        )
         output_tokens = self._output_tokens or 0
         usage: dict[str, Any] = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
         }
+        if self._cache_read_tokens:
+            usage["input_tokens_details"] = {"cached_tokens": self._cache_read_tokens}
         capped_reasoning_tokens = min(self._reasoning_tokens_estimate, output_tokens)
         if capped_reasoning_tokens:
             usage["output_tokens_details"] = {

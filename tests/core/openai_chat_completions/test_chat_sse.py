@@ -527,13 +527,79 @@ def test_the_non_streaming_form_reports_tool_calls_and_a_null_content() -> None:
         completion_id=_COMPLETION_ID,
     )
 
-    choice = completion["choices"][0]
-    assert choice["finish_reason"] == "tool_calls"
-    assert choice["message"]["content"] is None
-    assert choice["message"]["tool_calls"] == [
+    assert completion["choices"][0]["finish_reason"] == "tool_calls"
+    assert completion["choices"][0]["message"]["content"] is None
+    assert completion["choices"][0]["message"]["tool_calls"] == [
         {
             "id": "toolu_a",
             "type": "function",
             "function": {"name": "add", "arguments": '{"a":1}'},
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_call_serializes_prepopulated_input() -> None:
+    stream = [
+        format_sse_event("message_start", {"type": "message_start", "message": {}}),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call_pre",
+                    "name": "echo",
+                    "input": {"k": "v"},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call_empty",
+                    "name": "ping",
+                    "input": {},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 1},
+        ),
+        format_sse_event(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    frames = await _collect(_chunks(*stream), _request())
+    calls = [
+        call
+        for delta in _deltas(_payloads(frames))
+        for call in delta.get("tool_calls", ())
+    ]
+    assert calls == [
+        {
+            "index": 0,
+            "id": "call_pre",
+            "type": "function",
+            "function": {"name": "echo", "arguments": '{"k":"v"}'},
+        },
+        {
+            "index": 1,
+            "id": "call_empty",
+            "type": "function",
+            "function": {"name": "ping", "arguments": ""},
+        },
     ]

@@ -34,13 +34,19 @@ from .tools import convert_tools, responses_tool_identity_from_anthropic_name
 
 
 def _responses_usage(loop_usage: Mapping[str, Any]) -> dict[str, Any]:
-    input_tokens = int(loop_usage.get("input_tokens") or 0)
+    uncached_input = int(loop_usage.get("input_tokens") or 0)
+    cache_read = int(loop_usage.get("cache_read_input_tokens") or 0)
+    cache_write = int(loop_usage.get("cache_creation_input_tokens") or 0)
+    input_tokens = uncached_input + cache_read + cache_write
     output_tokens = int(loop_usage.get("output_tokens") or 0)
-    return {
+    usage: dict[str, Any] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
     }
+    if cache_read > 0:
+        usage["input_tokens_details"] = {"cached_tokens": cache_read}
+    return usage
 
 
 def _response_shell(

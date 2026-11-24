@@ -530,3 +530,39 @@ def _anthropic_reasoning_stream() -> list[str]:
         ),
         format_sse_event("message_stop", {"type": "message_stop"}),
     ]
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_status"),
+    [
+        ("rate_limit_error", 429),
+        ("invalid_request_error", 400),
+        ("overloaded_error", 529),
+        ("api_error", 500),
+    ],
+)
+def test_non_streaming_internal_sse_error_maps_http_status(
+    error_type: str, expected_status: int
+) -> None:
+    provider = FakeProvider(
+        [
+            format_sse_event(
+                "error",
+                {
+                    "type": "error",
+                    "error": {"type": error_type, "message": "upstream failure"},
+                },
+            )
+        ]
+    )
+    app = create_test_app()
+    with (
+        patch("my_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(app) as client,
+    ):
+        response = client.post(_PATH, json=_payload(stream=False))
+
+    assert response.status_code == expected_status
+    error = response.json()["error"]
+    assert error["type"] == error_type
+    assert error["message"] == "upstream failure"

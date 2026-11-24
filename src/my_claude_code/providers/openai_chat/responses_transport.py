@@ -1295,7 +1295,6 @@ class ResponsesTransport:
                     carrier_replay=configured_responses_carrier_replay(),
                 )
                 try:
-                    yield ledger.message_start()
                     shape = start_response_shape()
                     # The protocol's own ``*.delta`` events, not the converter's
                     # assembled output: answer text is buffered while think
@@ -1311,9 +1310,26 @@ class ResponsesTransport:
                             note_responses_event_shape(shape, event)
                             note_responses_generation_delta(generation, event)
                             for sse_event in converter.feed(event):
+                                if not ledger.message_started:
+                                    yield ledger.message_start()
                                 yield sse_event
-                        for sse_event in converter.finish():
+                        finish_events = list(converter.finish())
+                        if not ledger.message_started:
+                            yield ledger.message_start()
+                        for sse_event in finish_events:
                             yield sse_event
+                    except Exception as error:
+                        raise classify_provider_failure(
+                            error,
+                            provider_name=self._provider_name,
+                            request_id=request_id,
+                            read_timeout_s=self._config.http_read_timeout,
+                            mark_rate_limited=self._rate_limiter.extend_reactive_block,
+                            cooldown=self._config.rate_limit_cooldown(),
+                            mark_rate_limited_enabled=(
+                                not self._config.routes_around_model
+                            ),
+                        ) from error
                     finally:
                         # Recorded whatever ended the stream, including the
                         # failure the converter raises for an incomplete turn

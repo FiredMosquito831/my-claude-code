@@ -33,6 +33,7 @@ from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
     MessagesRequest,
     aggregate_anthropic_sse_to_message,
+    anthropic_status_for_error_type,
 )
 from my_claude_code.core.carrier_surface import CHAT_REDACTED_THINKING
 from my_claude_code.core.client_fingerprint import harness_from_headers
@@ -392,14 +393,15 @@ class ChatCompletionsHandler:
             if isinstance(raw_message, str) and raw_message.strip()
             else "Provider request failed unexpectedly."
         )
+        status_code = anthropic_status_for_error_type(error_type)
         trace_terminal_execution_error(
             wire_api="chat_completions",
             request_id=request_id,
-            status_code=500,
+            status_code=status_code,
             error_type=error_type,
         )
         return terminal_execution_error_response(
-            status_code=500,
+            status_code=status_code,
             content=self._chat_adapter.error_payload(
                 message=message, error_type=error_type
             ),

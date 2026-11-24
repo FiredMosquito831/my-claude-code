@@ -60,7 +60,13 @@ async def aggregate_anthropic_sse_to_message(
             elif dtype == "input_json_delta":
                 parts[idx].append(str(delta.get("partial_json", "")))
             elif dtype == "signature_delta":
-                blocks[idx]["signature"] = str(delta.get("signature", ""))
+                sig = delta.get("signature")
+                sig_text = (
+                    sig if isinstance(sig, str) else ("" if sig is None else str(sig))
+                )
+                existing = blocks[idx].get("signature")
+                prefix = existing if isinstance(existing, str) else ""
+                blocks[idx]["signature"] = prefix + sig_text
         elif ptype == "message_delta":
             delta = payload.get("delta")
             if isinstance(delta, dict):
