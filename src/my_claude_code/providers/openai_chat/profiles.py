@@ -198,6 +198,22 @@ class OpenAIModelListing:
     pagination: OpenAIModelPagination | None = None
 
 
+ReasoningWireField = Literal["reasoning_content", "reasoning"]
+
+
+def _delta_str_field(delta: Any, field: str) -> str | None:
+    """Read a string delta attribute, falling back to ``model_extra``."""
+    value = getattr(delta, field, None)
+    if isinstance(value, str):
+        return value
+    model_extra = getattr(delta, "model_extra", None)
+    if isinstance(model_extra, Mapping):
+        extra_value = model_extra.get(field)
+        if isinstance(extra_value, str):
+            return extra_value
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class OpenAIChatProfile:
     """Immutable transport and reasoning behavior for one provider."""
@@ -208,12 +224,8 @@ class OpenAIChatProfile:
     model_ids_are_routable: bool = True
     model_listing: OpenAIModelListing = OpenAIModelListing()
     normalize_base_url: bool = False
-    reasoning_delta_field: Literal["reasoning_content", "reasoning"] = (
-        "reasoning_content"
-    )
-    reasoning_delta_fallback_field: Literal["reasoning_content", "reasoning"] | None = (
-        None
-    )
+    reasoning_delta_field: ReasoningWireField = "reasoning_content"
+    reasoning_delta_fallback_field: ReasoningWireField | None = None
     structured_reasoning_details: bool = False
     # What this host is told about the client calling it. ``None`` --
     # every profile but the two OpenCode ones -- means MCC sends nothing
@@ -370,17 +382,35 @@ class OpenAIChatProfile:
     def base_url(self, configured: str) -> str:
         return openai_v1_base_url(configured) if self.normalize_base_url else configured
 
-    def reasoning_delta(self, delta: Any) -> str | None:
-        value = getattr(delta, self.reasoning_delta_field, None)
-        if isinstance(value, str) and value:
-            return value
+    def reasoning_delta_with_field(
+        self, delta: Any
+    ) -> tuple[ReasoningWireField | None, str | None]:
+        """Return ``(actual_wire_field, reasoning_text)`` from a stream delta."""
+        primary = self.reasoning_delta_field
+        value = _delta_str_field(delta, primary)
+        if value:
+            return primary, value
         fallback = self.reasoning_delta_fallback_field
-        if fallback is None:
-            return value if isinstance(value, str) else None
-        fallback_value = getattr(delta, fallback, None)
-        if isinstance(fallback_value, str):
-            return fallback_value
-        return value if isinstance(value, str) else None
+        fallback_value: str | None = None
+        if fallback is not None:
+            fallback_value = _delta_str_field(delta, fallback)
+            if fallback_value:
+                return fallback, fallback_value
+        alternate: ReasoningWireField = (
+            "reasoning" if primary == "reasoning_content" else "reasoning_content"
+        )
+        if alternate != fallback:
+            alt_value = _delta_str_field(delta, alternate)
+            if alt_value:
+                return alternate, alt_value
+        if value is not None:
+            return primary, value
+        if fallback is not None and fallback_value is not None:
+            return fallback, fallback_value
+        return None, None
+
+    def reasoning_delta(self, delta: Any) -> str | None:
+        return self.reasoning_delta_with_field(delta)[1]
 
     def apply_reasoning(
         self,

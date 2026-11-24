@@ -44,6 +44,7 @@ from my_claude_code.config.model_overrides import (
     save_model_overrides,
 )
 from tests.contracts.adaptive_expectations import moved as adaptive_moves
+from tests.contracts.chat_reasoning_expectations import chat_corrections
 from tests.contracts.go_reasoning_expectations import corrections
 from tests.contracts.marketplace_equality_corpus import compact, record_digest, snapshot
 from tests.support.parallel_tool_calls_pin import (
@@ -158,17 +159,28 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
     assert now["count"] == base["count"] + 1 + 432  # + chat/inferhub
     assert set(now["groups"]) - set(base["groups"]) == {"chat/inferhub"}
     expected = corrections("market")
+    chat_expected = chat_corrections("market")
     # 8.13.0 makes the Chat door express an ADAPTIVE policy instead of
     # silently sending nothing, so every ``*/adaptive/*`` call on every Chat
     # host moves. Those are recorded before/after in
     # ``adaptive_every_door_expectations.json`` -- the historical baseline is
     # not regenerated -- and nothing else may move.
     adaptive = adaptive_moves("marketplace")
-    changed = {f"chat/opencode_go/{key}" for key in expected} | {
-        f"chat/{name}" for name in adaptive
-    }
+    changed = (
+        {f"chat/opencode_go/{key}" for key in expected}
+        | {f"chat/minimax/{key}" for key in chat_expected}
+        | {f"chat/{name}" for name in adaptive}
+    )
     assert set(_moved(now, base)) == changed
     for index, key in enumerate(base["keys"]):
+        chat_entry = chat_expected.get(key)
+        if chat_entry is not None:
+            assert (
+                chat_entry["before"] == base["groups"]["chat/minimax"]["calls"][index]
+            )
+            assert (
+                record_digest(records[f"chat/minimax/{key}"]) == chat_entry["after"]
+            ), key
         entry = expected.get(key)
         if entry is None:
             continue

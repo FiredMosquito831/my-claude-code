@@ -104,8 +104,56 @@ def test_llamacpp_encoder_maps_effort_preserves_exact_budget_and_disables() -> N
 
 
 def test_split_reasoning_output_does_not_invent_compute_control() -> None:
-    body: dict = {}
+    off_body: dict = {}
+    on_body: dict = {}
 
-    SplitReasoningOutput().encode(body, ReasoningPolicy.off())
+    SplitReasoningOutput().encode(off_body, ReasoningPolicy.off())
+    SplitReasoningOutput().encode(on_body, ReasoningPolicy.on())
 
-    assert body == {"extra_body": {"reasoning_split": True}}
+    assert off_body == {}
+    assert on_body == {"extra_body": {"reasoning_split": True}}
+
+
+def test_adaptive_off_prefers_enabled_value_before_high_clamp(monkeypatch) -> None:
+    """Fix 3A: REASONING_ADAPTIVE='off' + ADAPTIVE(None) honors enabled_value != 'high'."""
+    from my_claude_code.config.settings import get_settings
+    from my_claude_code.providers.openai_chat import profiles as chat_profiles
+
+    monkeypatch.setenv("REASONING_ADAPTIVE", "off")
+    get_settings.cache_clear()
+    try:
+        encoder = NamedEffortReasoning(
+            (
+                (ReasoningEffort.LOW, "low"),
+                (ReasoningEffort.MEDIUM, "medium"),
+                (ReasoningEffort.HIGH, "high"),
+                (ReasoningEffort.MAX, "max"),
+            ),
+            enabled_value="max",
+        )
+        body: dict = {}
+        encoder.encode(body, ReasoningPolicy.adaptive())
+        assert body == {"reasoning_effort": "max"}
+
+        # Novita/Nebius/Together-style medium enabled_value when high is in efforts
+        medium_encoder = NamedEffortReasoning(
+            (
+                (ReasoningEffort.LOW, "low"),
+                (ReasoningEffort.MEDIUM, "medium"),
+                (ReasoningEffort.HIGH, "high"),
+            ),
+            enabled_value="medium",
+        )
+        medium_body: dict = {}
+        medium_encoder.encode(medium_body, ReasoningPolicy.adaptive())
+        assert medium_body == {"reasoning_effort": "medium"}
+
+        # Host with enabled_value=None still falls back to clamped HIGH
+        generic_body: dict = {}
+        chat_profiles.GENERIC_OPENAI_PROFILE.reasoning.encode(
+            generic_body, ReasoningPolicy.adaptive()
+        )
+        assert generic_body == {"reasoning_effort": "high"}
+    finally:
+        monkeypatch.delenv("REASONING_ADAPTIVE", raising=False)
+        get_settings.cache_clear()

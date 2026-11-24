@@ -120,7 +120,7 @@ def test_build_request_body_does_not_invent_unsupported_compute_control(
 
     body = minimax_provider._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["extra_body"] == {"reasoning_split": True}
+    assert "extra_body" not in body
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,7 @@ from my_claude_code.providers.openai_chat.profiles import OPENAI_CHAT_PROFILES
 from my_claude_code.providers.openai_chat.request_policy import (
     build_openai_chat_request_body,
 )
+from tests.contracts.chat_reasoning_expectations import chat_corrected_expectation
 from tests.contracts.go_reasoning_expectations import corrected_expectation
 from tests.providers.support import passthrough_rate_limiter
 from tests.support.parallel_tool_calls_pin import (
@@ -539,9 +540,12 @@ RESPONSES = sorted(
 
 @pytest.mark.parametrize("key", NON_RESPONSES)
 def test_every_other_surface_is_byte_identical_to_v7_58_0(key: str) -> None:
-    # 7.113.2: only the twelve approved Go native-history corrections differ.
-    # The v7.58.0 baseline stays intact; every other historical byte is pinned.
+    # 7.113.2: twelve Go native-history corrections; 8.40.0: twelve commandcode
+    # history corrections (reasoning -> reasoning_content) and eight minimax
+    # OFF cells (omitting reasoning_split). Every other historical byte stays
+    # pinned against the untouched baseline.
     expected = corrected_expectation("history", key, DIGESTS[key])
+    expected = chat_corrected_expectation("history", key, expected)
     assert digest(_now()[key]) == expected
 
 

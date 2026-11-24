@@ -23,6 +23,7 @@ from .facts import (
     FACT_EFFORT_VALUE_REJECTED,
     FACT_HISTORY_THINKING_REJECTED,
     FACT_OUTPUT_CAP,
+    FACT_REASONING_CHANNEL,
     FACT_REASONING_FIELD_REJECTED,
     FACT_RESPONSES_REASONING_ITEM_REJECTED,
     FACT_RESPONSES_TOOL_CHOICE_AUTO_ONLY,
@@ -32,6 +33,10 @@ from .facts import (
     FACT_STREAM_USAGE_UNSUPPORTED,
     PROVIDER_WIDE_MODEL_ID,
     FactSink,
+)
+
+_OBSERVED_REASONING_CHANNELS = frozenset(
+    {"reasoning_content", "reasoning", "think_tags"}
 )
 
 
@@ -107,6 +112,10 @@ class RecoveryMemory:
     #: is an Anthropic Messages history block and its reader is the Messages
     #: door's trim. This one is a Responses input item.
     responses_reasoning_item_rejected: set[str] = field(default_factory=set)
+
+    #: Bare model id -> {surface key: observed wire reasoning channel}.
+    #: ``surface key`` is ``"chat_completions"`` or ``""`` (default Chat).
+    reasoning_channels: dict[str, dict[str, str]] = field(default_factory=dict)
 
     #: Where a newly learned fact is written through to, or ``None`` for a
     #: memory that persists nothing.
@@ -439,3 +448,37 @@ class RecoveryMemory:
         if self.sink is not None:
             self.sink(FACT_STREAM_USAGE_UNSUPPORTED, model, True, "", evidence)
         return not already_known
+
+    def reasoning_channel_for(
+        self, model: str, *, surface: str | None = None
+    ) -> str | None:
+        """Return the observed Chat reasoning wire channel for ``model``, if known."""
+        channels = self.reasoning_channels.get(model)
+        if not channels:
+            return None
+        return channels.get(surface or "")
+
+    def remember_reasoning_channel(
+        self,
+        model: str,
+        channel: str,
+        *,
+        surface: str | None = None,
+        evidence: str = "",
+    ) -> bool:
+        """Record the reasoning wire channel observed from upstream; ``False`` if unchanged."""
+        if channel not in _OBSERVED_REASONING_CHANNELS:
+            return False
+        surface_key = surface or ""
+        channels = self.reasoning_channels.setdefault(model, {})
+        unchanged = channels.get(surface_key) == channel
+        channels[surface_key] = channel
+        if self.sink is not None:
+            self.sink(
+                FACT_REASONING_CHANNEL,
+                model,
+                channel,
+                surface_key,
+                evidence,
+            )
+        return not unchanged

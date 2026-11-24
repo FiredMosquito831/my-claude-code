@@ -330,6 +330,14 @@ def test_every_pre_adaptive_preference_is_byte_identical(
     published effort rung (``"high"`` on both ``groq`` and ``xai``), replacing
     ``groq``'s bare-``ON`` default ``"medium"`` and ``xai``'s bare-``ON`` ``{}``.
     None of the other 348 cells moved.
+
+    Six ``minimax|*|off`` and ``minimax|client_thinking_disabled|client`` cells
+    (``minimax|bare|off``, ``minimax|client_effort_high|off``,
+    ``minimax|client_thinking_adaptive|off``, ``minimax|client_thinking_budget|off``,
+    ``minimax|client_thinking_disabled|client``, ``minimax|client_thinking_disabled|off``)
+    were re-baselined in 8.40.0 (Fix 3B): ``SplitReasoningOutput.encode`` now
+    returns early on ``ReasoningControl.OFF`` instead of emitting
+    ``extra_body.reasoning_split=True``. All other cells stay byte-identical.
     """
 
     overrides = CLIENT_REQUESTS[shape]

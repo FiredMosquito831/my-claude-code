@@ -1,7 +1,7 @@
 """Mistral La Plateforme provider implementation (Chat Completions & Responses)."""
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, ClassVar
 
 from loguru import logger
 
@@ -70,6 +70,8 @@ class MistralProvider(OpenAIChatProvider):
     zero-cost table, and it is what the request log records per attempt. Two
     credentials spending two different budgets must not share those.
     """
+
+    _supports_observed_reasoning_replay: ClassVar[bool] = False
 
     def _declared_reasoning_dialect(self) -> ReasoningDialect:
         """See :data:`MISTRAL_REASONING_DIALECT`."""

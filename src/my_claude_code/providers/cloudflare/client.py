@@ -142,7 +142,7 @@ class CloudflareProvider(OpenAIChatProvider):
         Cloudflare delta into a ``TypeError``.
         """
         reasoning = _cloudflare_reasoning(delta)
-        if not output_reasoning or not reasoning:
+        if not output_reasoning or not reasoning or reasoning == native_reasoning:
             return
         yield from ledger.ensure_thinking_block()
         yield ledger.emit_thinking_delta(reasoning)
