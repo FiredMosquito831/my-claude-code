@@ -361,6 +361,13 @@ class OpenAIChatProfile:
     # nothing about Chat Completions or Responses, which have no signature
     # concept at all.
     messages_signs_thinking: bool = True
+    #: Whether this host's *Messages* SSE stream parses ``<think>...</think>``
+    #: tags out of ``text_delta`` into ``thinking_delta`` blocks. ``True`` --
+    #: every OpenAI-compatible gateway profile -- aligns non-Anthropic
+    #: ``/messages`` doors with Chat Completions and Responses, while native
+    #: ``AnthropicProvider`` / ``AnthropicOAuthProvider`` and Command Code's
+    #: Claude delegate keep ``False`` so literal ``<think>`` in text stays text.
+    messages_extract_think_tags: bool = True
     #: Declarative worker cache-affinity spec (``prompt_cache_key`` +
     #: ``x-affinity``). ``None`` -- every profile in ``OPENAI_CHAT_PROFILES``,
     #: including ``mistral_codestral``, ``opencode``, and
@@ -581,6 +588,10 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         # on a door MCC does speak. Nothing is hidden: the row keeps the
         # vendor's reason until a probe has actually answered.
         optimistic_first_try=True,
+        # Third-party ``/messages`` gateway: keep unsigned thinking unless the
+        # host refuses a replayed block (recorded per model in
+        # ``FACT_HISTORY_THINKING_REJECTED``).
+        messages_signs_thinking=False,
     ),
     "opencode_go": OpenAIChatProfile(
         _policy(
@@ -1129,6 +1140,10 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             ("cx", ResponseSurface.RESPONSES),
         ),
         marketplace=INFERHUB_MARKETPLACE,
+        # Uniform across third-party ``MessagesTransport`` profiles: keep
+        # unsigned thinking for non-signing models while strict Claude
+        # upstreams retain signed blocks and auto-learn any 400 refusal.
+        messages_signs_thinking=False,
     ),
     "tokenrouter": OpenAIChatProfile(
         _policy(
@@ -1266,6 +1281,7 @@ GENERIC_OPENAI_PROFILE = OpenAIChatProfile(
         extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
     ),
     OPENAI_STANDARD_REASONING,
+    messages_signs_thinking=False,
 )
 
 

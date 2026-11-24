@@ -65,6 +65,7 @@ from my_claude_code.providers.anthropic_messages.request import (
 )
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.openai_chat import (
+    GENERIC_OPENAI_PROFILE,
     OPENAI_CHAT_PROFILES,
     create_openai_chat_provider,
 )
@@ -673,14 +674,15 @@ def test_the_note_names_the_right_rule_on_a_host_that_signs_nothing() -> None:
 
 
 def test_only_the_go_profile_declares_that_its_messages_door_signs_nothing() -> None:
-    """Declared data, not a provider-id branch: the table is the whole answer."""
+    """Declared data, not a provider-id branch: third-party gateways do not sign."""
 
     unsigned = sorted(
         name
         for name, profile in OPENAI_CHAT_PROFILES.items()
         if not profile.messages_signs_thinking
     )
-    assert unsigned == ["opencode_go"]
+    assert unsigned == ["inferhub", "opencode", "opencode_go"]
+    assert GENERIC_OPENAI_PROFILE.messages_signs_thinking is False
 
 
 GO_BASE_URL = "https://opencode.ai/go/v1"

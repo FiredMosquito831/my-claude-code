@@ -7,12 +7,17 @@ from .auth import (
     BearerTokenAuth,
 )
 from .prompt_cache import refused_prompt_cache_lifetimes
-from .provider import ANTHROPIC_REASONING_DIALECT, AnthropicMessagesProvider
+from .provider import (
+    ANTHROPIC_GATEWAY_REASONING_DIALECT,
+    ANTHROPIC_REASONING_DIALECT,
+    AnthropicMessagesProvider,
+)
 from .request import build_anthropic_messages_body
 from .streaming import iter_anthropic_sse_frames
 
 __all__ = [
     "ANTHROPIC_API_VERSION",
+    "ANTHROPIC_GATEWAY_REASONING_DIALECT",
     "ANTHROPIC_REASONING_DIALECT",
     "AnthropicMessagesAuth",
     "AnthropicMessagesProvider",

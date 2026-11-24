@@ -93,7 +93,7 @@ from my_claude_code.core.wire_capture import (
     start_response_shape,
 )
 from my_claude_code.providers.anthropic_messages import (
-    ANTHROPIC_REASONING_DIALECT,
+    ANTHROPIC_GATEWAY_REASONING_DIALECT,
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
@@ -494,7 +494,7 @@ class OpenAIChatProvider(BaseProvider):
         ):
             surface = preferred
         if surface is ResponseSurface.MESSAGES:
-            dialect = ANTHROPIC_REASONING_DIALECT
+            dialect = ANTHROPIC_GATEWAY_REASONING_DIALECT
             mem_surface: str | None = ResponseSurface.MESSAGES.value
         elif surface is ResponseSurface.RESPONSES:
             dialect = RESPONSES_REASONING_DIALECT
@@ -582,8 +582,9 @@ class OpenAIChatProvider(BaseProvider):
                 marketplace=self._profile.marketplace,
                 # Whether this host's ``/messages`` door signs its thinking
                 # (8.12.2). Declared on the profile, so nothing here names a
-                # provider; ``True`` for every profile but OpenCode Go's.
+                # provider.
                 signs_thinking=self._profile.messages_signs_thinking,
+                extract_think_tags=self._profile.messages_extract_think_tags,
             )
             self._messages_transport = transport
         return transport

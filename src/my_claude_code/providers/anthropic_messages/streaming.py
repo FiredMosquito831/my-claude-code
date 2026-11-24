@@ -6,6 +6,11 @@ import time
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
+from my_claude_code.core.anthropic.thinking import (
+    ContentChunk,
+    ContentType,
+    ThinkTagParser,
+)
 from my_claude_code.core.anthropic.upstream_errors import anthropic_stream_failure
 from my_claude_code.core.reported_cost import (
     record_reported_reasoning,
@@ -18,8 +23,261 @@ _TERMINAL_EVENT = "message_stop"
 _ERROR_EVENT = "error"
 
 
+class AnthropicMessagesThinkTagNormalizer:
+    """Split ``<think>...</think>`` tags out of Anthropic ``text`` SSE blocks.
+
+    Activated only for non-Anthropic ``/messages`` gateways that opt in.
+    Native Anthropic and Anthropic OAuth never construct this normalizer.
+    """
+
+    def __init__(self, *, output_reasoning: bool = True) -> None:
+        self._output_reasoning = output_reasoning
+        self._next_index = 0
+        self._index_map: dict[int, int] = {}
+        self._active_text_source_index: int | None = None
+        self._active_text_template: dict[str, Any] = {}
+        self._last_suppressed_template: dict[str, Any] = {}
+        self._think_parser: ThinkTagParser | None = None
+        self._open_kind: str | None = None
+        self._open_index: int | None = None
+        self._emitted_in_active_text = False
+        self._suppressed_in_active_text = False
+        self._saw_suppressed_only = False
+
+    def _alloc_index(self) -> int:
+        index = self._next_index
+        self._next_index += 1
+        return index
+
+    def _close_open_subblock(self) -> list[tuple[str, dict[str, Any]]]:
+        if self._open_kind is None or self._open_index is None:
+            return []
+        closed_index = self._open_index
+        self._open_kind = None
+        self._open_index = None
+        return [
+            (
+                "content_block_stop",
+                {"type": "content_block_stop", "index": closed_index},
+            )
+        ]
+
+    def _emit_chunk(self, chunk: ContentChunk) -> list[tuple[str, dict[str, Any]]]:
+        if not chunk.content:
+            return []
+        out: list[tuple[str, dict[str, Any]]] = []
+        if chunk.type is ContentType.THINKING:
+            if not self._output_reasoning:
+                self._suppressed_in_active_text = True
+                return out
+            if self._open_kind != "thinking":
+                out.extend(self._close_open_subblock())
+                idx = self._alloc_index()
+                out.append(
+                    (
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": idx,
+                            "content_block": {"type": "thinking", "thinking": ""},
+                        },
+                    )
+                )
+                self._open_kind = "thinking"
+                self._open_index = idx
+                self._emitted_in_active_text = True
+            out.append(
+                (
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": self._open_index,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": chunk.content,
+                        },
+                    },
+                )
+            )
+            return out
+
+        if self._open_kind != "text":
+            out.extend(self._close_open_subblock())
+            idx = self._alloc_index()
+            out.append(
+                (
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": idx,
+                        "content_block": {
+                            "type": "text",
+                            "text": "",
+                            **self._active_text_template,
+                        },
+                    },
+                )
+            )
+            self._open_kind = "text"
+            self._open_index = idx
+            self._emitted_in_active_text = True
+        out.append(
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": self._open_index,
+                    "delta": {"type": "text_delta", "text": chunk.content},
+                },
+            )
+        )
+        return out
+
+    def _feed_text(self, text: str) -> list[tuple[str, dict[str, Any]]]:
+        if not text or self._think_parser is None:
+            return []
+        out: list[tuple[str, dict[str, Any]]] = []
+        for chunk in self._think_parser.feed(text):
+            out.extend(self._emit_chunk(chunk))
+        return out
+
+    def _finish_active_text(self) -> list[tuple[str, dict[str, Any]]]:
+        if self._active_text_source_index is None:
+            return []
+        out: list[tuple[str, dict[str, Any]]] = []
+        if self._think_parser is not None:
+            remaining = self._think_parser.flush()
+            if remaining is not None:
+                out.extend(self._emit_chunk(remaining))
+        out.extend(self._close_open_subblock())
+        if not self._emitted_in_active_text:
+            if self._suppressed_in_active_text:
+                self._saw_suppressed_only = True
+                self._last_suppressed_template = dict(self._active_text_template)
+            else:
+                idx = self._alloc_index()
+                out.append(
+                    (
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": idx,
+                            "content_block": {
+                                "type": "text",
+                                "text": "",
+                                **self._active_text_template,
+                            },
+                        },
+                    )
+                )
+                out.append(
+                    (
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": idx},
+                    )
+                )
+        self._active_text_source_index = None
+        self._active_text_template = {}
+        self._think_parser = None
+        self._emitted_in_active_text = False
+        self._suppressed_in_active_text = False
+        return out
+
+    def feed(
+        self, event_name: str, payload: dict[str, Any]
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Normalize one validated Anthropic SSE frame into zero or more frames."""
+
+        if event_name == "content_block_start":
+            src_idx = _block_index(payload)
+            block = payload.get("content_block")
+            out = self._finish_active_text()
+            if isinstance(block, Mapping) and block.get("type") == "text":
+                self._active_text_source_index = src_idx
+                self._active_text_template = {
+                    key: value
+                    for key, value in block.items()
+                    if key not in {"type", "text"}
+                }
+                self._think_parser = ThinkTagParser()
+                self._emitted_in_active_text = False
+                self._suppressed_in_active_text = False
+                eager = block.get("text")
+                if isinstance(eager, str) and eager:
+                    out.extend(self._feed_text(eager))
+                return out
+            out_idx = self._alloc_index()
+            self._index_map[src_idx] = out_idx
+            out.append((event_name, {**payload, "index": out_idx}))
+            return out
+
+        if event_name == "content_block_delta":
+            src_idx = _block_index(payload)
+            if src_idx == self._active_text_source_index:
+                delta = payload.get("delta")
+                if isinstance(delta, Mapping) and delta.get("type") == "text_delta":
+                    text = delta.get("text")
+                    if isinstance(text, str) and text:
+                        return self._feed_text(text)
+                return []
+            out_idx = self._index_map.get(src_idx, src_idx)
+            return [(event_name, {**payload, "index": out_idx})]
+
+        if event_name == "content_block_stop":
+            src_idx = _block_index(payload)
+            if src_idx == self._active_text_source_index:
+                return self._finish_active_text()
+            out_idx = self._index_map.pop(src_idx, src_idx)
+            return [(event_name, {**payload, "index": out_idx})]
+
+        if event_name in {"message_delta", "message_stop"}:
+            out = self._finish_active_text()
+            if self._next_index == 0 and self._saw_suppressed_only:
+                self._saw_suppressed_only = False
+                idx = self._alloc_index()
+                out.append(
+                    (
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": idx,
+                            "content_block": {
+                                "type": "text",
+                                "text": "",
+                                **self._last_suppressed_template,
+                            },
+                        },
+                    )
+                )
+                out.append(
+                    (
+                        "content_block_stop",
+                        {"type": "content_block_stop", "index": idx},
+                    )
+                )
+            out.append((event_name, payload))
+            return out
+
+        return [(event_name, payload)]
+
+    def flush(self) -> list[tuple[str, dict[str, Any]]]:
+        """Flush any unclosed active text block at stream end."""
+
+        return self._finish_active_text()
+
+
+def _format_sse_frame(event_name: str, payload: Mapping[str, Any]) -> str:
+    return (
+        f"event: {event_name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+    )
+
+
 async def iter_anthropic_sse_frames(
-    chunks: AsyncIterator[bytes], shape: ResponseShape | None = None
+    chunks: AsyncIterator[bytes],
+    shape: ResponseShape | None = None,
+    *,
+    extract_think_tags: bool = False,
+    output_reasoning: bool = True,
 ) -> AsyncIterator[str]:
     """Yield complete validated SSE frames and require ``message_stop``.
 
@@ -29,30 +287,60 @@ async def iter_anthropic_sse_frames(
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     buffer = ""
     terminal_seen = False
+    normalizer = (
+        AnthropicMessagesThinkTagNormalizer(output_reasoning=output_reasoning)
+        if extract_think_tags
+        else None
+    )
+
+    def _emit_normalized(
+        event_name: str, payload: dict[str, Any]
+    ) -> list[tuple[str, dict[str, Any]]]:
+        if normalizer is None:
+            return [(event_name, payload)]
+        return normalizer.feed(event_name, payload)
+
     async for chunk in chunks:
         buffer += decoder.decode(chunk)
         buffer = buffer.replace("\r\n", "\n")
         while "\n\n" in buffer:
             raw, buffer = buffer.split("\n\n", 1)
             frame, event_name, payload = _validated_frame(raw)
-            if frame is None:
+            if frame is None or event_name is None or payload is None:
                 continue
             if event_name == _ERROR_EVENT:
                 raise anthropic_stream_failure(payload)
-            terminal_seen = terminal_seen or event_name == _TERMINAL_EVENT
-            _note_frame_shape(shape, event_name, payload)
-            yield frame
+            if normalizer is None:
+                terminal_seen = terminal_seen or event_name == _TERMINAL_EVENT
+                _note_frame_shape(shape, event_name, payload)
+                yield frame
+            else:
+                for norm_event, norm_payload in _emit_normalized(event_name, payload):
+                    terminal_seen = terminal_seen or norm_event == _TERMINAL_EVENT
+                    _note_frame_shape(shape, norm_event, norm_payload)
+                    yield _format_sse_frame(norm_event, norm_payload)
 
     buffer += decoder.decode(b"", final=True)
     buffer = buffer.replace("\r\n", "\n")
     if buffer.strip():
         frame, event_name, payload = _validated_frame(buffer)
-        if frame is not None:
+        if frame is not None and event_name is not None and payload is not None:
             if event_name == _ERROR_EVENT:
                 raise anthropic_stream_failure(payload)
-            terminal_seen = terminal_seen or event_name == _TERMINAL_EVENT
-            _note_frame_shape(shape, event_name, payload)
-            yield frame
+            if normalizer is None:
+                terminal_seen = terminal_seen or event_name == _TERMINAL_EVENT
+                _note_frame_shape(shape, event_name, payload)
+                yield frame
+            else:
+                for norm_event, norm_payload in _emit_normalized(event_name, payload):
+                    terminal_seen = terminal_seen or norm_event == _TERMINAL_EVENT
+                    _note_frame_shape(shape, norm_event, norm_payload)
+                    yield _format_sse_frame(norm_event, norm_payload)
+    if normalizer is not None:
+        for norm_event, norm_payload in normalizer.flush():
+            terminal_seen = terminal_seen or norm_event == _TERMINAL_EVENT
+            _note_frame_shape(shape, norm_event, norm_payload)
+            yield _format_sse_frame(norm_event, norm_payload)
     if not terminal_seen:
         raise TruncatedProviderStreamError(
             "Anthropic Messages stream ended without message_stop."

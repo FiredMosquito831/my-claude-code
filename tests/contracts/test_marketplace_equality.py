@@ -47,6 +47,9 @@ from tests.contracts.adaptive_expectations import moved as adaptive_moves
 from tests.contracts.chat_reasoning_expectations import chat_corrections
 from tests.contracts.go_reasoning_expectations import corrections
 from tests.contracts.marketplace_equality_corpus import compact, record_digest, snapshot
+from tests.contracts.messages_gateway_reasoning_expectations import (
+    messages_gateway_corrections,
+)
 from tests.support.parallel_tool_calls_pin import (
     pin_parallel_tool_calls_off,
     unpin_parallel_tool_calls,
@@ -160,6 +163,7 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
     assert set(now["groups"]) - set(base["groups"]) == {"chat/inferhub"}
     expected = corrections("market")
     chat_expected = chat_corrections("market")
+    messages_expected = messages_gateway_corrections()
     # 8.13.0 makes the Chat door express an ADAPTIVE policy instead of
     # silently sending nothing, so every ``*/adaptive/*`` call on every Chat
     # host moves. Those are recorded before/after in
@@ -170,8 +174,18 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
         {f"chat/opencode_go/{key}" for key in expected}
         | {f"chat/minimax/{key}" for key in chat_expected}
         | {f"chat/{name}" for name in adaptive}
+        | set(messages_expected)
     )
     assert set(_moved(now, base)) == changed
+    for full_key, entry in messages_expected.items():
+        group_name, corpus_key = (
+            "/".join(full_key.split("/")[:2]),
+            "/".join(full_key.split("/")[2:]),
+        )
+        idx = base["keys"].index(corpus_key)
+        assert entry["before"] == base["groups"][group_name]["calls"][idx], full_key
+        assert record_digest(records[full_key]) == entry["after"], full_key
+        assert entry["after"] != entry["before"], full_key
     for index, key in enumerate(base["keys"]):
         chat_entry = chat_expected.get(key)
         if chat_entry is not None:

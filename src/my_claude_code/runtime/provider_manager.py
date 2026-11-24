@@ -372,10 +372,18 @@ class ProviderRuntimeManager:
 
         lists_effort = "reasoning_effort" in published
         lists_reasoning = "reasoning" in published
+        is_openai_effort = (
+            dialect.effort_field == "reasoning_effort"
+            or dialect.effort_field.startswith("reasoning.")
+        )
         effort_values = dialect.effort_values
-        if effort_values is not None and not (
-            lists_effort
-            or (lists_reasoning and dialect.effort_field.startswith("reasoning."))
+        if (
+            effort_values is not None
+            and is_openai_effort
+            and not (
+                lists_effort
+                or (lists_reasoning and dialect.effort_field.startswith("reasoning."))
+            )
         ):
             effort_values = None
         # A chat-template or ``thinking``-object toggle is not an OpenAI
