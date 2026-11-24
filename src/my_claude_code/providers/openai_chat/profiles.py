@@ -1107,6 +1107,7 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
         ),
         OPENAI_STANDARD_REASONING,
+        messages_signs_thinking=False,
     ),
     # InferHub (7.109.0): a price marketplace over pooled upstream
     # subscriptions, behind one key on three doors -- Chat Completions,

@@ -681,7 +681,7 @@ def test_only_the_go_profile_declares_that_its_messages_door_signs_nothing() -> 
         for name, profile in OPENAI_CHAT_PROFILES.items()
         if not profile.messages_signs_thinking
     )
-    assert unsigned == ["inferhub", "opencode", "opencode_go"]
+    assert unsigned == ["bai", "inferhub", "opencode", "opencode_go"]
     assert GENERIC_OPENAI_PROFILE.messages_signs_thinking is False
 
 
