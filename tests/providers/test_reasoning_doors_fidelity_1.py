@@ -45,6 +45,7 @@ from my_claude_code.core.wire_capture import (
     summarize_wire_body,
 )
 from my_claude_code.providers.anthropic_messages import (
+    ANTHROPIC_GATEWAY_REASONING_DIALECT,
     ANTHROPIC_REASONING_DIALECT,
     AnthropicMessagesProvider,
     build_anthropic_messages_body,
@@ -233,7 +234,7 @@ def test_pr2_single_surface_fast_path_and_multi_surface_scoping() -> None:
     )
     # muse-spark-1.3-contributor has a measured Messages surface on opencode_go.
     go_dialect = opencode_go.reasoning_dialect("muse-spark-1.3-contributor")
-    assert go_dialect == ANTHROPIC_REASONING_DIALECT
+    assert go_dialect == ANTHROPIC_GATEWAY_REASONING_DIALECT
 
     responses_profile = profile_with_declared_surfaces(
         GENERIC_OPENAI_PROFILE, ("responses", "chat_completions")

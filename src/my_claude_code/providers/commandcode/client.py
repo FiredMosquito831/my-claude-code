@@ -13,7 +13,10 @@ from my_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
-from my_claude_code.providers.anthropic_messages import AnthropicMessagesProvider
+from my_claude_code.providers.anthropic_messages import (
+    ANTHROPIC_GATEWAY_REASONING_DIALECT,
+    AnthropicMessagesProvider,
+)
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
@@ -150,6 +153,7 @@ class CommandCodeProvider(BaseProvider):
             # (7.105.0): a lifetime only where an override row sets one, and
             # only on the models this delegate serves.
             prompt_cache_family=prompt_cache_gateway_family(),
+            declared_reasoning_dialect=ANTHROPIC_GATEWAY_REASONING_DIALECT,
         )
 
     def reasoning_dialect(self, model_id: str) -> ReasoningDialect | None:

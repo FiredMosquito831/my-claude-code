@@ -1,0 +1,871 @@
+{
+ "_what": "8.41.0 (MESSAGES-GATEWAYS-REASONING-AND-SIGNING) finite moved marketplace equality cells (216 messages/*/on_high/* cells).",
+ "cases": {
+  "market": {
+   "messages/corpus_custom/anthropic_ciphertext/on_high/adaptive": {
+    "after": "9fa6069f0674",
+    "before": "74efd2784f69"
+   },
+   "messages/corpus_custom/anthropic_ciphertext/on_high/disabled": {
+    "after": "9fa6069f0674",
+    "before": "74efd2784f69"
+   },
+   "messages/corpus_custom/anthropic_ciphertext/on_high/enabled_4000": {
+    "after": "9fa6069f0674",
+    "before": "74efd2784f69"
+   },
+   "messages/corpus_custom/anthropic_ciphertext/on_high/none": {
+    "after": "9fa6069f0674",
+    "before": "74efd2784f69"
+   },
+   "messages/corpus_custom/assistant_arrived_empty/on_high/adaptive": {
+    "after": "7822fee30835",
+    "before": "2a61a991b218"
+   },
+   "messages/corpus_custom/assistant_arrived_empty/on_high/disabled": {
+    "after": "7822fee30835",
+    "before": "2a61a991b218"
+   },
+   "messages/corpus_custom/assistant_arrived_empty/on_high/enabled_4000": {
+    "after": "7822fee30835",
+    "before": "2a61a991b218"
+   },
+   "messages/corpus_custom/assistant_arrived_empty/on_high/none": {
+    "after": "7822fee30835",
+    "before": "2a61a991b218"
+   },
+   "messages/corpus_custom/assistant_prefill_last/on_high/adaptive": {
+    "after": "58e35178876f",
+    "before": "12da4e4af8e2"
+   },
+   "messages/corpus_custom/assistant_prefill_last/on_high/disabled": {
+    "after": "58e35178876f",
+    "before": "12da4e4af8e2"
+   },
+   "messages/corpus_custom/assistant_prefill_last/on_high/enabled_4000": {
+    "after": "58e35178876f",
+    "before": "12da4e4af8e2"
+   },
+   "messages/corpus_custom/assistant_prefill_last/on_high/none": {
+    "after": "58e35178876f",
+    "before": "12da4e4af8e2"
+   },
+   "messages/corpus_custom/cache_control_everywhere/on_high/adaptive": {
+    "after": "217f0a54d9d4",
+    "before": "24df8a95f3bb"
+   },
+   "messages/corpus_custom/cache_control_everywhere/on_high/disabled": {
+    "after": "217f0a54d9d4",
+    "before": "24df8a95f3bb"
+   },
+   "messages/corpus_custom/cache_control_everywhere/on_high/enabled_4000": {
+    "after": "217f0a54d9d4",
+    "before": "24df8a95f3bb"
+   },
+   "messages/corpus_custom/cache_control_everywhere/on_high/none": {
+    "after": "217f0a54d9d4",
+    "before": "24df8a95f3bb"
+   },
+   "messages/corpus_custom/consecutive_same_role/on_high/adaptive": {
+    "after": "64bf392d4808",
+    "before": "288c7b0d6abe"
+   },
+   "messages/corpus_custom/consecutive_same_role/on_high/disabled": {
+    "after": "64bf392d4808",
+    "before": "288c7b0d6abe"
+   },
+   "messages/corpus_custom/consecutive_same_role/on_high/enabled_4000": {
+    "after": "64bf392d4808",
+    "before": "288c7b0d6abe"
+   },
+   "messages/corpus_custom/consecutive_same_role/on_high/none": {
+    "after": "64bf392d4808",
+    "before": "288c7b0d6abe"
+   },
+   "messages/corpus_custom/consecutive_signed_blocks/on_high/adaptive": {
+    "after": "564cf3e825bf",
+    "before": "598037a4d3e3"
+   },
+   "messages/corpus_custom/consecutive_signed_blocks/on_high/disabled": {
+    "after": "564cf3e825bf",
+    "before": "598037a4d3e3"
+   },
+   "messages/corpus_custom/consecutive_signed_blocks/on_high/enabled_4000": {
+    "after": "564cf3e825bf",
+    "before": "598037a4d3e3"
+   },
+   "messages/corpus_custom/consecutive_signed_blocks/on_high/none": {
+    "after": "564cf3e825bf",
+    "before": "598037a4d3e3"
+   },
+   "messages/corpus_custom/document_and_inline_system/on_high/adaptive": {
+    "after": "8e245696e7aa",
+    "before": "de4d2d9177bf"
+   },
+   "messages/corpus_custom/document_and_inline_system/on_high/disabled": {
+    "after": "8e245696e7aa",
+    "before": "de4d2d9177bf"
+   },
+   "messages/corpus_custom/document_and_inline_system/on_high/enabled_4000": {
+    "after": "8e245696e7aa",
+    "before": "de4d2d9177bf"
+   },
+   "messages/corpus_custom/document_and_inline_system/on_high/none": {
+    "after": "8e245696e7aa",
+    "before": "de4d2d9177bf"
+   },
+   "messages/corpus_custom/plain_strings/on_high/adaptive": {
+    "after": "9c659eece2ea",
+    "before": "7fdc82bb97ab"
+   },
+   "messages/corpus_custom/plain_strings/on_high/disabled": {
+    "after": "9c659eece2ea",
+    "before": "7fdc82bb97ab"
+   },
+   "messages/corpus_custom/plain_strings/on_high/enabled_4000": {
+    "after": "9c659eece2ea",
+    "before": "7fdc82bb97ab"
+   },
+   "messages/corpus_custom/plain_strings/on_high/none": {
+    "after": "9c659eece2ea",
+    "before": "7fdc82bb97ab"
+   },
+   "messages/corpus_custom/relay_signature_kept/on_high/adaptive": {
+    "after": "bf1d9b9b9853",
+    "before": "d597fe3015db"
+   },
+   "messages/corpus_custom/relay_signature_kept/on_high/disabled": {
+    "after": "bf1d9b9b9853",
+    "before": "d597fe3015db"
+   },
+   "messages/corpus_custom/relay_signature_kept/on_high/enabled_4000": {
+    "after": "bf1d9b9b9853",
+    "before": "d597fe3015db"
+   },
+   "messages/corpus_custom/relay_signature_kept/on_high/none": {
+    "after": "bf1d9b9b9853",
+    "before": "d597fe3015db"
+   },
+   "messages/corpus_custom/replay.long_mcp_name_and_no_thinking/on_high/adaptive": {
+    "after": "0bd385b8d5e6",
+    "before": "c2f2ca70657b"
+   },
+   "messages/corpus_custom/replay.long_mcp_name_and_no_thinking/on_high/disabled": {
+    "after": "0bd385b8d5e6",
+    "before": "c2f2ca70657b"
+   },
+   "messages/corpus_custom/replay.long_mcp_name_and_no_thinking/on_high/enabled_4000": {
+    "after": "0bd385b8d5e6",
+    "before": "c2f2ca70657b"
+   },
+   "messages/corpus_custom/replay.long_mcp_name_and_no_thinking/on_high/none": {
+    "after": "0bd385b8d5e6",
+    "before": "c2f2ca70657b"
+   },
+   "messages/corpus_custom/replay.redacted_thinking/on_high/adaptive": {
+    "after": "4922001a2621",
+    "before": "641616c80f64"
+   },
+   "messages/corpus_custom/replay.redacted_thinking/on_high/disabled": {
+    "after": "4922001a2621",
+    "before": "641616c80f64"
+   },
+   "messages/corpus_custom/replay.redacted_thinking/on_high/enabled_4000": {
+    "after": "4922001a2621",
+    "before": "641616c80f64"
+   },
+   "messages/corpus_custom/replay.redacted_thinking/on_high/none": {
+    "after": "4922001a2621",
+    "before": "641616c80f64"
+   },
+   "messages/corpus_custom/replay.string_turn_with_reasoning_content/on_high/adaptive": {
+    "after": "8fa22a8eb75d",
+    "before": "5fdf6f574e7f"
+   },
+   "messages/corpus_custom/replay.string_turn_with_reasoning_content/on_high/disabled": {
+    "after": "8fa22a8eb75d",
+    "before": "5fdf6f574e7f"
+   },
+   "messages/corpus_custom/replay.string_turn_with_reasoning_content/on_high/enabled_4000": {
+    "after": "8fa22a8eb75d",
+    "before": "5fdf6f574e7f"
+   },
+   "messages/corpus_custom/replay.string_turn_with_reasoning_content/on_high/none": {
+    "after": "8fa22a8eb75d",
+    "before": "5fdf6f574e7f"
+   },
+   "messages/corpus_custom/replay.thinking_after_tool_call/on_high/adaptive": {
+    "after": "18849e57bd4c",
+    "before": "e8dce3416b79"
+   },
+   "messages/corpus_custom/replay.thinking_after_tool_call/on_high/disabled": {
+    "after": "18849e57bd4c",
+    "before": "e8dce3416b79"
+   },
+   "messages/corpus_custom/replay.thinking_after_tool_call/on_high/enabled_4000": {
+    "after": "18849e57bd4c",
+    "before": "e8dce3416b79"
+   },
+   "messages/corpus_custom/replay.thinking_after_tool_call/on_high/none": {
+    "after": "18849e57bd4c",
+    "before": "e8dce3416b79"
+   },
+   "messages/corpus_custom/replay.thinking_only_turn/on_high/adaptive": {
+    "after": "a0e22df62cc6",
+    "before": "6c1a70330f84"
+   },
+   "messages/corpus_custom/replay.thinking_only_turn/on_high/disabled": {
+    "after": "a0e22df62cc6",
+    "before": "6c1a70330f84"
+   },
+   "messages/corpus_custom/replay.thinking_only_turn/on_high/enabled_4000": {
+    "after": "a0e22df62cc6",
+    "before": "6c1a70330f84"
+   },
+   "messages/corpus_custom/replay.thinking_only_turn/on_high/none": {
+    "after": "a0e22df62cc6",
+    "before": "6c1a70330f84"
+   },
+   "messages/corpus_custom/replay.thinking_then_text/on_high/adaptive": {
+    "after": "e932c7918d16",
+    "before": "85748cc9c432"
+   },
+   "messages/corpus_custom/replay.thinking_then_text/on_high/disabled": {
+    "after": "e932c7918d16",
+    "before": "85748cc9c432"
+   },
+   "messages/corpus_custom/replay.thinking_then_text/on_high/enabled_4000": {
+    "after": "e932c7918d16",
+    "before": "85748cc9c432"
+   },
+   "messages/corpus_custom/replay.thinking_then_text/on_high/none": {
+    "after": "e932c7918d16",
+    "before": "85748cc9c432"
+   },
+   "messages/corpus_custom/replay.thinking_tool_loop/on_high/adaptive": {
+    "after": "5aaed7aeaf04",
+    "before": "d2364a3c18be"
+   },
+   "messages/corpus_custom/replay.thinking_tool_loop/on_high/disabled": {
+    "after": "5aaed7aeaf04",
+    "before": "d2364a3c18be"
+   },
+   "messages/corpus_custom/replay.thinking_tool_loop/on_high/enabled_4000": {
+    "after": "5aaed7aeaf04",
+    "before": "d2364a3c18be"
+   },
+   "messages/corpus_custom/replay.thinking_tool_loop/on_high/none": {
+    "after": "5aaed7aeaf04",
+    "before": "d2364a3c18be"
+   },
+   "messages/corpus_custom/replay.thinking_with_images/on_high/adaptive": {
+    "after": "0e80dbb9fccb",
+    "before": "570d36f213e5"
+   },
+   "messages/corpus_custom/replay.thinking_with_images/on_high/disabled": {
+    "after": "0e80dbb9fccb",
+    "before": "570d36f213e5"
+   },
+   "messages/corpus_custom/replay.thinking_with_images/on_high/enabled_4000": {
+    "after": "0e80dbb9fccb",
+    "before": "570d36f213e5"
+   },
+   "messages/corpus_custom/replay.thinking_with_images/on_high/none": {
+    "after": "0e80dbb9fccb",
+    "before": "570d36f213e5"
+   },
+   "messages/corpus_custom/server_tools/on_high/adaptive": {
+    "after": "eee2bfdff801",
+    "before": "aaf5bc8424d7"
+   },
+   "messages/corpus_custom/server_tools/on_high/disabled": {
+    "after": "eee2bfdff801",
+    "before": "aaf5bc8424d7"
+   },
+   "messages/corpus_custom/server_tools/on_high/enabled_4000": {
+    "after": "eee2bfdff801",
+    "before": "aaf5bc8424d7"
+   },
+   "messages/corpus_custom/server_tools/on_high/none": {
+    "after": "eee2bfdff801",
+    "before": "aaf5bc8424d7"
+   },
+   "messages/opencode/anthropic_ciphertext/on_high/adaptive": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode/anthropic_ciphertext/on_high/disabled": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode/anthropic_ciphertext/on_high/enabled_4000": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode/anthropic_ciphertext/on_high/none": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode/assistant_arrived_empty/on_high/adaptive": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode/assistant_arrived_empty/on_high/disabled": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode/assistant_arrived_empty/on_high/enabled_4000": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode/assistant_arrived_empty/on_high/none": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode/assistant_prefill_last/on_high/adaptive": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode/assistant_prefill_last/on_high/disabled": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode/assistant_prefill_last/on_high/enabled_4000": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode/assistant_prefill_last/on_high/none": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode/cache_control_everywhere/on_high/adaptive": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode/cache_control_everywhere/on_high/disabled": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode/cache_control_everywhere/on_high/enabled_4000": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode/cache_control_everywhere/on_high/none": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode/consecutive_same_role/on_high/adaptive": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode/consecutive_same_role/on_high/disabled": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode/consecutive_same_role/on_high/enabled_4000": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode/consecutive_same_role/on_high/none": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode/consecutive_signed_blocks/on_high/adaptive": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode/consecutive_signed_blocks/on_high/disabled": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode/consecutive_signed_blocks/on_high/enabled_4000": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode/consecutive_signed_blocks/on_high/none": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode/document_and_inline_system/on_high/adaptive": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode/document_and_inline_system/on_high/disabled": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode/document_and_inline_system/on_high/enabled_4000": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode/document_and_inline_system/on_high/none": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode/plain_strings/on_high/adaptive": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode/plain_strings/on_high/disabled": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode/plain_strings/on_high/enabled_4000": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode/plain_strings/on_high/none": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode/relay_signature_kept/on_high/adaptive": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode/relay_signature_kept/on_high/disabled": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode/relay_signature_kept/on_high/enabled_4000": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode/relay_signature_kept/on_high/none": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode/replay.long_mcp_name_and_no_thinking/on_high/adaptive": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode/replay.long_mcp_name_and_no_thinking/on_high/disabled": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode/replay.long_mcp_name_and_no_thinking/on_high/enabled_4000": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode/replay.long_mcp_name_and_no_thinking/on_high/none": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode/replay.redacted_thinking/on_high/adaptive": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode/replay.redacted_thinking/on_high/disabled": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode/replay.redacted_thinking/on_high/enabled_4000": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode/replay.redacted_thinking/on_high/none": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode/replay.string_turn_with_reasoning_content/on_high/adaptive": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode/replay.string_turn_with_reasoning_content/on_high/disabled": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode/replay.string_turn_with_reasoning_content/on_high/enabled_4000": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode/replay.string_turn_with_reasoning_content/on_high/none": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode/replay.thinking_after_tool_call/on_high/adaptive": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode/replay.thinking_after_tool_call/on_high/disabled": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode/replay.thinking_after_tool_call/on_high/enabled_4000": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode/replay.thinking_after_tool_call/on_high/none": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode/replay.thinking_only_turn/on_high/adaptive": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode/replay.thinking_only_turn/on_high/disabled": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode/replay.thinking_only_turn/on_high/enabled_4000": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode/replay.thinking_only_turn/on_high/none": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode/replay.thinking_then_text/on_high/adaptive": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode/replay.thinking_then_text/on_high/disabled": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode/replay.thinking_then_text/on_high/enabled_4000": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode/replay.thinking_then_text/on_high/none": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode/replay.thinking_tool_loop/on_high/adaptive": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode/replay.thinking_tool_loop/on_high/disabled": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode/replay.thinking_tool_loop/on_high/enabled_4000": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode/replay.thinking_tool_loop/on_high/none": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode/replay.thinking_with_images/on_high/adaptive": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode/replay.thinking_with_images/on_high/disabled": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode/replay.thinking_with_images/on_high/enabled_4000": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode/replay.thinking_with_images/on_high/none": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode/server_tools/on_high/adaptive": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   },
+   "messages/opencode/server_tools/on_high/disabled": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   },
+   "messages/opencode/server_tools/on_high/enabled_4000": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   },
+   "messages/opencode/server_tools/on_high/none": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   },
+   "messages/opencode_go/anthropic_ciphertext/on_high/adaptive": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode_go/anthropic_ciphertext/on_high/disabled": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode_go/anthropic_ciphertext/on_high/enabled_4000": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode_go/anthropic_ciphertext/on_high/none": {
+    "after": "ad9cb6fb1bde",
+    "before": "6d5aa713784b"
+   },
+   "messages/opencode_go/assistant_arrived_empty/on_high/adaptive": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode_go/assistant_arrived_empty/on_high/disabled": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode_go/assistant_arrived_empty/on_high/enabled_4000": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode_go/assistant_arrived_empty/on_high/none": {
+    "after": "f28c8449f8ae",
+    "before": "9e9fbfe63b3a"
+   },
+   "messages/opencode_go/assistant_prefill_last/on_high/adaptive": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode_go/assistant_prefill_last/on_high/disabled": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode_go/assistant_prefill_last/on_high/enabled_4000": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode_go/assistant_prefill_last/on_high/none": {
+    "after": "119819d3dc34",
+    "before": "215439a8e6fa"
+   },
+   "messages/opencode_go/cache_control_everywhere/on_high/adaptive": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode_go/cache_control_everywhere/on_high/disabled": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode_go/cache_control_everywhere/on_high/enabled_4000": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode_go/cache_control_everywhere/on_high/none": {
+    "after": "3ea9e29807c6",
+    "before": "a3f950f5ac11"
+   },
+   "messages/opencode_go/consecutive_same_role/on_high/adaptive": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode_go/consecutive_same_role/on_high/disabled": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode_go/consecutive_same_role/on_high/enabled_4000": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode_go/consecutive_same_role/on_high/none": {
+    "after": "e71fc4edb63c",
+    "before": "0fbb82b2262d"
+   },
+   "messages/opencode_go/consecutive_signed_blocks/on_high/adaptive": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode_go/consecutive_signed_blocks/on_high/disabled": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode_go/consecutive_signed_blocks/on_high/enabled_4000": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode_go/consecutive_signed_blocks/on_high/none": {
+    "after": "128098a0f931",
+    "before": "760dfd8ef3d2"
+   },
+   "messages/opencode_go/document_and_inline_system/on_high/adaptive": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode_go/document_and_inline_system/on_high/disabled": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode_go/document_and_inline_system/on_high/enabled_4000": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode_go/document_and_inline_system/on_high/none": {
+    "after": "eae250fb5391",
+    "before": "a8bf90fab464"
+   },
+   "messages/opencode_go/plain_strings/on_high/adaptive": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode_go/plain_strings/on_high/disabled": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode_go/plain_strings/on_high/enabled_4000": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode_go/plain_strings/on_high/none": {
+    "after": "a1ae07a7ef37",
+    "before": "454d08f0124d"
+   },
+   "messages/opencode_go/relay_signature_kept/on_high/adaptive": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode_go/relay_signature_kept/on_high/disabled": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode_go/relay_signature_kept/on_high/enabled_4000": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode_go/relay_signature_kept/on_high/none": {
+    "after": "9fbd4b42a88c",
+    "before": "013fa05fc981"
+   },
+   "messages/opencode_go/replay.long_mcp_name_and_no_thinking/on_high/adaptive": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode_go/replay.long_mcp_name_and_no_thinking/on_high/disabled": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode_go/replay.long_mcp_name_and_no_thinking/on_high/enabled_4000": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode_go/replay.long_mcp_name_and_no_thinking/on_high/none": {
+    "after": "dd03b0937c3d",
+    "before": "ba47f697cce5"
+   },
+   "messages/opencode_go/replay.redacted_thinking/on_high/adaptive": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode_go/replay.redacted_thinking/on_high/disabled": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode_go/replay.redacted_thinking/on_high/enabled_4000": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode_go/replay.redacted_thinking/on_high/none": {
+    "after": "dc99afbb75f4",
+    "before": "af41758fe33f"
+   },
+   "messages/opencode_go/replay.string_turn_with_reasoning_content/on_high/adaptive": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode_go/replay.string_turn_with_reasoning_content/on_high/disabled": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode_go/replay.string_turn_with_reasoning_content/on_high/enabled_4000": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode_go/replay.string_turn_with_reasoning_content/on_high/none": {
+    "after": "0f99e9cd2a11",
+    "before": "480a957f4289"
+   },
+   "messages/opencode_go/replay.thinking_after_tool_call/on_high/adaptive": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode_go/replay.thinking_after_tool_call/on_high/disabled": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode_go/replay.thinking_after_tool_call/on_high/enabled_4000": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode_go/replay.thinking_after_tool_call/on_high/none": {
+    "after": "60dd3a66116e",
+    "before": "bcd6d8b1b1ca"
+   },
+   "messages/opencode_go/replay.thinking_only_turn/on_high/adaptive": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode_go/replay.thinking_only_turn/on_high/disabled": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode_go/replay.thinking_only_turn/on_high/enabled_4000": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode_go/replay.thinking_only_turn/on_high/none": {
+    "after": "d5cd42680371",
+    "before": "ac412ae8d2ad"
+   },
+   "messages/opencode_go/replay.thinking_then_text/on_high/adaptive": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode_go/replay.thinking_then_text/on_high/disabled": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode_go/replay.thinking_then_text/on_high/enabled_4000": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode_go/replay.thinking_then_text/on_high/none": {
+    "after": "d965409a5450",
+    "before": "341c9dd6130d"
+   },
+   "messages/opencode_go/replay.thinking_tool_loop/on_high/adaptive": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode_go/replay.thinking_tool_loop/on_high/disabled": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode_go/replay.thinking_tool_loop/on_high/enabled_4000": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode_go/replay.thinking_tool_loop/on_high/none": {
+    "after": "8826a1c73c72",
+    "before": "38177face7ba"
+   },
+   "messages/opencode_go/replay.thinking_with_images/on_high/adaptive": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode_go/replay.thinking_with_images/on_high/disabled": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode_go/replay.thinking_with_images/on_high/enabled_4000": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode_go/replay.thinking_with_images/on_high/none": {
+    "after": "1ff92b001239",
+    "before": "f5c33d5eb6cf"
+   },
+   "messages/opencode_go/server_tools/on_high/adaptive": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   },
+   "messages/opencode_go/server_tools/on_high/disabled": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   },
+   "messages/opencode_go/server_tools/on_high/enabled_4000": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   },
+   "messages/opencode_go/server_tools/on_high/none": {
+    "after": "78a79f8f2e63",
+    "before": "2bd2933d4fa7"
+   }
+  }
+ }
+}

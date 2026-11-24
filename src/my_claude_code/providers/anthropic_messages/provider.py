@@ -63,15 +63,18 @@ from my_claude_code.providers.raw_upstream import (
 from my_claude_code.providers.recovery import (
     ANTHROPIC_OUTPUT_FIELDS,
     OutputCapRecovery,
+    ProviderRecovery,
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
+    RecoveryRung,
     complaint_evidence_snippet,
     complaint_is_about_the_body,
     complaint_refuses_a_history_thinking_block,
     history_carries_unsigned_thinking,
     is_bad_request,
     learned_fact_store,
+    sampling_parameter_evidence,
     upstream_complaint,
 )
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
@@ -90,6 +93,7 @@ from .request import (
     PROMPT_CACHE_TTL_NOTE,
     apply_manual_thinking_fallback,
     build_anthropic_messages_body,
+    clone_body_without_output_config_effort,
 )
 from .streaming import iter_anthropic_sse_frames
 
@@ -107,6 +111,70 @@ The one host in the fleet with a genuine adaptive channel, which is why
 ``ReasoningControl.ADAPTIVE`` encodes to something here and to nothing
 everywhere else. No effort field: the wire takes a number.
 """
+
+ANTHROPIC_GATEWAY_REASONING_DIALECT = ReasoningDialect(
+    effort_values=frozenset(
+        {
+            ReasoningEffort.LOW,
+            ReasoningEffort.MEDIUM,
+            ReasoningEffort.HIGH,
+            ReasoningEffort.XHIGH,
+            ReasoningEffort.MAX,
+        }
+    ),
+    budget=True,
+    toggle=True,
+    off=True,
+    adaptive=True,
+    effort_field="output_config.effort",
+    toggle_field="thinking.type",
+    budget_field="thinking.budget_tokens",
+)
+"""Anthropic-protocol gateways that also honor ``output_config.effort``.
+
+Used by third-party ``/messages`` gateways (``MessagesTransport`` and Command
+Code's Anthropic delegate) while native ``anthropic`` / ``anthropic_oauth``
+keep :data:`ANTHROPIC_REASONING_DIALECT`.
+"""
+
+
+def _output_config_effort_recovery(log_tag: str) -> RecoveryRung:
+    """Strip ``output_config.effort`` (keeping ``format``) on 400 effort refusals."""
+
+    def _rewrite(error: Exception, body: dict[str, Any]) -> dict[str, Any] | None:
+        if not is_bad_request(error):
+            return None
+        output_config = body.get("output_config")
+        if not isinstance(output_config, Mapping) or "effort" not in output_config:
+            return None
+        complaint = upstream_complaint(error)
+        if complaint_is_about_the_body(complaint, "output_config"):
+            return None
+        if sampling_parameter_evidence(complaint) is not None:
+            return None
+        lowered = complaint.lower()
+        names_output_config = re.search(r"\boutput_config\b", lowered) is not None
+        names_effort_without_thinking = (
+            re.search(r"\beffort\b", lowered) is not None
+            and re.search(r"\bthinking\b", lowered) is None
+        )
+        if not (names_output_config or names_effort_without_thinking):
+            return None
+        cloned = clone_body_without_output_config_effort(body)
+        if cloned is None:
+            return None
+        logger.warning(
+            "{}: retrying without 'output_config.effort' -- upstream named it: {}",
+            log_tag,
+            complaint_evidence_snippet(complaint),
+        )
+        return cloned
+
+    return ProviderRecovery(
+        kind="output_config_effort",
+        rewrite=_rewrite,
+        stripped_field=lambda _error, _body: "output_config",
+    ).rung()
 
 
 def _is_adaptive_type_rejection(error: Exception, body: Mapping[str, Any]) -> bool:
@@ -148,11 +216,10 @@ class AnthropicMessagesProvider(BaseProvider):
         value_rejections = self._recovery_memory.rejected_values_for(
             model_id, surface=self._recovery_surface
         )
+        base = self._declared_reasoning_dialect
         if not rejections and not value_rejections:
-            return ANTHROPIC_REASONING_DIALECT
-        return narrow_dialect_by_rejections(
-            ANTHROPIC_REASONING_DIALECT, rejections, value_rejections
-        )
+            return base
+        return narrow_dialect_by_rejections(base, rejections, value_rejections)
 
     def __init__(
         self,
@@ -170,9 +237,17 @@ class AnthropicMessagesProvider(BaseProvider):
         signs_thinking: bool = True,
         memory: RecoveryMemory | None = None,
         recovery_surface: str | None = None,
+        declared_reasoning_dialect: ReasoningDialect | None = None,
+        extract_think_tags: bool = False,
     ) -> None:
         super().__init__(config)
         self._provider_name = provider_name
+        self._declared_reasoning_dialect = (
+            declared_reasoning_dialect
+            if declared_reasoning_dialect is not None
+            else ANTHROPIC_REASONING_DIALECT
+        )
+        self._extract_think_tags = extract_think_tags
         # Whether this host mints and checks signatures on the thinking blocks
         # it returns (8.12.2). ``True`` -- ``api.anthropic.com``, the Claude
         # subscription, Command Code and every other Messages caller -- is what
@@ -255,6 +330,7 @@ class AnthropicMessagesProvider(BaseProvider):
         self._recovery_ladder = RecoveryLadder(
             (
                 self._output_cap_recovery.rung(),
+                _output_config_effort_recovery(log_tag=log_tag),
                 ReasoningStripRecovery(log_tag=log_tag).rung(),
             )
         )
@@ -416,11 +492,14 @@ class AnthropicMessagesProvider(BaseProvider):
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> None:
+        dialect = self.reasoning_dialect(request.model)
         build_anthropic_messages_body(
             request,
             reasoning=reasoning,
             forward_thinking_display=self._forward_thinking_display,
             signs_thinking=self._signs_thinking_for(request.model),
+            adaptive_capable=dialect.adaptive,
+            effort_capable=dialect.effort_values is not None,
         )
 
     async def probe(self, model_id: str) -> None:
@@ -659,6 +738,8 @@ class AnthropicMessagesProvider(BaseProvider):
         # every try's body: a retry never changes what the history left out.
         wire_notes: dict[str, Any] = {}
         prompt_cache = self._prompt_cache_choice(request)
+        dialect = self.reasoning_dialect(request.model)
+        effort_capable = dialect.effort_values is not None
         body = build_anthropic_messages_body(
             request,
             reasoning=reasoning,
@@ -666,7 +747,8 @@ class AnthropicMessagesProvider(BaseProvider):
             forward_thinking_display=self._forward_thinking_display,
             prompt_cache=prompt_cache,
             signs_thinking=self._signs_thinking_for(request.model),
-            adaptive_capable=self.reasoning_dialect(request.model).adaptive,
+            adaptive_capable=dialect.adaptive,
+            effort_capable=effort_capable,
         )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what
@@ -759,6 +841,8 @@ class AnthropicMessagesProvider(BaseProvider):
                             enabled=log_raw_bytes,
                         ),
                         shape,
+                        extract_think_tags=self._extract_think_tags,
+                        output_reasoning=reasoning.output_enabled,
                     ):
                         if log_raw_frames:
                             # 7.113.4: the Messages door was the one streaming
@@ -825,7 +909,9 @@ class AnthropicMessagesProvider(BaseProvider):
                                 or ReasoningEffort.HIGH.budget_tokens
                             )
                             retry_body = apply_manual_thinking_fallback(
-                                body, fallback_budget
+                                body,
+                                fallback_budget,
+                                preserve_effort=effort_capable,
                             )
                             if retry_body is not None:
                                 stripped_reasoning = "thinking.type"

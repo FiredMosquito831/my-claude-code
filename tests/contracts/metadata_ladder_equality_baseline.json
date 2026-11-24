@@ -33629,6 +33629,10 @@
   "v8.39.0": {
    "bytes": 227660,
    "sha256": "cbc1aac49b5334520bd798500daf7731bddc157e6e67c1aadf6798e7e30c6c17"
+  },
+  "v8.41.0": {
+   "bytes": 226954,
+   "sha256": "a1c63755d31fb05b5a2cd0cf6566c5ff03c2d54c25b02e06bcfa90ff46fd4ee3"
   }
  },
  "kor-live/page-diff": {
@@ -38358,6 +38362,10 @@
   "v8.39.0": {
    "bytes": 202593,
    "sha256": "6735b0d1c45dfe308a80f0a8ad91a4f67d5fab775daf44bbd3018775c0bb3408"
+  },
+  "v8.41.0": {
+   "bytes": 201887,
+   "sha256": "4b0977bb2e2008361f7249d2049b6b73158f1d64e639638fda82d83e37c0d27c"
   }
  },
  "picker-kinds": {
@@ -39841,12 +39849,22 @@
   "vision": true
  },
  "routing/commandcode/claude-sonnet-5-5": {
-  "context_length": 1000000,
-  "output_limit": 128000,
-  "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=false,supported_efforts={e:high,e:low,e:max,e:medium,e:xhigh},mandatory=~,default_enabled=~)",
-  "reasoning_dialect": "ReasoningDialect(effort_values=~,toggle=true,budget=true,off=true,adaptive=true,effort_field=s:,toggle_field=s:thinking.type,budget_field=s:thinking.budget_tokens,origin=e:declared,learned_rejections=[])",
-  "thinking": null,
-  "vision": true
+  "v8.40.0": {
+   "context_length": 1000000,
+   "output_limit": 128000,
+   "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=false,supported_efforts={e:high,e:low,e:max,e:medium,e:xhigh},mandatory=~,default_enabled=~)",
+   "reasoning_dialect": "ReasoningDialect(effort_values=~,toggle=true,budget=true,off=true,adaptive=true,effort_field=s:,toggle_field=s:thinking.type,budget_field=s:thinking.budget_tokens,origin=e:declared,learned_rejections=[])",
+   "thinking": null,
+   "vision": true
+  },
+  "v8.41.0": {
+   "context_length": 1000000,
+   "output_limit": 128000,
+   "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=true,supports_toggle_control=false,supports_budget_control=false,supported_efforts={e:high,e:low,e:max,e:medium,e:xhigh},mandatory=~,default_enabled=~)",
+   "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:xhigh},toggle=true,budget=true,off=true,adaptive=true,effort_field=s:output_config.effort,toggle_field=s:thinking.type,budget_field=s:thinking.budget_tokens,origin=e:declared,learned_rejections=[])",
+   "thinking": null,
+   "vision": true
+  }
  },
  "routing/commandcode/deepseek/deepseek-v4-flash-fast": {
   "context_length": 1000000,
@@ -39998,6 +40016,14 @@
    "output_limit": 131072,
    "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=false,supported_efforts=~,mandatory=~,default_enabled=~)",
    "reasoning_dialect": "ReasoningDialect(effort_values=~,toggle=true,budget=true,off=true,adaptive=true,effort_field=s:,toggle_field=s:thinking.type,budget_field=s:thinking.budget_tokens,origin=e:declared,learned_rejections=[])",
+   "thinking": null,
+   "vision": true
+  },
+  "v8.41.0": {
+   "context_length": 1000000,
+   "output_limit": 131072,
+   "reasoning_capability": "ModelReasoningCapability(can_reason=true,supports_effort_control=false,supports_toggle_control=true,supports_budget_control=false,supported_efforts=~,mandatory=~,default_enabled=~)",
+   "reasoning_dialect": "ReasoningDialect(effort_values={e:high,e:low,e:max,e:medium,e:xhigh},toggle=true,budget=true,off=true,adaptive=true,effort_field=s:output_config.effort,toggle_field=s:thinking.type,budget_field=s:thinking.budget_tokens,origin=e:declared,learned_rejections=[])",
    "thinking": null,
    "vision": true
   }

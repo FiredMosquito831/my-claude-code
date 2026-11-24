@@ -70,7 +70,7 @@ def rejected_effort_values(
         if sent:
             refused.add(sent)
         return refused
-    if sent and re.search(rf"\b{re.escape(sent)}\b", complaint):
+    if sent and re.search(rf"\b{re.escape(sent)}\b", complaint, re.IGNORECASE):
         return {sent}
     return set()
 
@@ -158,6 +158,10 @@ def complaint_is_about_the_body(complaint: str, field: str) -> bool:
     text = complaint.lower()
     if _HISTORY_LOCATION.search(text):
         return True
+    if field.lower() == "output_config" and re.search(
+        r"\boutput_config\.effort:\s*extra\b", text
+    ):
+        return False
     nested_extra = rf"\b{re.escape(field.lower())}\.[\w.\[\]]+:\s*extra\b"
     return re.search(nested_extra, text) is not None
 

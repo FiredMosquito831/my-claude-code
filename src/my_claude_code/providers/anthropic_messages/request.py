@@ -72,6 +72,7 @@ def build_anthropic_messages_body(
     signs_thinking: bool = True,
     adaptive_capable: bool | None = None,
     suppress_thinking: bool = False,
+    effort_capable: bool = False,
 ) -> dict[str, Any]:
     """Build one native Messages request without exposing FCC-only fields.
 
@@ -130,6 +131,7 @@ def build_anthropic_messages_body(
         reasoning,
         adaptive_capable=adaptive_capable,
         suppress_thinking=suppress_thinking,
+        effort_capable=effort_capable,
     )
     # Manual thinking makes Anthropic require its own thinking at the start of
     # the final assistant turn of a tool loop. When that turn's thinking was
@@ -150,7 +152,12 @@ def build_anthropic_messages_body(
         and _final_tool_turn_lost_its_thinking(native, signs_thinking=signs_thinking)
     )
     if unsigned_tool_turn and _is_manual_thinking(body.get("thinking")):
-        _apply_reasoning(body, request, ReasoningPolicy.off())
+        _apply_reasoning(
+            body,
+            request,
+            ReasoningPolicy.off(),
+            effort_capable=effort_capable,
+        )
     else:
         unsigned_tool_turn = False
     if forward_thinking_display:
@@ -713,6 +720,19 @@ def _strip_output_config_effort(body: dict[str, Any]) -> None:
         body.pop("output_config", None)
 
 
+def clone_body_without_output_config_effort(
+    body: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return a deep clone with ``output_config['effort']`` removed, or ``None``."""
+
+    output_config = body.get("output_config")
+    if not isinstance(output_config, dict) or "effort" not in output_config:
+        return None
+    cloned = deepcopy(body)
+    _strip_output_config_effort(cloned)
+    return cloned
+
+
 def _apply_output_config_effort(
     body: dict[str, Any], effort: ReasoningEffort | None
 ) -> None:
@@ -732,21 +752,29 @@ def _apply_output_config_effort(
 def apply_manual_thinking_fallback(
     body: dict[str, Any],
     budget: int,
+    *,
+    preserve_effort: bool = False,
 ) -> dict[str, Any] | None:
     """Clone ``body`` downgraded from adaptive thinking to a manual budget."""
 
     cloned = deepcopy(body)
-    _apply_manual_budget(cloned, budget)
+    _apply_manual_budget(cloned, budget, preserve_effort=preserve_effort)
     if "thinking" not in cloned:
         return None
     return cloned
 
 
-def _apply_manual_budget(body: dict[str, Any], budget: int) -> None:
-    """Emit manual ``enabled`` + bounded ``budget_tokens``, omitting ``output_config.effort``."""
+def _apply_manual_budget(
+    body: dict[str, Any],
+    budget: int,
+    *,
+    preserve_effort: bool = False,
+) -> None:
+    """Emit manual ``enabled`` + bounded ``budget_tokens``, optionally keeping effort."""
 
     bounded = _budget_within_max_tokens(body, budget)
-    _strip_output_config_effort(body)
+    if not preserve_effort:
+        _strip_output_config_effort(body)
     if bounded is None:
         # No legal budget exists inside this allowance. Sending the answer
         # without thinking is the only outcome that is neither a 400 nor a
@@ -763,6 +791,7 @@ def _apply_reasoning(
     *,
     adaptive_capable: bool | None = None,
     suppress_thinking: bool = False,
+    effort_capable: bool = False,
 ) -> None:
     if policy.control is ReasoningControl.OFF:
         body.pop("thinking", None)
@@ -777,7 +806,15 @@ def _apply_reasoning(
             fallback_budget = (
                 policy.numeric_budget_tokens or ReasoningEffort.HIGH.budget_tokens
             )
-            _apply_manual_budget(body, fallback_budget)
+            if (
+                effort_capable
+                and policy.effort is not None
+                and policy.budget_tokens is None
+            ):
+                _apply_manual_budget(body, fallback_budget, preserve_effort=True)
+                _apply_output_config_effort(body, policy.effort)
+            else:
+                _apply_manual_budget(body, fallback_budget)
             return
         body["thinking"] = {"type": "adaptive"}
         _apply_output_config_effort(body, policy.effort)
@@ -797,6 +834,21 @@ def _apply_reasoning(
         ):
             _apply_manual_budget(body, ReasoningEffort.HIGH.budget_tokens)
         return
+
+    if effort_capable:
+        if policy.budget_tokens is not None:
+            _apply_manual_budget(body, policy.budget_tokens)
+            return
+        if policy.effort is not None:
+            if allow_adaptive:
+                body["thinking"] = {"type": "adaptive"}
+            else:
+                fallback_budget = (
+                    policy.numeric_budget_tokens or ReasoningEffort.HIGH.budget_tokens
+                )
+                _apply_manual_budget(body, fallback_budget, preserve_effort=True)
+            _apply_output_config_effort(body, policy.effort)
+            return
 
     if adaptive_mode == "on" and allow_adaptive and policy.budget_tokens is None:
         body["thinking"] = {"type": "adaptive"}

@@ -83,6 +83,7 @@ from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.core.upstream_ladder import note_recovery_rung
 from my_claude_code.providers.anthropic_messages import (
     ANTHROPIC_API_VERSION,
+    ANTHROPIC_GATEWAY_REASONING_DIALECT,
     AnthropicMessagesProvider,
 )
 from my_claude_code.providers.base import ProviderConfig
@@ -288,6 +289,7 @@ class MessagesTransport:
         memory: RecoveryMemory | None = None,
         marketplace: MarketplaceDialect | None = None,
         signs_thinking: bool = True,
+        extract_think_tags: bool = False,
     ) -> None:
         self._identity = identity
         # The price marketplace this host is (7.109.0), or ``None`` -- every
@@ -338,6 +340,8 @@ class MessagesTransport:
             signs_thinking=signs_thinking,
             memory=self._memory,
             recovery_surface="messages",
+            declared_reasoning_dialect=ANTHROPIC_GATEWAY_REASONING_DIALECT,
+            extract_think_tags=extract_think_tags,
         )
         if marketplace is not None:
             dialect = marketplace

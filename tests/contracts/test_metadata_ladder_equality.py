@@ -945,6 +945,7 @@ AFTER_8_36 = "v8.36.0"
 AFTER_8_38 = "v8.38.0"
 BEFORE_8_39 = "v8.38.1"
 AFTER_8_39 = "v8.39.0"
+AFTER_8_41 = "v8.41.0"
 
 #: 8.39.0 (MODEL-DISCOVERY-AND-CATEGORIZATION) classifies
 #: ``vercel/alibaba/qwen3-embedding-0.6b`` (which declares ``type: "embedding"``
@@ -978,6 +979,12 @@ def _is_codex_max_entry(value: Any) -> bool:
     return isinstance(value, dict) and AFTER_8_36 in value
 
 
+def _is_messages_gateway_dialect_entry(value: Any) -> bool:
+    """An entry 8.41.0 moves via ``ANTHROPIC_GATEWAY_REASONING_DIALECT``."""
+
+    return isinstance(value, dict) and AFTER_8_41 in value
+
+
 def _is_surface_dialect_entry(value: Any) -> bool:
     """An entry 8.38.0 moves via surface-aware OpenCode Go dialect selection."""
 
@@ -999,6 +1006,10 @@ def _is_ocgo3_entry(value: Any) -> bool:
 
 
 def _expected(key: str, value: Any) -> Any:
+    if _is_messages_gateway_dialect_entry(value):
+        return value[AFTER_8_41]
+    if _is_messages_gateway_dialect_entry(value):
+        return value[AFTER_8_41]
     if _is_discovery_categorization_entry(value):
         return value[AFTER_8_39]
     if _is_surface_dialect_entry(value):
@@ -1029,6 +1040,8 @@ def _current_answer(group: str, key: str, value: Any) -> Any:
     correction's ``before`` be the 7.113.5 answer.
     """
 
+    if _is_messages_gateway_dialect_entry(value):
+        return value[AFTER_8_41]
     if _is_discovery_categorization_entry(value):
         return value[AFTER_8_39]
     if _is_surface_dialect_entry(value):
@@ -2105,3 +2118,35 @@ def test_8_39_0_refines_same_rung_type_and_folds_provider_vision() -> None:
     assert hyper_cap[AFTER_8_39]["supports_vision"]["source"] == "provider"
     assert hyper_cap[AFTER_8_39]["supports_vision"]["value"] is True
     assert hyper_cap[AFTER_8_39]["supports_vision"]["tier"] == 1
+
+
+def test_8_41_0_moves_only_messages_gateway_dialects() -> None:
+    """8.41.0 moves only the two ``/messages`` gateway ``reasoning_dialect`` rows."""
+
+    baseline: dict[str, Any] = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    moved = {
+        key: value
+        for key, value in baseline.items()
+        if _is_messages_gateway_dialect_entry(value)
+    }
+    assert set(moved) == {
+        "page",
+        "kor-live/page",
+        "routing/commandcode/claude-sonnet-5-5",
+        "routing/opencode_go/minimax-m3",
+    }
+    cc_before = moved["routing/commandcode/claude-sonnet-5-5"]["v8.40.0"]
+    cc_after = moved["routing/commandcode/claude-sonnet-5-5"][AFTER_8_41]
+    assert {k: v for k, v in cc_before.items() if k != "reasoning_dialect"} == {
+        k: v for k, v in cc_after.items() if k != "reasoning_dialect"
+    }
+    assert "effort_values=~" in cc_before["reasoning_dialect"]
+    assert "effort_field=s:output_config.effort" in cc_after["reasoning_dialect"]
+
+    go_before = moved["routing/opencode_go/minimax-m3"][AFTER_8_38]
+    go_after = moved["routing/opencode_go/minimax-m3"][AFTER_8_41]
+    assert {k: v for k, v in go_before.items() if k != "reasoning_dialect"} == {
+        k: v for k, v in go_after.items() if k != "reasoning_dialect"
+    }
+    assert "effort_values=~" in go_before["reasoning_dialect"]
+    assert "effort_field=s:output_config.effort" in go_after["reasoning_dialect"]
