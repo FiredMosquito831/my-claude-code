@@ -250,7 +250,7 @@ def test_create_response_stream_bypasses_local_message_optimizations() -> None:
     assert provider.requests[0].messages[0].content == "quota check"
 
 
-def test_create_response_stream_false_returns_openai_error(
+def test_create_response_stream_false_returns_complete_response_json(
     responses_client: tuple[TestClient, FakeProvider],
 ) -> None:
     client, provider = responses_client
@@ -264,11 +264,85 @@ def test_create_response_stream_false_returns_openai_error(
         },
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
     payload = response.json()
-    assert payload["error"]["type"] == "invalid_request_error"
-    assert "streaming only" in payload["error"]["message"]
-    assert provider.requests == []
+    assert payload["object"] == "response"
+    assert payload["status"] == "completed"
+    assert payload["output"][0]["type"] == "message"
+    assert payload["output"][0]["content"][0]["text"] == "Hello from provider"
+    assert payload["usage"] == {
+        "input_tokens": 3,
+        "output_tokens": 4,
+        "total_tokens": 7,
+    }
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("raw_type", "expected_status", "expected_type", "expected_code"),
+    [
+        ("rate_limit_error", 429, "rate_limit_error", "rate_limit_exceeded"),
+        ("overloaded_error", 529, "server_error", "server_error"),
+        ("billing_error", 402, "insufficient_quota", "insufficient_quota"),
+        ("invalid_request_error", 400, "invalid_request_error", None),
+    ],
+)
+def test_create_response_stream_false_maps_sse_error_status_and_discards_partial(
+    raw_type: str,
+    expected_status: int,
+    expected_type: str,
+    expected_code: str | None,
+) -> None:
+    provider = FakeProvider(
+        [
+            format_sse_event("message_start", {"type": "message_start", "message": {}}),
+            format_sse_event(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            format_sse_event(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "partial secret"},
+                },
+            ),
+            format_sse_event(
+                "error",
+                {
+                    "type": "error",
+                    "error": {"type": raw_type, "message": "upstream failure"},
+                },
+            ),
+        ]
+    )
+    app = create_test_app()
+    with (
+        patch("my_claude_code.api.routes.resolve_provider", return_value=provider),
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            "/v1/responses",
+            json={"model": "nvidia_nim/test-model", "input": "Hello", "stream": False},
+        )
+
+    assert response.status_code == expected_status
+    assert response.headers["x-should-retry"] == "false"
+    payload = response.json()
+    assert payload["error"] == {
+        "message": "upstream failure",
+        "type": expected_type,
+        "param": None,
+        "code": expected_code,
+    }
+    assert "partial secret" not in response.text
+    assert "output" not in payload
 
 
 def test_create_response_stream_preserves_interleaved_reasoning_order() -> None:
@@ -296,7 +370,12 @@ def test_create_response_stream_preserves_interleaved_reasoning_order() -> None:
 
     assert response.status_code == 200
     events = parse_sse_text(response.text)
-    assert "response.reasoning_text.delta" in [event.event for event in events]
+    event_names = [event.event for event in events]
+    assert "response.reasoning_summary_part.added" in event_names
+    assert "response.reasoning_summary_text.delta" in event_names
+    assert "response.reasoning_summary_text.done" in event_names
+    assert "response.reasoning_summary_part.done" in event_names
+    assert "response.reasoning_text.delta" not in event_names
     completed = events[-1].data["response"]
     assert [item["type"] for item in completed["output"]] == [
         "reasoning",
@@ -305,10 +384,10 @@ def test_create_response_stream_preserves_interleaved_reasoning_order() -> None:
         "reasoning",
         "message",
     ]
-    assert completed["output"][0]["content"][0]["text"] == "first thought"
+    assert completed["output"][0]["summary"][0]["text"] == "first thought"
     assert completed["output"][1]["content"][0]["text"] == "first answer"
     assert completed["output"][2]["arguments"] == '{"value":"FCC"}'
-    assert completed["output"][3]["content"][0]["text"] == "second thought"
+    assert completed["output"][3]["summary"][0]["text"] == "second thought"
     assert completed["output"][4]["content"][0]["text"] == "final answer"
 
 
@@ -504,9 +583,9 @@ def test_create_response_stream_provider_error_returns_response_failed() -> None
     assert failed["status"] == "failed"
     assert failed["error"] == {
         "message": "provider failed",
-        "type": "api_error",
+        "type": "server_error",
         "param": None,
-        "code": None,
+        "code": "server_error",
     }
 
 
@@ -668,7 +747,9 @@ def test_create_response_preserves_and_resolves_reasoning_effort(
 
 
 def test_create_response_maps_redacted_thinking_to_encrypted_reasoning() -> None:
-    provider = FakeProvider(_anthropic_redacted_thinking_stream())
+    provider = FakeProvider(
+        _anthropic_redacted_thinking_stream(data="mcc:reasoning:v1:opaque-redacted")
+    )
     app = create_test_app()
     with (
         patch("my_claude_code.api.routes.resolve_provider", return_value=provider),
@@ -691,10 +772,30 @@ def test_create_response_maps_redacted_thinking_to_encrypted_reasoning() -> None
             "type": "reasoning",
             "status": "completed",
             "summary": [],
-            "encrypted_content": "opaque-redacted",
+            "encrypted_content": "mcc:reasoning:v1:opaque-redacted",
         }
     ]
     assert "content" not in completed["output"][0]
+
+    # Non-carrier Anthropic redacted_thinking must never leak into encrypted_content.
+    raw_provider = FakeProvider(
+        _anthropic_redacted_thinking_stream(data="EjQ_raw_anthropic")
+    )
+    with (
+        patch("my_claude_code.api.routes.resolve_provider", return_value=raw_provider),
+        TestClient(app) as raw_client,
+    ):
+        raw_response = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": "nvidia_nim/test-model",
+                "input": "Continue",
+                "stream": True,
+            },
+        )
+    assert raw_response.status_code == 200
+    raw_completed = parse_sse_text(raw_response.text)[-1].data["response"]
+    assert raw_completed["output"] == []
 
 
 def test_create_response_unsupported_tool_returns_openai_error(
@@ -1001,7 +1102,7 @@ def _anthropic_interleaved_reasoning_stream() -> list[str]:
     ]
 
 
-def _anthropic_redacted_thinking_stream() -> list[str]:
+def _anthropic_redacted_thinking_stream(*, data: str = "opaque-redacted") -> list[str]:
     return [
         format_sse_event("message_start", {"type": "message_start", "message": {}}),
         format_sse_event(
@@ -1011,7 +1112,7 @@ def _anthropic_redacted_thinking_stream() -> list[str]:
                 "index": 0,
                 "content_block": {
                     "type": "redacted_thinking",
-                    "data": "opaque-redacted",
+                    "data": data,
                 },
             },
         ),

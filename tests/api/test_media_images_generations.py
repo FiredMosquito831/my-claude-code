@@ -332,7 +332,7 @@ def test_empty_rail_answers_openai_error_naming_the_setting(
         response = client.post("/v1/images/generations", json={"prompt": "p"})
     assert response.status_code == 404
     error = response.json()["error"]
-    assert error["type"] == "not_found_error"
+    assert error["type"] == "invalid_request_error"
     assert "MODEL_IMAGE" in error["message"]
     assert upstream.seen == []
 

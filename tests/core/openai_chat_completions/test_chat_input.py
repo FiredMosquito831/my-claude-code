@@ -330,7 +330,23 @@ def test_unhonourable_sampling_fields_are_dropped_and_recorded() -> None:
             )
         )
 
-    assert set(payload) == {"model", "messages", "stream"}
+    assert {key for key in payload if key != "chat_envelope"} == {
+        "model",
+        "messages",
+        "stream",
+    }
+    assert payload["chat_envelope"] == {
+        "seed": 7,
+        "logprobs": True,
+        "top_logprobs": 3,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.5,
+    }
+    assert MessagesRequest(**payload).model_dump(exclude_none=True) == {
+        "model": "nvidia_nim/test-model",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": True,
+    }
     assert trace_event.call_args.kwargs["fields"] == [
         "frequency_penalty",
         "logprobs",

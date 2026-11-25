@@ -319,7 +319,7 @@ async def test_provider_failure_outranks_provisional_incomplete_function_call() 
         "message": "provider is busy\n\nRequest ID: req_failure_precedence",
         "type": "rate_limit_error",
         "param": None,
-        "code": None,
+        "code": "rate_limit_exceeded",
     }
 
 
@@ -369,7 +369,8 @@ async def test_unrelated_post_start_exception_group_remains_unexpected() -> None
 
     assert observed == [grouped]
     assert events[-1].event == "response.failed"
-    assert events[-1].data["response"]["error"]["type"] == "api_error"
+    assert events[-1].data["response"]["error"]["type"] == "server_error"
+    assert events[-1].data["response"]["error"]["code"] == "server_error"
 
 
 @pytest.mark.asyncio
@@ -1193,7 +1194,10 @@ async def test_split_signature_deltas_accumulate_on_reasoning_block() -> None:
             {
                 "type": "content_block_delta",
                 "index": 0,
-                "delta": {"type": "signature_delta", "signature": "part_a_"},
+                "delta": {
+                    "type": "signature_delta",
+                    "signature": "mcc:reasoning:v1:part_a_",
+                },
             },
         ),
         format_sse_event(
@@ -1219,7 +1223,59 @@ async def test_split_signature_deltas_accumulate_on_reasoning_block() -> None:
     reasoning = response["output"][0]
     assert reasoning["type"] == "reasoning"
     assert reasoning["summary"] == []
-    assert reasoning["encrypted_content"] == "part_a_part_b"
+    assert reasoning["encrypted_content"] == "mcc:reasoning:v1:part_a_part_b"
+
+    # Non-carrier raw Anthropic signatures (e.g. EjQ...) are buffered and dropped.
+    non_carrier_events = [
+        format_sse_event(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_raw_sig"}},
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "thought"},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "EjQ_raw_part_a_"},
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "part_b"},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    raw_response = await _completed_response_from_sse(
+        _aiter(non_carrier_events),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+    raw_reasoning = raw_response["output"][0]
+    assert "encrypted_content" not in raw_reasoning
+    assert raw_reasoning["summary"] == [{"type": "summary_text", "text": "thought"}]
 
 
 @pytest.mark.asyncio

@@ -190,7 +190,11 @@ def test_missing_provider_credential_is_protocol_specific_503_without_terminal_h
         response,
         wire_api=wire_api,
         status_code=503,
-        error_type="api_error",
+        error_type=(
+            "server_error"
+            if wire_api in {"responses", "chat_completions"}
+            else "api_error"
+        ),
         message=message,
     )
 
@@ -220,7 +224,11 @@ def test_runtime_acquisition_failure_is_protocol_specific_503_without_terminal_h
         response,
         wire_api=wire_api,
         status_code=503,
-        error_type="api_error",
+        error_type=(
+            "server_error"
+            if wire_api in {"responses", "chat_completions"}
+            else "api_error"
+        ),
         message=message,
     )
 

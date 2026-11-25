@@ -331,7 +331,7 @@ def test_upload_over_limit_is_413_and_never_sent(monkeypatch, tmp_path) -> None:
         )
     assert response.status_code == 413, response.text
     error = response.json()["error"]
-    assert error["type"] == "request_too_large"
+    assert error["type"] == "invalid_request_error"
     assert "MEDIA_UPLOAD_MAX_MB (1 MB)" in error["message"]
     assert "'image[]'" in error["message"]
     assert upstream.seen == []

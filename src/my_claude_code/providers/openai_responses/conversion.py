@@ -1892,8 +1892,11 @@ def build_responses_passthrough_body(
     store: bool = False,
     stream: bool = True,
     parallel_tool_calls: bool = False,
+    max_output_tokens: int | None = None,
     prompt_cache_key: str | None = None,
     tool_name_max_length: int | None = None,
+    tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
+    include_tool_choice: bool = True,
     tool_schema_dialect: ToolSchemaDialect = RESPONSES_TOOL_SCHEMA_DIALECT,
     wire_notes: dict[str, str] | None = None,
     origin: ReplayOrigin | None = None,
@@ -1904,6 +1907,8 @@ def build_responses_passthrough_body(
     default_instructions: str | None = None,
     default_service_tier: str | None = None,
     accepts_documents: bool = False,
+    allow_truncation: bool = False,
+    extra_body: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reconstruct a Codex Responses body from ``request.responses_envelope``.
 
@@ -1922,8 +1927,12 @@ def build_responses_passthrough_body(
             store=store,
             stream=stream,
             parallel_tool_calls=parallel_tool_calls,
+            max_output_tokens=max_output_tokens,
+            extra_body=extra_body,
             prompt_cache_key=prompt_cache_key,
             tool_name_max_length=tool_name_max_length,
+            tool_catalogue=tool_catalogue,
+            include_tool_choice=include_tool_choice,
             tool_schema_dialect=tool_schema_dialect,
             wire_notes=wire_notes,
             origin=origin,
@@ -1935,11 +1944,12 @@ def build_responses_passthrough_body(
             default_service_tier=default_service_tier,
             accepts_documents=accepts_documents,
         )
-        fallback_body.pop("truncation", None)
+        if not allow_truncation:
+            fallback_body.pop("truncation", None)
         return fallback_body
 
     tool_names = responses_tool_name_codec(
-        request, tool_name_max_length, EMPTY_TOOL_CATALOGUE
+        request, tool_name_max_length, tool_catalogue
     )
     history_counts: dict[str, int] = {}
     sanitized_input = _sanitize_passthrough_input(
@@ -1974,6 +1984,8 @@ def build_responses_passthrough_body(
         body["store"] = store
     body["stream"] = stream
     body["parallel_tool_calls"] = effective_parallel
+    if max_output_tokens is not None:
+        body["max_output_tokens"] = max_output_tokens
 
     effective_cache_key = prompt_cache_key or envelope.get("prompt_cache_key")
     if isinstance(effective_cache_key, str) and effective_cache_key:
@@ -1997,7 +2009,11 @@ def build_responses_passthrough_body(
             tool_schema_dialect=tool_schema_dialect,
             wire_notes=wire_notes,
         )
-    if "tool_choice" in envelope and envelope["tool_choice"] is not None:
+    if (
+        include_tool_choice
+        and "tool_choice" in envelope
+        and envelope["tool_choice"] is not None
+    ):
         choice = deepcopy(envelope["tool_choice"])
         if tool_names is not None and isinstance(choice, dict):
             aliased_choice = _alias_tool_choice(
@@ -2019,6 +2035,8 @@ def build_responses_passthrough_body(
                 text_section["format"] = text_fmt
             else:
                 body["text"] = {"format": text_fmt}
+    if allow_truncation and envelope.get("truncation") is not None:
+        body["truncation"] = deepcopy(envelope["truncation"])
     service_tier = envelope.get("service_tier")
     effective_tier = (
         service_tier
@@ -2064,6 +2082,9 @@ def build_responses_passthrough_body(
             else None
         ),
     )
+
+    if extra_body:
+        body.update({str(key): value for key, value in extra_body.items()})
 
     return body
 

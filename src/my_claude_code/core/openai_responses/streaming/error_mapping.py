@@ -1,19 +1,13 @@
 """Responses stream error mapping."""
 
-from collections.abc import Mapping
 from typing import Any
 
+from my_claude_code.core.openai_common import openai_error_from_anthropic_error
 
-def openai_error_from_anthropic_error(data: Mapping[str, Any]) -> dict[str, Any]:
-    error = data.get("error")
-    if not isinstance(error, dict):
-        error = {"type": "api_error", "message": str(data)}
-    return {
-        "message": str(error.get("message", "")),
-        "type": str(error.get("type", "api_error")),
-        "param": None,
-        "code": None,
-    }
+__all__ = [
+    "openai_error_from_anthropic_error",
+    "replay_unsafe_function_call_error",
+]
 
 
 def replay_unsafe_function_call_error() -> dict[str, Any]:

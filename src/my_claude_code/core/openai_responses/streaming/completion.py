@@ -1,15 +1,28 @@
 """Block finalization for OpenAI Responses streams."""
 
+import json
 from collections.abc import Callable
 
+from ..carrier import is_carrier
 from ..errors import ResponsesConversionError
-from ..items import encrypted_reasoning_item, message_item, reasoning_item
+from ..items import (
+    encrypted_reasoning_item,
+    message_item,
+    reasoning_item,
+    web_search_call_item,
+)
 from ..tools import (
     custom_tool_input_text_from_arguments,
     normalized_function_call_arguments,
 )
 from . import event_builders as events
-from .blocks import BlockState, ReasoningBlockState, TextBlockState, ToolBlockState
+from .blocks import (
+    BlockState,
+    ReasoningBlockState,
+    TextBlockState,
+    ToolBlockState,
+    WebSearchBlockState,
+)
 from .ledger import ResponsesOutputLedger
 
 InvalidFunctionCallHandler = Callable[
@@ -34,6 +47,8 @@ class ResponseBlockCompleter:
             return self._complete_text_block(state)
         if isinstance(state, ReasoningBlockState):
             return self._complete_reasoning_block(state)
+        if isinstance(state, WebSearchBlockState):
+            return self._complete_web_search_block(state)
         return self._complete_tool_block(state)
 
     def _complete_text_block(self, state: TextBlockState) -> list[str]:
@@ -47,12 +62,29 @@ class ResponseBlockCompleter:
         ]
 
     def _complete_reasoning_block(self, state: ReasoningBlockState) -> list[str]:
+        if state.encrypted_content is None and state.signature_parts:
+            assembled_signature = "".join(state.signature_parts)
+            if is_carrier(assembled_signature):
+                state.encrypted_content = assembled_signature
         item = _reasoning_output_item(state, status="completed")
         self._ledger.commit_output(state.output_index, item)
         chunks: list[str] = []
         text = "".join(state.text_parts)
         if text:
             self._ledger.add_reasoning_text(text)
+        if state.emit_summary:
+            if state.summary_part_added:
+                chunks.extend(
+                    [
+                        events.reasoning_summary_text_done(
+                            state.item_id, state.output_index, text
+                        ),
+                        events.reasoning_summary_part_done(
+                            state.item_id, state.output_index, text
+                        ),
+                    ]
+                )
+        elif text:
             chunks.append(
                 events.reasoning_text_done(state.item_id, state.output_index, text)
             )
@@ -70,7 +102,7 @@ class ResponseBlockCompleter:
         item = tool_item(state, status="completed", arguments=arguments)
         self._ledger.commit_output(state.output_index, item)
         chunks: list[str] = []
-        if arguments:
+        if arguments and not state.streamed_arguments:
             chunks.append(
                 events.function_call_arguments_delta(
                     state.item_id, state.output_index, arguments
@@ -85,6 +117,26 @@ class ResponseBlockCompleter:
             ]
         )
         return chunks
+
+    def _complete_web_search_block(self, state: WebSearchBlockState) -> list[str]:
+        raw = "".join(state.argument_parts).strip()
+        action: dict[str, object] = {"type": "search"}
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    query = parsed.get("query")
+                    if isinstance(query, str) and query:
+                        action["query"] = query
+            except json.JSONDecodeError:
+                pass
+        item = web_search_call_item(state.item_id, "completed", action)
+        self._ledger.commit_output(state.output_index, item)
+        return [
+            events.web_search_call_searching(state.item_id, state.output_index),
+            events.web_search_call_completed(state.item_id, state.output_index),
+            events.output_item_done(state.output_index, item),
+        ]
 
     def _complete_custom_tool_block(self, state: ToolBlockState) -> list[str]:
         input_text = custom_tool_input_text_from_arguments(
@@ -151,7 +203,7 @@ def reasoning_output_item(
             status,
             summary_text=text or None,
         )
-    return reasoning_item(state.item_id, text, status)
+    return reasoning_item(state.item_id, text, status, as_summary=state.emit_summary)
 
 
 def _reasoning_output_item(

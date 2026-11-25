@@ -783,7 +783,7 @@ def test_unknown_id_404(monkeypatch, tmp_path) -> None:
         ]
     for response in responses:
         assert response.status_code == 404
-        assert response.json()["error"]["type"] == "not_found_error"
+        assert response.json()["error"]["type"] == "invalid_request_error"
 
 
 def test_videos_probe(monkeypatch, tmp_path) -> None:

@@ -9,6 +9,7 @@ from .input import convert_request_to_anthropic_payload
 from .models import OpenAIResponsesRequest
 from .stream import (
     PostStartTerminalFailureObserver,
+    complete_response_from_anthropic_sse,
     iter_responses_sse_from_anthropic,
 )
 
@@ -42,5 +43,21 @@ class OpenAIResponsesAdapter:
             on_post_start_terminal_failure=on_post_start_terminal_failure,
         )
 
-    def error_payload(self, *, message: str, error_type: str) -> dict[str, Any]:
-        return openai_error_payload(message=message, error_type=error_type)
+    async def complete_from_anthropic_sse(
+        self,
+        chunks: AsyncIterable[Any],
+        request: OpenAIResponsesRequest,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        return await complete_response_from_anthropic_sse(chunks, request)
+
+    def error_payload(
+        self,
+        *,
+        message: str,
+        error_type: str,
+        param: str | None = None,
+        code: str | None = None,
+    ) -> dict[str, Any]:
+        return openai_error_payload(
+            message=message, error_type=error_type, param=param, code=code
+        )

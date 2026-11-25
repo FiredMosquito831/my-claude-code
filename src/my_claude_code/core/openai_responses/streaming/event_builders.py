@@ -171,6 +171,66 @@ def web_search_call_completed(item_id: str, output_index: int) -> str:
     )
 
 
+def reasoning_summary_part_added(
+    item_id: str, output_index: int, *, summary_index: int = 0
+) -> str:
+    return format_response_sse_event(
+        "response.reasoning_summary_part.added",
+        {
+            "type": "response.reasoning_summary_part.added",
+            "item_id": item_id,
+            "output_index": output_index,
+            "summary_index": summary_index,
+            "part": {"type": "summary_text", "text": ""},
+        },
+    )
+
+
+def reasoning_summary_text_delta(
+    item_id: str, output_index: int, text: str, *, summary_index: int = 0
+) -> str:
+    return format_response_sse_event(
+        "response.reasoning_summary_text.delta",
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": item_id,
+            "output_index": output_index,
+            "summary_index": summary_index,
+            "delta": text,
+        },
+    )
+
+
+def reasoning_summary_text_done(
+    item_id: str, output_index: int, text: str, *, summary_index: int = 0
+) -> str:
+    return format_response_sse_event(
+        "response.reasoning_summary_text.done",
+        {
+            "type": "response.reasoning_summary_text.done",
+            "item_id": item_id,
+            "output_index": output_index,
+            "summary_index": summary_index,
+            "text": text,
+        },
+    )
+
+
+def reasoning_summary_part_done(
+    item_id: str, output_index: int, text: str, *, summary_index: int = 0
+) -> str:
+    return format_response_sse_event(
+        "response.reasoning_summary_part.done",
+        {
+            "type": "response.reasoning_summary_part.done",
+            "item_id": item_id,
+            "output_index": output_index,
+            "summary_index": summary_index,
+            "part": {"type": "summary_text", "text": text},
+        },
+    )
+
+
 def reasoning_text_delta(item_id: str, output_index: int, text: str) -> str:
     return format_response_sse_event(
         "response.reasoning_text.delta",
