@@ -289,34 +289,36 @@ def convert_tools(
     return (tools or None), dropped
 
 
-def convert_tool_config(tool_config: Any, *, tool_names: set[str]) -> tuple[Any, bool]:
+def convert_tool_config(
+    tool_config: Any, *, tool_names: set[str]
+) -> tuple[Any, bool, list[str]]:
     """Convert ``toolConfig.functionCallingConfig`` into Anthropic form.
 
-    Returns ``(tool_choice, forbids_tools)``. Google's four modes are:
+    Returns ``(tool_choice, forbids_tools, dropped_fields)``. Google's four
+    modes are:
 
     ``AUTO``       the model decides -- Anthropic's default, so no key.
     ``ANY``        it must call a function; with exactly one entry in
                    ``allowedFunctionNames`` that is Anthropic's
                    ``{"type": "tool", "name": ...}``, and otherwise
                    ``{"type": "any"}``.
-    ``NONE``       no function may be called: the tools are withheld entirely,
-                   which is what ``tool_choice_forbids_tools`` expresses on the
-                   Chat Completions surface too.
+    ``NONE``       no function may be called: the tools are withheld entirely
+                   unless tool history is present, in which case the caller
+                   keeps ``tools`` and sends ``{"type": "none"}``.
     ``VALIDATED``  the model decides but its call is schema-checked upstream.
                    MCC has no such validator, so it reads as ``AUTO`` -- the
                    honest translation, since the alternative is claiming a
                    guarantee nothing here enforces.
 
-    ``allowedFunctionNames`` with more than one entry has no Anthropic
-    equivalent, so it becomes ``{"type": "any"}`` and the restriction is lost.
-    That is stated rather than hidden: the caller traces it.
+    ``allowedFunctionNames`` with more than one entry (or on modes that do not
+    use it) has no Anthropic equivalent and is recorded in ``dropped_fields``.
     """
 
     if tool_config is None:
-        return None, False
+        return None, False, []
     config = getattr(tool_config, "function_calling_config", None)
     if config is None:
-        return None, False
+        return None, False, []
     mode = config.mode
     normalized = mode.strip().upper() if isinstance(mode, str) else ""
     allowed = [
@@ -326,14 +328,22 @@ def convert_tool_config(tool_config: Any, *, tool_names: set[str]) -> tuple[Any,
     ]
 
     if normalized == "NONE":
-        return None, True
+        return None, True, []
     if normalized == "ANY":
         named = [name for name in allowed if name in tool_names]
+        if len(named) == 1 and len(allowed) == 1:
+            return {"type": "tool", "name": named[0]}, False, []
+        dropped = (
+            ["toolConfig.functionCallingConfig.allowedFunctionNames"] if allowed else []
+        )
         if len(named) == 1:
-            return {"type": "tool", "name": named[0]}, False
-        return {"type": "any"}, False
+            return {"type": "tool", "name": named[0]}, False, dropped
+        return {"type": "any"}, False, dropped
     if normalized in {"", "AUTO", "MODE_UNSPECIFIED", "VALIDATED"}:
-        return None, False
+        dropped = (
+            ["toolConfig.functionCallingConfig.allowedFunctionNames"] if allowed else []
+        )
+        return None, False, dropped
     raise GeminiConversionError(
         f"Unsupported functionCallingConfig.mode: {mode!r}. "
         "MCC accepts AUTO, ANY, NONE and VALIDATED.",
@@ -395,33 +405,105 @@ def _schema(entry: Mapping[str, Any], name: str) -> dict[str, Any]:
     return {"type": "object", "properties": {}}
 
 
-def normalize_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
-    """Lower-case every ``type`` in a Google ``Schema``-shaped mapping.
+_SCHEMA_DICT_OF_SCHEMAS_KEYS = frozenset(
+    {"properties", "$defs", "definitions", "patternProperties"}
+)
+_SCHEMA_SINGLE_SCHEMA_KEYS = frozenset(
+    {
+        "not",
+        "if",
+        "then",
+        "else",
+        "contains",
+        "propertyNames",
+        "unevaluatedProperties",
+    }
+)
+_SCHEMA_LIST_OF_SCHEMAS_KEYS = frozenset(
+    {"anyOf", "any_of", "oneOf", "one_of", "allOf", "all_of", "prefixItems"}
+)
+_SNAKE_TO_CAMEL_COMPOSITION: dict[str, str] = {
+    "any_of": "anyOf",
+    "one_of": "oneOf",
+    "all_of": "allOf",
+}
 
-    Applied recursively through ``properties``, ``items`` and the three
-    composition keywords. A schema that already uses lower case -- which is
-    what ``parametersJsonSchema`` carries -- passes through unchanged, so this
-    is safe to run over either spelling.
+
+def normalize_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize a Google ``Schema`` or JSON Schema mapping into JSON Schema.
+
+    Lowers uppercase Google proto ``type`` names, normalizes snake_case
+    composition keywords (``any_of``/``one_of``/``all_of``), recurses through
+    nested schema containers (``properties``, ``$defs``, ``definitions``,
+    ``patternProperties``, ``additionalProperties`` schemas, tuple/object
+    ``items``, ``prefixItems``, ``not``/``if``/``then``/``else``/``contains``/
+    ``propertyNames``/``unevaluatedProperties``), and translates OpenAPI-3
+    ``nullable: true`` into JSON Schema ``"null"`` union types.
     """
 
     result: dict[str, Any] = {}
+    nullable = schema.get("nullable")
     for key, value in schema.items():
-        if key == "type" and isinstance(value, str):
-            result[key] = value.lower()
-        elif key == "properties" and isinstance(value, Mapping):
+        if key == "nullable":
+            continue
+        if key == "type":
+            if isinstance(value, str):
+                result[key] = value.lower()
+            elif isinstance(value, list):
+                result[key] = [
+                    item.lower() if isinstance(item, str) else item for item in value
+                ]
+            else:
+                result[key] = value
+        elif key in _SCHEMA_DICT_OF_SCHEMAS_KEYS and isinstance(value, Mapping):
             result[key] = {
                 property_name: normalize_schema(property_schema)
                 if isinstance(property_schema, Mapping)
                 else property_schema
                 for property_name, property_schema in value.items()
             }
-        elif key == "items" and isinstance(value, Mapping):
+        elif key == "items":
+            if isinstance(value, Mapping):
+                result[key] = normalize_schema(value)
+            elif isinstance(value, list):
+                result[key] = [
+                    normalize_schema(item) if isinstance(item, Mapping) else item
+                    for item in value
+                ]
+            else:
+                result[key] = value
+        elif (
+            key == "additionalProperties" or key in _SCHEMA_SINGLE_SCHEMA_KEYS
+        ) and isinstance(value, Mapping):
             result[key] = normalize_schema(value)
-        elif key in {"anyOf", "any_of", "oneOf", "allOf"} and isinstance(value, list):
-            result[key] = [
+        elif key in _SCHEMA_LIST_OF_SCHEMAS_KEYS and isinstance(value, list):
+            target_key = _SNAKE_TO_CAMEL_COMPOSITION.get(key, key)
+            if key in _SNAKE_TO_CAMEL_COMPOSITION and target_key in result:
+                continue
+            result[target_key] = [
                 normalize_schema(item) if isinstance(item, Mapping) else item
                 for item in value
             ]
         else:
             result[key] = value
+
+    if nullable is True:
+        existing_type = result.get("type")
+        if isinstance(existing_type, str):
+            result["type"] = (
+                [existing_type, "null"] if existing_type != "null" else "null"
+            )
+        elif isinstance(existing_type, list):
+            if "null" not in existing_type:
+                result["type"] = [*existing_type, "null"]
+        elif isinstance(result.get("anyOf"), list) and not any(
+            isinstance(item, Mapping) and item.get("type") == "null"
+            for item in result["anyOf"]
+        ):
+            result["anyOf"] = [*result["anyOf"], {"type": "null"}]
+        elif isinstance(result.get("oneOf"), list) and not any(
+            isinstance(item, Mapping) and item.get("type") == "null"
+            for item in result["oneOf"]
+        ):
+            result["oneOf"] = [*result["oneOf"], {"type": "null"}]
     return result

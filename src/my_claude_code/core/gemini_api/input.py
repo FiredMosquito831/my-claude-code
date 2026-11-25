@@ -2,10 +2,17 @@
 
 import base64
 import binascii
+import contextlib
 import json
+from collections import defaultdict, deque
 from collections.abc import Mapping
 from typing import Any
 
+from my_claude_code.core.anthropic import (
+    attach_structured_output_schema,
+    has_tool_history,
+    synthesize_missing_history_tools,
+)
 from my_claude_code.core.carrier_surface import (
     GEMINI_THOUGHT_PART,
     GEMINI_THOUGHT_SIGNATURE,
@@ -28,9 +35,19 @@ from .tools import convert_tool_config, convert_tools, normalize_schema
 #: ``safetySettings`` by default. So they are dropped *and* recorded.
 IGNORED_REQUEST_FIELDS: tuple[str, ...] = ("safety_settings", "cached_content")
 
-_JSON_OBJECT_INSTRUCTION = (
-    "Respond with a single valid JSON object and nothing else. "
-    "Do not wrap it in Markdown code fences and do not add commentary."
+#: ``generationConfig`` extra fields accepted by Gemini REST that MCC does not
+#: forward across the IR boundary, traced in ``conversion.dropped``.
+IGNORED_GENERATION_CONFIG_FIELDS: tuple[tuple[str, str], ...] = (
+    ("seed", "generationConfig.seed"),
+    ("presencePenalty", "generationConfig.presencePenalty"),
+    ("presence_penalty", "generationConfig.presencePenalty"),
+    ("frequencyPenalty", "generationConfig.frequencyPenalty"),
+    ("frequency_penalty", "generationConfig.frequencyPenalty"),
+    ("responseLogprobs", "generationConfig.responseLogprobs"),
+    ("response_logprobs", "generationConfig.responseLogprobs"),
+    ("logprobs", "generationConfig.logprobs"),
+    ("mediaResolution", "generationConfig.mediaResolution"),
+    ("media_resolution", "generationConfig.mediaResolution"),
 )
 
 #: ``inlineData`` mime types Anthropic takes as a document rather than an
@@ -55,7 +72,13 @@ class GeminiConversion:
     always did.
     """
 
-    __slots__ = ("carrier_surface", "dropped", "include_thoughts", "payload")
+    __slots__ = (
+        "carrier_surface",
+        "dropped",
+        "include_thoughts",
+        "payload",
+        "preserve_thought_signatures",
+    )
 
     def __init__(
         self,
@@ -64,6 +87,7 @@ class GeminiConversion:
         dropped: list[str],
         include_thoughts: bool,
         carrier_surface: dict[str, int] | None = None,
+        preserve_thought_signatures: bool = False,
     ) -> None:
         self.payload = payload
         self.dropped = dropped
@@ -74,12 +98,16 @@ class GeminiConversion:
         self.include_thoughts = include_thoughts
         #: The carrier-surface cells this request dropped, or ``{}``.
         self.carrier_surface = carrier_surface if carrier_surface is not None else {}
+        #: Whether non-``functionCall`` thought parts/signatures were preserved
+        #: in ``gemini_envelope`` instead of counted as dropped.
+        self.preserve_thought_signatures = preserve_thought_signatures
 
 
 def convert_request_to_anthropic_payload(
     request: GeminiGenerateContentRequest,
     *,
     allow_web_search: bool = False,
+    preserve_thought_signatures: bool = False,
 ) -> GeminiConversion:
     """Convert a ``GenerateContentRequest`` into an Anthropic Messages payload.
 
@@ -98,25 +126,41 @@ def convert_request_to_anthropic_payload(
 
     generation = request.generation_config
     _reject_multiple_candidates(generation)
+    if generation is not None and isinstance(generation.model_extra, Mapping):
+        ignored_gen = [
+            trace_name
+            for wire_key, trace_name in IGNORED_GENERATION_CONFIG_FIELDS
+            if generation.model_extra.get(wire_key) is not None
+        ]
+        if ignored_gen:
+            dropped.extend(dict.fromkeys(ignored_gen))
 
-    messages = _convert_contents(request.content_list, carrier_surface)
+    gemini_envelope: dict[str, Any] = {}
+    messages = _convert_contents(
+        request.content_list,
+        carrier_surface,
+        preserve_thought_signatures=preserve_thought_signatures,
+        gemini_envelope=gemini_envelope,
+    )
     if not messages:
         raise GeminiConversionError(
             "contents must contain at least one user or model turn",
             field="contents",
         )
 
-    system_parts: list[str] = []
-    if instruction := _system_text(request.system_instruction):
-        system_parts.append(instruction)
-    if schema_instruction := _response_format_instruction(generation):
-        system_parts.append(schema_instruction)
-
     payload: dict[str, Any] = {
         "model": _required_model(request.model),
         "messages": messages,
         "stream": True,
     }
+    if gemini_envelope:
+        payload["gemini_envelope"] = gemini_envelope
+
+    system_parts: list[str] = []
+    if instruction := _system_text(request.system_instruction):
+        system_parts.append(instruction)
+    _apply_response_format(payload, generation, system_parts=system_parts)
+
     if system_parts:
         payload["system"] = "\n\n".join(system_parts)
 
@@ -126,19 +170,26 @@ def convert_request_to_anthropic_payload(
     tools, hosted = convert_tools(request.tools, allow_web_search=allow_web_search)
     dropped.extend(hosted)
     tool_names = {tool["name"] for tool in tools or ()}
-    tool_choice, forbids = convert_tool_config(
+    tool_choice, forbids, tool_config_dropped = convert_tool_config(
         request.tool_config, tool_names=tool_names
     )
-    if tools and not forbids:
-        payload["tools"] = tools
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
+    dropped.extend(tool_config_dropped)
+    history_has_tools = has_tool_history(messages)
+    if not forbids:
+        if tools:
+            payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+    elif history_has_tools:
+        payload["tools"] = synthesize_missing_history_tools(messages, tools or [])
+        payload["tool_choice"] = {"type": "none"}
 
     return GeminiConversion(
         payload,
         dropped=dropped,
         include_thoughts=include_thoughts,
         carrier_surface=carrier_surface,
+        preserve_thought_signatures=preserve_thought_signatures,
     )
 
 
@@ -162,24 +213,28 @@ def _reject_multiple_candidates(generation: GeminiGenerationConfig | None) -> No
 
 
 def _convert_contents(
-    contents: list[GeminiContent], carrier_surface: dict[str, int]
+    contents: list[GeminiContent],
+    carrier_surface: dict[str, int],
+    *,
+    preserve_thought_signatures: bool = False,
+    gemini_envelope: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Convert ``contents`` into Anthropic messages.
 
     The ``functionCall`` id map exists because Gemini's function-call parts
-    carry **no id**. Anthropic pairs a
-    ``tool_result`` to its ``tool_use`` by id and rejects a mismatch, so MCC
-    mints a stable id per call and remembers it by function name: a
-    ``functionResponse`` for ``read_file`` is answered against the most recent
-    unanswered ``read_file`` call, which is exactly the pairing Gemini's own
-    ordering implies.
+    often carry **no id**. Anthropic pairs a ``tool_result`` to its
+    ``tool_use`` by id and rejects a mismatch, so MCC mints a stable id per
+    call and queues ids per function name (FIFO) so repeated calls to the same
+    function pair cleanly in order.
 
-    ``carrier_surface`` receives the two ingress cells (8.20.0), counted at the
+    ``carrier_surface`` receives the ingress cells (8.20.0), counted at the
     very place that drops them so the count and the conversion cannot disagree.
     """
 
     messages: list[dict[str, Any]] = []
-    call_ids: dict[str, str] = {}
+    call_ids: dict[str, deque[str]] = defaultdict(deque)
+    tool_call_signatures: dict[str, str] = {}
+    thought_parts: list[dict[str, Any]] = []
     counter = 0
 
     for index, content in enumerate(contents):
@@ -199,6 +254,9 @@ def _convert_contents(
                 call_ids=call_ids,
                 counter=counter,
                 carrier_surface=carrier_surface,
+                preserve_thought_signatures=preserve_thought_signatures,
+                tool_call_signatures=tool_call_signatures,
+                thought_parts=thought_parts,
             )
             if block is None:
                 continue
@@ -209,10 +267,19 @@ def _convert_contents(
             else:
                 blocks.append(block)
 
-        if results:
-            _append_tool_results(messages, results)
-        if blocks:
-            messages.append({"role": role, "content": blocks})
+        if results and blocks and role == "user":
+            _append_tool_results(messages, [*results, *blocks])
+        else:
+            if results:
+                _append_tool_results(messages, results)
+            if blocks:
+                messages.append({"role": role, "content": blocks})
+
+    if gemini_envelope is not None:
+        if tool_call_signatures:
+            gemini_envelope["tool_call_signatures"] = tool_call_signatures
+        if preserve_thought_signatures and thought_parts:
+            gemini_envelope["thought_parts"] = thought_parts
 
     return messages
 
@@ -243,32 +310,55 @@ def _convert_part(
     *,
     index: int,
     position: int,
-    call_ids: dict[str, str],
+    call_ids: dict[str, deque[str]],
     counter: int,
     carrier_surface: dict[str, int],
+    preserve_thought_signatures: bool = False,
+    tool_call_signatures: dict[str, str] | None = None,
+    thought_parts: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
     """Return ``(block, is_tool_result)`` for one Gemini part."""
 
-    # 8.20.0: a ``thoughtSignature`` is read nowhere on this door -- not on a
-    # thought part, not on a tool call. Counted on every part, before any
-    # branch, because the drop is the same drop wherever the client put it.
-    if _has_thought_signature(part):
+    sig = _thought_signature_value(part)
+
+    if call := _mapping(part, "functionCall", "function_call"):
+        block = _function_call_block(call, call_ids=call_ids, counter=counter)
+        if sig and tool_call_signatures is not None:
+            tool_call_signatures[block["id"]] = sig
+        return block, False
+
+    if sig and not preserve_thought_signatures:
         note(carrier_surface, GEMINI_THOUGHT_SIGNATURE)
 
     if "text" in part:
         if part.get("thought") is True:
-            # A thought echoed back from a previous turn. Anthropic requires a
-            # signature on a ``thinking`` block and rejects one without it, so
-            # replaying it would fail the whole request; dropping it loses
-            # nothing the model cannot re-derive. Counted (8.20.0) because the
-            # drop is otherwise invisible, and it is exactly the cell a Gemini
-            # carrier would have to close.
-            note(carrier_surface, GEMINI_THOUGHT_PART)
+            if preserve_thought_signatures:
+                if thought_parts is not None:
+                    entry: dict[str, Any] = {
+                        "index": index,
+                        "position": position,
+                        "text": part.get("text"),
+                    }
+                    if sig:
+                        entry["thought_signature"] = sig
+                    thought_parts.append(entry)
+            else:
+                note(carrier_surface, GEMINI_THOUGHT_PART)
             return None, False
         text = part.get("text")
         if not isinstance(text, str):
             raise GeminiConversionError(
                 "contents[].parts[].text must be a string", field="contents"
+            )
+        if preserve_thought_signatures and sig and thought_parts is not None:
+            thought_parts.append(
+                {
+                    "index": index,
+                    "position": position,
+                    "text": text,
+                    "thought": False,
+                    "thought_signature": sig,
+                }
             )
         if not text:
             return None, False
@@ -279,9 +369,6 @@ def _convert_part(
 
     if file_data := _mapping(part, "fileData", "file_data"):
         return _file_data_block(file_data), False
-
-    if call := _mapping(part, "functionCall", "function_call"):
-        return _function_call_block(call, call_ids=call_ids, counter=counter), False
 
     if response := _mapping(part, "functionResponse", "function_response"):
         return _function_response_block(response, call_ids=call_ids), True
@@ -300,21 +387,14 @@ def _convert_part(
     )
 
 
-def _has_thought_signature(part: Mapping[str, Any]) -> bool:
-    """Whether a replayed part carries Gemini's own opaque signature field.
-
-    Both spellings are accepted, for the reason every other part key here is
-    read through :func:`_mapping` with two names: the wire is ``thoughtSignature``
-    and the Python SDK's model spells it ``thought_signature``. A non-string or
-    empty value is not a signature and is not counted -- an operator reading the
-    note must not be told a carrier was dropped when the client sent ``null``.
-    """
+def _thought_signature_value(part: Mapping[str, Any]) -> str | None:
+    """Return Gemini's non-empty ``thoughtSignature`` / ``thought_signature`` if any."""
 
     for key in ("thoughtSignature", "thought_signature"):
         value = part.get(key)
         if isinstance(value, str) and value:
-            return True
-    return False
+            return value
+    return None
 
 
 def _mapping(part: Mapping[str, Any], *keys: str) -> Mapping[str, Any] | None:
@@ -371,13 +451,24 @@ def _file_data_block(file_data: Mapping[str, Any]) -> dict[str, Any]:
             "API, so a files/ resource name cannot be resolved here.",
             field="contents",
         )
-    if isinstance(mime_type, str) and mime_type in _DOCUMENT_MIME_TYPES:
+    if not isinstance(mime_type, str) or not mime_type.strip():
+        raise GeminiConversionError(
+            "fileData.mimeType must be a non-empty string", field="contents"
+        )
+    normalized_mime = mime_type.strip().lower()
+    if normalized_mime in _DOCUMENT_MIME_TYPES:
         return {"type": "document", "source": {"type": "url", "url": uri}}
-    return {"type": "image", "source": {"type": "url", "url": uri}}
+    if normalized_mime.startswith("image/"):
+        return {"type": "image", "source": {"type": "url", "url": uri}}
+    raise GeminiConversionError(
+        f"Unsupported fileData.mimeType: {mime_type!r}. "
+        "MCC accepts image/* and application/pdf.",
+        field="contents",
+    )
 
 
 def _function_call_block(
-    call: Mapping[str, Any], *, call_ids: dict[str, str], counter: int
+    call: Mapping[str, Any], *, call_ids: dict[str, deque[str]], counter: int
 ) -> dict[str, Any]:
     name = call.get("name")
     if not isinstance(name, str) or not name:
@@ -393,12 +484,12 @@ def _function_call_block(
         )
     raw_id = call.get("id")
     call_id = raw_id if isinstance(raw_id, str) and raw_id else f"gemini_call_{counter}"
-    call_ids[name] = call_id
+    call_ids[name].append(call_id)
     return {"type": "tool_use", "id": call_id, "name": name, "input": dict(args)}
 
 
 def _function_response_block(
-    response: Mapping[str, Any], *, call_ids: dict[str, str]
+    response: Mapping[str, Any], *, call_ids: dict[str, deque[str]]
 ) -> dict[str, Any]:
     name = response.get("name")
     if not isinstance(name, str) or not name:
@@ -406,17 +497,70 @@ def _function_response_block(
             "functionResponse.name must be a non-empty string", field="contents"
         )
     raw_id = response.get("id")
-    tool_use_id = raw_id if isinstance(raw_id, str) and raw_id else call_ids.get(name)
+    queue = call_ids.get(name)
+    if isinstance(raw_id, str) and raw_id:
+        tool_use_id = raw_id
+        if queue:
+            with contextlib.suppress(ValueError):
+                queue.remove(raw_id)
+    else:
+        tool_use_id = queue.popleft() if queue else None
     if not tool_use_id:
         raise GeminiConversionError(
             f"functionResponse for {name!r} answers no functionCall in this "
             "conversation; Anthropic pairs a tool result to its call by id.",
             field="contents",
         )
+    text = _response_text(response.get("response"))
+    raw_parts = response.get("parts")
+    if raw_parts is None:
+        content: str | list[dict[str, Any]] = text
+    else:
+        if not isinstance(raw_parts, list):
+            raise GeminiConversionError(
+                "functionResponse.parts must be a list", field="contents"
+            )
+        extra_blocks: list[dict[str, Any]] = []
+        extra_texts: list[str] = []
+        has_media = False
+        for part in raw_parts:
+            if not isinstance(part, Mapping):
+                raise GeminiConversionError(
+                    f"Unsupported functionResponse.parts entry: {type(part).__name__}",
+                    field="contents",
+                )
+            if inline := _mapping(part, "inlineData", "inline_data"):
+                extra_blocks.append(_inline_data_block(inline))
+                has_media = True
+            elif file_data := _mapping(part, "fileData", "file_data"):
+                extra_blocks.append(_file_data_block(file_data))
+                has_media = True
+            elif "text" in part:
+                part_text = part.get("text")
+                if not isinstance(part_text, str):
+                    raise GeminiConversionError(
+                        "functionResponse.parts[].text must be a string",
+                        field="contents",
+                    )
+                if part_text:
+                    extra_blocks.append({"type": "text", "text": part_text})
+                    extra_texts.append(part_text)
+        if has_media:
+            combined: list[dict[str, Any]] = []
+            if text:
+                combined.append({"type": "text", "text": text})
+            combined.extend(extra_blocks)
+            content = combined
+        elif extra_texts:
+            content = (
+                "\n".join([text, *extra_texts]) if text else "\n".join(extra_texts)
+            )
+        else:
+            content = text
     return {
         "type": "tool_result",
         "tool_use_id": tool_use_id,
-        "content": _response_text(response.get("response")),
+        "content": content,
     }
 
 
@@ -526,7 +670,9 @@ def _apply_thinking_config(
     if effort is not None:
         if effort == "none":
             payload["thinking"] = {"type": "disabled", "enabled": False}
-        payload["output_config"] = {"effort": effort}
+        else:
+            payload["thinking"] = {"type": "adaptive"}
+            payload.setdefault("output_config", {})["effort"] = effort
         return thinking.include_thoughts is True
 
     budget = thinking.thinking_budget
@@ -575,31 +721,38 @@ def _thinking_level_effort(value: str | None) -> str | None:
         ) from None
 
 
-def _response_format_instruction(
+def _apply_response_format(
+    payload: dict[str, Any],
     generation: GeminiGenerationConfig | None,
-) -> str | None:
-    """Map ``responseMimeType`` / ``responseSchema`` onto the Anthropic mechanism.
-
-    Anthropic has no server-enforced JSON mode, so the honest translation is
-    an instruction the model can follow, appended to the system prompt --
-    identical to what the Chat Completions adapter does with
-    ``response_format``. A schema additionally travels verbatim, which is what
-    makes the difference between "some JSON" and "this JSON".
-    """
+    *,
+    system_parts: list[str],
+) -> None:
+    """Map ``responseMimeType`` / ``responseSchema`` onto canonical structured output IR."""
 
     if generation is None:
-        return None
-    schema = generation.response_json_schema or generation.response_schema
+        return
+    schema = (
+        generation.response_json_schema
+        if generation.response_json_schema is not None
+        else generation.response_schema
+    )
+    schema_field = (
+        "generationConfig.responseJsonSchema"
+        if generation.response_json_schema is not None
+        else "generationConfig.responseSchema"
+    )
     mime_type = generation.response_mime_type
     if schema is None and mime_type in (None, "", "text/plain"):
-        return None
+        return
     if schema is None:
         if mime_type in {"application/json", "application/x-ndjson"}:
-            return _JSON_OBJECT_INSTRUCTION
+            payload["structured_output_spec"] = {"type": "json_object"}
+            return
         if mime_type == "text/x.enum":
-            return (
+            system_parts.append(
                 "Respond with exactly one of the allowed enum values and nothing else."
             )
+            return
         raise GeminiConversionError(
             f"Unsupported generationConfig.responseMimeType: {mime_type!r}. "
             "MCC accepts text/plain, application/json and text/x.enum.",
@@ -607,11 +760,22 @@ def _response_format_instruction(
         )
     if not isinstance(schema, Mapping):
         raise GeminiConversionError(
-            "generationConfig.responseSchema must be an object",
-            field="generationConfig.responseSchema",
+            f"{schema_field} must be an object",
+            field=schema_field,
         )
     normalized = normalize_schema(schema)
-    return (
-        f"{_JSON_OBJECT_INSTRUCTION} The object must validate against this "
-        f"JSON Schema:\n{json.dumps(normalized, sort_keys=True)}"
+    if mime_type == "text/x.enum":
+        system_parts.append(
+            "Respond with exactly one of the allowed enum values and nothing else. "
+            f"Allowed schema:\n{json.dumps(normalized, sort_keys=True)}"
+        )
+        return
+    if mime_type not in (None, "", "application/json", "application/x-ndjson"):
+        raise GeminiConversionError(
+            f"Unsupported generationConfig.responseMimeType: {mime_type!r}. "
+            "MCC accepts text/plain, application/json and text/x.enum.",
+            field="generationConfig.responseMimeType",
+        )
+    attach_structured_output_schema(
+        payload, schema=normalized, name="structured_output"
     )

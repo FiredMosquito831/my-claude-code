@@ -1,0 +1,346 @@
+{
+ "cases": {
+  "market": {
+   "gemini/anthropic_ciphertext/adaptive/adaptive": {
+    "adaptive_before": "8bf253a7d1db",
+    "after": "29a6c7d06610",
+    "before": "d7490637cf2b"
+   },
+   "gemini/anthropic_ciphertext/adaptive/disabled": {
+    "adaptive_before": "8bf253a7d1db",
+    "after": "29a6c7d06610",
+    "before": "d7490637cf2b"
+   },
+   "gemini/anthropic_ciphertext/adaptive/enabled_4000": {
+    "adaptive_before": "8bf253a7d1db",
+    "after": "29a6c7d06610",
+    "before": "d7490637cf2b"
+   },
+   "gemini/anthropic_ciphertext/adaptive/none": {
+    "adaptive_before": "8bf253a7d1db",
+    "after": "29a6c7d06610",
+    "before": "d7490637cf2b"
+   },
+   "gemini/assistant_arrived_empty/adaptive/adaptive": {
+    "adaptive_before": "d99a266d4a85",
+    "after": "2cefaf7b3fa1",
+    "before": "a0d0f4c79e91"
+   },
+   "gemini/assistant_arrived_empty/adaptive/disabled": {
+    "adaptive_before": "d99a266d4a85",
+    "after": "2cefaf7b3fa1",
+    "before": "a0d0f4c79e91"
+   },
+   "gemini/assistant_arrived_empty/adaptive/enabled_4000": {
+    "adaptive_before": "d99a266d4a85",
+    "after": "2cefaf7b3fa1",
+    "before": "a0d0f4c79e91"
+   },
+   "gemini/assistant_arrived_empty/adaptive/none": {
+    "adaptive_before": "d99a266d4a85",
+    "after": "2cefaf7b3fa1",
+    "before": "a0d0f4c79e91"
+   },
+   "gemini/assistant_prefill_last/adaptive/adaptive": {
+    "adaptive_before": "7ad40cb74650",
+    "after": "55abba29fa2e",
+    "before": "ed77b1ae218d"
+   },
+   "gemini/assistant_prefill_last/adaptive/disabled": {
+    "adaptive_before": "7ad40cb74650",
+    "after": "55abba29fa2e",
+    "before": "ed77b1ae218d"
+   },
+   "gemini/assistant_prefill_last/adaptive/enabled_4000": {
+    "adaptive_before": "7ad40cb74650",
+    "after": "55abba29fa2e",
+    "before": "ed77b1ae218d"
+   },
+   "gemini/assistant_prefill_last/adaptive/none": {
+    "adaptive_before": "7ad40cb74650",
+    "after": "55abba29fa2e",
+    "before": "ed77b1ae218d"
+   },
+   "gemini/cache_control_everywhere/adaptive/adaptive": {
+    "adaptive_before": "cef8ecdeb790",
+    "after": "2dee5b3cf9d5",
+    "before": "45309f989781"
+   },
+   "gemini/cache_control_everywhere/adaptive/disabled": {
+    "adaptive_before": "cef8ecdeb790",
+    "after": "2dee5b3cf9d5",
+    "before": "45309f989781"
+   },
+   "gemini/cache_control_everywhere/adaptive/enabled_4000": {
+    "adaptive_before": "cef8ecdeb790",
+    "after": "2dee5b3cf9d5",
+    "before": "45309f989781"
+   },
+   "gemini/cache_control_everywhere/adaptive/none": {
+    "adaptive_before": "cef8ecdeb790",
+    "after": "2dee5b3cf9d5",
+    "before": "45309f989781"
+   },
+   "gemini/consecutive_same_role/adaptive/adaptive": {
+    "adaptive_before": "f7a2967dc4d0",
+    "after": "afdcb90742a2",
+    "before": "8038147eba84"
+   },
+   "gemini/consecutive_same_role/adaptive/disabled": {
+    "adaptive_before": "f7a2967dc4d0",
+    "after": "afdcb90742a2",
+    "before": "8038147eba84"
+   },
+   "gemini/consecutive_same_role/adaptive/enabled_4000": {
+    "adaptive_before": "f7a2967dc4d0",
+    "after": "afdcb90742a2",
+    "before": "8038147eba84"
+   },
+   "gemini/consecutive_same_role/adaptive/none": {
+    "adaptive_before": "f7a2967dc4d0",
+    "after": "afdcb90742a2",
+    "before": "8038147eba84"
+   },
+   "gemini/consecutive_signed_blocks/adaptive/adaptive": {
+    "adaptive_before": "0d419930dd2b",
+    "after": "536cc626e995",
+    "before": "f6dffafb059c"
+   },
+   "gemini/consecutive_signed_blocks/adaptive/disabled": {
+    "adaptive_before": "0d419930dd2b",
+    "after": "536cc626e995",
+    "before": "f6dffafb059c"
+   },
+   "gemini/consecutive_signed_blocks/adaptive/enabled_4000": {
+    "adaptive_before": "0d419930dd2b",
+    "after": "536cc626e995",
+    "before": "f6dffafb059c"
+   },
+   "gemini/consecutive_signed_blocks/adaptive/none": {
+    "adaptive_before": "0d419930dd2b",
+    "after": "536cc626e995",
+    "before": "f6dffafb059c"
+   },
+   "gemini/document_and_inline_system/adaptive/adaptive": {
+    "adaptive_before": "38f103ac7ac6",
+    "after": "3554ba86bbdf",
+    "before": "b1cdaf4d8918"
+   },
+   "gemini/document_and_inline_system/adaptive/disabled": {
+    "adaptive_before": "38f103ac7ac6",
+    "after": "3554ba86bbdf",
+    "before": "b1cdaf4d8918"
+   },
+   "gemini/document_and_inline_system/adaptive/enabled_4000": {
+    "adaptive_before": "38f103ac7ac6",
+    "after": "3554ba86bbdf",
+    "before": "b1cdaf4d8918"
+   },
+   "gemini/document_and_inline_system/adaptive/none": {
+    "adaptive_before": "38f103ac7ac6",
+    "after": "3554ba86bbdf",
+    "before": "b1cdaf4d8918"
+   },
+   "gemini/plain_strings/adaptive/adaptive": {
+    "adaptive_before": "0ea1db9c3341",
+    "after": "ce02e40766f2",
+    "before": "42bc4b055d94"
+   },
+   "gemini/plain_strings/adaptive/disabled": {
+    "adaptive_before": "0ea1db9c3341",
+    "after": "ce02e40766f2",
+    "before": "42bc4b055d94"
+   },
+   "gemini/plain_strings/adaptive/enabled_4000": {
+    "adaptive_before": "0ea1db9c3341",
+    "after": "ce02e40766f2",
+    "before": "42bc4b055d94"
+   },
+   "gemini/plain_strings/adaptive/none": {
+    "adaptive_before": "0ea1db9c3341",
+    "after": "ce02e40766f2",
+    "before": "42bc4b055d94"
+   },
+   "gemini/relay_signature_kept/adaptive/adaptive": {
+    "adaptive_before": "2ec2940b94b3",
+    "after": "a9125398e284",
+    "before": "19108b1c95e5"
+   },
+   "gemini/relay_signature_kept/adaptive/disabled": {
+    "adaptive_before": "2ec2940b94b3",
+    "after": "a9125398e284",
+    "before": "19108b1c95e5"
+   },
+   "gemini/relay_signature_kept/adaptive/enabled_4000": {
+    "adaptive_before": "2ec2940b94b3",
+    "after": "a9125398e284",
+    "before": "19108b1c95e5"
+   },
+   "gemini/relay_signature_kept/adaptive/none": {
+    "adaptive_before": "2ec2940b94b3",
+    "after": "a9125398e284",
+    "before": "19108b1c95e5"
+   },
+   "gemini/replay.long_mcp_name_and_no_thinking/adaptive/adaptive": {
+    "adaptive_before": "cdb5d8df721b",
+    "after": "9944e0f97282",
+    "before": "dc243f39a5ad"
+   },
+   "gemini/replay.long_mcp_name_and_no_thinking/adaptive/disabled": {
+    "adaptive_before": "cdb5d8df721b",
+    "after": "9944e0f97282",
+    "before": "dc243f39a5ad"
+   },
+   "gemini/replay.long_mcp_name_and_no_thinking/adaptive/enabled_4000": {
+    "adaptive_before": "cdb5d8df721b",
+    "after": "9944e0f97282",
+    "before": "dc243f39a5ad"
+   },
+   "gemini/replay.long_mcp_name_and_no_thinking/adaptive/none": {
+    "adaptive_before": "cdb5d8df721b",
+    "after": "9944e0f97282",
+    "before": "dc243f39a5ad"
+   },
+   "gemini/replay.redacted_thinking/adaptive/adaptive": {
+    "adaptive_before": "6eeff280872d",
+    "after": "395b986e51fd",
+    "before": "03d79a7ea227"
+   },
+   "gemini/replay.redacted_thinking/adaptive/disabled": {
+    "adaptive_before": "6eeff280872d",
+    "after": "395b986e51fd",
+    "before": "03d79a7ea227"
+   },
+   "gemini/replay.redacted_thinking/adaptive/enabled_4000": {
+    "adaptive_before": "6eeff280872d",
+    "after": "395b986e51fd",
+    "before": "03d79a7ea227"
+   },
+   "gemini/replay.redacted_thinking/adaptive/none": {
+    "adaptive_before": "6eeff280872d",
+    "after": "395b986e51fd",
+    "before": "03d79a7ea227"
+   },
+   "gemini/replay.string_turn_with_reasoning_content/adaptive/adaptive": {
+    "adaptive_before": "bbd4439b6a8d",
+    "after": "c4e6cb3ea763",
+    "before": "f1b551015c2c"
+   },
+   "gemini/replay.string_turn_with_reasoning_content/adaptive/disabled": {
+    "adaptive_before": "bbd4439b6a8d",
+    "after": "c4e6cb3ea763",
+    "before": "f1b551015c2c"
+   },
+   "gemini/replay.string_turn_with_reasoning_content/adaptive/enabled_4000": {
+    "adaptive_before": "bbd4439b6a8d",
+    "after": "c4e6cb3ea763",
+    "before": "f1b551015c2c"
+   },
+   "gemini/replay.string_turn_with_reasoning_content/adaptive/none": {
+    "adaptive_before": "bbd4439b6a8d",
+    "after": "c4e6cb3ea763",
+    "before": "f1b551015c2c"
+   },
+   "gemini/replay.thinking_after_tool_call/adaptive/adaptive": {
+    "adaptive_before": "4678b785219b",
+    "after": "da98a649975a",
+    "before": "2bb86cf53cff"
+   },
+   "gemini/replay.thinking_after_tool_call/adaptive/disabled": {
+    "adaptive_before": "4678b785219b",
+    "after": "da98a649975a",
+    "before": "2bb86cf53cff"
+   },
+   "gemini/replay.thinking_after_tool_call/adaptive/enabled_4000": {
+    "adaptive_before": "4678b785219b",
+    "after": "da98a649975a",
+    "before": "2bb86cf53cff"
+   },
+   "gemini/replay.thinking_after_tool_call/adaptive/none": {
+    "adaptive_before": "4678b785219b",
+    "after": "da98a649975a",
+    "before": "2bb86cf53cff"
+   },
+   "gemini/replay.thinking_only_turn/adaptive/adaptive": {
+    "adaptive_before": "23939955b803",
+    "after": "12ca842bcd0b",
+    "before": "3860a216b216"
+   },
+   "gemini/replay.thinking_only_turn/adaptive/disabled": {
+    "adaptive_before": "23939955b803",
+    "after": "12ca842bcd0b",
+    "before": "3860a216b216"
+   },
+   "gemini/replay.thinking_only_turn/adaptive/enabled_4000": {
+    "adaptive_before": "23939955b803",
+    "after": "12ca842bcd0b",
+    "before": "3860a216b216"
+   },
+   "gemini/replay.thinking_only_turn/adaptive/none": {
+    "adaptive_before": "23939955b803",
+    "after": "12ca842bcd0b",
+    "before": "3860a216b216"
+   },
+   "gemini/replay.thinking_then_text/adaptive/adaptive": {
+    "adaptive_before": "b07064c2e052",
+    "after": "42dfb2431217",
+    "before": "930e2d3b5f6d"
+   },
+   "gemini/replay.thinking_then_text/adaptive/disabled": {
+    "adaptive_before": "b07064c2e052",
+    "after": "42dfb2431217",
+    "before": "930e2d3b5f6d"
+   },
+   "gemini/replay.thinking_then_text/adaptive/enabled_4000": {
+    "adaptive_before": "b07064c2e052",
+    "after": "42dfb2431217",
+    "before": "930e2d3b5f6d"
+   },
+   "gemini/replay.thinking_then_text/adaptive/none": {
+    "adaptive_before": "b07064c2e052",
+    "after": "42dfb2431217",
+    "before": "930e2d3b5f6d"
+   },
+   "gemini/replay.thinking_tool_loop/adaptive/adaptive": {
+    "adaptive_before": "f1372a57fb54",
+    "after": "365012cd9ac0",
+    "before": "c221f11b894d"
+   },
+   "gemini/replay.thinking_tool_loop/adaptive/disabled": {
+    "adaptive_before": "f1372a57fb54",
+    "after": "365012cd9ac0",
+    "before": "c221f11b894d"
+   },
+   "gemini/replay.thinking_tool_loop/adaptive/enabled_4000": {
+    "adaptive_before": "f1372a57fb54",
+    "after": "365012cd9ac0",
+    "before": "c221f11b894d"
+   },
+   "gemini/replay.thinking_tool_loop/adaptive/none": {
+    "adaptive_before": "f1372a57fb54",
+    "after": "365012cd9ac0",
+    "before": "c221f11b894d"
+   },
+   "gemini/replay.thinking_with_images/adaptive/adaptive": {
+    "adaptive_before": "8c1814aa4180",
+    "after": "02d101bc98c4",
+    "before": "0129f106606a"
+   },
+   "gemini/replay.thinking_with_images/adaptive/disabled": {
+    "adaptive_before": "8c1814aa4180",
+    "after": "02d101bc98c4",
+    "before": "0129f106606a"
+   },
+   "gemini/replay.thinking_with_images/adaptive/enabled_4000": {
+    "adaptive_before": "8c1814aa4180",
+    "after": "02d101bc98c4",
+    "before": "0129f106606a"
+   },
+   "gemini/replay.thinking_with_images/adaptive/none": {
+    "adaptive_before": "8c1814aa4180",
+    "after": "02d101bc98c4",
+    "before": "0129f106606a"
+   }
+  }
+ }
+}

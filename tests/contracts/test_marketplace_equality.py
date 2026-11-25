@@ -45,6 +45,7 @@ from my_claude_code.config.model_overrides import (
 )
 from tests.contracts.adaptive_expectations import moved as adaptive_moves
 from tests.contracts.chat_reasoning_expectations import chat_corrections
+from tests.contracts.gemini_adaptive_expectations import gemini_adaptive_corrections
 from tests.contracts.go_reasoning_expectations import corrections
 from tests.contracts.marketplace_equality_corpus import compact, record_digest, snapshot
 from tests.contracts.messages_gateway_reasoning_expectations import (
@@ -170,6 +171,11 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
     # ``adaptive_every_door_expectations.json`` -- the historical baseline is
     # not regenerated -- and nothing else may move.
     adaptive = adaptive_moves("marketplace")
+    gemini_expected = gemini_adaptive_corrections()
+    assert set(gemini_expected) == {
+        name for name in adaptive if name.startswith("gemini/")
+    }
+    assert len(gemini_expected) == 68
     changed = (
         {f"chat/opencode_go/{key}" for key in expected}
         | {f"chat/minimax/{key}" for key in chat_expected}
@@ -215,6 +221,15 @@ def test_every_recorded_call_is_byte_identical(scenario: str) -> None:
         # The recorded ``before`` must be the committed baseline's own digest,
         # so a baseline that silently drifted fails here instead of passing.
         assert entry["before"] == base["groups"][f"chat/{host}"]["calls"][index], name
+        gemini_entry = gemini_expected.get(name)
+        if gemini_entry is not None:
+            assert gemini_entry["before"] == entry["before"], name
+            assert gemini_entry["adaptive_before"] == entry["after"], name
+            assert (
+                record_digest(records[f"chat/{host}/{key}"]) == gemini_entry["after"]
+            ), name
+            assert gemini_entry["after"] != entry["after"], name
+            continue
         assert record_digest(records[f"chat/{host}/{key}"]) == entry["after"], name
         assert entry["after"] != entry["before"], name
     assert adaptive, "the recorded moves would prove nothing if empty"

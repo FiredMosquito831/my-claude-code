@@ -71,15 +71,31 @@ def generate_content_response_from_anthropic_message(
     }
 
 
+def thought_signature_from_extra_content(extra_content: Any) -> str | None:
+    """Extract Google's ``thought_signature`` from ``extra_content`` if present."""
+    if not isinstance(extra_content, Mapping):
+        return None
+    google = extra_content.get("google")
+    if not isinstance(google, Mapping):
+        return None
+    signature = google.get("thought_signature")
+    return signature if isinstance(signature, str) and signature else None
+
+
 def function_call_part(block: Mapping[str, Any]) -> dict[str, Any]:
     """Convert one Anthropic ``tool_use`` block into a Gemini ``functionCall`` part."""
     arguments = block.get("input")
-    return {
-        "functionCall": {
-            "name": _text(block.get("name")),
-            "args": dict(arguments) if isinstance(arguments, Mapping) else {},
-        }
+    call: dict[str, Any] = {
+        "name": _text(block.get("name")),
+        "args": dict(arguments) if isinstance(arguments, Mapping) else {},
     }
+    call_id = block.get("id")
+    if isinstance(call_id, str) and call_id:
+        call["id"] = call_id
+    part: dict[str, Any] = {"functionCall": call}
+    if sig := thought_signature_from_extra_content(block.get("extra_content")):
+        part["thoughtSignature"] = sig
+    return part
 
 
 def _text(value: Any) -> str:

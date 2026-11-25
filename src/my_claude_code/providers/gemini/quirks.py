@@ -1,10 +1,14 @@
 """Gemini request-body quirks for the shared OpenAI-chat provider."""
 
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, cast
 
 from my_claude_code.core.anthropic.models import MessagesRequest
-from my_claude_code.core.reasoning import ReasoningPolicy
+from my_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
+from my_claude_code.providers.google_openai.thought_signatures import (
+    apply_envelope_tool_call_signatures,
+)
 
 GEMINI_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"
 
@@ -46,7 +50,7 @@ def apply_gemini_request_quirks(
     if isinstance(request_extra, dict):
         extra_body.update(deepcopy(request_extra))
 
-    if reasoning.requests_reasoning:
+    if reasoning.requests_reasoning or reasoning.control is ReasoningControl.ADAPTIVE:
         _apply_thinking_config(extra_body)
 
     if extra_body:
@@ -55,6 +59,7 @@ def apply_gemini_request_quirks(
     _apply_gemini_tool_call_signatures(
         body,
         tool_call_extra_content_by_id=tool_call_extra_content_by_id,
+        gemini_envelope=request_data.gemini_envelope,
         wire_notes=wire_notes,
     )
 
@@ -208,11 +213,13 @@ def _apply_gemini_tool_call_signatures(
     body: dict[str, Any],
     *,
     tool_call_extra_content_by_id: dict[str, dict[str, Any]] | None,
+    gemini_envelope: Mapping[str, Any] | None = None,
     wire_notes: dict[str, Any] | None = None,
 ) -> None:
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
+    apply_envelope_tool_call_signatures(messages, gemini_envelope)
     _apply_cached_tool_call_signatures(messages, tool_call_extra_content_by_id or {})
     skipped = _apply_missing_current_turn_signatures(messages)
     if wire_notes is not None:

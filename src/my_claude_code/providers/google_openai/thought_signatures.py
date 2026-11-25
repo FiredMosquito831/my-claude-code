@@ -1,5 +1,6 @@
 """Google thought-signature replay for OpenAI-compatible tool calls."""
 
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
@@ -13,10 +14,39 @@ GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"
 GOOGLE_THOUGHT_SIGNATURE_SKIPPED = "gemini_thought_signature_skipped"
 
 
+def apply_envelope_tool_call_signatures(
+    messages: list[Any], gemini_envelope: Mapping[str, Any] | None
+) -> None:
+    """Restore ``tool_call_signatures`` from ``gemini_envelope`` onto assistant tool calls."""
+    if not isinstance(gemini_envelope, Mapping):
+        return
+    signatures = gemini_envelope.get("tool_call_signatures")
+    if not isinstance(signatures, Mapping) or not signatures:
+        return
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict) or _tool_call_thought_signature(
+                tool_call
+            ):
+                continue
+            tool_call_id = tool_call.get("id")
+            if tool_call_id is None:
+                continue
+            sig = signatures.get(str(tool_call_id))
+            if isinstance(sig, str) and sig:
+                _set_tool_call_thought_signature(tool_call, sig)
+
+
 def apply_google_thought_signatures(
     body: dict[str, Any],
     *,
     tool_call_extra_content_by_id: dict[str, dict[str, Any]] | None = None,
+    gemini_envelope: Mapping[str, Any] | None = None,
     wire_notes: dict[str, Any] | None = None,
 ) -> None:
     """Restore Google tool-call signatures required for conversation replay.
@@ -29,6 +59,7 @@ def apply_google_thought_signatures(
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
+    apply_envelope_tool_call_signatures(messages, gemini_envelope)
     _apply_cached_tool_call_signatures(messages, tool_call_extra_content_by_id or {})
     skipped = _apply_missing_current_turn_signatures(messages)
     if wire_notes is not None:

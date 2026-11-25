@@ -490,6 +490,10 @@ class RequestCapture:
     def enabled(self) -> bool:
         return self._store is not None
 
+    def note_carrier_drop(self, cell: str, amount: int = 1) -> None:
+        """Record a door-level carrier drop into ``_carrier_surface``."""
+        note_carrier_surface_cell(self._carrier_surface, cell, amount)
+
     @property
     def recorded_cost_usd(self) -> float | None:
         """Return finalized USD cost if priced, else ``None``."""

@@ -134,6 +134,29 @@ def parse_responses_text_format(
     )
 
 
+def attach_structured_output_schema(
+    payload: dict[str, Any],
+    *,
+    schema: Mapping[str, Any],
+    name: str = "structured_output",
+) -> None:
+    """Attach canonical ``structured_output_spec`` and ``output_config.format``."""
+    schema_copy = deepcopy(dict(schema))
+    payload["structured_output_spec"] = {
+        "type": "json_schema",
+        "name": name,
+        "schema": schema_copy,
+    }
+    output_config = payload.get("output_config")
+    if not isinstance(output_config, dict):
+        output_config = {}
+        payload["output_config"] = output_config
+    output_config["format"] = {
+        "type": "json_schema",
+        "schema": deepcopy(schema_copy),
+    }
+
+
 def effective_structured_output_spec(
     request: MessagesRequest,
 ) -> dict[str, Any] | None:

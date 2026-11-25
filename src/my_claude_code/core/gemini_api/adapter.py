@@ -31,9 +31,12 @@ class GeminiApiAdapter:
         request: GeminiGenerateContentRequest,
         *,
         allow_web_search: bool = False,
+        preserve_thought_signatures: bool = False,
     ) -> GeminiConversion:
         return convert_request_to_anthropic_payload(
-            request, allow_web_search=allow_web_search
+            request,
+            allow_web_search=allow_web_search,
+            preserve_thought_signatures=preserve_thought_signatures,
         )
 
     def iter_sse_from_anthropic(

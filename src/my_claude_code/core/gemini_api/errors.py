@@ -13,10 +13,25 @@ two OpenAI surfaces. That is what makes a rate limit read the same to a Gemini
 client and to an OpenAI-SDK client.
 """
 
+from collections.abc import Mapping
 from typing import Any
 
+from my_claude_code.core.anthropic import anthropic_status_for_error_type
 from my_claude_code.core.diagnostics import redact_sensitive_error_text
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
+
+_ANTHROPIC_ERROR_STATUSES: dict[str, str] = {
+    "invalid_request_error": "INVALID_ARGUMENT",
+    "authentication_error": "UNAUTHENTICATED",
+    "billing_error": "FAILED_PRECONDITION",
+    "permission_error": "PERMISSION_DENIED",
+    "not_found_error": "NOT_FOUND",
+    "request_too_large": "INVALID_ARGUMENT",
+    "rate_limit_error": "RESOURCE_EXHAUSTED",
+    "api_error": "INTERNAL",
+    "timeout_error": "DEADLINE_EXCEEDED",
+    "overloaded_error": "UNAVAILABLE",
+}
 
 #: Neutral failure semantics -> Google's canonical error status. The names are
 #: google.rpc.Code's, which is what Google's own HTTP mapping emits.
@@ -130,3 +145,32 @@ def gemini_failure_payload(failure: ExecutionFailure) -> dict[str, Any]:
     """Return a Google-compatible envelope for a canonical failure."""
 
     return {"error": gemini_error_from_failure(failure)}
+
+
+def gemini_error_from_anthropic_error(
+    error: object,
+    *,
+    default_message: str = "Provider request failed unexpectedly.",
+) -> tuple[int, dict[str, Any]]:
+    """Map an Anthropic error payload dict into ``(http_status, google_error_object)``."""
+    if not isinstance(error, Mapping):
+        error = {"type": "api_error", "message": str(error)}
+    raw_type = error.get("type")
+    error_type = raw_type if isinstance(raw_type, str) and raw_type else "api_error"
+    status_code = anthropic_status_for_error_type(error_type)
+    status = _ANTHROPIC_ERROR_STATUSES.get(error_type)
+    if status is None:
+        mapped = gemini_status_for_code(status_code)
+        status = "INTERNAL" if mapped == _DEFAULT_STATUS else mapped
+    raw_message = error.get("message")
+    message = (
+        raw_message.strip()
+        if isinstance(raw_message, str) and raw_message.strip()
+        else default_message
+    )
+    err_obj = gemini_error_payload(
+        message=message,
+        code=status_code,
+        status=status,
+    )["error"]
+    return status_code, err_obj

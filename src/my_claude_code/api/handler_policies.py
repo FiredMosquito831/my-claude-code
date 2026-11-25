@@ -64,7 +64,7 @@ def try_store_from_settings(settings: Settings) -> RequestLogStore | None:
 def invalidate_envelope_keys(
     request: MessagesRequest, keys: Iterable[str]
 ) -> MessagesRequest:
-    """Drop stale keys from ``responses_envelope`` and ``chat_envelope`` if present."""
+    """Drop stale keys from sidecar envelopes if present."""
     key_set = frozenset(keys)
     updates: dict[str, Any] = {}
     if request.responses_envelope is not None and any(
@@ -85,6 +85,17 @@ def invalidate_envelope_keys(
             if key not in key_set
         }
         updates["chat_envelope"] = filtered_chat or None
+    if (
+        request.gemini_envelope is not None
+        and "messages" in key_set
+        and "thought_parts" in request.gemini_envelope
+    ):
+        filtered_gemini = {
+            key: value
+            for key, value in request.gemini_envelope.items()
+            if key != "thought_parts"
+        }
+        updates["gemini_envelope"] = filtered_gemini or None
     if not updates:
         return request
     return request.model_copy(update=updates)
