@@ -7,7 +7,7 @@ drifted, and the mismatch made *every* create return HTTP 500 while the tests
 stayed green against a fake shaped like the guess.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel
 
+from my_claude_code.api.model_admin import provider_endpoint_summary
 from my_claude_code.config.admin.route_refs import (
     PausedPair,
     updates_pausing_provider,
@@ -30,6 +31,10 @@ from my_claude_code.config.credential_names import (
     set_name,
 )
 from my_claude_code.config.media_surfaces import CUSTOM_MEDIA_OPERATIONS
+from my_claude_code.config.model_overrides import (
+    ModelParameterOverrides,
+    current_model_overrides,
+)
 from my_claude_code.config.provider_registry import (
     CUSTOM_CACHE_AFFINITY_MODES,
     CUSTOM_PROVIDER_SURFACES,
@@ -243,7 +248,12 @@ def _registry_get_or_404(
 
 
 def _serialize_entry(
-    entry: CustomProviderEntry, cached_models: dict[str, frozenset[str]]
+    entry: CustomProviderEntry,
+    cached_models: dict[str, frozenset[str]],
+    *,
+    overrides: ModelParameterOverrides | None = None,
+    observed_by_provider: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    unlabeled_by_provider: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not entry.enabled:
         status = "disabled"
@@ -252,6 +262,24 @@ def _serialize_entry(
     else:
         status = "missing_key"
     models = sorted(cached_models.get(entry.provider_id, ()))
+    observed_rows = (
+        observed_by_provider.get(entry.provider_id)
+        if observed_by_provider is not None
+        else None
+    )
+    unlabeled_attempt = (
+        unlabeled_by_provider.get(entry.provider_id)
+        if unlabeled_by_provider is not None
+        else None
+    )
+    endpoint_summary = provider_endpoint_summary(
+        entry.provider_id,
+        custom_surfaces=entry.surfaces,
+        model_ids=models,
+        overrides=overrides,
+        observed_rows=observed_rows,
+        unlabeled_attempt=unlabeled_attempt,
+    )
     return {
         "provider_id": entry.provider_id,
         "display_name": entry.display_name,
@@ -299,6 +327,7 @@ def _serialize_entry(
             {"value": value, "label": CUSTOM_CACHE_AFFINITY_LABELS[value]}
             for value in CUSTOM_CACHE_AFFINITY_MODES
         ],
+        "endpoint_summary": endpoint_summary,
     }
 
 
@@ -369,9 +398,20 @@ async def list_custom_providers(
     """List every registered custom provider with cached model metadata."""
     require_loopback_admin(request)
     cached = services.admin.cached_model_ids()
+    overrides = current_model_overrides()
+    recent_surfaces = services.admin.recent_wire_surfaces()
+    observed_by_provider = recent_surfaces.get("by_provider")
+    unlabeled_by_provider = recent_surfaces.get("unlabeled_by_provider")
     return {
         "providers": [
-            _serialize_entry(entry, cached) for entry in registry.list_custom()
+            _serialize_entry(
+                entry,
+                cached,
+                overrides=overrides,
+                observed_by_provider=observed_by_provider,
+                unlabeled_by_provider=unlabeled_by_provider,
+            )
+            for entry in registry.list_custom()
         ]
     }
 

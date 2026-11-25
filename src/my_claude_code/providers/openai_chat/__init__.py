@@ -1,6 +1,11 @@
 """OpenAI-compatible provider family."""
 
 from my_claude_code.providers.base import ProviderConfig
+from my_claude_code.providers.model_listing import (
+    cached_declared_http_endpoints,
+    cached_declared_http_surfaces,
+    cached_provider_http_endpoints,
+)
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
 from .base_url import openai_v1_base_url
@@ -137,6 +142,9 @@ __all__ = [
     "build_openai_chat_request_body",
     "cache_affinity_headers",
     "cache_affinity_spec_for_mode",
+    "cached_declared_http_endpoints",
+    "cached_declared_http_surfaces",
+    "cached_provider_http_endpoints",
     "catalogue_discovered_surfaces",
     "catalogue_surface",
     "complaint_evidence_snippet",

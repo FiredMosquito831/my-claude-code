@@ -15610,3 +15610,95 @@ def test_jsdom_harness_surfaces_saves_and_resets_auto_cleanly(
         "provider": "opencode_go",
         "surface": "auto",
     }
+
+
+@pytest.fixture(scope="module")
+def endpoint_readouts_ui() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="endpoint_readouts")
+
+
+def test_jsdom_endpoint_readouts_cards_modals_and_models_sync(
+    endpoint_readouts_ui: dict,
+) -> None:
+    assert endpoint_readouts_ui["fatal"] is None
+    assert endpoint_readouts_ui.get("scenarioError") is None
+    assert endpoint_readouts_ui["scriptErrors"] == []
+    assert endpoint_readouts_ui["consoleErrors"] == []
+
+    faces = endpoint_readouts_ui["faces"]
+    assert faces["ccButtons"] == ["Configure", "Refresh models", "2 models"]
+    assert faces["ccDataKeys"] == 0
+    assert "Speaks: Chat Completions, Responses, Messages" in faces["ccEndpointsFace"]
+    assert faces["groqEndpointsFace"] == "Speaks: Chat Completions"
+    assert faces["customSingleEndpointsFace"] == "Speaks: Chat Completions"
+
+    custom_single = endpoint_readouts_ui["customSingleModal"]
+    assert "serves chat_completions" in custom_single["details"]
+    assert (
+        "Can speak: Chat Completions (/chat/completions)" in custom_single["panelText"]
+    )
+    assert custom_single["selectCount"] == 0
+
+    custom_dual = endpoint_readouts_ui["customDualModal"]
+    assert custom_dual["regions"][-2:] == ["pv-endpoints-panel", "pv-detail-actions"]
+    assert custom_dual["selectCount"] == 1
+    assert custom_dual["selectHasDataKey"] is False
+    assert custom_dual["deleteIsLast"] is True
+    assert custom_dual["injectedImgs"] == 0
+
+    groq_modal = endpoint_readouts_ui["groqModal"]
+    assert "Publishes (/models): None declared" in groq_modal["panelText"]
+    assert groq_modal["selectCount"] == 0
+
+    models_init = endpoint_readouts_ui["modelsInitial"]
+    assert (
+        "Publishes: /chat/completions (79), /responses (79)" in models_init["ccRollup"]
+    )
+    assert "Observed: Responses (4x" in models_init["ccRollup"]
+    assert (
+        "Can speak: Chat Completions (/chat/completions)" in models_init["groqRollup"]
+    )
+    assert "last used: Chat Completions" in models_init["groqLastUsedChip"]
+    assert "Last used: Chat Completions" in models_init["groqReadout"]
+    assert endpoint_readouts_ui["xssToken"] in models_init["groqReadout"]
+    assert models_init["groqInjectedImgs"] == 0
+    assert (
+        "Effective: Messages (commandcode native Messages delegate)"
+        in models_init["ccClaudeReadout"]
+    )
+    assert "last used: Responses" in models_init["ccDeepseekLastUsedChip"]
+
+    cc_modal_init = endpoint_readouts_ui["ccModalInitial"]
+    assert "Observed: Responses (4x" in cc_modal_init["panelText"]
+    assert cc_modal_init["selectValue"] == ""
+    assert cc_modal_init["selectHasDataKey"] is False
+
+    assert endpoint_readouts_ui["ccModalAfterSave"] == {
+        "status": "Saved",
+        "selectValue": "chat_completions",
+    }
+    assert (
+        endpoint_readouts_ui["syncedModels"]["providerSelectValue"]
+        == "chat_completions"
+    )
+    assert (
+        "Preferred: Chat Completions"
+        in endpoint_readouts_ui["syncedModels"]["rollupText"]
+    )
+    assert endpoint_readouts_ui["modalSyncedFromModels"] == "responses"
+
+    posts = endpoint_readouts_ui["posts"]
+    assert [p["path"] for p in posts] == [
+        "/admin/api/model-admin/preferred-surface",
+        "/admin/api/model-admin/preferred-surface",
+    ]
+    assert json.loads(posts[0]["body"]) == {
+        "scope": "provider",
+        "key": "commandcode",
+        "surface": "chat_completions",
+    }
+    assert json.loads(posts[1]["body"]) == {
+        "scope": "provider",
+        "key": "commandcode",
+        "surface": "responses",
+    }

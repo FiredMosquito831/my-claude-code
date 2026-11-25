@@ -164,6 +164,8 @@ from my_claude_code.providers.commandcode import (
     commandcode_uses_anthropic_messages,
 )
 from my_claude_code.providers.openai_chat import (
+    cached_declared_http_endpoints,
+    cached_provider_http_endpoints,
     catalogue_discovered_surfaces,
     catalogue_surface,
     declared_surfaces_for,
@@ -2240,42 +2242,367 @@ def response_surface_payload(
 
 
 def with_surface_preferences(
-    page: dict[str, Any], overrides: ModelParameterOverrides
+    page: dict[str, Any],
+    overrides: ModelParameterOverrides,
+    *,
+    custom_surfaces_by_provider: Mapping[str, Sequence[str]] | None = None,
+    observed_by_provider: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    unlabeled_by_provider: Mapping[str, Mapping[str, Any]] | None = None,
+    unlabeled_by_model: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Attach live surface preferences, discovered doors and Q9 refusals to ``page``.
+    """Attach live surface preferences, endpoint summaries, and model readouts.
 
     Applied on the Models page route outside ``build_capability_half`` so the
     pinned capability snapshot stays byte-identical and learned surface/refusal
-    facts are never served stale from the disk cache. Single-door providers
-    receive zero additions (Q11).
+    facts are never served stale from the disk cache. Writable
+    ``surface_preference`` choosers remain strictly gated on ``len(offered) >= 2``
+    while read-only ``endpoint_summary`` and ``endpoint_readout`` are emitted
+    for every provider and model (single-door and multi-door).
     """
 
+    custom_map = custom_surfaces_by_provider or {}
+    observed_map = observed_by_provider or {}
+    unlabeled_prov_map = unlabeled_by_provider or {}
+    unlabeled_model_map = unlabeled_by_model or {}
     for provider in page.get("providers", []) or []:
         provider_id = str(provider.get("provider_id") or "")
-        offered = speakable_surfaces(provider_id)
-        if len(offered) < 2:
-            continue
-        provider_row = overrides.providers.get(normalize_override_key(provider_id), {})
-        raw_pref = provider_row.get(PREFERRED_SURFACE_OVERRIDE)
-        provider_pref = (
-            raw_pref.strip() if isinstance(raw_pref, str) and raw_pref.strip() else ""
+        custom_surfaces = tuple(custom_map.get(provider_id) or ())
+        models = provider.get("models", []) or []
+        model_ids = tuple(
+            str(model.get("model_id") or "")
+            for model in models
+            if model.get("model_id")
         )
-        provider["surface_preference"] = {
-            "offered": [
-                {"value": surface.value, "label": SURFACE_VALUE_LABELS[surface]}
-                for surface in offered
-            ],
-            "preferred": provider_pref,
-        }
-        for model in provider.get("models", []) or []:
+        offered = speakable_surfaces(provider_id)
+        if len(offered) >= 2:
+            provider_row = overrides.providers.get(
+                normalize_override_key(provider_id), {}
+            )
+            raw_pref = provider_row.get(PREFERRED_SURFACE_OVERRIDE)
+            provider_pref = (
+                raw_pref.strip()
+                if isinstance(raw_pref, str) and raw_pref.strip()
+                else ""
+            )
+            provider["surface_preference"] = {
+                "offered": [
+                    {"value": surface.value, "label": SURFACE_VALUE_LABELS[surface]}
+                    for surface in offered
+                ],
+                "preferred": provider_pref,
+            }
+        observed_rows = provider.get("endpoint_observations")
+        if observed_rows is None:
+            observed_rows = observed_map.get(provider_id)
+        provider["endpoint_summary"] = provider_endpoint_summary(
+            provider_id,
+            custom_surfaces=custom_surfaces,
+            model_ids=model_ids,
+            overrides=overrides,
+            observed_rows=observed_rows,
+            unlabeled_attempt=unlabeled_prov_map.get(provider_id),
+        )
+        for model in models:
             model_id = str(model.get("model_id") or "")
-            if model_id:
+            pref_payload: dict[str, Any] | None = None
+            if model_id and len(offered) >= 2:
                 pref_payload = response_surface_payload(
                     provider_id, model_id, include_preferences=True
                 )
                 if pref_payload is not None:
                     model["surface_preference"] = pref_payload
+            if model_id:
+                model_ref = str(
+                    model.get("model_ref") or model_ref_for(provider_id, model_id)
+                )
+                readout = model_endpoint_readout(
+                    provider_id,
+                    model_id,
+                    custom_surfaces=custom_surfaces,
+                    surface_pref=pref_payload,
+                    last_used=model.get("last_used_endpoint"),
+                    unlabeled_attempt=unlabeled_model_map.get(model_ref),
+                )
+                model["endpoint_readout"] = readout
+                if (
+                    model.get("last_used_endpoint") is None
+                    and readout.get("last_used") is not None
+                ):
+                    model["last_used_endpoint"] = dict(readout["last_used"])
     return page
+
+
+_ENDPOINT_DISPLAY_LABELS: dict[str, str] = {
+    ResponseSurface.CHAT_COMPLETIONS.value: SURFACE_VALUE_LABELS[
+        ResponseSurface.CHAT_COMPLETIONS
+    ],
+    ResponseSurface.RESPONSES.value: SURFACE_VALUE_LABELS[ResponseSurface.RESPONSES],
+    ResponseSurface.MESSAGES.value: SURFACE_VALUE_LABELS[ResponseSurface.MESSAGES],
+    "v1internal": "Cloud Code Internal (v1internal)",
+}
+
+_ENDPOINT_SHORT_LABELS: dict[str, str] = {
+    ResponseSurface.CHAT_COMPLETIONS.value: SURFACE_SHORT_LABELS[
+        ResponseSurface.CHAT_COMPLETIONS
+    ],
+    ResponseSurface.RESPONSES.value: SURFACE_SHORT_LABELS[ResponseSurface.RESPONSES],
+    ResponseSurface.MESSAGES.value: SURFACE_SHORT_LABELS[ResponseSurface.MESSAGES],
+    "v1internal": "v1internal",
+}
+
+_SINGLE_DOOR_PROVIDER_SURFACES: dict[str, tuple[tuple[str, str], ...]] = {
+    "anthropic": (
+        (
+            ResponseSurface.MESSAGES.value,
+            SURFACE_VALUE_LABELS[ResponseSurface.MESSAGES],
+        ),
+    ),
+    "anthropic_oauth": (
+        (
+            ResponseSurface.MESSAGES.value,
+            SURFACE_VALUE_LABELS[ResponseSurface.MESSAGES],
+        ),
+    ),
+    "chatgpt_oauth": (
+        (ResponseSurface.RESPONSES.value, "Responses (/codex/responses)"),
+    ),
+    "openai": ((ResponseSurface.RESPONSES.value, "Responses (/codex/responses)"),),
+    "antigravity_oauth": (("v1internal", "Cloud Code Internal (v1internal)"),),
+}
+
+
+def _endpoint_entry(value: str, label: str | None = None) -> dict[str, str]:
+    resolved = label or _ENDPOINT_DISPLAY_LABELS.get(value, value)
+    return {"value": value, "label": resolved}
+
+
+def _short_endpoint_label(value: str) -> str:
+    return _ENDPOINT_SHORT_LABELS.get(value, value)
+
+
+def _can_speak_entries_for_provider(
+    provider_id: str,
+    *,
+    custom_surfaces: Sequence[str] = (),
+) -> list[dict[str, str]]:
+    """Ordered non-empty wire endpoints MCC can speak to ``provider_id``."""
+
+    speakable = speakable_surfaces(provider_id)
+    if speakable:
+        entries = [_endpoint_entry(surface.value) for surface in speakable]
+        if provider_id == COMMANDCODE_PROVIDER_ID and all(
+            item["value"] != ResponseSurface.MESSAGES.value for item in entries
+        ):
+            entries.append(_endpoint_entry(ResponseSurface.MESSAGES.value))
+        return entries
+    if custom_surfaces:
+        return [
+            _endpoint_entry(surface.strip())
+            for surface in custom_surfaces
+            if isinstance(surface, str) and surface.strip()
+        ] or [_endpoint_entry(ResponseSurface.CHAT_COMPLETIONS.value)]
+    mapped = _SINGLE_DOOR_PROVIDER_SURFACES.get(provider_id)
+    if mapped is not None:
+        return [_endpoint_entry(value, label) for value, label in mapped]
+    return [_endpoint_entry(ResponseSurface.CHAT_COMPLETIONS.value)]
+
+
+def _observed_entries_for_provider(
+    provider_id: str,
+    *,
+    observed_rows: Sequence[Mapping[str, Any]] | None = None,
+    learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    seen_surfaces: set[str] = set()
+    for row in observed_rows or ():
+        surface = str(row.get("surface") or "").strip()
+        if not surface:
+            continue
+        seen_surfaces.add(surface)
+        entries.append(
+            {
+                "surface": surface,
+                "label": _short_endpoint_label(surface),
+                "count": int(row.get("count") or 0),
+                "last_used_at": row.get("last_used_at"),
+                "last_outcome": str(row.get("last_outcome") or ""),
+                "source": "request_log",
+            }
+        )
+    if learned:
+        prefix = f"{provider_id}/"
+        for model_ref, facts in learned.items():
+            if not model_ref.startswith(prefix):
+                continue
+            for fact in facts or ():
+                if fact.get("retired") or fact.get("fact_kind") != "response_surface":
+                    continue
+                detail = str(fact.get("detail") or "").strip()
+                if not detail or detail in seen_surfaces:
+                    continue
+                seen_surfaces.add(detail)
+                entries.append(
+                    {
+                        "surface": detail,
+                        "label": _short_endpoint_label(detail),
+                        "count": 0,
+                        "last_used_at": fact.get("observed_at"),
+                        "last_outcome": "learned",
+                        "source": "learned",
+                    }
+                )
+    return entries
+
+
+def provider_endpoint_summary(
+    provider_id: str,
+    *,
+    custom_surfaces: Sequence[str] = (),
+    model_ids: Sequence[str] = (),
+    overrides: ModelParameterOverrides | None = None,
+    observed_rows: Sequence[Mapping[str, Any]] | None = None,
+    learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    unlabeled_attempt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Uniform read-only + optional multi-door chooser endpoint summary."""
+
+    publishes_counts = cached_provider_http_endpoints(provider_id, model_ids)
+    publishes = [
+        {"value": token, "label": token, "model_count": count}
+        for token, count in publishes_counts
+    ]
+    can_speak = _can_speak_entries_for_provider(
+        provider_id, custom_surfaces=custom_surfaces
+    )
+    observed = _observed_entries_for_provider(
+        provider_id, observed_rows=observed_rows, learned=learned
+    )
+    if not observed and len(can_speak) == 1 and isinstance(unlabeled_attempt, Mapping):
+        sole_surface = can_speak[0]["value"]
+        observed.append(
+            {
+                "surface": sole_surface,
+                "label": _short_endpoint_label(sole_surface),
+                "count": int(unlabeled_attempt.get("count") or 0),
+                "last_used_at": unlabeled_attempt.get("last_used_at"),
+                "last_outcome": str(unlabeled_attempt.get("last_outcome") or ""),
+                "source": "request_log",
+            }
+        )
+    speakable = speakable_surfaces(provider_id)
+    if len(speakable) < 2 and len(custom_surfaces) >= 2:
+        offered_values = tuple(
+            s.strip() for s in custom_surfaces if isinstance(s, str) and s.strip()
+        )
+    else:
+        offered_values = tuple(surface.value for surface in speakable)
+
+    surface_preference: dict[str, Any] | None = None
+    if len(offered_values) >= 2:
+        active_overrides = (
+            overrides if overrides is not None else current_model_overrides()
+        )
+        provider_row = active_overrides.providers.get(
+            normalize_override_key(provider_id), {}
+        )
+        raw_pref = provider_row.get(PREFERRED_SURFACE_OVERRIDE)
+        preferred = (
+            raw_pref.strip() if isinstance(raw_pref, str) and raw_pref.strip() else ""
+        )
+        surface_preference = {
+            "offered": [_endpoint_entry(value) for value in offered_values],
+            "preferred": preferred,
+        }
+
+    speaks_short = ", ".join(_short_endpoint_label(item["value"]) for item in can_speak)
+    if publishes:
+        pub_short = ", ".join(str(item["value"]) for item in publishes[:3])
+        if len(publishes) > 3:
+            pub_short += ", ..."
+        face_text = f"Speaks: {speaks_short} · Publishes: {pub_short}"
+    else:
+        face_text = f"Speaks: {speaks_short}"
+
+    return {
+        "publishes": publishes,
+        "can_speak": can_speak,
+        "observed": observed,
+        "surface_preference": surface_preference,
+        "face_text": face_text,
+    }
+
+
+def model_endpoint_readout(
+    provider_id: str,
+    model_id: str,
+    *,
+    custom_surfaces: Sequence[str] = (),
+    surface_pref: Mapping[str, Any] | None = None,
+    last_used: Mapping[str, Any] | None = None,
+    unlabeled_attempt: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Un-gated endpoint readout for one model (single-door or multi-door)."""
+
+    publishes = list(cached_declared_http_endpoints(provider_id, model_id))
+    is_cc_messages = (
+        provider_id == COMMANDCODE_PROVIDER_ID
+        and commandcode_uses_anthropic_messages(model_id)
+    )
+    if is_cc_messages:
+        can_speak = [_endpoint_entry(ResponseSurface.MESSAGES.value)]
+        effective = ResponseSurface.MESSAGES.value
+        effective_label = _short_endpoint_label(effective)
+        preferred = ""
+        source_label = "commandcode native Messages delegate"
+    elif surface_pref is not None:
+        offered = surface_pref.get("offered")
+        can_speak = (
+            [dict(item) for item in offered if isinstance(item, Mapping)]
+            if isinstance(offered, Sequence)
+            else _can_speak_entries_for_provider(
+                provider_id, custom_surfaces=custom_surfaces
+            )
+        )
+        effective = str(surface_pref.get("value") or "")
+        effective_label = _short_endpoint_label(effective) if effective else ""
+        preferred = str(surface_pref.get("preferred") or "")
+        source_label = str(surface_pref.get("source_label") or "")
+    else:
+        speakable = speakable_surfaces(provider_id)
+        if speakable:
+            can_speak = [_endpoint_entry(surface.value) for surface in speakable]
+        else:
+            can_speak = _can_speak_entries_for_provider(
+                provider_id, custom_surfaces=custom_surfaces
+            )
+        effective = can_speak[0]["value"] if can_speak else ""
+        effective_label = _short_endpoint_label(effective) if effective else ""
+        preferred = ""
+        source_label = "provider's native endpoint"
+
+    resolved_last_used = dict(last_used) if isinstance(last_used, Mapping) else None
+    if (
+        resolved_last_used is None
+        and len(can_speak) == 1
+        and isinstance(unlabeled_attempt, Mapping)
+    ):
+        resolved_last_used = {
+            "surface": can_speak[0]["value"],
+            "outcome": str(unlabeled_attempt.get("outcome") or ""),
+            "ts_epoch": unlabeled_attempt.get("ts_epoch"),
+            "ts_iso": unlabeled_attempt.get("ts_iso"),
+        }
+
+    return {
+        "publishes": publishes,
+        "can_speak": can_speak,
+        "effective": effective,
+        "effective_label": effective_label,
+        "preferred": preferred,
+        "source_label": source_label,
+        "last_used": resolved_last_used,
+    }
 
 
 def speakable_surfaces(provider_id: str) -> tuple[ResponseSurface, ...]:

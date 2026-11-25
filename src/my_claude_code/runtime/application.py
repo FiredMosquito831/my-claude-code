@@ -73,6 +73,7 @@ from my_claude_code.core.request_log import (
     reset_request_log_stores,
     retune_request_log_store,
     set_cost_backfill_pricer,
+    store_from_settings,
 )
 from my_claude_code.core.startup_state import startup_state
 from my_claude_code.messaging.platforms import factory as messaging_platform_factory
@@ -1190,6 +1191,14 @@ class ApplicationRuntime:
             row["detail"] = fact.detail
             grouped.setdefault(f"{fact.provider_id}/{fact.model_id}", []).append(row)
         return grouped
+
+    def recent_wire_surfaces(self) -> dict[str, Any]:
+        """Recent wire-surface telemetry per model and provider."""
+
+        store = store_from_settings(self.settings)
+        if store is None:
+            return {"by_model": {}, "by_provider": {}}
+        return store.recent_wire_surfaces()
 
     def forget_learned_facts(
         self,

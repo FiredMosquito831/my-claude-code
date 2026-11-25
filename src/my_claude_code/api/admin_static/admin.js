@@ -15934,6 +15934,12 @@ function renderProviderCard(provider, fields) {
   // title and the buttons -- see `.pv-detect` in admin.css for why it is not
   // sharing the action row.
   card.appendChild(faceControl(buildDetectModelsButton(provider)));
+  if (provider.endpoint_summary && provider.endpoint_summary.face_text) {
+    const endpointsLine = document.createElement("p");
+    endpointsLine.className = "provider-endpoints-summary";
+    endpointsLine.textContent = provider.endpoint_summary.face_text;
+    card.appendChild(endpointsLine);
+  }
   // The dialog's body is not built here -- see the note above the overlay.
   // Neither is the summary line: `providerSummaryText()` (the key count and
   // the rotation policy) and the server's own sentence for a keyless provider
@@ -15955,6 +15961,167 @@ function renderProviderCard(provider, fields) {
   return card;
 }
 
+function formatEndpointLabels(entries) {
+  if (!Array.isArray(entries) || !entries.length) return "";
+  return entries
+    .map((entry) =>
+      entry && typeof entry === "object"
+        ? entry.label || entry.value || ""
+        : String(entry || ""),
+    )
+    .filter(Boolean)
+    .join(", ");
+}
+
+function formatPublishesSummary(publishes) {
+  if (!Array.isArray(publishes) || !publishes.length) return "None declared";
+  return publishes
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return String(entry || "");
+      const token = entry.label || entry.value || "";
+      return entry.model_count != null ? `${token} (${entry.model_count})` : token;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function formatObservedTime(iso) {
+  const raw = String(iso || "").trim();
+  if (!raw) return "";
+  if (raw.length >= 19 && raw[10] === "T") {
+    return `${raw.slice(0, 19).replace("T", " ")}Z`;
+  }
+  return raw;
+}
+
+function formatObservedSummary(observed) {
+  if (!Array.isArray(observed) || !observed.length) return "No recent traffic";
+  return observed
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return String(entry || "");
+      const name = entry.label || entry.surface || "";
+      const count = Number(entry.count || 0);
+      if (entry.source === "learned" || !count) {
+        return `${name} (learned)`;
+      }
+      const outcome = entry.last_outcome || "seen";
+      const when = entry.last_used_at ? `, ${formatObservedTime(entry.last_used_at)}` : "";
+      return `${name} (${count}x, ${outcome}${when})`;
+    })
+    .filter(Boolean)
+    .join(" \u00b7 ");
+}
+
+function syncOverlayPreferredPreferenceToState(providerId, surface) {
+  const updateEntry = (entry) => {
+    if (
+      entry &&
+      entry.provider_id === providerId &&
+      entry.endpoint_summary &&
+      entry.endpoint_summary.surface_preference
+    ) {
+      entry.endpoint_summary.surface_preference.preferred = surface;
+    }
+  };
+  ((state.config && state.config.provider_status) || []).forEach(updateEntry);
+  (state.customProviders || []).forEach(updateEntry);
+}
+
+async function saveOverlayPreferredSurface(provider, surface, select, statusEl) {
+  select.disabled = true;
+  statusEl.className = "pv-preferred-surface-status";
+  statusEl.textContent = "Saving...";
+  try {
+    const nextModels = await api("/admin/api/model-admin/preferred-surface", {
+      method: "POST",
+      body: JSON.stringify({
+        scope: "provider",
+        key: provider.provider_id,
+        surface,
+      }),
+    });
+    if (provider.endpoint_summary && provider.endpoint_summary.surface_preference) {
+      provider.endpoint_summary.surface_preference.preferred = surface;
+    }
+    syncOverlayPreferredPreferenceToState(provider.provider_id, surface);
+    applyModelsData(nextModels);
+    refreshProviderRow(provider.provider_id);
+    statusEl.textContent = "Saved";
+    statusEl.className = "pv-preferred-surface-status ok";
+  } catch (error) {
+    statusEl.textContent = error.message;
+    statusEl.className = "pv-preferred-surface-status error";
+    showMessage(error.message, "error");
+  } finally {
+    select.disabled = false;
+  }
+}
+
+function buildProviderEndpointsPanel(provider) {
+  const summary = provider && provider.endpoint_summary;
+  if (!summary) return null;
+  const panel = document.createElement("div");
+  panel.className = "pv-endpoints-panel";
+
+  const title = document.createElement("p");
+  title.className = "pv-endpoints-title";
+  title.textContent = "Endpoints";
+  panel.appendChild(title);
+
+  const addRow = (labelText, valueText) => {
+    const row = document.createElement("div");
+    row.className = "pv-endpoints-row";
+    const label = document.createElement("span");
+    label.className = "pv-endpoints-label";
+    label.textContent = `${labelText}: `;
+    const value = document.createElement("span");
+    value.className = "pv-endpoints-value";
+    value.textContent = valueText;
+    row.append(label, value);
+    panel.appendChild(row);
+  };
+
+  addRow("Publishes (/models)", formatPublishesSummary(summary.publishes));
+  addRow("Can speak", formatEndpointLabels(summary.can_speak) || "None");
+  addRow("Observed", formatObservedSummary(summary.observed));
+
+  const pref = summary.surface_preference;
+  const offered = pref && Array.isArray(pref.offered) ? pref.offered : [];
+  if (offered.length >= 2) {
+    const prefRow = document.createElement("div");
+    prefRow.className = "pv-preferred-surface-row";
+    const prefLabel = document.createElement("label");
+    prefLabel.className = "pv-endpoints-label";
+    prefLabel.textContent = "Preferred wire endpoint";
+    const select = document.createElement("select");
+    select.className = "pv-preferred-surface";
+    select.setAttribute(
+      "aria-label",
+      `Preferred wire endpoint for ${provider.provider_id}`,
+    );
+    const auto = document.createElement("option");
+    auto.value = "";
+    auto.textContent = "Auto (follow ladder)";
+    select.appendChild(auto);
+    offered.forEach((surface) => {
+      const option = document.createElement("option");
+      option.value = surface.value;
+      option.textContent = surface.label;
+      select.appendChild(option);
+    });
+    select.value = pref.preferred || "";
+    const status = document.createElement("span");
+    status.className = "pv-preferred-surface-status";
+    select.addEventListener("change", () => {
+      saveOverlayPreferredSurface(provider, select.value, select, status);
+    });
+    prefLabel.appendChild(select);
+    prefRow.append(prefLabel, status);
+    panel.appendChild(prefRow);
+  }
+  return panel;
+}
+
 /** Build the dialog's body for one provider: everything the card used to hold. */
 function buildProviderOverlayBody(provider, fields) {
   const body = document.createElement("section");
@@ -15972,6 +16139,9 @@ function buildProviderOverlayBody(provider, fields) {
     meta.classList.add("provider-meta-prose");
   }
   body.appendChild(meta);
+
+  const endpointsPanel = buildProviderEndpointsPanel(provider);
+  if (endpointsPanel) body.appendChild(endpointsPanel);
 
   const ordered = advancedLast(fields);
   // Every field the provider owns, primary and advanced alike.
@@ -27264,7 +27434,7 @@ function customProviderDetailsText(provider) {
    worth reading without opening the form. */
 function customProviderSurfacesText(provider) {
   const surfaces = Array.isArray(provider.surfaces) ? provider.surfaces : [];
-  if (surfaces.length < 2) return "";
+  if (!surfaces.length) return "";
   return ` · serves ${surfaces.join(", ")}`;
 }
 
@@ -27560,6 +27730,12 @@ function customProviderCard(provider) {
     refreshCustomProviderModels(provider, detect, "Detecting");
   });
   card.appendChild(faceControl(detect));
+  if (provider.endpoint_summary && provider.endpoint_summary.face_text) {
+    const endpointsLine = document.createElement("p");
+    endpointsLine.className = "provider-endpoints-summary";
+    endpointsLine.textContent = provider.endpoint_summary.face_text;
+    card.appendChild(endpointsLine);
+  }
 
   card.addEventListener("click", (event) => {
     if (pressIsOnACardControl(event)) return;
@@ -27713,6 +27889,9 @@ function buildCustomProviderOverlayBody(provider) {
   body.appendChild(keyList);
 
   body.appendChild(customProviderDialect(provider));
+
+  const endpointsPanel = buildProviderEndpointsPanel(provider);
+  if (endpointsPanel) body.appendChild(endpointsPanel);
 
   const actions = document.createElement("div");
   actions.className = "pv-detail-actions cp-actions";
@@ -46633,9 +46812,39 @@ function providerHasOverrides(provider) {
   return Object.keys(provider.override || {}).length > 0;
 }
 
+function buildModelsProviderEndpointsRollup(provider) {
+  const summary = provider && provider.endpoint_summary;
+  if (!summary) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "models-provider-endpoints";
+  fillModelsProviderEndpointsRollup(wrap, provider);
+  return wrap;
+}
+
+function fillModelsProviderEndpointsRollup(wrap, provider) {
+  const summary = provider && provider.endpoint_summary;
+  if (!wrap || !summary) return;
+  wrap.textContent = "";
+  const parts = [
+    `Publishes: ${formatPublishesSummary(summary.publishes)}`,
+    `Can speak: ${formatEndpointLabels(summary.can_speak) || "None"}`,
+    `Observed: ${formatObservedSummary(summary.observed)}`,
+  ];
+  const pref = summary.surface_preference;
+  if (pref && Array.isArray(pref.offered) && pref.offered.length >= 2) {
+    parts.push(
+      `Preferred: ${pref.preferred ? surfaceShortLabel(pref.preferred) : "Auto (follow ladder)"}`,
+    );
+  }
+  wrap.textContent = parts.join(" \u00b7 ");
+}
+
 function fillModelsProviderBody(body, provider, models) {
   const data = modelsState.data;
   const editable = (data && data.overrides.editable_parameters) || [];
+
+  const endpointsRollup = buildModelsProviderEndpointsRollup(provider);
+  if (endpointsRollup) body.appendChild(endpointsRollup);
 
   // The models are what the user clicked the provider for, so they come
   // first; the provider-wide form is one line of disclosure above them
@@ -46949,6 +47158,19 @@ function buildModelSummary(model) {
     second.appendChild(chip);
   }
   appendLatencyChip(second, model.model_ref);
+  const lastUsed =
+    (model.endpoint_readout && model.endpoint_readout.last_used) ||
+    model.last_used_endpoint;
+  if (lastUsed && lastUsed.surface) {
+    const when = lastUsed.ts_iso ? `, ${formatObservedTime(lastUsed.ts_iso)}` : "";
+    const outcome = lastUsed.outcome || "seen";
+    const chip = buildModelsChip(
+      "endpoint",
+      `last used: ${surfaceShortLabel(lastUsed.surface)} (${outcome}${when})`,
+    );
+    chip.title = `Most recent logged wire surface for ${model.model_ref}.`;
+    second.appendChild(chip);
+  }
   // How often this model stopped mid-loop (7.115.1): the request log's own
   // answer to "it said it would keep reading and stopped".
   appendInLoopChip(second, model.model_ref);
@@ -47192,6 +47414,50 @@ function modelFieldsInput(model) {
    "Saved" confirmation landed in a node that was no longer on the page and
    the user saw nothing at all. The table repaints its own value columns and
    default lines (7.101.0); only these need drawing again. */
+function buildModelEndpointReadoutPanel(model) {
+  const readout = model && model.endpoint_readout;
+  if (!readout) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "models-endpoint-readout";
+  const head = document.createElement("p");
+  head.className = "models-subhead";
+  head.textContent = "Wire endpoints";
+  wrap.appendChild(head);
+
+  const lines = document.createElement("div");
+  lines.className = "models-endpoint-readout-lines";
+  const addLine = (label, value) => {
+    const p = document.createElement("p");
+    p.className = "models-endpoint-readout-line";
+    const strong = document.createElement("strong");
+    strong.textContent = `${label}: `;
+    p.append(strong, document.createTextNode(value));
+    lines.appendChild(p);
+  };
+  const publishes =
+    Array.isArray(readout.publishes) && readout.publishes.length
+      ? readout.publishes.join(", ")
+      : "None declared";
+  addLine("Publishes (/models)", publishes);
+  addLine("Can speak", formatEndpointLabels(readout.can_speak) || "None");
+  const eff = readout.effective_label || readout.effective || "None";
+  const src = readout.source_label ? ` (${readout.source_label})` : "";
+  addLine("Effective", `${eff}${src}`);
+  if (readout.preferred) {
+    addLine("Preferred", surfaceShortLabel(readout.preferred));
+  }
+  const lu = readout.last_used;
+  const luText =
+    lu && lu.surface
+      ? `${surfaceShortLabel(lu.surface)} (${lu.outcome || "seen"}${
+          lu.ts_iso ? `, ${formatObservedTime(lu.ts_iso)}` : ""
+        })`
+      : "No recent traffic";
+  addLine("Last used", luText);
+  wrap.appendChild(lines);
+  return wrap;
+}
+
 function fillModelReadouts(readouts, model) {
   readouts.textContent = "";
   const capabilities = model.capabilities;
@@ -47207,6 +47473,8 @@ function fillModelReadouts(readouts, model) {
     const dialect = buildDialectPanel(capabilities && capabilities.reasoning_dialect);
     if (dialect) readouts.appendChild(dialect);
   }
+  const endpointReadout = buildModelEndpointReadoutPanel(model);
+  if (endpointReadout) readouts.appendChild(endpointReadout);
   /* Everything every source says about this model (7.86.0), loaded only when
      opened: it is never part of the page payload or its cache. */
   readouts.appendChild(buildKnowledgeDisclosure(model));
@@ -50059,6 +50327,8 @@ function refreshProviderRow(providerId) {
     if (prefSelect && provider.surface_preference && !prefSelect.disabled) {
       prefSelect.value = provider.surface_preference.preferred || "";
     }
+    const rollup = node.querySelector(".models-provider-endpoints");
+    if (rollup) fillModelsProviderEndpointsRollup(rollup, provider);
   });
   // A provider override changes what every model under it sends, so the open
   // model bodies below it have to be repainted too.
@@ -50682,8 +50952,13 @@ async function savePreferredSurface(scope, key, surface) {
       body: JSON.stringify({ scope, key, surface }),
     }),
   );
-  if (scope === "provider") refreshProviderRow(key);
-  else refreshModelRows([key]);
+  if (scope === "provider") {
+    syncOverlayPreferredPreferenceToState(key, surface);
+    refreshProviderOverlay();
+    refreshProviderRow(key);
+  } else {
+    refreshModelRows([key]);
+  }
 }
 
 async function saveModelOverrides(scope, key, updates) {

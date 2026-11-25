@@ -48,6 +48,8 @@ class AdminRuntimePort(Protocol):
 
     def learned_facts_by_model(self) -> dict[str, list[dict[str, Any]]]: ...
 
+    def recent_wire_surfaces(self) -> dict[str, Any]: ...
+
     def forget_learned_facts(
         self,
         provider_id: str,
