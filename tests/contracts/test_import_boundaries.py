@@ -1309,6 +1309,37 @@ def test_config_mirrors_the_check_depths_it_cannot_import():
     assert default != DEFAULT_FETCH_CHECK_DEPTH
 
 
+def test_config_mirrors_the_non_registry_harnesses_it_cannot_import():
+    """``config`` validates ``harness_surfaces`` and ``core`` classifies clients.
+
+    Neither ``config`` nor ``core`` may import the other, so
+    ``NON_REGISTRY_HARNESS_IDS`` and ``NON_REGISTRY_HARNESS_LABELS`` are
+    mirrored in ``config.constants`` and pinned here in both directions.
+    """
+    from my_claude_code.config.constants import (
+        NON_REGISTRY_HARNESS_IDS as CONFIG_IDS,
+    )
+    from my_claude_code.config.constants import (
+        NON_REGISTRY_HARNESS_LABELS as CONFIG_LABELS,
+    )
+    from my_claude_code.config.constants import (
+        SDK_HARNESS_IDS,
+        SELECTABLE_SDK_HARNESS_IDS,
+    )
+    from my_claude_code.core.client_fingerprint import (
+        NON_REGISTRY_HARNESS_IDS,
+        NON_REGISTRY_HARNESS_LABELS,
+        UNKNOWN_HARNESS,
+    )
+
+    assert CONFIG_IDS == NON_REGISTRY_HARNESS_IDS
+    assert CONFIG_LABELS == NON_REGISTRY_HARNESS_LABELS
+    assert set(SDK_HARNESS_IDS) == SELECTABLE_SDK_HARNESS_IDS
+    assert SELECTABLE_SDK_HARNESS_IDS < NON_REGISTRY_HARNESS_IDS
+    assert UNKNOWN_HARNESS not in SELECTABLE_SDK_HARNESS_IDS
+    assert "script" not in SELECTABLE_SDK_HARNESS_IDS
+
+
 def test_config_mirrors_the_tier_vocabulary_it_cannot_import():
     """Same leaf-package rule, same both-directions pin.
 

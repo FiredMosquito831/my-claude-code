@@ -670,6 +670,8 @@ HARNESS_ENTRY_KEYS = frozenset(
         "protocol_label",
         "rtk_agent",
         "rtk_enabled",
+        "speaks",
+        "speaks_labels",
         "summary",
         "unavailable_reason",
     }
@@ -780,4 +782,21 @@ def test_the_harnesses_payload_gained_one_key_and_no_entry_changed_shape(
     assert [entry["id"] for entry in body["harnesses"]] == list(harness_ids())
     for entry in body["harnesses"]:
         assert set(entry) == HARNESS_ENTRY_KEYS, entry["id"]
+        assert entry["protocol"] in entry["speaks"], entry["id"]
+        assert len(entry["speaks"]) == len(entry["speaks_labels"]) >= 1
+    by_id = {entry["id"]: entry for entry in body["harnesses"]}
+    assert by_id["opencode"]["speaks"] == [
+        "anthropic_messages",
+        "openai_responses",
+        "openai_chat_completions",
+    ]
+    assert by_id["hermes"]["speaks"] == [
+        "openai_chat_completions",
+        "anthropic_messages",
+        "openai_responses",
+    ]
+    assert by_id["commandcode_cli"]["speaks"] == [
+        "anthropic_messages",
+        "openai_chat_completions",
+    ]
     assert [card["id"] for card in body["not_yet"]] == ["dsh"]

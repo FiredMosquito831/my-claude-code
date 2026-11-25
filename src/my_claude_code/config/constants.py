@@ -1623,3 +1623,30 @@ WEB_SEARCH_DOOR_MODE_DEFAULT = "local"
 WEB_SEARCH_TOOL_LOOP_MAX_STEPS_DEFAULT = 5
 WEB_SEARCH_GEMINI_ENABLED_DEFAULT = True
 WEB_SEARCH_CHAT_ENABLED_DEFAULT = True
+
+# Non-registry client attribution vocabulary mirrored from
+# ``core.client_fingerprint`` (``config`` is a leaf package and may not import
+# ``core``; ``tests/contracts/test_import_boundaries.py`` pins both sets and
+# label maps equal in both directions).
+NON_REGISTRY_HARNESS_LABELS: dict[str, str] = {
+    "claude_agent_sdk": "Claude Agent SDK",
+    "anthropic_sdk": "Anthropic SDK",
+    "openai_sdk": "OpenAI SDK",
+    "google_sdk": "Google GenAI SDK",
+    "ai_sdk": "Vercel AI SDK",
+    "script": "Script or curl",
+    "unknown": "Unknown",
+}
+NON_REGISTRY_HARNESS_IDS: frozenset[str] = frozenset(NON_REGISTRY_HARNESS_LABELS)
+
+# Programmatic SDK client ids that appear on the Coding agents page and can
+# carry per-(harness, provider) wire-surface preferences (``harness_surfaces``).
+# ``script`` and ``unknown`` remain non-selectable attribution buckets.
+SDK_HARNESS_IDS: tuple[str, ...] = (
+    "claude_agent_sdk",
+    "anthropic_sdk",
+    "openai_sdk",
+    "google_sdk",
+    "ai_sdk",
+)
+SELECTABLE_SDK_HARNESS_IDS: frozenset[str] = frozenset(SDK_HARNESS_IDS)

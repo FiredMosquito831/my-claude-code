@@ -333,6 +333,10 @@ MAX_HARNESS_CHARS = 64
 # SDK identifies itself as ``claude-cli/<v> (external, sdk-py, agent-sdk/<v>)``
 # and is a different program from the Claude Code CLI, so folding it into
 # ``claude`` would hide the single busiest client on the box.
+#
+# Mirrored into ``config.constants`` because neither ``core`` nor ``config``
+# may import the other; ``tests/contracts/test_import_boundaries.py`` pins both
+# sets and label dicts equal in both directions.
 NON_REGISTRY_HARNESS_IDS: frozenset[str] = frozenset(
     {
         "claude_agent_sdk",

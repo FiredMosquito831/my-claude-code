@@ -84,6 +84,7 @@ from my_claude_code.application.tier_chains import (
     resolve_tier_chain,
 )
 from my_claude_code.config.atomic_json import json_document_bytes
+from my_claude_code.config.constants import SELECTABLE_SDK_HARNESS_IDS
 from my_claude_code.config.harness_config_merge import (
     merge_config_path,
     read_text_document,
@@ -101,9 +102,11 @@ from my_claude_code.config.harnesses import (
     HarnessConfigMerge,
     HarnessNotYetCard,
     HarnessSpec,
+    SdkHarnessSpec,
     harness_command_lines,
     harness_specs,
     not_yet_cards,
+    sdk_harness_specs,
 )
 from my_claude_code.config.mcp_media import mcp_media_document
 from my_claude_code.config.model_overrides import (
@@ -358,7 +361,7 @@ async def set_harness_surface(
 
     require_loopback_admin(request)
     harness_id = payload.harness.strip().lower()
-    known_harnesses = {spec.id for spec in harness_specs()}
+    known_harnesses = {spec.id for spec in harness_specs()} | SELECTABLE_SDK_HARNESS_IDS
     if not harness_id or harness_id not in known_harnesses:
         raise HTTPException(
             status_code=422, detail=f"Not a coding agent: {payload.harness}"
@@ -438,20 +441,41 @@ def _multi_door_surface_providers(services: ApiServices) -> list[dict[str, Any]]
     return providers
 
 
+def _sdk_harness_entry(sdk: SdkHarnessSpec) -> dict[str, Any]:
+    """Return one selectable non-registry SDK client descriptor for the Agents UI."""
+
+    speaks = sdk.effective_speaks()
+    return {
+        "id": sdk.id,
+        "display_name": sdk.display_name,
+        "protocol": str(sdk.protocol),
+        "protocol_label": PROTOCOL_LABELS[sdk.protocol],
+        "speaks": [str(item) for item in speaks],
+        "speaks_labels": [PROTOCOL_LABELS[item] for item in speaks],
+        "summary": sdk.summary,
+    }
+
+
 def _harness_surfaces_payload(services: ApiServices) -> dict[str, Any]:
     providers = _multi_door_surface_providers(services)
     overrides = current_model_overrides()
+    sdks = sdk_harness_specs()
+    all_harness_ids = [
+        *(spec.id for spec in harness_specs()),
+        *(sdk.id for sdk in sdks),
+    ]
     return {
         "providers": providers,
         "harnesses": {
-            spec.id: {
+            harness_id: {
                 provider["provider_id"]: (
-                    overrides.harness_surface(spec.id, provider["provider_id"]) or ""
+                    overrides.harness_surface(harness_id, provider["provider_id"]) or ""
                 )
                 for provider in providers
             }
-            for spec in harness_specs()
+            for harness_id in all_harness_ids
         },
+        "sdk_harnesses": [_sdk_harness_entry(sdk) for sdk in sdks],
         "attribution_note": HARNESS_SURFACE_ATTRIBUTION_NOTE,
     }
 
@@ -567,6 +591,8 @@ def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
         ],
         "protocol": str(spec.protocol),
         "protocol_label": PROTOCOL_LABELS[spec.protocol],
+        "speaks": [str(item) for item in spec.effective_speaks()],
+        "speaks_labels": [PROTOCOL_LABELS[item] for item in spec.effective_speaks()],
         "summary": spec.summary,
         # A harness MCC has measured and cannot serve is still listed, with
         # the reason and the date on it. The question gets asked; an answer

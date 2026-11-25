@@ -4052,11 +4052,17 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"</code></pre>
 
                 <h3 id="guide-agent-surfaces">Surfaces it uses</h3>
                 <p>
-                  Each card on the <strong>Coding agents</strong> page also has a
+                  Each launchable CLI card and SDK client card
+                  (<code>claude_agent_sdk</code>, <code>anthropic_sdk</code>,
+                  <code>openai_sdk</code>, <code>google_sdk</code>,
+                  <code>ai_sdk</code>) on the <strong>Coding agents</strong> page lists
+                  which wire protocols the agent natively <em>Speaks</em> and has a
                   <em>Surfaces it uses</em> section for providers that declare two or more
-                  wire endpoints (such as <code>opencode</code>, <code>opencode_go</code>,
-                  <code>inferhub</code>, <code>mistral</code>, <code>mistral_vibe</code>,
-                  and multi-door custom providers). Pick a door to try first whenever that
+                  wire endpoints (such as <code>commandcode</code>, <code>opencode</code>,
+                  <code>opencode_go</code>, <code>inferhub</code>, <code>mistral</code>,
+                  <code>mistral_vibe</code>, and multi-door custom providers). Because MCC
+                  translates between inbound and outbound protocols, every valid provider
+                  door stays selectable &mdash; pick a door to try first whenever that
                   agent asks that host, or leave <em>Follow the client (auto)</em> to
                   inherit the Models page preference and the client-family ladder.
                 </p>

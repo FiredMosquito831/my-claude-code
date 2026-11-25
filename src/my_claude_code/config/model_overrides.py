@@ -60,6 +60,7 @@ from my_claude_code.config.atomic_json import write_json_document_atomically
 from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_MAX_MINUTES,
     PROMPT_CACHE_TTL_MIN_MINUTES,
+    SDK_HARNESS_IDS,
 )
 from my_claude_code.config.harnesses import harness_ids
 from my_claude_code.config.marketplace_profiles import profile_name_problem
@@ -603,7 +604,9 @@ def _parse_harness_surfaces(section: object) -> dict[str, dict[str, str]]:
             HARNESS_SURFACES_KEY,
         )
         return {}
-    known = {normalize_override_key(item) for item in harness_ids()}
+    known = {
+        normalize_override_key(item) for item in (*harness_ids(), *SDK_HARNESS_IDS)
+    }
     parsed: dict[str, dict[str, str]] = {}
     for raw_harness, raw_providers in section.items():
         harness_id = normalize_override_key(str(raw_harness))
