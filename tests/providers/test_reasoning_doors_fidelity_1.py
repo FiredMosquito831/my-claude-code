@@ -516,7 +516,7 @@ def test_pr3_gemini_xhigh_and_thinking_level_over_budget_conflict() -> None:
         )
     ).payload
     assert parsed_conflict["output_config"] == {"effort": "low"}
-    assert "thinking" not in parsed_conflict
+    assert parsed_conflict["thinking"] == {"type": "adaptive"}
 
     # OFF / NONE thinkingLevel overrides positive thinkingBudget to disabled.
     parsed_off = adapter.to_anthropic_payload(

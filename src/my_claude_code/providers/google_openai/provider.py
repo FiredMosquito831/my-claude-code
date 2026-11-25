@@ -109,9 +109,10 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
                 request.model, self._profile.request_policy
             ),
             postprocessors=(
-                lambda body, _request_data, _policy: apply_google_thought_signatures(
+                lambda body, request_data, _policy: apply_google_thought_signatures(
                     body,
                     tool_call_extra_content_by_id=(self._tool_call_extra_content_by_id),
+                    gemini_envelope=request_data.gemini_envelope,
                     wire_notes=wire_notes,
                 ),
                 *self._profile.request_postprocessors,

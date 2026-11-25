@@ -6,6 +6,14 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from my_claude_code.api.handler_policies import (
+    ENVELOPE_MEDIA_AND_MESSAGE_KEYS,
+    apply_describe_outcome,
+    apply_message_routing_policies,
+    fold_request_tool_changes_with_envelope_sync,
+    invalidate_envelope_keys,
+    try_store_from_settings,
+)
 from my_claude_code.api.request_capture import RequestCapture, build_capture
 from my_claude_code.api.request_errors import (
     http_status_for_unexpected_api_exception,
@@ -28,12 +36,16 @@ from my_claude_code.application.execution import (
 from my_claude_code.application.ports import ProviderResolver
 from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
 from my_claude_code.application.routing import ModelRouter
+from my_claude_code.application.vision_describe import VisionDescribeAdapter
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
     MessagesRequest,
     aggregate_anthropic_sse_to_message,
 )
-from my_claude_code.core.carrier_surface import GEMINI_THOUGHT_UNSIGNED
+from my_claude_code.core.carrier_surface import (
+    GEMINI_THOUGHT_SIGNATURE,
+    GEMINI_THOUGHT_UNSIGNED,
+)
 from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
@@ -44,6 +56,7 @@ from my_claude_code.core.gemini_api import (
     build_gemini_payload_from_loop,
     collect_gemini_final_text,
     extract_gemini_web_search_spec,
+    gemini_error_from_anthropic_error,
     gemini_failure_payload,
     gemini_status_for_failure,
     iter_gemini_sse_from_loop,
@@ -90,6 +103,12 @@ class GeminiHandler:
             retry_first=settings.fallback_retry_first,
             provider_lookup=self._throttle_lookup,
         )
+        self._describe_adapter = VisionDescribeAdapter(
+            router=self._model_router,
+            executor=self._provider_executor,
+            store=try_store_from_settings(settings),
+            concurrency=settings.describe_concurrency,
+        )
 
     def _throttle_lookup(self, provider_id: str) -> float | None:
         """Return provider throttle seconds for a provider_id, or None.
@@ -134,6 +153,9 @@ class GeminiHandler:
                 allow_web_search=allow_web_search,
             )
             gemini_request = MessagesRequest(**conversion.payload)
+            gemini_request = fold_request_tool_changes_with_envelope_sync(
+                gemini_request, request_id=request_id
+            )
             stamp_prompt_cache_ask(self._settings, gemini_request)
             capture = build_capture(
                 self._settings,
@@ -160,6 +182,16 @@ class GeminiHandler:
             )
             require_non_empty_messages(gemini_request.messages)
             harness = harness_from_headers(headers).harness
+            described = await self._describe_adapter.apply(
+                gemini_request,
+                request_id=request_id,
+                harness=harness,
+                on_attempt=capture.record_describe_attempt,
+            )
+            if described.applied:
+                gemini_request = invalidate_envelope_keys(
+                    gemini_request, ENVELOPE_MEDIA_AND_MESSAGE_KEYS
+                )
             if web_search_spec is not None:
                 return await self._create_web_search_response(
                     request_data,
@@ -177,6 +209,28 @@ class GeminiHandler:
             plan = self._model_router.resolve_messages_plan(
                 gemini_request, harness=harness
             )
+            plan = apply_describe_outcome(
+                plan,
+                gemini_request,
+                described,
+                model_router=self._model_router,
+                harness=harness,
+            )
+            plan = apply_message_routing_policies(plan)
+            if not conversion.preserve_thought_signatures and isinstance(
+                gemini_request.gemini_envelope, Mapping
+            ):
+                tool_call_sigs = gemini_request.gemini_envelope.get(
+                    "tool_call_signatures"
+                )
+                if (
+                    isinstance(tool_call_sigs, Mapping)
+                    and tool_call_sigs
+                    and plan.primary.resolved.provider_id not in {"gemini", "vertex"}
+                ):
+                    capture.note_carrier_drop(
+                        GEMINI_THOUGHT_SIGNATURE, amount=len(tool_call_sigs)
+                    )
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
 
@@ -399,21 +453,16 @@ class GeminiHandler:
     def _stream_error_response(
         self, error: Mapping[str, object], *, request_id: str
     ) -> JSONResponse:
-        raw_message = error.get("message")
-        message = (
-            raw_message.strip()
-            if isinstance(raw_message, str) and raw_message.strip()
-            else "Provider request failed unexpectedly."
-        )
+        status_code, err_obj = gemini_error_from_anthropic_error(error)
         trace_terminal_execution_error(
             wire_api="gemini",
             request_id=request_id,
-            status_code=500,
-            error_type="INTERNAL",
+            status_code=status_code,
+            error_type=err_obj["status"],
         )
         return terminal_execution_error_response(
-            status_code=500,
-            content=self._gemini_adapter.error_payload(message=message, code=500),
+            status_code=status_code,
+            content={"error": err_obj},
         )
 
     def _pre_start_error_response(

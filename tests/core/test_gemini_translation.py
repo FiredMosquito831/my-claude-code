@@ -340,6 +340,7 @@ def test_thinking_level_becomes_a_named_effort() -> None:
         generationConfig={"thinkingConfig": {"thinkingLevel": "HIGH"}},
     ).payload
 
+    assert payload["thinking"] == {"type": "adaptive"}
     assert payload["output_config"] == {"effort": "high"}
 
 
@@ -349,7 +350,7 @@ def test_thinking_level_off_disables_thinking() -> None:
     ).payload
 
     assert payload["thinking"] == {"type": "disabled", "enabled": False}
-    assert payload["output_config"] == {"effort": "none"}
+    assert "output_config" not in payload
 
 
 def test_include_thoughts_is_reported_to_the_caller() -> None:
@@ -363,7 +364,7 @@ def test_include_thoughts_is_reported_to_the_caller() -> None:
     assert _convert(contents="hi").include_thoughts is False
 
 
-def test_a_response_schema_travels_verbatim_in_the_system_prompt() -> None:
+def test_a_response_schema_populates_canonical_structured_output() -> None:
     schema = {"type": "OBJECT", "properties": {"n": {"type": "INTEGER"}}}
     payload = _convert(
         contents="hi",
@@ -373,22 +374,26 @@ def test_a_response_schema_travels_verbatim_in_the_system_prompt() -> None:
         },
     ).payload
 
-    assert "JSON Schema" in payload["system"]
-    # Google's Schema proto spells types in upper case; JSON Schema does not,
-    # and an Anthropic upstream rejects the upper-case form with a schema
-    # error naming no field.
-    assert '"type": "object"' in payload["system"]
-    assert '"type": "integer"' in payload["system"]
-    assert "OBJECT" not in payload["system"]
+    expected_schema = {"type": "object", "properties": {"n": {"type": "integer"}}}
+    assert "system" not in payload
+    assert payload["output_config"] == {
+        "format": {"type": "json_schema", "schema": expected_schema}
+    }
+    assert payload["structured_output_spec"] == {
+        "type": "json_schema",
+        "name": "structured_output",
+        "schema": expected_schema,
+    }
 
 
-def test_a_plain_json_mime_type_asks_for_json_without_a_schema() -> None:
+def test_a_plain_json_mime_type_populates_json_object_spec() -> None:
     payload = _convert(
         contents="hi", generationConfig={"responseMimeType": "application/json"}
     ).payload
 
-    assert "single valid JSON object" in payload["system"]
-    assert "JSON Schema" not in payload["system"]
+    assert "system" not in payload
+    assert "output_config" not in payload
+    assert payload["structured_output_spec"] == {"type": "json_object"}
 
 
 # --------------------------------------------------------------------- tools
@@ -640,8 +645,8 @@ def test_two_interleaved_tool_calls_emit_whole_function_calls_in_close_order() -
         if "functionCall" in part
     ]
     assert calls == [
-        {"name": "beta", "args": {"y": 2}},
-        {"name": "alpha", "args": {"x": 1}},
+        {"id": "toolu_b", "name": "beta", "args": {"y": 2}},
+        {"id": "toolu_a", "name": "alpha", "args": {"x": 1}},
     ]
     # Gemini reports STOP for a turn that called a function; the client
     # dispatches on the parts, not on the reason.
@@ -667,7 +672,7 @@ def test_a_tool_call_whose_block_never_closed_is_still_emitted() -> None:
     )
 
     assert frames[0]["candidates"][0]["content"]["parts"] == [
-        {"functionCall": {"name": "alpha", "args": {"x": 1}}}
+        {"functionCall": {"id": "t", "name": "alpha", "args": {"x": 1}}}
     ]
 
 
@@ -813,7 +818,7 @@ def test_a_complete_message_assembles_the_same_parts_the_stream_emits() -> None:
     assert body["candidates"][0]["content"]["parts"] == [
         {"text": "hmm", "thought": True},
         {"text": "Hello"},
-        {"functionCall": {"name": "alpha", "args": {"x": 1}}},
+        {"functionCall": {"id": "t", "name": "alpha", "args": {"x": 1}}},
     ]
     assert body["candidates"][0]["finishReason"] == "STOP"
     assert body["usageMetadata"]["promptTokenCount"] == 4
@@ -1079,3 +1084,530 @@ async def test_gemini_web_search_response_honest_nulls_and_no_done() -> None:
     assert gm["webSearchQueries"] == ["python 3.14"]
     assert gm["groundingSupports"][0]["groundingChunkIndices"] == [0]
     assert "urlContextMetadata" not in last["candidates"][0]
+
+
+# ------------------------------------------- PR 8: Gemini Door Parity
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_code", "expected_status"),
+    [
+        ("rate_limit_error", 429, "RESOURCE_EXHAUSTED"),
+        ("invalid_request_error", 400, "INVALID_ARGUMENT"),
+        ("authentication_error", 401, "UNAUTHENTICATED"),
+        ("permission_error", 403, "PERMISSION_DENIED"),
+        ("billing_error", 402, "FAILED_PRECONDITION"),
+        ("not_found_error", 404, "NOT_FOUND"),
+        ("request_too_large", 413, "INVALID_ARGUMENT"),
+        ("overloaded_error", 529, "UNAVAILABLE"),
+        ("timeout_error", 504, "DEADLINE_EXCEEDED"),
+        ("api_error", 500, "INTERNAL"),
+        ("unknown_error_type", 500, "INTERNAL"),
+    ],
+)
+def test_stream_assembler_error_event_maps_real_status(
+    error_type: str, expected_code: int, expected_status: str
+) -> None:
+    assembler = GeminiStreamAssembler("m", include_thoughts=False)
+    assembler.process_anthropic_event(_event("message_start", message={}))
+    frames = _frames(
+        assembler.process_anthropic_event(
+            _event(
+                "error",
+                error={"type": error_type, "message": "upstream boom"},
+            )
+        )
+    )
+    assert frames[0]["error"] == {
+        "code": expected_code,
+        "message": "upstream boom",
+        "status": expected_status,
+    }
+    assert frames[0]["candidates"][0]["finishReason"] == "OTHER"
+
+
+def test_repeated_function_call_names_pair_fifo_and_survive_chat_and_responses() -> (
+    None
+):
+    from my_claude_code.core.anthropic import (
+        AnthropicToOpenAIConverter,
+        MessagesRequest,
+    )
+
+    conversion = _convert(
+        contents=[
+            {"role": "user", "parts": [{"text": "read two files"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {"functionCall": {"name": "read_file", "args": {"path": "a.txt"}}},
+                    {"functionCall": {"name": "read_file", "args": {"path": "b.txt"}}},
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "read_file",
+                            "response": {"output": "alpha"},
+                        }
+                    },
+                    {
+                        "functionResponse": {
+                            "name": "read_file",
+                            "response": {"output": "beta"},
+                        }
+                    },
+                ],
+            },
+        ]
+    )
+    tool_uses = conversion.payload["messages"][1]["content"]
+    tool_results = conversion.payload["messages"][2]["content"]
+    assert [b["id"] for b in tool_uses] == ["gemini_call_0", "gemini_call_1"]
+    assert [b["tool_use_id"] for b in tool_results] == [
+        "gemini_call_0",
+        "gemini_call_1",
+    ]
+
+    # Must survive OpenAI Chat conversion without orphaned tool_use error.
+    req = MessagesRequest(**conversion.payload)
+    openai_msgs = AnthropicToOpenAIConverter.convert_messages(req.messages)
+    tool_msgs = [m for m in openai_msgs if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_msgs] == [
+        "gemini_call_0",
+        "gemini_call_1",
+    ]
+
+
+def test_mixed_explicit_and_omitted_function_response_ids_pair_cleanly() -> None:
+    payload = _convert(
+        contents=[
+            {"role": "user", "parts": [{"text": "go"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "id": "call_explicit",
+                            "name": "read_file",
+                            "args": {"p": "a"},
+                        }
+                    },
+                    {
+                        "functionCall": {
+                            "name": "read_file",
+                            "args": {"p": "b"},
+                        }
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "id": "call_explicit",
+                            "name": "read_file",
+                            "response": {"output": "1"},
+                        }
+                    },
+                    {
+                        "functionResponse": {
+                            "name": "read_file",
+                            "response": {"output": "2"},
+                        }
+                    },
+                ],
+            },
+        ]
+    ).payload
+
+    results = payload["messages"][2]["content"]
+    assert [r["tool_use_id"] for r in results] == ["call_explicit", "gemini_call_1"]
+
+
+def test_thinking_level_and_response_schema_merge_into_output_config() -> None:
+    payload = _convert(
+        contents="hi",
+        generationConfig={
+            "thinkingConfig": {"thinkingLevel": "HIGH"},
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {"ok": {"type": "BOOLEAN"}},
+            },
+        },
+    ).payload
+
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"] == {
+        "effort": "high",
+        "format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+        },
+    }
+    assert payload["structured_output_spec"]["type"] == "json_schema"
+
+
+def test_empty_response_json_schema_is_not_skipped_by_falsy_or() -> None:
+    payload = _convert(
+        contents="hi",
+        generationConfig={
+            "responseMimeType": "application/json",
+            "responseJsonSchema": {},
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {"x": {"type": "STRING"}},
+            },
+        },
+    ).payload
+
+    assert payload["output_config"] == {"format": {"type": "json_schema", "schema": {}}}
+    assert payload["structured_output_spec"] == {
+        "type": "json_schema",
+        "name": "structured_output",
+        "schema": {},
+    }
+
+
+def test_normalize_schema_handles_nested_openapi_and_json_schema_constructs() -> None:
+    from my_claude_code.core.gemini_api.tools import normalize_schema
+
+    raw = {
+        "type": "OBJECT",
+        "$defs": {
+            "Sub": {
+                "type": "INTEGER",
+                "nullable": True,
+            }
+        },
+        "definitions": {"Alt": {"type": "NUMBER"}},
+        "properties": {
+            "choice": {
+                "any_of": [{"type": "STRING"}, {"type": "INTEGER"}],
+                "nullable": True,
+            },
+            "pair": {
+                "type": "ARRAY",
+                "items": [{"type": "STRING"}, {"type": "BOOLEAN"}],
+                "prefixItems": [{"type": "NUMBER"}],
+            },
+            "falseNullable": {"type": "STRING", "nullable": False},
+        },
+        "additionalProperties": {"type": "STRING"},
+        "patternProperties": {"^x-": {"type": "BOOLEAN"}},
+        "not": {"type": "NULL"},
+    }
+
+    normalized = normalize_schema(raw)
+    assert normalized["type"] == "object"
+    assert normalized["$defs"] == {"Sub": {"type": ["integer", "null"]}}
+    assert normalized["definitions"] == {"Alt": {"type": "number"}}
+    assert normalized["properties"]["choice"] == {
+        "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]
+    }
+    assert "any_of" not in normalized["properties"]["choice"]
+    assert normalized["properties"]["pair"] == {
+        "type": "array",
+        "items": [{"type": "string"}, {"type": "boolean"}],
+        "prefixItems": [{"type": "number"}],
+    }
+    assert normalized["properties"]["falseNullable"] == {"type": "string"}
+    assert normalized["additionalProperties"] == {"type": "string"}
+    assert normalized["patternProperties"] == {"^x-": {"type": "boolean"}}
+    assert normalized["not"] == {"type": "null"}
+
+
+def test_text_x_enum_keeps_prompt_instruction_and_skips_json_schema_wrapper() -> None:
+    payload = _convert(
+        contents="pick one",
+        generationConfig={
+            "responseMimeType": "text/x.enum",
+            "responseSchema": {"type": "STRING", "enum": ["YES", "NO"]},
+        },
+    ).payload
+
+    assert "structured_output_spec" not in payload
+    assert "output_config" not in payload
+    assert "enum" in payload["system"]
+
+
+def test_mode_none_with_tool_history_preserves_and_synthesizes_tools() -> None:
+    conversion = _convert(
+        contents=[
+            {"role": "user", "parts": [{"text": "go"}]},
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "read_file", "args": {"p": "a"}}}],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "read_file",
+                            "response": {"output": "ok"},
+                        }
+                    }
+                ],
+            },
+        ],
+        tools=[{"functionDeclarations": [{"name": "other_tool"}]}],
+        toolConfig={"functionCallingConfig": {"mode": "NONE"}},
+    )
+
+    assert conversion.payload["tool_choice"] == {"type": "none"}
+    assert [t["name"] for t in conversion.payload["tools"]] == [
+        "other_tool",
+        "read_file",
+    ]
+
+
+def test_allowed_function_names_multi_and_ignored_generation_fields_are_traced() -> (
+    None
+):
+    conversion = _convert(
+        contents="hi",
+        generationConfig={
+            "maxOutputTokens": 64,
+            "seed": 42,
+            "presencePenalty": 0.5,
+            "frequencyPenalty": 0.2,
+            "responseLogprobs": True,
+            "logprobs": 3,
+            "mediaResolution": "MEDIA_RESOLUTION_HIGH",
+        },
+        tools=[{"functionDeclarations": [{"name": "a"}, {"name": "b"}]}],
+        toolConfig={
+            "functionCallingConfig": {
+                "mode": "ANY",
+                "allowedFunctionNames": ["a", "b"],
+            }
+        },
+    )
+
+    assert conversion.dropped == [
+        "generationConfig.seed",
+        "generationConfig.presencePenalty",
+        "generationConfig.frequencyPenalty",
+        "generationConfig.responseLogprobs",
+        "generationConfig.logprobs",
+        "generationConfig.mediaResolution",
+        "toolConfig.functionCallingConfig.allowedFunctionNames",
+    ]
+
+
+def test_function_response_parts_multimodal_and_mixed_user_turn() -> None:
+    payload = _convert(
+        contents=[
+            {"role": "user", "parts": [{"text": "inspect"}]},
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "screenshot", "args": {}}}],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "screenshot",
+                            "response": {"output": "captured"},
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": "aGk=",
+                                    }
+                                },
+                                {"text": "caption"},
+                            ],
+                        }
+                    },
+                    {"text": "what do you see?"},
+                ],
+            },
+        ]
+    ).payload
+
+    assert [m["role"] for m in payload["messages"]] == ["user", "assistant", "user"]
+    user_blocks = payload["messages"][2]["content"]
+    assert user_blocks[0]["type"] == "tool_result"
+    assert user_blocks[0]["content"] == [
+        {"type": "text", "text": "captured"},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "aGk="},
+        },
+        {"type": "text", "text": "caption"},
+    ]
+    assert user_blocks[1] == {"type": "text", "text": "what do you see?"}
+
+
+@pytest.mark.parametrize(
+    "file_data",
+    [
+        {"fileUri": "https://example.com/v.mp4", "mimeType": "video/mp4"},
+        {"fileUri": "https://example.com/no_mime"},
+    ],
+)
+def test_file_data_rejects_non_image_non_pdf_mime_type(file_data) -> None:
+    with pytest.raises(GeminiConversionError) as excinfo:
+        _convert(contents=[{"role": "user", "parts": [{"fileData": file_data}]}])
+    assert excinfo.value.field == "contents"
+
+
+def test_egress_emits_thought_signature_and_assembler_reads_seeded_input() -> None:
+    assembler = GeminiStreamAssembler("m", include_thoughts=False)
+    frames = _drive(
+        assembler,
+        [
+            _event(
+                "content_block_start",
+                index=0,
+                content_block={
+                    "type": "tool_use",
+                    "id": "call_seeded",
+                    "name": "echo",
+                    "input": {"k": "v"},
+                    "extra_content": {"google": {"thought_signature": "sig-stream"}},
+                },
+            ),
+            _event("content_block_stop", index=0),
+            _event("message_delta", delta={"stop_reason": "tool_use"}),
+            _event("message_stop"),
+        ],
+    )
+    stream_part = frames[0]["candidates"][0]["content"]["parts"][0]
+    assert stream_part == {
+        "functionCall": {"id": "call_seeded", "name": "echo", "args": {"k": "v"}},
+        "thoughtSignature": "sig-stream",
+    }
+
+    non_stream = generate_content_response_from_anthropic_message(
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call_seeded",
+                    "name": "echo",
+                    "input": {"k": "v"},
+                    "extra_content": {"google": {"thought_signature": "sig-stream"}},
+                }
+            ],
+            "stop_reason": "tool_use",
+        },
+        model="m",
+        response_id="r",
+        include_thoughts=False,
+    )
+    assert non_stream["candidates"][0]["content"]["parts"][0] == stream_part
+
+
+def test_assembler_seeded_input_is_replaced_on_first_partial_json_delta() -> None:
+    assembler = GeminiStreamAssembler("m", include_thoughts=False)
+    frames = _drive(
+        assembler,
+        [
+            _event(
+                "content_block_start",
+                index=0,
+                content_block={
+                    "type": "tool_use",
+                    "id": "call_override",
+                    "name": "echo",
+                    "input": {"k": "old"},
+                },
+            ),
+            _event(
+                "content_block_delta",
+                index=0,
+                delta={"type": "input_json_delta", "partial_json": '{"k":"new"}'},
+            ),
+            _event("content_block_stop", index=0),
+            _event("message_stop"),
+        ],
+    )
+    assert frames[0]["candidates"][0]["content"]["parts"][0] == {
+        "functionCall": {"id": "call_override", "name": "echo", "args": {"k": "new"}}
+    }
+
+
+def test_usage_ledger_ignores_bool_values() -> None:
+    from my_claude_code.core.gemini_api.usage import GeminiUsageLedger
+
+    ledger = GeminiUsageLedger()
+    ledger.absorb(
+        {
+            "input_tokens": True,
+            "output_tokens": False,
+            "cache_read_input_tokens": True,
+            "cache_creation_input_tokens": True,
+        }
+    )
+    assert ledger.has_counts() is False
+    assert ledger.payload() == {
+        "promptTokenCount": 0,
+        "candidatesTokenCount": 0,
+        "totalTokenCount": 0,
+    }
+
+
+def test_gemini_envelope_captures_tool_call_signatures_and_opt_in_thoughts() -> None:
+    from my_claude_code.core.carrier_surface import (
+        GEMINI_THOUGHT_PART,
+        GEMINI_THOUGHT_SIGNATURE,
+    )
+
+    req = _request(
+        contents=[
+            {"role": "user", "parts": [{"text": "go"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {"text": "thinking", "thought": True, "thoughtSignature": "t-sig"},
+                    {
+                        "functionCall": {"name": "read_file", "args": {"p": "a"}},
+                        "thoughtSignature": "fc-sig",
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "read_file",
+                            "response": {"output": "ok"},
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+    default_conv = convert_request_to_anthropic_payload(req)
+    assert default_conv.payload["gemini_envelope"] == {
+        "tool_call_signatures": {"gemini_call_0": "fc-sig"}
+    }
+    assert default_conv.carrier_surface == {
+        GEMINI_THOUGHT_PART: 1,
+        GEMINI_THOUGHT_SIGNATURE: 1,
+    }
+
+    opt_in_conv = convert_request_to_anthropic_payload(
+        req, preserve_thought_signatures=True
+    )
+    assert opt_in_conv.carrier_surface == {}
+    assert opt_in_conv.payload["gemini_envelope"] == {
+        "tool_call_signatures": {"gemini_call_0": "fc-sig"},
+        "thought_parts": [
+            {
+                "index": 1,
+                "position": 0,
+                "text": "thinking",
+                "thought_signature": "t-sig",
+            }
+        ],
+    }

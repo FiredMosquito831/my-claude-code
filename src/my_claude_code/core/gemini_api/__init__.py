@@ -20,6 +20,7 @@ from .catalog import (
 )
 from .errors import (
     GeminiConversionError,
+    gemini_error_from_anthropic_error,
     gemini_error_payload,
     gemini_failure_payload,
     gemini_status_for_code,
@@ -89,6 +90,7 @@ __all__ = [
     "fetched_image_part",
     "file_id_for_job",
     "gemini_count_tokens_payload",
+    "gemini_error_from_anthropic_error",
     "gemini_error_payload",
     "gemini_failure_payload",
     "gemini_model_entry",

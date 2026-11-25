@@ -309,7 +309,7 @@ def test_a_tool_call_arrives_as_one_whole_function_call_part() -> None:
         for part in frame["candidates"][0]["content"]["parts"]
         if "functionCall" in part
     ]
-    assert calls == [{"name": "echo", "args": {"value": "FCC"}}]
+    assert calls == [{"id": "toolu_1", "name": "echo", "args": {"value": "FCC"}}]
     assert frames[-1]["candidates"][0]["finishReason"] == "STOP"
     assert provider.requests[0].tools[0].name == "echo"
     assert provider.requests[0].tools[0].input_schema == {"type": "object"}
@@ -331,7 +331,7 @@ def test_a_non_streaming_tool_call_carries_the_same_function_call() -> None:
 
     body = response.json()
     assert body["candidates"][0]["content"]["parts"] == [
-        {"functionCall": {"name": "echo", "args": {"value": "FCC"}}}
+        {"functionCall": {"id": "toolu_1", "name": "echo", "args": {"value": "FCC"}}}
     ]
 
 
@@ -527,3 +527,197 @@ def _recording_build_capture(captured: list[Any]):
         return original(settings, request, **kwargs)
 
     return recording
+
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_code", "expected_status"),
+    [
+        ("rate_limit_error", 429, "RESOURCE_EXHAUSTED"),
+        ("billing_error", 402, "FAILED_PRECONDITION"),
+        ("overloaded_error", 529, "UNAVAILABLE"),
+        ("timeout_error", 504, "DEADLINE_EXCEEDED"),
+        ("invalid_request_error", 400, "INVALID_ARGUMENT"),
+        ("authentication_error", 401, "UNAUTHENTICATED"),
+        ("permission_error", 403, "PERMISSION_DENIED"),
+        ("not_found_error", 404, "NOT_FOUND"),
+        ("api_error", 500, "INTERNAL"),
+    ],
+)
+def test_stream_error_events_preserve_real_status_on_generate_and_stream(
+    error_type: str, expected_code: int, expected_status: str
+) -> None:
+    chunks = [
+        format_sse_event(
+            "message_start",
+            {"type": "message_start", "message": {"usage": {"input_tokens": 2}}},
+        ),
+        format_sse_event(
+            "error",
+            {"type": "error", "error": {"type": error_type, "message": "boom"}},
+        ),
+    ]
+    provider = FakeProvider(chunks)
+    app = create_test_app()
+    with (
+        patch(
+            "my_claude_code.api.gemini_routes.resolve_provider", return_value=provider
+        ),
+        TestClient(app) as client,
+    ):
+        unary = client.post(_GENERATE, json=_payload())
+        streamed = client.post(_STREAM, json=_payload())
+
+    assert unary.status_code == expected_code
+    assert unary.json() == {
+        "error": {"code": expected_code, "message": "boom", "status": expected_status}
+    }
+    frames = _data_frames(streamed.text)
+    assert frames[-1]["error"] == {
+        "code": expected_code,
+        "message": "boom",
+        "status": expected_status,
+    }
+
+
+def test_pre_populated_tool_use_input_matches_between_stream_and_unary() -> None:
+    chunks = [
+        format_sse_event(
+            "message_start",
+            {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+        ),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call_99",
+                    "name": "echo",
+                    "input": {"k": "v"},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_stop", {"type": "content_block_stop", "index": 0}
+        ),
+        format_sse_event(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    provider = FakeProvider(chunks)
+    app = create_test_app()
+    with (
+        patch(
+            "my_claude_code.api.gemini_routes.resolve_provider", return_value=provider
+        ),
+        TestClient(app) as client,
+    ):
+        unary = client.post(_GENERATE, json=_payload())
+        streamed = client.post(_STREAM, json=_payload())
+
+    unary_part = unary.json()["candidates"][0]["content"]["parts"][0]
+    stream_frames = _data_frames(streamed.text)
+    stream_part = stream_frames[0]["candidates"][0]["content"]["parts"][0]
+    expected = {"functionCall": {"id": "call_99", "name": "echo", "args": {"k": "v"}}}
+    assert unary_part == expected
+    assert stream_part == expected
+
+
+def test_gemini_handler_applies_safety_classifier_no_thinking_policy() -> None:
+    from my_claude_code.core.reasoning import ReasoningControl
+
+    provider = FakeProvider(_anthropic_text_stream("SAFE"))
+    app = create_test_app()
+    with (
+        patch(
+            "my_claude_code.api.gemini_routes.resolve_provider", return_value=provider
+        ),
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            _GENERATE,
+            json={
+                "systemInstruction": {
+                    "parts": [
+                        {
+                            "text": (
+                                "You are a policy safety classifier. "
+                                "Return yes</block> or no</block>."
+                            )
+                        }
+                    ]
+                },
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": ("<transcript>user asked ls</transcript>")}],
+                    }
+                ],
+                "generationConfig": {"thinkingConfig": {"thinkingBudget": 4096}},
+            },
+        )
+
+    assert response.status_code == 200
+    assert provider.stream_kwargs
+    assert provider.stream_kwargs[0]["reasoning"].control is ReasoningControl.OFF
+
+
+def test_gemini_handler_notes_function_call_signature_drop_on_non_google_route(
+    monkeypatch,
+) -> None:
+    from my_claude_code.core import request_log
+    from my_claude_code.core.carrier_surface import (
+        CARRIER_SURFACE_DROPPED,
+        GEMINI_THOUGHT_SIGNATURE,
+    )
+    from tests.support.request_log_writes import FlushWatch
+
+    watch = FlushWatch().install(monkeypatch)
+    provider = FakeProvider(_anthropic_text_stream("ok"))
+    app = create_test_app()
+    with (
+        patch(
+            "my_claude_code.api.gemini_routes.resolve_provider", return_value=provider
+        ),
+        TestClient(app) as client,
+    ):
+        response = client.post(
+            _GENERATE,
+            json={
+                "contents": [
+                    {"role": "user", "parts": [{"text": "call tool"}]},
+                    {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {"name": "echo", "args": {}},
+                                "thoughtSignature": "sig-1",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "functionResponse": {
+                                    "name": "echo",
+                                    "response": {"output": "ok"},
+                                }
+                            }
+                        ],
+                    },
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    request_id = response.headers["request-id"]
+    watch.wait(request_id)
+    store = request_log.get_request_log_store()
+    assert store is not None
+    row = store.get_request(request_id)
+    assert row is not None
+    assert row["params"][CARRIER_SURFACE_DROPPED] == {GEMINI_THOUGHT_SIGNATURE: 1}

@@ -1,6 +1,7 @@
 """Tests for Google AI Studio Gemini (OpenAI-compatible) provider."""
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -672,3 +673,85 @@ def test_gemini_tool_result_image_goes_as_an_image_part(gemini_provider):
         "image_url": {"url": "data:image/png;base64,QUJDRA=="},
     }
     assert "QUJDRA==" not in str(body["messages"][-2])
+
+
+def test_adaptive_thinking_sets_include_thoughts_and_keeps_default_unchanged(
+    gemini_provider,
+) -> None:
+    from my_claude_code.core.reasoning import ReasoningPolicy
+
+    adaptive_req = make_request(thinking={"type": "adaptive"})
+    adaptive_body = gemini_provider._build_request_body(
+        adaptive_req, reasoning=reasoning_for(adaptive_req)
+    )
+    assert (
+        adaptive_body["extra_body"]["extra_body"]["google"]["thinking_config"][
+            "include_thoughts"
+        ]
+        is True
+    )
+
+    default_req = make_request()
+    default_body = gemini_provider._build_request_body(
+        default_req, reasoning=ReasoningPolicy.provider_default()
+    )
+    assert "extra_body" not in default_body
+
+
+def test_gemini_envelope_restores_tool_call_signature_without_skip_sentinel(
+    gemini_provider,
+) -> None:
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.core.gemini_api import (
+        GeminiGenerateContentRequest,
+    )
+    from my_claude_code.core.gemini_api.input import (
+        convert_request_to_anthropic_payload,
+    )
+
+    gem_req = GeminiGenerateContentRequest.model_validate(
+        {
+            "contents": [
+                {"role": "user", "parts": [{"text": "find"}]},
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "id": "call_from_turn_1",
+                                "name": "Glob",
+                                "args": {"pattern": "*.py"},
+                            },
+                            "thoughtSignature": "sig-from-gemini-envelope",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "functionResponse": {
+                                "id": "call_from_turn_1",
+                                "name": "Glob",
+                                "response": {"output": "[]"},
+                            }
+                        }
+                    ],
+                },
+            ]
+        }
+    ).with_model("gemini-2.5-pro")
+
+    conv = convert_request_to_anthropic_payload(gem_req)
+    req = MessagesRequest(**conv.payload)
+    # Exclude from model_dump so non-Google upstreams never see gemini_envelope.
+    assert "gemini_envelope" not in req.model_dump()
+
+    notes: dict[str, Any] = {}
+    body = gemini_provider._build_request_body(
+        req, reasoning=reasoning_for(req), wire_notes=notes
+    )
+    assert body["messages"][1]["tool_calls"][0]["extra_content"] == {
+        "google": {"thought_signature": "sig-from-gemini-envelope"}
+    }
+    assert GEMINI_THOUGHT_SIGNATURE_SKIPPED not in notes

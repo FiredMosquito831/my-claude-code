@@ -7,8 +7,9 @@ from typing import Any
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.openai_common import AnthropicSseEvent
 
-from .errors import gemini_error_from_failure
+from .errors import gemini_error_from_anthropic_error, gemini_error_from_failure
 from .events import finish_reason_for, format_gemini_sse_data
+from .response import thought_signature_from_extra_content
 from .usage import GeminiUsageLedger
 
 
@@ -129,10 +130,22 @@ class GeminiStreamAssembler:
         if block_type == "thinking":
             return self._thought_chunks(_text(block.get("thinking")))
         if block_type == "tool_use" and index is not None:
-            self._pending_tools[index] = {
+            initial_input = block.get("input")
+            initial_args = (
+                json.dumps(initial_input, separators=(",", ":"))
+                if isinstance(initial_input, Mapping) and initial_input
+                else ""
+            )
+            entry: dict[str, Any] = {
+                "id": _text(block.get("id")),
                 "name": _text(block.get("name")),
-                "arguments": "",
+                "arguments": initial_args,
+                "seeded_input": bool(initial_args),
             }
+            extra_content = block.get("extra_content")
+            if isinstance(extra_content, Mapping):
+                entry["extra_content"] = dict(extra_content)
+            self._pending_tools[index] = entry
         return []
 
     def _handle_block_delta(self, data: Mapping[str, Any]) -> list[str]:
@@ -148,8 +161,12 @@ class GeminiStreamAssembler:
         if delta_type == "input_json_delta":
             index = _event_index(data)
             pending = self._pending_tools.get(index) if index is not None else None
-            if pending is not None:
-                pending["arguments"] += _text(delta.get("partial_json"))
+            partial = _text(delta.get("partial_json"))
+            if pending is not None and partial:
+                if pending.pop("seeded_input", False):
+                    pending["arguments"] = partial
+                else:
+                    pending["arguments"] += partial
         return []
 
     def _handle_block_stop(self, data: Mapping[str, Any]) -> list[str]:
@@ -211,12 +228,17 @@ class GeminiStreamAssembler:
 
 
 def _function_call_part(pending: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        "functionCall": {
-            "name": str(pending.get("name", "")),
-            "args": _parse_arguments(pending.get("arguments")),
-        }
+    call: dict[str, Any] = {
+        "name": str(pending.get("name", "")),
+        "args": _parse_arguments(pending.get("arguments")),
     }
+    call_id = pending.get("id")
+    if isinstance(call_id, str) and call_id:
+        call["id"] = call_id
+    part: dict[str, Any] = {"functionCall": call}
+    if sig := thought_signature_from_extra_content(pending.get("extra_content")):
+        part["thoughtSignature"] = sig
+    return part
 
 
 def _parse_arguments(value: Any) -> dict[str, Any]:
@@ -240,11 +262,8 @@ def _error_object(data: Mapping[str, Any]) -> dict[str, Any]:
     error = data.get("error")
     if not isinstance(error, Mapping):
         error = {"type": "api_error", "message": str(data)}
-    return {
-        "code": 500,
-        "message": str(error.get("message", "")),
-        "status": "INTERNAL",
-    }
+    _, err_obj = gemini_error_from_anthropic_error(error, default_message="")
+    return err_obj
 
 
 def _event_index(data: Mapping[str, Any]) -> int | None:

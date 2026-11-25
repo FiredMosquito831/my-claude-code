@@ -400,3 +400,51 @@ def test_a_proxied_vertex_model_list_client_still_gets_its_proxy() -> None:
 
     assert recorded, "Vertex built no httpx client"
     assert recorded[0]["proxy"] == proxy
+
+
+def test_vertex_replays_gemini_envelope_tool_call_signature() -> None:
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.providers.google_openai.thought_signatures import (
+        GOOGLE_THOUGHT_SIGNATURE_SKIPPED,
+    )
+    from tests.providers.support import reasoning_for
+
+    provider = _vertex_provider()
+    req = MessagesRequest.model_validate(
+        {
+            "model": "google/gemini-2.5-pro",
+            "messages": [
+                {"role": "user", "content": "find"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call_v1",
+                            "name": "Glob",
+                            "input": {"pattern": "*.py"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_v1",
+                            "content": "[]",
+                        }
+                    ],
+                },
+            ],
+            "gemini_envelope": {"tool_call_signatures": {"call_v1": "sig-vertex-env"}},
+        }
+    )
+    notes: dict[str, Any] = {}
+    body = provider._build_request_body(
+        req, reasoning=reasoning_for(req), wire_notes=notes
+    )
+    assert body["messages"][1]["tool_calls"][0]["extra_content"] == {
+        "google": {"thought_signature": "sig-vertex-env"}
+    }
+    assert GOOGLE_THOUGHT_SIGNATURE_SKIPPED not in notes

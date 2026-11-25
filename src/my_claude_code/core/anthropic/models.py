@@ -252,6 +252,13 @@ class MessagesRequest(BaseModel):
     #: ``model_copy(deep=True)`` while remaining invisible to ``model_dump()``
     #: and cross-door conversions.
     chat_envelope: dict[str, Any] | None = Field(default=None, exclude=True)
+    #: Lossless ``/v1beta`` Gemini ingress sidecar (8.46.0), or ``None``.
+    #:
+    #: Preserves per-tool-call ``thoughtSignature`` values (and optional
+    #: ``thought_parts`` when opted in) across ``model_copy(deep=True)`` for
+    #: ``GeminiProvider`` / ``VertexProvider`` continuity while remaining
+    #: invisible to ``model_dump()`` and non-Google outbound conversions.
+    gemini_envelope: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @property
     def prompt_cache_ask(self) -> PromptCacheAsk | None:

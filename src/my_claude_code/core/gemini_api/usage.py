@@ -44,22 +44,22 @@ class GeminiUsageLedger:
     def absorb(self, usage: object) -> None:
         if not isinstance(usage, Mapping):
             return
-        input_tokens = usage.get("input_tokens")
+        input_tokens = _non_bool_int(usage.get("input_tokens"))
         # A later zero must not erase a positive count seeded by
         # ``message_start``: it means the provider did not recount, not that
         # nobody sent anything.
-        if isinstance(input_tokens, int) and (
+        if input_tokens is not None and (
             self._input_tokens is None or input_tokens > 0
         ):
             self._input_tokens = input_tokens
-        output_tokens = usage.get("output_tokens")
-        if isinstance(output_tokens, int):
+        output_tokens = _non_bool_int(usage.get("output_tokens"))
+        if output_tokens is not None:
             self._output_tokens = output_tokens
-        cache_read = usage.get("cache_read_input_tokens")
-        if isinstance(cache_read, int) and cache_read > 0:
+        cache_read = _non_bool_int(usage.get("cache_read_input_tokens"))
+        if cache_read is not None and cache_read > 0:
             self._cache_read_tokens = cache_read
-        cache_write = usage.get("cache_creation_input_tokens")
-        if isinstance(cache_write, int) and cache_write > 0:
+        cache_write = _non_bool_int(usage.get("cache_creation_input_tokens"))
+        if cache_write is not None and cache_write > 0:
             self._cache_write_tokens = cache_write
 
     def add_thought_text(self, text: str) -> None:
@@ -90,3 +90,9 @@ class GeminiUsageLedger:
         if thoughts:
             usage["thoughtsTokenCount"] = thoughts
         return usage
+
+
+def _non_bool_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value

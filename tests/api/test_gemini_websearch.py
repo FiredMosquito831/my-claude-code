@@ -458,7 +458,13 @@ def test_gemini_streaming_google_search_and_url_context_mixed_function_call() ->
     ]
     assert {"text": "Comparing sources", "thought": True} in parts
     assert {"text": "Checked https://docs.python.org/3.14/ now."} in parts
-    assert {"functionCall": {"name": "save_note", "args": {"title": "3.14"}}} in parts
+    assert {
+        "functionCall": {
+            "id": "toolu_fn",
+            "name": "save_note",
+            "args": {"title": "3.14"},
+        }
+    } in parts
 
     last = frames[-1]
     cand = last["candidates"][0]
