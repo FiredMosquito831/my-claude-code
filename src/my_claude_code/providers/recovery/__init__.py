@@ -49,6 +49,7 @@ from .facts import (
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
     FACT_RESPONSES_TOOLS_MAX_COUNT,
     FACT_STREAM_USAGE_UNSUPPORTED,
+    FACT_STRUCTURED_OUTPUT_UNSUPPORTED,
     FACT_TOOL_CALLS_UNSUPPORTED,
     FACT_VISION_UNSUPPORTED,
     INFERRED_FACT_TTL_SECONDS,
@@ -105,6 +106,10 @@ from .store import (
     learned_fact_store,
     reset_learned_fact_store,
     set_learned_fact_store,
+)
+from .structured_output import (
+    RUNG_STRUCTURED_OUTPUT,
+    classify_structured_output_refusal,
 )
 from .surface import (
     is_region_refusal,
@@ -176,6 +181,7 @@ __all__ = [
     "FACT_RESPONSES_TOOL_SCHEMA_KEYWORD",
     "FACT_RESPONSE_SURFACE",
     "FACT_STREAM_USAGE_UNSUPPORTED",
+    "FACT_STRUCTURED_OUTPUT_UNSUPPORTED",
     "FACT_TOOL_CALLS_UNSUPPORTED",
     "FACT_VISION_UNSUPPORTED",
     "GIVE_UP",
@@ -186,6 +192,7 @@ __all__ = [
     "PROVIDER_WIDE_MODEL_ID",
     "REGEX_CONSTRUCTS",
     "RESPONSES_OUTPUT_FIELDS",
+    "RUNG_STRUCTURED_OUTPUT",
     "RUNG_TOOLS_COUNT",
     "RUNG_TOOL_NAME_LENGTH",
     "RUNG_TOOL_SCHEMA",
@@ -219,6 +226,7 @@ __all__ = [
     "apply_tools_max_count",
     "bounded_evidence",
     "clamp_output_tokens",
+    "classify_structured_output_refusal",
     "clone_body_without_reasoning_field",
     "clone_body_without_tool_choice",
     "complaint_evidence_snippet",

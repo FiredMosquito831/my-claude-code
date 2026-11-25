@@ -2760,6 +2760,16 @@ def declared_modalities_lookup(
     return lookup
 
 
+def model_accepts_pdf(
+    provider_id: str, model_id: str, path: Path | None = None
+) -> bool:
+    """Return True iff cached ``models.dev`` declares ``pdf`` in ``inputs``."""
+    if not provider_id or not model_id:
+        return False
+    pair, _tier = declared_modalities_tiered(provider_id, model_id, path=path)
+    return pair is not None and "pdf" in pair.inputs
+
+
 def model_prices_tiered(
     provider_id: str, model_id: str, path: Path | None = None
 ) -> dict[str, tuple[float | None, ResolutionTier | None]]:

@@ -1205,6 +1205,17 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider):
             "model": "m",
             "messages": [
                 {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "read_doc",
+                            "input": {},
+                        }
+                    ],
+                },
+                {
                     "role": "user",
                     "content": [
                         {
@@ -1227,10 +1238,15 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0] == {
+    assert body["messages"][1] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "PDF text extracted",
+    }
+    assert body["messages"][2] == {"role": "assistant", "content": " "}
+    assert body["messages"][3] == {
+        "role": "user",
+        "content": "[attachment omitted: this model does not accept documents]",
     }
 
 

@@ -24,6 +24,7 @@ from my_claude_code.config.settings import (
     configured_responses_parallel_tool_calls,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.structured_output import disables_parallel_tool_use
 from my_claude_code.core.openai_responses import ReplayOrigin
 from my_claude_code.core.reasoning import (
     ReasoningControl,
@@ -133,6 +134,8 @@ def build_chatgpt_oauth_request_body(
     ):
         effective_unspecified = ReasoningEffort.MAX.value
     parallel = configured_responses_parallel_tool_calls()
+    if disables_parallel_tool_use(request.tool_choice):
+        parallel = False
     default_service_tier = configured_chatgpt_oauth_service_tier()
     if request.responses_envelope is not None:
         body = build_responses_passthrough_body(
@@ -152,6 +155,7 @@ def build_chatgpt_oauth_request_body(
             compact=compact,
             default_instructions=CODEX_BASE_INSTRUCTIONS,
             default_service_tier=default_service_tier,
+            accepts_documents=True,
         )
     else:
         body = build_responses_request_body(
@@ -173,6 +177,7 @@ def build_chatgpt_oauth_request_body(
             unspecified_effort=effective_unspecified,
             default_instructions=CODEX_BASE_INSTRUCTIONS,
             default_service_tier=default_service_tier,
+            accepts_documents=True,
         )
     tier = body.get("service_tier")
     if isinstance(tier, str):

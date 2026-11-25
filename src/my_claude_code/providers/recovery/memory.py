@@ -31,6 +31,7 @@ from .facts import (
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
     FACT_RESPONSES_TOOLS_MAX_COUNT,
     FACT_STREAM_USAGE_UNSUPPORTED,
+    FACT_STRUCTURED_OUTPUT_UNSUPPORTED,
     PROVIDER_WIDE_MODEL_ID,
     FactSink,
 )
@@ -66,6 +67,11 @@ class RecoveryMemory:
     #: request to such a host paid a failed try and a retry -- not once per
     #: process, once per request.
     stream_usage_unsupported: set[str] = field(default_factory=set)
+
+    #: Bare model ids whose host rejected native structured outputs
+    #: (``response_format``, ``output_config.format``, or ``text.format``) with
+    #: a 400, falling back to prompt-instruction guidance.
+    structured_output_unsupported: set[str] = field(default_factory=set)
 
     #: The longest tool name this host's Responses surface accepts, or
     #: ``None`` when it has never said. Host-wide rather than per model: the
@@ -447,6 +453,20 @@ class RecoveryMemory:
         self.stream_usage_unsupported.add(model)
         if self.sink is not None:
             self.sink(FACT_STREAM_USAGE_UNSUPPORTED, model, True, "", evidence)
+        return not already_known
+
+    def structured_output_refused(self, model: str) -> bool:
+        """Whether this model's host has been proven to reject structured output."""
+        return model in self.structured_output_unsupported
+
+    def remember_structured_output_refusal(
+        self, model: str, *, evidence: str = ""
+    ) -> bool:
+        """Record that native structured output was refused; ``False`` if known."""
+        already_known = model in self.structured_output_unsupported
+        self.structured_output_unsupported.add(model)
+        if self.sink is not None:
+            self.sink(FACT_STRUCTURED_OUTPUT_UNSUPPORTED, model, True, "", evidence)
         return not already_known
 
     def reasoning_channel_for(

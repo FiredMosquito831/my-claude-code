@@ -43,6 +43,7 @@ from my_claude_code.core.anthropic import (
     HeuristicToolParser,
     ReasoningReplayMode,
     ThinkTagParser,
+    apply_chat_structured_output_fallback,
     empty_system_messages_note,
 )
 from my_claude_code.core.anthropic.models import MessagesRequest, Tool
@@ -117,11 +118,13 @@ from my_claude_code.providers.raw_upstream import (
     refusal_line,
 )
 from my_claude_code.providers.recovery import (
+    RUNG_STRUCTURED_OUTPUT,
     OutputCapRecovery,
     ProviderRecovery,
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
+    classify_structured_output_refusal,
     learned_fact_store,
     region_refusal_on_cause_chain,
     surface_shaped_failure,
@@ -171,6 +174,7 @@ from .request_policy import (
     OpenAIChatRequestPolicy,
     build_openai_chat_request_body,
     chat_tool_schema_note,
+    model_accepts_pdf_for_provider,
 )
 from .response_surface import (
     ResolvedSurfaceLadder,
@@ -395,6 +399,10 @@ class OpenAIChatProvider(BaseProvider):
                 self._output_cap_recovery.rung(),
                 ProviderRecovery(
                     kind="stream_usage", rewrite=self._rewrite_without_stream_usage
+                ).rung(),
+                ProviderRecovery(
+                    kind=RUNG_STRUCTURED_OUTPUT,
+                    rewrite=self._rewrite_without_structured_output,
                 ).rung(),
                 ProviderRecovery(
                     kind="provider_specific",
@@ -900,6 +908,12 @@ class OpenAIChatProvider(BaseProvider):
             provider_id=self._provider_id,
             tool_catalogue=self.tool_catalogue_for_request(request),
             tool_schema_dialect=self._profile.chat_tool_schema_dialect,
+            accepts_documents=model_accepts_pdf_for_provider(
+                self._provider_id, request.model
+            ),
+            suppress_structured_output=self._recovery_memory.structured_output_refused(
+                request.model
+            ),
         )
         apply_cache_affinity_body(
             body,
@@ -1082,6 +1096,7 @@ class OpenAIChatProvider(BaseProvider):
         """
         body = self._output_cap_recovery.apply_learned(body)
         body = self._apply_learned_stream_usage(body)
+        body = self._apply_learned_structured_output(body)
         used_retry_kinds: set[str] = set()
         # Per attempt-chain, deliberately a local rather than instance state:
         # concurrent requests share this provider, and unlike the monotonic
@@ -1183,6 +1198,10 @@ class OpenAIChatProvider(BaseProvider):
                     self._remember_stream_usage_refusal(
                         body, rewrite_evidence.get("stream_usage", "")
                     )
+                if RUNG_STRUCTURED_OUTPUT in used_retry_kinds:
+                    self._remember_structured_output_refusal(
+                        body, rewrite_evidence.get(RUNG_STRUCTURED_OUTPUT, "")
+                    )
                 return stream, body
             except Exception as error:
                 # A refusal is the only evidence this proxy will ever get
@@ -1276,6 +1295,56 @@ class OpenAIChatProvider(BaseProvider):
         logger.warning(
             "{}_STREAM: {} refuses stream_options.include_usage -- later "
             "requests omit it without paying the rejection",
+            self._provider_name,
+            model,
+        )
+
+    def _rewrite_without_structured_output(
+        self, error: Exception, body: dict
+    ) -> dict | None:
+        """Replace ``response_format`` with prompt instructions on 400 refusal."""
+        if "response_format" not in body:
+            return None
+        evidence = classify_structured_output_refusal(
+            error, wire_field="response_format"
+        )
+        if evidence is None:
+            return None
+        retry_body = apply_chat_structured_output_fallback(body)
+        if retry_body is None:
+            return None
+        logger.warning(
+            "{}_STREAM: retrying without response_format (prompt fallback) -- "
+            "upstream refused it: {}",
+            self._provider_name,
+            evidence,
+        )
+        return retry_body
+
+    def _apply_learned_structured_output(self, body: dict) -> dict:
+        """Apply prompt fallback up front when ``response_format`` is known unsupported."""
+        if "response_format" not in body:
+            return body
+        model = body.get("model")
+        if not isinstance(model, str):
+            return body
+        if not self._recovery_memory.structured_output_refused(model):
+            return body
+        fallback = apply_chat_structured_output_fallback(body)
+        return fallback if fallback is not None else body
+
+    def _remember_structured_output_refusal(self, body: dict, evidence: str) -> None:
+        """Record a proven structured-output refusal once the retry succeeded."""
+        model = body.get("model")
+        if not isinstance(model, str):
+            return
+        if not self._recovery_memory.remember_structured_output_refusal(
+            model, evidence=evidence
+        ):
+            return
+        logger.warning(
+            "{}_STREAM: {} refuses native response_format -- later requests "
+            "use prompt instruction fallback",
             self._provider_name,
             model,
         )

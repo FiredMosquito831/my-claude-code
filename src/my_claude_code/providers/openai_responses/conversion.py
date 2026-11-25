@@ -30,6 +30,11 @@ from my_claude_code.core.anthropic.openai_tool_names import (
     MIN_TOOL_NAME_MAX_LENGTH,
     OpenAIToolNameCodec,
 )
+from my_claude_code.core.anthropic.structured_output import (
+    disables_parallel_tool_use,
+    effective_structured_output_spec,
+    to_responses_text_format,
+)
 from my_claude_code.core.openai_responses import (
     ReplayOrigin,
     accepts,
@@ -392,10 +397,33 @@ def _openai_content_to_responses_parts(
                 parts.append({"type": text_type, "text": text})
         elif part_type == "image_url" and not assistant:
             image_url = part.get("image_url")
+            detail = image_url.get("detail") if isinstance(image_url, Mapping) else None
             if isinstance(image_url, dict):
                 image_url = image_url.get("url")
             if isinstance(image_url, str) and image_url:
-                parts.append({"type": "input_image", "image_url": image_url})
+                out_part: dict[str, Any] = {
+                    "type": "input_image",
+                    "image_url": image_url,
+                }
+                if isinstance(detail, str) and detail in {"low", "high"}:
+                    out_part["detail"] = detail
+                parts.append(out_part)
+        elif part_type == "file" and not assistant:
+            file_obj = part.get("file")
+            if isinstance(file_obj, Mapping):
+                file_data = file_obj.get("file_data")
+                file_url = file_obj.get("file_url")
+                if isinstance(file_data, str) and file_data:
+                    out_file: dict[str, Any] = {
+                        "type": "input_file",
+                        "file_data": file_data,
+                    }
+                    filename = file_obj.get("filename")
+                    if isinstance(filename, str) and filename:
+                        out_file["filename"] = filename
+                    parts.append(out_file)
+                elif isinstance(file_url, str) and file_url:
+                    parts.append({"type": "input_file", "file_url": file_url})
     return parts
 
 
@@ -607,6 +635,8 @@ def _convert_tools(
         }
         if raw_name in strict_by_name:
             converted_tool["strict"] = strict_by_name[raw_name]
+        elif isinstance(strict := getattr(tool, "strict", None), bool):
+            converted_tool["strict"] = strict
         result.append(converted_tool)
     return sweep_tool_catalogue(result, tool_schema_dialect)
 
@@ -1339,6 +1369,7 @@ def build_responses_request_body(
     allow_openai_responses_sidecars: bool = False,
     default_instructions: str | None = None,
     default_service_tier: str | None = None,
+    accepts_documents: bool = False,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -1469,6 +1500,8 @@ def build_responses_request_body(
             request.messages,
             reasoning_replay=RESPONSES_REASONING_REPLAY,
             reasoning_by_message=reasoning_by_message,
+            accepts_documents=accepts_documents,
+            accepts_document_urls=accepts_documents,
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
@@ -1501,6 +1534,11 @@ def build_responses_request_body(
             if index > 0
         }
 
+    effective_parallel_tool_calls = (
+        False
+        if disables_parallel_tool_use(request.tool_choice)
+        else parallel_tool_calls
+    )
     body: dict[str, Any] = {
         "model": request.model,
         "input": _openai_messages_to_responses_input(
@@ -1508,7 +1546,7 @@ def build_responses_request_body(
         ),
         "store": store,
         "stream": stream,
-        "parallel_tool_calls": parallel_tool_calls,
+        "parallel_tool_calls": effective_parallel_tool_calls,
     }
     if max_output_tokens is not None:
         body["max_output_tokens"] = max_output_tokens
@@ -1620,6 +1658,17 @@ def build_responses_request_body(
                 body["include"] = merged_include
     elif isinstance(default_service_tier, str) and default_service_tier:
         body["service_tier"] = default_service_tier
+
+    if not (
+        isinstance(body.get("text"), Mapping) and body["text"].get("format") is not None
+    ):
+        text_fmt = to_responses_text_format(effective_structured_output_spec(request))
+        if text_fmt is not None:
+            text_section = body.get("text")
+            if isinstance(text_section, dict):
+                text_section["format"] = text_fmt
+            else:
+                body["text"] = {"format": text_fmt}
 
     # Recorded beside the body it describes, at the one site both Responses
     # callers (``chatgpt_oauth`` and the OpenCode Responses transport) go
@@ -1854,6 +1903,7 @@ def build_responses_passthrough_body(
     compact: bool = False,
     default_instructions: str | None = None,
     default_service_tier: str | None = None,
+    accepts_documents: bool = False,
 ) -> dict[str, Any]:
     """Reconstruct a Codex Responses body from ``request.responses_envelope``.
 
@@ -1883,6 +1933,7 @@ def build_responses_passthrough_body(
             allow_openai_responses_sidecars=True,
             default_instructions=default_instructions,
             default_service_tier=default_service_tier,
+            accepts_documents=accepts_documents,
         )
         fallback_body.pop("truncation", None)
         return fallback_body
@@ -1906,7 +1957,13 @@ def build_responses_passthrough_body(
 
     caller_parallel = envelope.get("parallel_tool_calls")
     effective_parallel = (
-        caller_parallel if isinstance(caller_parallel, bool) else parallel_tool_calls
+        False
+        if disables_parallel_tool_use(request.tool_choice)
+        else (
+            caller_parallel
+            if isinstance(caller_parallel, bool)
+            else parallel_tool_calls
+        )
     )
 
     body: dict[str, Any] = {
@@ -1952,6 +2009,16 @@ def build_responses_passthrough_body(
 
     if isinstance(envelope.get("text"), Mapping):
         body["text"] = deepcopy(dict(envelope["text"]))
+    if not (
+        isinstance(body.get("text"), Mapping) and body["text"].get("format") is not None
+    ):
+        text_fmt = to_responses_text_format(effective_structured_output_spec(request))
+        if text_fmt is not None:
+            text_section = body.get("text")
+            if isinstance(text_section, dict):
+                text_section["format"] = text_fmt
+            else:
+                body["text"] = {"format": text_fmt}
     service_tier = envelope.get("service_tier")
     effective_tier = (
         service_tier

@@ -61,7 +61,11 @@ from .reasoning import (
     NamedEffortReasoning,
     ReasoningObject,
 )
-from .request_policy import OpenAIChatRequestPolicy, build_openai_chat_request_body
+from .request_policy import (
+    OpenAIChatRequestPolicy,
+    build_openai_chat_request_body,
+    model_accepts_pdf_for_provider,
+)
 from .response_surface import (
     CLIENT_FAMILY_ORDER,
     NPM_SURFACES,
@@ -147,6 +151,7 @@ __all__ = [
     "learned_surface_last_confirmed",
     "learned_surfaces",
     "matched_token",
+    "model_accepts_pdf_for_provider",
     "model_is_zero_cost",
     "observe_identity_enforcement",
     "openai_v1_base_url",

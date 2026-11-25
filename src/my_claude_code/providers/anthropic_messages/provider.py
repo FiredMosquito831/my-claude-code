@@ -22,6 +22,10 @@ from my_claude_code.core.anthropic.openai_tool_names import (
     decode_anthropic_sse_event,
     encode_anthropic_body_tool_names,
 )
+from my_claude_code.core.anthropic.structured_output import (
+    apply_anthropic_structured_output_fallback,
+    effective_structured_output_spec,
+)
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningAdaptationKind,
@@ -62,12 +66,14 @@ from my_claude_code.providers.raw_upstream import (
 )
 from my_claude_code.providers.recovery import (
     ANTHROPIC_OUTPUT_FIELDS,
+    RUNG_STRUCTURED_OUTPUT,
     OutputCapRecovery,
     ProviderRecovery,
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryMemory,
     RecoveryRung,
+    classify_structured_output_refusal,
     complaint_evidence_snippet,
     complaint_is_about_the_body,
     complaint_refuses_a_history_thinking_block,
@@ -94,6 +100,7 @@ from .request import (
     apply_manual_thinking_fallback,
     build_anthropic_messages_body,
     clone_body_without_output_config_effort,
+    clone_body_without_tool_strict,
 )
 from .streaming import iter_anthropic_sse_frames
 
@@ -175,6 +182,57 @@ def _output_config_effort_recovery(log_tag: str) -> RecoveryRung:
         rewrite=_rewrite,
         stripped_field=lambda _error, _body: "output_config",
     ).rung()
+
+
+def _rewrite_without_anthropic_structured_output(
+    error: Exception,
+    body: dict[str, Any],
+    *,
+    log_tag: str,
+) -> dict[str, Any] | None:
+    if (
+        evidence := classify_structured_output_refusal(
+            error, wire_field="output_config.format"
+        )
+    ) is None:
+        return None
+    cloned = apply_anthropic_structured_output_fallback(body)
+    if cloned is None:
+        return None
+    logger.warning(
+        "{}: retrying without 'output_config.format' (prompt fallback) -- "
+        "upstream refused it: {}",
+        log_tag,
+        evidence,
+    )
+    return cloned
+
+
+def _rewrite_without_tool_strict(
+    error: Exception,
+    body: dict[str, Any],
+    *,
+    log_tag: str,
+) -> dict[str, Any] | None:
+    if not is_bad_request(error):
+        return None
+    complaint = upstream_complaint(error)
+    if "strict" not in complaint or not (
+        "tool" in complaint
+        or "extra inputs are not permitted" in complaint
+        or "unrecognized" in complaint
+        or "unknown" in complaint
+    ):
+        return None
+    cloned = clone_body_without_tool_strict(body)
+    if cloned is None:
+        return None
+    logger.warning(
+        "{}: retrying without 'tools[].strict' -- upstream refused it: {}",
+        log_tag,
+        complaint_evidence_snippet(complaint),
+    )
+    return cloned
 
 
 def _is_adaptive_type_rejection(error: Exception, body: Mapping[str, Any]) -> bool:
@@ -331,6 +389,20 @@ class AnthropicMessagesProvider(BaseProvider):
             (
                 self._output_cap_recovery.rung(),
                 _output_config_effort_recovery(log_tag=log_tag),
+                ProviderRecovery(
+                    kind=RUNG_STRUCTURED_OUTPUT,
+                    rewrite=lambda error, body: (
+                        _rewrite_without_anthropic_structured_output(
+                            error, body, log_tag=log_tag
+                        )
+                    ),
+                ).rung(),
+                ProviderRecovery(
+                    kind="tool_strict",
+                    rewrite=lambda error, body: _rewrite_without_tool_strict(
+                        error, body, log_tag=log_tag
+                    ),
+                ).rung(),
                 ReasoningStripRecovery(log_tag=log_tag).rung(),
             )
         )
@@ -500,6 +572,9 @@ class AnthropicMessagesProvider(BaseProvider):
             signs_thinking=self._signs_thinking_for(request.model),
             adaptive_capable=dialect.adaptive,
             effort_capable=dialect.effort_values is not None,
+            suppress_structured_output=self._recovery_memory.structured_output_refused(
+                request.model
+            ),
         )
 
     async def probe(self, model_id: str) -> None:
@@ -740,6 +815,7 @@ class AnthropicMessagesProvider(BaseProvider):
         prompt_cache = self._prompt_cache_choice(request)
         dialect = self.reasoning_dialect(request.model)
         effort_capable = dialect.effort_values is not None
+        structured_spec = effective_structured_output_spec(request)
         body = build_anthropic_messages_body(
             request,
             reasoning=reasoning,
@@ -749,6 +825,9 @@ class AnthropicMessagesProvider(BaseProvider):
             signs_thinking=self._signs_thinking_for(request.model),
             adaptive_capable=dialect.adaptive,
             effort_capable=effort_capable,
+            suppress_structured_output=self._recovery_memory.structured_output_refused(
+                request.model
+            ),
         )
         if tool_names is not None:
             # Before the wire capture and before every recovery rung, so what
@@ -797,6 +876,7 @@ class AnthropicMessagesProvider(BaseProvider):
         # the history, or a key nested inside the field. The retry is the same
         # either way; only the durable "this model refuses it" is withheld.
         stripped_about_the_body = False
+        pending_structured_output_evidence: str | None = None
 
         async with self._rate_limiter.concurrency_slot():
             while True:
@@ -816,6 +896,15 @@ class AnthropicMessagesProvider(BaseProvider):
                         provider_failure_override=self._failure_override,
                     )
                     stream_opened = True
+                    if pending_structured_output_evidence is not None:
+                        model_name = body.get("model")
+                        self._recovery_memory.remember_structured_output_refusal(
+                            model_name
+                            if isinstance(model_name, str) and model_name
+                            else request.model,
+                            evidence=pending_structured_output_evidence,
+                        )
+                        pending_structured_output_evidence = None
                     if stripped_reasoning is not None and stripped_about_the_body:
                         logger.info(
                             "{}_STREAM: retried without {!r} and it was accepted; "
@@ -933,6 +1022,24 @@ class AnthropicMessagesProvider(BaseProvider):
                             error, body, used_retry_kinds
                         )
                         if recovered.body is not None:
+                            if recovered.kind == RUNG_STRUCTURED_OUTPUT:
+                                pending_structured_output_evidence = recovered.evidence
+                                if structured_spec is not None and structured_spec.get(
+                                    "name"
+                                ):
+                                    rebuilt = (
+                                        apply_anthropic_structured_output_fallback(
+                                            body, spec=structured_spec
+                                        )
+                                    )
+                                    if rebuilt is not None:
+                                        recovered_body = rebuilt
+                                    else:
+                                        recovered_body = recovered.body
+                                else:
+                                    recovered_body = recovered.body
+                                body = recovered_body
+                                continue
                             if recovered.stripped_reasoning_field is not None:
                                 stripped_reasoning = recovered.stripped_reasoning_field
                                 stripped_evidence = recovered.evidence

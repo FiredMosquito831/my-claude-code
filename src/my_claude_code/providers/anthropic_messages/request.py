@@ -14,6 +14,12 @@ from my_claude_code.config.settings import (
     configured_reasoning_adaptive,
 )
 from my_claude_code.core.anthropic.models import Message, MessagesRequest
+from my_claude_code.core.anthropic.structured_output import (
+    apply_anthropic_structured_output_fallback,
+    effective_structured_output_spec,
+    inject_anthropic_system_instruction,
+    render_response_format_instruction,
+)
 from my_claude_code.core.openai_responses import is_carrier
 from my_claude_code.core.reasoning import (
     MINIMUM_BUDGET_TOKENS,
@@ -73,6 +79,7 @@ def build_anthropic_messages_body(
     adaptive_capable: bool | None = None,
     suppress_thinking: bool = False,
     effort_capable: bool = False,
+    suppress_structured_output: bool = False,
 ) -> dict[str, Any]:
     """Build one native Messages request without exposing FCC-only fields.
 
@@ -109,11 +116,16 @@ def build_anthropic_messages_body(
     body = request.model_dump(exclude_none=True)
     for field in _INTERNAL_FIELDS:
         body.pop(field, None)
+    if request.tools and isinstance(body.get("tools"), list):
+        for tool_model, raw_tool in zip(request.tools, body["tools"], strict=False):
+            if isinstance(tool_model.strict, bool) and isinstance(raw_tool, dict):
+                raw_tool["strict"] = tool_model.strict
     native = [_native_message(message) for message in request.messages]
     carrier_counts: dict[str, int] = {}
     messages, dropped_blocks, dropped_chars = drop_foreign_thinking(
         native, signs_thinking=signs_thinking, carrier_counts=carrier_counts
     )
+    messages = _strip_true_orphan_tool_results(messages)
     body["messages"] = messages
     body["stream"] = True
     if body.get("max_tokens") is None:
@@ -198,9 +210,123 @@ def build_anthropic_messages_body(
         # key's own sentence -- "dropped" -- false. Absent, not ``0``, here too.
         wire_notes.update(carrier_stripped_note(carriers_stripped))
     _merge_extra_body(body, request.extra_body)
+    body = _apply_structured_output(
+        body,
+        request,
+        suppress_structured_output=suppress_structured_output,
+    )
     if prompt_cache is not None:
         body = apply_prompt_cache_lifetime(body, prompt_cache, wire_notes)
     return body
+
+
+def _strip_true_orphan_tool_results(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Strip ``tool_result`` blocks whose ``tool_use_id`` never appeared earlier.
+
+    Preserves non-orphan blocks (including ``consecutive_same_role`` where a
+    ``tool_use`` appeared in an earlier, non-adjacent assistant turn) and
+    returns ``messages`` by identity when no true orphan exists.
+    """
+    seen_tool_use_ids: set[str] = set()
+    kept: list[dict[str, Any]] | None = None
+    for index, message in enumerate(messages):
+        role = message.get("role")
+        content = message.get("content")
+        if role == "assistant" and isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_id = block.get("id")
+                    if isinstance(tool_id, str) and tool_id:
+                        seen_tool_use_ids.add(tool_id)
+            if kept is not None:
+                kept.append(message)
+            continue
+        if role == "user" and isinstance(content, list):
+            has_orphan = any(
+                isinstance(block, dict)
+                and block.get("type") == "tool_result"
+                and not (
+                    isinstance(block.get("tool_use_id"), str)
+                    and block["tool_use_id"] in seen_tool_use_ids
+                )
+                for block in content
+            )
+            if not has_orphan:
+                if kept is not None:
+                    kept.append(message)
+                continue
+            if kept is None:
+                kept = list(messages[:index])
+            filtered = [
+                block
+                for block in content
+                if not (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_result"
+                    and not (
+                        isinstance(block.get("tool_use_id"), str)
+                        and block["tool_use_id"] in seen_tool_use_ids
+                    )
+                )
+            ]
+            if filtered:
+                kept.append({**message, "content": filtered})
+            continue
+        if kept is not None:
+            kept.append(message)
+    if kept is None:
+        return messages
+    return kept or messages
+
+
+def _apply_structured_output(
+    body: dict[str, Any],
+    request: MessagesRequest,
+    *,
+    suppress_structured_output: bool,
+) -> dict[str, Any]:
+    spec = effective_structured_output_spec(request)
+    if spec is None:
+        return body
+    fmt_type = spec.get("type")
+    if fmt_type in {"json_object", "text"}:
+        oc = body.get("output_config")
+        if isinstance(oc, dict):
+            oc.pop("format", None)
+            if not oc:
+                body.pop("output_config", None)
+        if fmt_type == "json_object":
+            instruction = render_response_format_instruction(spec)
+            if instruction:
+                inject_anthropic_system_instruction(body, instruction)
+        return body
+    if fmt_type == "json_schema":
+        if suppress_structured_output:
+            fallback = apply_anthropic_structured_output_fallback(body, spec=spec)
+            return fallback if fallback is not None else body
+        oc = body.get("output_config")
+        fmt_payload = {"type": "json_schema", "schema": deepcopy(spec["schema"])}
+        if not isinstance(oc, dict):
+            body["output_config"] = {"format": fmt_payload}
+        elif "format" not in oc:
+            oc["format"] = fmt_payload
+    return body
+
+
+def clone_body_without_tool_strict(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Clone ``body`` with ``tools[].strict`` stripped, or ``None`` if absent."""
+    tools = body.get("tools")
+    if not isinstance(tools, list) or not any(
+        isinstance(tool, dict) and "strict" in tool for tool in tools
+    ):
+        return None
+    cloned = deepcopy(body)
+    for tool in cloned.get("tools", ()):
+        if isinstance(tool, dict):
+            tool.pop("strict", None)
+    return cloned
 
 
 def apply_prompt_cache_lifetime(
