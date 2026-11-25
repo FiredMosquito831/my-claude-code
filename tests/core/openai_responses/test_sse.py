@@ -1333,3 +1333,201 @@ async def test_turn1_sse_reasoning_item_round_trips_into_turn2_outbound_body() -
     )
     replayed = [i for i in turn2_body["input"] if i.get("type") == "reasoning"]
     assert replayed == [native_item]
+
+
+@pytest.mark.asyncio
+async def test_responses_ledger_restores_cache_tokens_and_emits_cached_details() -> (
+    None
+):
+    events_in = [
+        format_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "usage": {
+                        "input_tokens": 12,
+                        "cache_read_input_tokens": 500,
+                        "cache_creation_input_tokens": 200,
+                    }
+                },
+            },
+        ),
+        *_anthropic_text_stream("cached")[1:-2],
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {
+                    "input_tokens": 0,
+                    "cache_read_input_tokens": 500,
+                    "cache_creation_input_tokens": 0,
+                    "output_tokens": 45,
+                },
+            },
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    response = await _completed_response_from_sse(
+        _aiter(events_in),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+
+    assert response["usage"] == {
+        "input_tokens": 712,
+        "output_tokens": 45,
+        "total_tokens": 757,
+        "input_tokens_details": {"cached_tokens": 500},
+    }
+
+
+@pytest.mark.asyncio
+async def test_responses_ledger_excludes_bool_cache_counts_and_zero_cache_details() -> (
+    None
+):
+    events_in = [
+        format_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "usage": {
+                        "input_tokens": 12,
+                        "cache_read_input_tokens": True,
+                        "cache_creation_input_tokens": False,
+                    }
+                },
+            },
+        ),
+        *_anthropic_text_stream("bool-guard")[1:-2],
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"input_tokens": 0, "output_tokens": 9},
+            },
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    response = await _completed_response_from_sse(
+        _aiter(events_in),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+
+    assert response["usage"] == {
+        "input_tokens": 12,
+        "output_tokens": 9,
+        "total_tokens": 21,
+    }
+
+
+@pytest.mark.asyncio
+async def test_web_search_responses_usage_restores_cache_tokens() -> None:
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesRequest,
+        build_responses_payload_from_loop,
+        iter_responses_sse_from_loop,
+    )
+
+    req = OpenAIResponsesRequest(model="gpt-test", input="Hi", stream=True)
+    loop_usage = {
+        "input_tokens": 12,
+        "cache_read_input_tokens": 500,
+        "cache_creation_input_tokens": 200,
+        "output_tokens": 45,
+    }
+    expected = {
+        "input_tokens": 712,
+        "output_tokens": 45,
+        "total_tokens": 757,
+        "input_tokens_details": {"cached_tokens": 500},
+    }
+
+    raw_chunks = [
+        chunk
+        async for chunk in iter_responses_sse_from_loop(
+            req,
+            web_calls=(),
+            final_step_blocks=[{"type": "text", "text": "ok"}],
+            annotations=(),
+            loop_usage=loop_usage,
+        )
+    ]
+    sse_events = parse_sse_text("".join(raw_chunks))
+    assert sse_events[-1].event == "response.completed"
+    assert sse_events[-1].data["response"]["usage"] == expected
+
+    non_stream = build_responses_payload_from_loop(
+        OpenAIResponsesRequest(model="gpt-test", input="Hi", stream=False),
+        web_calls=(),
+        final_step_blocks=[{"type": "text", "text": "ok"}],
+        annotations=(),
+        loop_usage=loop_usage,
+    )
+    assert non_stream["usage"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stop_reason", "expected_reason"),
+    [
+        ("max_tokens", "max_output_tokens"),
+        ("refusal", "content_filter"),
+        ("content_filter", "content_filter"),
+    ],
+)
+async def test_responses_stream_emits_response_incomplete_for_incomplete_stop_reasons(
+    stop_reason: str, expected_reason: str
+) -> None:
+    events_in = [
+        *_anthropic_text_stream("cut")[:-2],
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason},
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+        ),
+        format_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {},
+                "usage": {"output_tokens": 3},
+            },
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    text = await _collect_sse(
+        _responses_sse(
+            _aiter(events_in),
+            {"model": "nvidia_nim/test-model", "stream": True},
+        )
+    )
+    events = parse_sse_text(text)
+    assert events[-1].event == "response.incomplete"
+    incomplete = events[-1].data["response"]
+    assert incomplete["status"] == "incomplete"
+    assert incomplete["incomplete_details"] == {"reason": expected_reason}
+    assert incomplete["usage"] == {
+        "input_tokens": 5,
+        "output_tokens": 3,
+        "total_tokens": 8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_responses_completed_omits_incomplete_details() -> None:
+    response = await _completed_response_from_sse(
+        _aiter(_anthropic_text_stream("done")),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+
+    assert response["status"] == "completed"
+    assert "incomplete_details" not in response

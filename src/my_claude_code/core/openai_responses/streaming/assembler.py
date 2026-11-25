@@ -43,6 +43,7 @@ class ResponsesStreamAssembler:
         )
         self._started = False
         self._provisional_error: dict[str, Any] | None = None
+        self._stop_reason: str | None = None
         self.terminal = False
         self.final_response: dict[str, Any] | None = None
 
@@ -61,6 +62,11 @@ class ResponsesStreamAssembler:
             self._ledger.record_message_start(event.data)
         elif event.event == "message_delta":
             self._ledger.record_usage_delta(event.data)
+            delta = event.data.get("delta")
+            if isinstance(delta, Mapping):
+                stop_reason = delta.get("stop_reason")
+                if isinstance(stop_reason, str) and stop_reason:
+                    self._stop_reason = stop_reason
         elif event.event == "message_stop":
             chunks.extend(self.complete_response())
         elif event.event == "error":
@@ -75,7 +81,11 @@ class ResponsesStreamAssembler:
         return chunks
 
     def response_payload(
-        self, *, status: str, error: dict[str, Any] | None = None
+        self,
+        *,
+        status: str,
+        error: dict[str, Any] | None = None,
+        incomplete_details: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "id": self._response_id,
@@ -100,6 +110,8 @@ class ResponsesStreamAssembler:
             "usage": self._ledger.usage(),
             "error": error,
         }
+        if incomplete_details is not None:
+            payload["incomplete_details"] = incomplete_details
         if self._request.text is not None:
             payload["text"] = self._request.text
         if self._request.truncation is not None:
@@ -112,6 +124,15 @@ class ResponsesStreamAssembler:
             return chunks
         if self._provisional_error is not None:
             chunks.extend(self._finish_failed_response(self._provisional_error))
+            return chunks
+        incomplete_details = _incomplete_details_for_stop_reason(self._stop_reason)
+        if incomplete_details is not None:
+            self.final_response = self.response_payload(
+                status="incomplete",
+                incomplete_details=incomplete_details,
+            )
+            chunks.append(events.response_incomplete(self.final_response))
+            self.terminal = True
             return chunks
         self.final_response = self.response_payload(status="completed")
         chunks.append(events.response_completed(self.final_response))
@@ -359,6 +380,16 @@ class ResponsesStreamAssembler:
         if self._provisional_error is None:
             self._provisional_error = error
         return []
+
+
+def _incomplete_details_for_stop_reason(
+    stop_reason: str | None,
+) -> dict[str, str] | None:
+    if stop_reason == "max_tokens":
+        return {"reason": "max_output_tokens"}
+    if stop_reason in {"refusal", "content_filter"}:
+        return {"reason": "content_filter"}
+    return None
 
 
 def _event_index(data: Mapping[str, Any]) -> int | None:

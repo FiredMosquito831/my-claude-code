@@ -1422,9 +1422,10 @@ class ChatGPTOAuthProvider(BaseProvider):
                                     if not ledger.message_started:
                                         yield ledger.message_start()
                                     yield sse_event
+                            finish_events = list(converter.finish())
                             if not ledger.message_started:
                                 yield ledger.message_start()
-                            for sse_event in converter.finish():
+                            for sse_event in finish_events:
                                 yield sse_event
                         finally:
                             # Recorded whatever ended the stream, including

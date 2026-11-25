@@ -1,5 +1,6 @@
 """Anthropic SSE to OpenAI Chat Completions chunk assembly."""
 
+import json
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -174,6 +175,12 @@ class ChatCompletionsStreamAssembler:
         self._next_tool_call_index += 1
         self._tool_call_index[index] = call_index
         self._emitted_tool_calls = True
+        initial_input = block.get("input")
+        arguments = (
+            json.dumps(initial_input, separators=(",", ":"))
+            if isinstance(initial_input, Mapping) and initial_input
+            else ""
+        )
         chunks.append(
             self._chunk(
                 {
@@ -184,7 +191,7 @@ class ChatCompletionsStreamAssembler:
                             "type": "function",
                             "function": {
                                 "name": _text(block.get("name")),
-                                "arguments": "",
+                                "arguments": arguments,
                             },
                         }
                     ]

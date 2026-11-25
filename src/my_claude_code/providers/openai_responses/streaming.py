@@ -49,7 +49,7 @@ def _finish_reason_from_status(status: Any) -> str:
     if status_lower in {"max_tokens", "length"}:
         return "max_tokens"
     if status_lower in {"content_filter"}:
-        return "content_filter"
+        return "refusal"
     return "end_turn"
 
 
@@ -144,6 +144,38 @@ def _incomplete_reason(response: Mapping[str, Any]) -> str:
         if isinstance(reason, str) and reason:
             return reason
     return "no reason reported"
+
+
+def _sse_error_message(event: Mapping[str, Any]) -> str:
+    """Preserve upstream error code, type, and message for failure classification."""
+    err = event.get("error")
+    code: object = None
+    err_type: object = None
+    message: object = None
+    if isinstance(err, Mapping):
+        code = err.get("code")
+        err_type = err.get("type")
+        message = err.get("message")
+    elif isinstance(err, str) and err.strip():
+        message = err
+    if not code:
+        code = event.get("code")
+    if not message:
+        message = event.get("message")
+    label_parts = [
+        part.strip()
+        for part in (code, err_type)
+        if isinstance(part, str) and part.strip()
+    ]
+    label = "/".join(dict.fromkeys(label_parts))
+    msg = message.strip() if isinstance(message, str) and message.strip() else ""
+    if label and msg:
+        return f"Responses stream error ({label}): {msg}"
+    if label:
+        return f"Responses stream error ({label})."
+    if msg:
+        return f"Responses stream error: {msg}"
+    return "Responses stream ended with an upstream error event."
 
 
 #: Frames that repeat a whole reasoning part after its deltas. They are the
@@ -477,6 +509,12 @@ class ResponsesStreamConverter:
                     yield self._ledger.stop_tool_block(tool["index"])
             return
 
+        if event_type == "error":
+            yield from self._flush_answer_text()
+            yield from self._ledger.close_content_blocks()
+            self._finished = True
+            raise TruncatedProviderStreamError(_sse_error_message(event))
+
         if event_type in _TERMINAL_EVENT_TYPES:
             yield from self._terminal(event_type, event)
             return
@@ -529,7 +567,11 @@ class ResponsesStreamConverter:
                     " (incomplete_details.reason:"
                     f" {_incomplete_reason(response)})."
                 )
-            self._stop_reason = _INCOMPLETE_STOP_REASON
+            self._stop_reason = (
+                "refusal"
+                if _incomplete_reason(response) == "content_filter"
+                else _INCOMPLETE_STOP_REASON
+            )
 
     def _reasoning_part_key(
         self, event_type: str, event: Mapping[str, Any]
@@ -782,6 +824,10 @@ class ResponsesStreamConverter:
 
     def finish(self, stop_reason: str | None = None) -> Iterator[str]:
         """Emit final message_delta and message_stop events."""
+        if not self._finished and not self._output_seen:
+            raise TruncatedProviderStreamError(
+                "Responses stream ended without a terminal event or any output."
+            )
         yield from self._flush_answer_text()
         if self._answer_text_seen and self._ledger.blocks.next_index == 0:
             # The answer was nothing but tagged reasoning, and the client's
@@ -833,6 +879,20 @@ def note_carrier_shape(
         shape.count_reasoning("carrier_oversize", oversize)
 
 
+def _parse_responses_sse_line(line: str) -> tuple[bool, dict[str, Any] | None]:
+    stripped = line.strip()
+    if not stripped or not stripped.startswith("data:"):
+        return False, None
+    data = stripped[5:].lstrip(" ").strip()
+    if data == "[DONE]":
+        return True, None
+    try:
+        event = json.loads(data)
+    except json.JSONDecodeError:
+        return False, None
+    return False, event if isinstance(event, dict) else None
+
+
 async def iter_responses_sse_events(
     raw_stream: Any,
     *,
@@ -860,18 +920,15 @@ async def iter_responses_sse_events(
         buffer += text
         while "\n" in buffer:
             line, buffer = buffer.split("\n", 1)
-            line = line.strip()
-            if not line or not line.startswith("data: "):
-                continue
-            data = line[len("data: ") :].strip()
-            if data == "[DONE]":
+            done, event = _parse_responses_sse_line(line)
+            if done:
                 return
-            try:
-                event = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(event, dict):
+            if event is not None:
                 yield event
+    if buffer.strip():
+        done, event = _parse_responses_sse_line(buffer)
+        if not done and event is not None:
+            yield event
 
 
 _RESPONSES_SHAPE_FIELDS = {
@@ -946,6 +1003,9 @@ def note_responses_event_shape(shape: ResponseShape | None, event: Any) -> None:
             _note_reasoning_item(shape, item)
         elif isinstance(item, Mapping) and item.get("type") == "function_call":
             _note_function_call(shape, item)
+        return
+    if kind == "error":
+        shape.note_finish("error")
         return
     if kind in ("response.completed", "response.incomplete", "response.failed"):
         response = event.get("response")

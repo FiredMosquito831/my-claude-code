@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from my_claude_code.application.execution import (
@@ -68,8 +69,10 @@ from my_claude_code.core.wire_capture import (
 )
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.chatgpt_oauth import ChatGPTOAuthProvider
+from my_claude_code.providers.openai_chat.responses_transport import ResponsesTransport
 from my_claude_code.providers.openai_responses.streaming import (
     ResponsesStreamConverter,
+    iter_responses_sse_events,
     note_responses_event_shape,
 )
 from my_claude_code.providers.stream_recovery import TruncatedProviderStreamError
@@ -797,3 +800,309 @@ def test_a_completed_stream_emits_every_frame_in_protocol_order() -> None:
         "message_delta",
         "message_stop",
     ]
+
+
+# --- PR 3: SSE "error", empty/[DONE], data: no-space, incomplete(content_filter), holdback ---
+
+
+def test_sse_error_event_raises_truncated_error_and_preserves_upstream_detail() -> None:
+    ledger = _ledger()
+    converter = ResponsesStreamConverter(ledger)
+    with pytest.raises(TruncatedProviderStreamError) as raised:
+        list(
+            converter.feed(
+                {
+                    "type": "error",
+                    "error": {
+                        "code": "server_is_overloaded",
+                        "type": "server_error",
+                        "message": "busy",
+                    },
+                }
+            )
+        )
+
+    assert "server_is_overloaded" in str(raised.value)
+    assert "busy" in str(raised.value)
+    assert not ledger.message_started
+
+
+def test_sse_error_event_after_partial_output_closes_blocks_and_raises() -> None:
+    ledger = _ledger()
+    converter = ResponsesStreamConverter(ledger)
+    emitted = list(
+        converter.feed({"type": "response.output_text.delta", "delta": "hi"})
+    )
+    with pytest.raises(TruncatedProviderStreamError) as raised:
+        emitted.extend(
+            converter.feed(
+                {
+                    "type": "error",
+                    "error": {"code": "rate_limit_exceeded", "message": "slow down"},
+                }
+            )
+        )
+
+    assert "hi" in "".join(emitted)
+    assert "rate_limit_exceeded" in str(raised.value)
+
+
+def test_note_responses_event_shape_records_error_finish_reason() -> None:
+    payload = _shape_for(
+        [
+            {"type": "response.created", "response": {"status": "in_progress"}},
+            {
+                "type": "error",
+                "error": {"code": "server_is_overloaded", "message": "busy"},
+            },
+        ]
+    )
+    assert payload["finish_reason"] == "error"
+
+
+def test_empty_and_created_only_streams_raise_truncated_on_finish() -> None:
+    empty_converter = ResponsesStreamConverter(_ledger())
+    with pytest.raises(TruncatedProviderStreamError):
+        list(empty_converter.finish())
+
+    created_only = ResponsesStreamConverter(_ledger())
+    assert (
+        list(
+            created_only.feed(
+                {"type": "response.created", "response": {"status": "in_progress"}}
+            )
+        )
+        == []
+    )
+    with pytest.raises(TruncatedProviderStreamError):
+        list(created_only.finish())
+
+
+@pytest.mark.asyncio
+async def test_iter_responses_sse_events_tolerates_no_space_data_and_eof_line() -> None:
+    async def _raw_chunks() -> AsyncIterator[bytes]:
+        yield b'data:{"type":"response.output_text.delta","delta":"hi"}\n\n'
+        yield b'data:{"type":"response.completed","response":{"status":"completed"}}'
+
+    events = [ev async for ev in iter_responses_sse_events(_raw_chunks())]
+    assert [ev["type"] for ev in events] == [
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert events[0]["delta"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_incomplete_content_filter_maps_to_refusal_end_to_end() -> None:
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesAdapter,
+        OpenAIResponsesRequest,
+    )
+
+    frames = _run(
+        [
+            {"type": "response.output_text.delta", "delta": "partial"},
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "content_filter"},
+                    "usage": {"input_tokens": 5, "output_tokens": 2},
+                },
+            },
+        ]
+    )
+    assert _message_delta(frames)["delta"]["stop_reason"] == "refusal"
+
+    async def _sse_chunks() -> AsyncIterator[str]:
+        for frame in frames:
+            yield frame
+
+    assembled = [
+        chunk
+        async for chunk in OpenAIResponsesAdapter().iter_sse_from_anthropic(
+            _sse_chunks(),
+            OpenAIResponsesRequest(model="gpt-6-luna", input="hi", stream=True),
+        )
+    ]
+    parsed = parse_sse_text("".join(assembled))
+    assert parsed[-1].event == "response.incomplete"
+    assert parsed[-1].data["response"]["status"] == "incomplete"
+    assert parsed[-1].data["response"]["incomplete_details"] == {
+        "reason": "content_filter"
+    }
+
+
+def _responses_transport_with_raw(raw_payload: bytes) -> ResponsesTransport:
+    transport = ResponsesTransport(
+        ProviderConfig(api_key="test_key", base_url="https://example.invalid/v1"),
+        base_url="https://example.invalid/v1",
+        provider_name="OPENCODE",
+        identity=None,
+        api_key="test_key",
+        rate_limiter=passthrough_rate_limiter(),
+    )
+
+    def _upstream(_request: httpx.Request) -> httpx.Response:
+        async def _body() -> AsyncIterator[bytes]:
+            yield raw_payload
+
+        return httpx.Response(
+            200, content=_body(), headers={"content-type": "text/event-stream"}
+        )
+
+    transport._client = httpx.AsyncClient(transport=httpx.MockTransport(_upstream))
+    return transport
+
+
+class _ResponsesTransportProviderAdapter:
+    credential_label = None
+
+    def __init__(self, transport: ResponsesTransport) -> None:
+        self._transport = transport
+
+    def throttle_remaining(self, model: str | None = None) -> float:
+        return 0.0
+
+    def preflight_stream(
+        self, request: MessagesRequest, *, reasoning: ReasoningPolicy
+    ) -> None:
+        return None
+
+    async def stream_response(
+        self,
+        request: MessagesRequest,
+        *,
+        input_tokens: int = 0,
+        request_id: str | None = None,
+        reasoning: ReasoningPolicy,
+    ) -> AsyncIterator[str]:
+        body, headers = self._transport.build_body(
+            request, reasoning=reasoning, max_output_tokens=64
+        )
+        async for event in self._transport.stream(
+            request,
+            input_tokens=input_tokens,
+            reasoning=reasoning,
+            body=body,
+            headers=headers,
+            surface_label="responses",
+            request_id=request_id,
+        ):
+            yield event
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_payload", "expected_retryable"),
+    [
+        (
+            b'data:{"type":"error","error":{"code":"server_is_overloaded","message":"busy"}}\n\n',
+            True,
+        ),
+        (
+            b'data:{"type":"response.created","response":{"status":"in_progress"}}\n\ndata: [DONE]\n\n',
+            False,
+        ),
+    ],
+    ids=["sse_error_overload_no_space", "created_then_done_empty"],
+)
+async def test_chatgpt_oauth_and_responses_transport_hold_start_and_fallback(
+    raw_payload: bytes, expected_retryable: bool
+) -> None:
+    # 1. ChatGPTOAuthProvider: zero frames emitted and fallback succeeds.
+    oauth_provider = ChatGPTOAuthProvider(
+        _provider_config(),
+        rate_limiter=passthrough_rate_limiter(),
+        account_id="test_account_id",
+    )
+
+    async def _raw_oauth() -> AsyncIterator[bytes]:
+        yield raw_payload
+
+    oauth_resp = MagicMock(status_code=200)
+    oauth_resp.aiter_raw = _raw_oauth
+    oauth_resp.aclose = AsyncMock()
+    oauth_provider._client.build_request = MagicMock(return_value=MagicMock())
+    oauth_provider._client.send = AsyncMock(return_value=oauth_resp)
+
+    with pytest.raises(ExecutionFailure) as oauth_err:
+        async for _ in oauth_provider.stream_response(
+            _messages_request(), request_id="req_oauth_err"
+        ):
+            raise AssertionError("primary must yield zero frames")
+    assert oauth_err.value.kind is FailureKind.UPSTREAM
+    assert oauth_err.value.retryable is expected_retryable
+
+    secondary_oauth = _AnsweringProvider("fallback-model")
+    attempts_oauth: list[RouteAttemptRecord] = []
+    executor_oauth = ProviderExecutor(
+        lambda pid: {"chatgpt_oauth": oauth_provider, "secondary": secondary_oauth}[
+            pid
+        ],
+        token_counter=lambda _m, _s, _t: 7,
+        health=RouteHealthRegistry(eject_after_failures=0),
+    )
+    chunks_oauth = [
+        c
+        async for c in executor_oauth.stream(
+            RoutedMessagesPlan(
+                (
+                    _routed("chatgpt_oauth", "gpt-6-luna"),
+                    _routed("secondary", "fallback-model"),
+                )
+            ),
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload={},
+            request_id="req_oauth_chain",
+            on_attempt_result=attempts_oauth.append,
+        )
+    ]
+    assert "the next model answered" in "".join(chunks_oauth)
+    assert secondary_oauth.stream_calls == 1
+    assert [r.outcome for r in attempts_oauth] == ["failed", "succeeded"]
+    await oauth_provider.cleanup()
+
+    # 2. ResponsesTransport: zero frames emitted, ExecutionFailure classified, fallback succeeds.
+    transport = _responses_transport_with_raw(raw_payload)
+    adapter = _ResponsesTransportProviderAdapter(transport)
+    try:
+        with pytest.raises(ExecutionFailure) as tr_err:
+            async for _ in adapter.stream_response(
+                _messages_request("muse-spark"),
+                request_id="req_tr_err",
+                reasoning=ReasoningPolicy.off(),
+            ):
+                raise AssertionError("ResponsesTransport must yield zero frames")
+        assert tr_err.value.kind is FailureKind.UPSTREAM
+        assert tr_err.value.retryable is expected_retryable
+
+        secondary_tr = _AnsweringProvider("fallback-model")
+        attempts_tr: list[RouteAttemptRecord] = []
+        executor_tr = ProviderExecutor(
+            lambda pid: {"opencode": adapter, "secondary": secondary_tr}[pid],
+            token_counter=lambda _m, _s, _t: 7,
+            health=RouteHealthRegistry(eject_after_failures=0),
+        )
+        chunks_tr = [
+            c
+            async for c in executor_tr.stream(
+                RoutedMessagesPlan(
+                    (
+                        _routed("opencode", "muse-spark"),
+                        _routed("secondary", "fallback-model"),
+                    )
+                ),
+                wire_api="messages",
+                raw_log_label="FULL_PAYLOAD",
+                raw_log_payload={},
+                request_id="req_tr_chain",
+                on_attempt_result=attempts_tr.append,
+            )
+        ]
+        assert "the next model answered" in "".join(chunks_tr)
+        assert secondary_tr.stream_calls == 1
+        assert [r.outcome for r in attempts_tr] == ["failed", "succeeded"]
+    finally:
+        await transport.aclose()
