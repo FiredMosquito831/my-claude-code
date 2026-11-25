@@ -58,7 +58,7 @@ from my_claude_code.cli.harnesses.catalogue_client import (
     print_defaulted_summary,
 )
 from my_claude_code.cli.harnesses.catalogue_documents import (
-    document_on_disk,
+    read_document,
     warn_catalogue_unavailable,
 )
 from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_for
@@ -66,13 +66,27 @@ from my_claude_code.config.atomic_json import (
     write_json_document_atomically_if_changed,
 )
 from my_claude_code.config.harness_base_url import with_root_base_url
-from my_claude_code.config.harnesses import CRUSH_API_KEY_ENV, HarnessSpec
+from my_claude_code.config.harness_inbound_protocol import (
+    apply_inbound_protocol,
+    document_matches_inbound_protocol,
+)
+from my_claude_code.config.harnesses import (
+    CRUSH_API_KEY_ENV,
+    HarnessProtocol,
+    HarnessSpec,
+)
+from my_claude_code.config.model_overrides import current_model_overrides
 from my_claude_code.config.paths import harness_catalogue_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
-from .common import preflight_proxy, run_client_process
+from .common import (
+    preflight_proxy,
+    resolve_launch_inbound_protocol,
+    run_client_process,
+    strip_inbound_protocol_flag,
+)
 
 HARNESS_ID = "crush"
 
@@ -87,13 +101,14 @@ def launch(argv: Sequence[str] | None = None) -> None:
 
     spec = spec_for(HARNESS_ID)
     args = list(sys.argv[1:] if argv is None else argv)
+    flag_override, clean_args = strip_inbound_protocol_flag(spec, args)
     binary_path = resolve_harness_binary(spec)
 
-    if is_passthrough(spec, args):
+    if is_passthrough(spec, clean_args):
         # ``crush login`` and ``--version`` have nothing to do with a provider
         # and must not require a running proxy to answer.
         run_client_process(
-            command=[binary_path, *args],
+            command=[binary_path, *clean_args],
             env=os.environ,
             binary_name=spec.binary,
             display_name=spec.display_name,
@@ -101,6 +116,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
         )
         return
 
+    active_protocol = resolve_launch_inbound_protocol(spec, flag_override, os.environ)
     settings = get_settings()
     proxy_root_url = local_proxy_root_url(settings)
     if error := preflight_proxy(proxy_root_url):
@@ -112,10 +128,13 @@ def launch(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(1)
 
     config_path = write_harness_config(
-        spec, proxy_root_url, settings.anthropic_auth_token
+        spec,
+        proxy_root_url,
+        settings.anthropic_auth_token,
+        inbound_protocol=active_protocol,
     )
     run_client_process(
-        command=[binary_path, *args],
+        command=[binary_path, *clean_args],
         env=build_crush_launcher_env(
             spec=spec,
             config_path=config_path,
@@ -166,7 +185,11 @@ def build_crush_launcher_env(
 
 
 def write_harness_config(
-    spec: HarnessSpec, proxy_root_url: str, auth_token: str
+    spec: HarnessSpec,
+    proxy_root_url: str,
+    auth_token: str,
+    *,
+    inbound_protocol: HarnessProtocol | None = None,
 ) -> Path | None:
     """Refresh Crush's MCC-owned crush.json and return its path.
 
@@ -181,10 +204,19 @@ def write_harness_config(
     if catalogue is None or catalogue.filename is None:
         return None
     config_path = harness_catalogue_path(catalogue.filename)
-    if document_on_disk(config_path, catalogue.document_format):
+    effective_protocol = (
+        inbound_protocol
+        if inbound_protocol is not None
+        else (current_model_overrides().harness_protocol(spec.id) or spec.protocol)
+    )
+    existing = read_document(config_path, catalogue.document_format)
+    if existing is not None and document_matches_inbound_protocol(
+        catalogue.format_id, existing, effective_protocol
+    ):
         # The server writes this document at startup and rewrites it on every
         # catalogue publish, so the file on disk is the current one and this
-        # launch costs no HTTP at all. The fetch below exists to create it.
+        # launch costs no HTTP at all. The fetch below exists to create it or
+        # switch its inbound protocol when an override changed.
         return config_path
     try:
         payload = fetch_catalogue_models(proxy_root_url, auth_token)
@@ -196,7 +228,14 @@ def write_harness_config(
                 file=sys.stderr,
             )
             return None
-        if catalogue.base_url_sentinel is not None:
+        if inbound_protocol is not None or effective_protocol != spec.protocol:
+            document = apply_inbound_protocol(
+                catalogue.format_id,
+                document,
+                effective_protocol,
+                proxy_root_url=proxy_root_url,
+            )
+        elif catalogue.base_url_sentinel is not None:
             document = with_root_base_url(
                 document, catalogue.base_url_sentinel, proxy_root_url
             )

@@ -36,6 +36,7 @@ already owns.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -53,6 +54,7 @@ from pydantic import BaseModel, Field
 from my_claude_code.api.admin_proxy_routes import configured_provider_ids
 from my_claude_code.api.admin_routes import (
     INHERIT_SENTINEL,
+    commit_harness_inbound_protocol,
     commit_harness_surface,
     require_loopback_admin,
 )
@@ -75,6 +77,9 @@ from my_claude_code.application.catalogues import (
     model_entries,
     serialise,
     serialise_sidecar,
+)
+from my_claude_code.application.catalogues.inbound_protocol import (
+    apply_inbound_protocol,
 )
 from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_metadata import ProviderModelInfo
@@ -104,12 +109,15 @@ from my_claude_code.config.harnesses import (
     HarnessSpec,
     SdkHarnessSpec,
     harness_command_lines,
+    harness_spec,
     harness_specs,
+    normalize_inbound_protocol,
     not_yet_cards,
     sdk_harness_specs,
 )
 from my_claude_code.config.mcp_media import mcp_media_document
 from my_claude_code.config.model_overrides import (
+    ModelParameterOverrides,
     current_model_overrides,
     preferred_surface_problem,
 )
@@ -480,14 +488,80 @@ def _harness_surfaces_payload(services: ApiServices) -> dict[str, Any]:
     }
 
 
+class HarnessInboundProtocolPayload(BaseModel):
+    """One launchable coding agent's inbound MCC protocol preference."""
+
+    harness: str
+    protocol: str = ""
+
+
+@router.post("/admin/api/harness-inbound-protocol")
+async def set_harness_inbound_protocol(
+    payload: HarnessInboundProtocolPayload,
+    request: Request,
+    services: ApiServices = Depends(get_services),
+):
+    """Persist one multi-protocol coding agent's inbound MCC endpoint and refresh catalogues."""
+
+    require_loopback_admin(request)
+    harness_id = payload.harness.strip().lower()
+    known = {spec.id for spec in harness_specs()}
+    if not harness_id or harness_id not in known:
+        raise HTTPException(
+            status_code=422, detail=f"Not a coding agent: {payload.harness}"
+        )
+
+    spec = harness_spec(harness_id)
+    if not spec.available or len(spec.switchable_protocols) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{spec.display_name} does not support switching its inbound MCC protocol.",
+        )
+
+    try:
+        target = normalize_inbound_protocol(payload.protocol)
+    except ValueError:
+        valid = ", ".join(str(item) for item in spec.switchable_protocols)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown inbound protocol {payload.protocol!r}. Supported: {valid}.",
+        ) from None
+
+    if target is not None and target not in spec.switchable_protocols:
+        valid = ", ".join(str(item) for item in spec.switchable_protocols)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{spec.display_name} does not support inbound protocol '{target}'. "
+                f"Supported: {valid}."
+            ),
+        )
+
+    await asyncio.to_thread(
+        commit_harness_inbound_protocol,
+        harness_id,
+        str(target) if target is not None else "",
+    )
+    with contextlib.suppress(Exception):
+        await services.admin.reload_providers(
+            reason="harness inbound protocol changed",
+            sweep=False,
+            rebuild_provider_ids=frozenset(),
+        )
+    refreshed = await asyncio.to_thread(_harness_payload)
+    return {"status": "ok", **refreshed}
+
+
 # ------------------------------------------------------------------ harnesses
 
 
 def _harness_payload() -> dict[str, Any]:
     rtk = load_rtk_state()
+    overrides = current_model_overrides()
     return {
         "harnesses": [
-            _harness_entry(spec, rtk.enabled(spec.id)) for spec in harness_specs()
+            _harness_entry(spec, rtk.enabled(spec.id), overrides=overrides)
+            for spec in harness_specs()
         ],
         # 7.118.1: the agents MCC has assessed and does not configure yet,
         # beside the launchable ones because it is the same page's question.
@@ -552,7 +626,12 @@ def _installed_binary_path(spec: HarnessSpec) -> str | None:
     return None
 
 
-def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
+def _harness_entry(
+    spec: HarnessSpec,
+    rtk_enabled: bool,
+    *,
+    overrides: ModelParameterOverrides | None = None,
+) -> dict[str, Any]:
     binary_path = _installed_binary_path(spec)
     # Binary first, and only then the config file: a CLI on PATH is installed
     # whatever its file says, and a file without the CLI is the state the card
@@ -560,6 +639,17 @@ def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
     config_path = (
         None if binary_path is not None else spec.config_probe_path(os.environ)
     )
+    resolved_overrides = (
+        overrides if overrides is not None else current_model_overrides()
+    )
+    raw_override = resolved_overrides.harness_protocol(spec.id)
+    switchable = (
+        spec.switchable_protocols
+        if spec.available and len(spec.switchable_protocols) >= 2
+        else ()
+    )
+    override = raw_override if raw_override in switchable else None
+    active_protocol = override or spec.protocol
     return {
         "id": spec.id,
         "display_name": spec.display_name,
@@ -589,8 +679,19 @@ def _harness_entry(spec: HarnessSpec, rtk_enabled: bool) -> dict[str, Any]:
             {"command": line.command, "help": line.help_text, "kind": line.kind}
             for line in harness_command_lines(spec)
         ],
-        "protocol": str(spec.protocol),
-        "protocol_label": PROTOCOL_LABELS[spec.protocol],
+        "protocol": str(active_protocol),
+        "protocol_label": PROTOCOL_LABELS[active_protocol],
+        "inbound_protocol": str(active_protocol),
+        "default_protocol": str(spec.protocol),
+        "inbound_protocol_override": str(override) if override is not None else "",
+        "switchable_protocols": [
+            {
+                "value": str(proto),
+                "label": PROTOCOL_LABELS[proto],
+                "default": proto == spec.protocol,
+            }
+            for proto in switchable
+        ],
         "speaks": [str(item) for item in spec.effective_speaks()],
         "speaks_labels": [PROTOCOL_LABELS[item] for item in spec.effective_speaks()],
         "summary": spec.summary,
@@ -795,6 +896,7 @@ def _catalogue_models_payload(
         provenance=provenance,
         harness_tiers=harness_tiers,
     )
+    overrides = current_model_overrides()
     catalogues: dict[str, Any] = {}
     for spec in harness_specs():
         catalogue = spec.catalogue
@@ -830,6 +932,11 @@ def _catalogue_models_payload(
                 environ=os.environ,
             )
         )
+        inbound_override = overrides.harness_protocol(spec.id)
+        if inbound_override is not None:
+            document = apply_inbound_protocol(
+                catalogue.format_id, document, inbound_override
+            )
         entry: dict[str, Any] = {
             "format": catalogue.format_id,
             "filename": catalogue.filename,

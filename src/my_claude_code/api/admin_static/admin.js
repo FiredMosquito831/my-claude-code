@@ -32014,6 +32014,105 @@ function harnessMeta(harness) {
     return meta;
   }
 
+  let protocolDetailEl = null;
+  const appendMetaRow = (label, value) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    meta.append(term, detail);
+    if (label === "Protocol") {
+      protocolDetailEl = detail;
+    }
+  };
+  const appendInboundProtocolRow = () => {
+    if (
+      harness.available === false ||
+      !Array.isArray(harness.switchable_protocols) ||
+      harness.switchable_protocols.length < 2
+    ) {
+      return;
+    }
+    const term = document.createElement("dt");
+    term.textContent = "Inbound endpoint";
+    const detail = document.createElement("dd");
+    detail.className = "agent-inbound-protocol";
+    const select = document.createElement("select");
+    select.className = "agent-inbound-protocol-select";
+    select.setAttribute(
+      "aria-label",
+      `Inbound MCC endpoint for ${harness.display_name || harness.id}`,
+    );
+    const defaultEntry = harness.switchable_protocols.find((opt) => opt.default);
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = defaultEntry
+      ? `Default (${defaultEntry.label})`
+      : "Default";
+    select.append(defaultOpt);
+    harness.switchable_protocols.forEach((opt) => {
+      const option = document.createElement("option");
+      option.value = opt.value;
+      option.textContent = opt.label;
+      select.append(option);
+    });
+    select.value = harness.inbound_protocol_override || "";
+
+    const feedback = document.createElement("span");
+    feedback.className = "agent-inbound-protocol-feedback field-description";
+    feedback.setAttribute("role", "status");
+    feedback.setAttribute("aria-live", "polite");
+
+    select.addEventListener("change", async () => {
+      const selected = select.value;
+      select.disabled = true;
+      feedback.textContent = "Saving…";
+      try {
+        const updated = await api("/admin/api/harness-inbound-protocol", {
+          method: "POST",
+          body: JSON.stringify({
+            harness: harness.id,
+            protocol: selected,
+          }),
+        });
+        if (updated && Array.isArray(updated.harnesses)) {
+          state.harnesses = updated.harnesses;
+          const refreshed = updated.harnesses.find((item) => item.id === harness.id);
+          if (refreshed) {
+            harness.protocol = refreshed.protocol;
+            harness.protocol_label = refreshed.protocol_label;
+            harness.inbound_protocol = refreshed.inbound_protocol;
+            harness.inbound_protocol_override = refreshed.inbound_protocol_override;
+          }
+        } else {
+          const matched = harness.switchable_protocols.find(
+            (opt) => opt.value === selected,
+          );
+          const nextEntry = matched || defaultEntry;
+          if (nextEntry) {
+            harness.protocol = nextEntry.value;
+            harness.protocol_label = nextEntry.label;
+            harness.inbound_protocol = nextEntry.value;
+          }
+          harness.inbound_protocol_override = selected;
+        }
+        if (protocolDetailEl && harness.protocol_label) {
+          protocolDetailEl.textContent = harness.protocol_label;
+        }
+        select.value = harness.inbound_protocol_override || "";
+        feedback.textContent = "Saved";
+      } catch (error) {
+        select.value = harness.inbound_protocol_override || "";
+        feedback.textContent = error.message || "Could not save";
+      } finally {
+        select.disabled = false;
+      }
+    });
+
+    detail.append(select, feedback);
+    meta.append(term, detail);
+  };
+
   if (!catalogue) {
     rows.push(["Model list", "Fetched by the agent itself from /v1/models"]);
   } else if (catalogue.delivery === "process_local") {
@@ -32091,11 +32190,10 @@ function harnessMeta(harness) {
   }
 
   rows.forEach(([label, value]) => {
-    const term = document.createElement("dt");
-    term.textContent = label;
-    const detail = document.createElement("dd");
-    detail.textContent = value;
-    meta.append(term, detail);
+    appendMetaRow(label, value);
+    if (label === "Protocol") {
+      appendInboundProtocolRow();
+    }
   });
 
   if (catalogue && catalogue.defaulted_model_count) {

@@ -62,13 +62,19 @@ from my_claude_code.config.constants import (
     PROMPT_CACHE_TTL_MIN_MINUTES,
     SDK_HARNESS_IDS,
 )
-from my_claude_code.config.harnesses import harness_ids
+from my_claude_code.config.harnesses import (
+    HarnessProtocol,
+    harness_ids,
+    harness_spec,
+    normalize_inbound_protocol,
+)
 from my_claude_code.config.marketplace_profiles import profile_name_problem
 from my_claude_code.config.paths import model_overrides_path
 
 PROVIDERS_KEY = "providers"
 MODELS_KEY = "models"
 HARNESS_SURFACES_KEY = "harness_surfaces"
+HARNESS_PROTOCOLS_KEY = "harness_protocols"
 
 # Real request fields only. Adding to this list makes a parameter settable;
 # nothing else about it has to change.
@@ -339,12 +345,18 @@ class ModelParameterOverrides:
     providers: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     models: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     harness_surfaces: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    harness_protocols: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
         """Whether this table can change any request at all."""
 
-        return not self.providers and not self.models and not self.harness_surfaces
+        return (
+            not self.providers
+            and not self.models
+            and not self.harness_surfaces
+            and not self.harness_protocols
+        )
 
     @classmethod
     def from_document(cls, document: object) -> Self:
@@ -360,6 +372,9 @@ class ModelParameterOverrides:
             models=_parse_section(document.get(MODELS_KEY), MODELS_KEY),
             harness_surfaces=_parse_harness_surfaces(
                 document.get(HARNESS_SURFACES_KEY)
+            ),
+            harness_protocols=_parse_harness_protocols(
+                document.get(HARNESS_PROTOCOLS_KEY)
             ),
         )
 
@@ -553,6 +568,19 @@ class ModelParameterOverrides:
             normalize_override_key(provider_id)
         )
 
+    def harness_protocol(self, harness_id: str | None) -> HarnessProtocol | None:
+        """Return the persisted inbound MCC protocol override for ``harness_id``, or ``None``."""
+
+        if not harness_id:
+            return None
+        raw = self.harness_protocols.get(normalize_override_key(harness_id))
+        if not raw:
+            return None
+        try:
+            return normalize_inbound_protocol(raw)
+        except ValueError:
+            return None
+
     def as_document(self) -> dict[str, dict[str, Any]]:
         """Render back to the on-disk shape."""
 
@@ -564,10 +592,94 @@ class ModelParameterOverrides:
             document[HARNESS_SURFACES_KEY] = {
                 key: dict(value) for key, value in self.harness_surfaces.items()
             }
+        if self.harness_protocols:
+            document[HARNESS_PROTOCOLS_KEY] = dict(self.harness_protocols)
         return document
 
 
 EMPTY_MODEL_OVERRIDES = ModelParameterOverrides()
+
+
+def with_harness_protocol_row(
+    overrides: ModelParameterOverrides,
+    *,
+    harness: str,
+    protocol: HarnessProtocol | str | None,
+) -> ModelParameterOverrides:
+    """Return a copy of ``overrides`` with one harness's inbound protocol set or cleared."""
+
+    folded_harness = normalize_override_key(harness)
+    table = dict(overrides.harness_protocols)
+    if isinstance(protocol, HarnessProtocol):
+        parsed: HarnessProtocol | None = protocol
+    else:
+        parsed = normalize_inbound_protocol(protocol)
+    if parsed is None:
+        table.pop(folded_harness, None)
+    else:
+        table[folded_harness] = str(parsed)
+    return replace(overrides, harness_protocols=table)
+
+
+def _parse_harness_protocols(section: object) -> dict[str, str]:
+    if section is None:
+        return {}
+    if not isinstance(section, Mapping):
+        logger.warning(
+            "MODEL OVERRIDES: '{}' is not an object; ignoring it",
+            HARNESS_PROTOCOLS_KEY,
+        )
+        return {}
+    known = {normalize_override_key(item) for item in harness_ids()}
+    parsed: dict[str, str] = {}
+    for raw_harness, raw_protocol in section.items():
+        harness_id = normalize_override_key(str(raw_harness))
+        if not harness_id:
+            continue
+        if harness_id not in known:
+            logger.warning(
+                "MODEL OVERRIDES: '{}.{}' is not a known launchable coding agent; ignoring it",
+                HARNESS_PROTOCOLS_KEY,
+                harness_id,
+            )
+            continue
+        if not isinstance(raw_protocol, str):
+            logger.warning(
+                "MODEL OVERRIDES: '{}.{}' must be a protocol name string; ignoring it",
+                HARNESS_PROTOCOLS_KEY,
+                harness_id,
+            )
+            continue
+        try:
+            resolved = normalize_inbound_protocol(raw_protocol)
+        except ValueError:
+            logger.warning(
+                "MODEL OVERRIDES: '{}.{}' has unknown inbound protocol {!r}; ignoring it",
+                HARNESS_PROTOCOLS_KEY,
+                harness_id,
+                raw_protocol,
+            )
+            continue
+        if resolved is None:
+            continue
+        spec = harness_spec(harness_id)
+        if not spec.available or len(spec.switchable_protocols) < 2:
+            logger.warning(
+                "MODEL OVERRIDES: '{}.{}' does not support switching inbound protocol; ignoring it",
+                HARNESS_PROTOCOLS_KEY,
+                harness_id,
+            )
+            continue
+        if resolved not in spec.switchable_protocols:
+            logger.warning(
+                "MODEL OVERRIDES: '{}.{}' does not support inbound protocol '{}'; ignoring it",
+                HARNESS_PROTOCOLS_KEY,
+                harness_id,
+                resolved,
+            )
+            continue
+        parsed[harness_id] = str(resolved)
+    return parsed
 
 
 def with_harness_surface_row(

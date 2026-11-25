@@ -171,6 +171,7 @@ from my_claude_code.config.model_overrides import (
     load_model_overrides,
     normalize_override_key,
     save_model_overrides,
+    with_harness_protocol_row,
     with_harness_surface_row,
 )
 from my_claude_code.config.model_refs import (
@@ -2823,6 +2824,20 @@ def commit_harness_surface(harness_id: str, provider_id: str, surface: str) -> N
                 harness=harness_id,
                 provider_id=provider_id,
                 surface=surface or None,
+            )
+        )
+
+
+def commit_harness_inbound_protocol(harness_id: str, protocol: str) -> None:
+    """Persist one launchable agent's inbound MCC protocol preference atomically."""
+
+    with _HARNESS_SURFACE_WRITE_LOCK:
+        current = load_model_overrides()
+        save_model_overrides(
+            with_harness_protocol_row(
+                current,
+                harness=harness_id,
+                protocol=protocol or None,
             )
         )
 

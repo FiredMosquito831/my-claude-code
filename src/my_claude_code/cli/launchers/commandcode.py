@@ -47,15 +47,23 @@ from my_claude_code.config.harness_config_merge import (
     remove_owned_block,
     with_base_url,
 )
+from my_claude_code.config.harness_inbound_protocol import apply_inbound_protocol
 from my_claude_code.config.harnesses import (
     COMMANDCODE_API_KEY_ENV,
+    HarnessProtocol,
     HarnessSpec,
 )
+from my_claude_code.config.model_overrides import current_model_overrides
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
-from .common import preflight_proxy, run_client_process
+from .common import (
+    preflight_proxy,
+    resolve_launch_inbound_protocol,
+    run_client_process,
+    strip_inbound_protocol_flag,
+)
 
 HARNESS_ID = "commandcode_cli"
 
@@ -80,13 +88,14 @@ def launch(argv: Sequence[str] | None = None) -> None:
     if DISCONNECT_FLAG in args:
         raise SystemExit(disconnect(spec))
 
+    flag_override, clean_args = strip_inbound_protocol_flag(spec, args)
     binary_path = resolve_harness_binary(spec)
 
-    if is_passthrough(spec, args):
+    if is_passthrough(spec, clean_args):
         # ``command-code update`` and ``--version`` have nothing to do with a
         # provider and must not require a running proxy to answer.
         run_client_process(
-            command=[binary_path, *args],
+            command=[binary_path, *clean_args],
             env=os.environ,
             binary_name=spec.binary,
             display_name=spec.display_name,
@@ -94,6 +103,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
         )
         return
 
+    active_protocol = resolve_launch_inbound_protocol(spec, flag_override, os.environ)
     settings = get_settings()
     proxy_root_url = local_proxy_root_url(settings)
     if error := preflight_proxy(proxy_root_url):
@@ -104,9 +114,14 @@ def launch(argv: Sequence[str] | None = None) -> None:
         print("Start it in another terminal with: mcc-server", file=sys.stderr)
         raise SystemExit(1)
 
-    merged = merge_provider_block(spec, proxy_root_url, settings.anthropic_auth_token)
+    merged = merge_provider_block(
+        spec,
+        proxy_root_url,
+        settings.anthropic_auth_token,
+        inbound_protocol=active_protocol,
+    )
     run_client_process(
-        command=[binary_path, *args],
+        command=[binary_path, *clean_args],
         env=build_commandcode_launcher_env(
             merged=merged,
             auth_token=settings.anthropic_auth_token,
@@ -136,7 +151,11 @@ def config_path_for(spec: HarnessSpec, env: Mapping[str, str] | None = None) -> 
 
 
 def merge_provider_block(
-    spec: HarnessSpec, proxy_root_url: str, auth_token: str
+    spec: HarnessSpec,
+    proxy_root_url: str,
+    auth_token: str,
+    *,
+    inbound_protocol: HarnessProtocol | None = None,
 ) -> bool:
     """Write MCC's one key into the user's providers.json.
 
@@ -151,6 +170,11 @@ def merge_provider_block(
     catalogue = spec.catalogue
     if catalogue is None or catalogue.merge is None:
         return False
+    target_protocol = (
+        inbound_protocol
+        if inbound_protocol is not None
+        else current_model_overrides().harness_protocol(spec.id)
+    )
     try:
         payload = fetch_catalogue_models(proxy_root_url, auth_token)
         document = harness_catalogue(payload, spec.id)
@@ -161,6 +185,13 @@ def merge_provider_block(
                 file=sys.stderr,
             )
             return False
+        if target_protocol is not None:
+            document = apply_inbound_protocol(
+                catalogue.format_id,
+                document,
+                target_protocol,
+                proxy_root_url=proxy_root_url,
+            )
         block = with_base_url(
             owned_block(document, catalogue.merge.owned_key_path), proxy_root_url
         )

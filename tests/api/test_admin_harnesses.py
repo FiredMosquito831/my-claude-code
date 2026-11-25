@@ -677,6 +677,16 @@ HARNESS_ENTRY_KEYS = frozenset(
     }
 )
 
+#: Additive per-harness inbound-protocol fields added in 8.50.0 (EM-PR5).
+INBOUND_PROTOCOL_ENTRY_KEYS = frozenset(
+    {
+        "default_protocol",
+        "inbound_protocol",
+        "inbound_protocol_override",
+        "switchable_protocols",
+    }
+)
+
 #: What a not-yet card carries: prose from the registry and nothing else. No
 #: path, no probe, no setting -- there is nothing about this agent MCC reads.
 NOT_YET_CARD_KEYS = frozenset(
@@ -781,7 +791,9 @@ def test_the_harnesses_payload_gained_one_key_and_no_entry_changed_shape(
     assert len(body["harnesses"]) == len(harness_ids())
     assert [entry["id"] for entry in body["harnesses"]] == list(harness_ids())
     for entry in body["harnesses"]:
-        assert set(entry) == HARNESS_ENTRY_KEYS, entry["id"]
+        assert set(entry) == HARNESS_ENTRY_KEYS | INBOUND_PROTOCOL_ENTRY_KEYS, entry[
+            "id"
+        ]
         assert entry["protocol"] in entry["speaks"], entry["id"]
         assert len(entry["speaks"]) == len(entry["speaks_labels"]) >= 1
     by_id = {entry["id"]: entry for entry in body["harnesses"]}

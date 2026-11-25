@@ -57,6 +57,10 @@ from my_claude_code.application.catalogue_snapshot import (
     store_catalogue_snapshot,
 )
 from my_claude_code.application.catalogues import serialise, serialise_sidecar
+from my_claude_code.application.catalogues.inbound_protocol import (
+    apply_inbound_protocol,
+    inbound_protocol_base_url_shape,
+)
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.atomic_json import write_json_document_atomically_if_changed
 from my_claude_code.config.harness_attribution import with_harness_id
@@ -86,6 +90,7 @@ from my_claude_code.config.harnesses import (
     harness_specs,
 )
 from my_claude_code.config.mcp_media import mcp_media_document
+from my_claude_code.config.model_overrides import current_model_overrides
 from my_claude_code.config.paths import harness_catalogue_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
@@ -199,6 +204,7 @@ class HarnessCatalogueFanoutPublisher:
                 sentinel=merge.base_url_sentinel,
                 preserve_bytes=merge.preserve_bytes,
                 document_format=merge.document_format,
+                accept_root=bool(spec.switchable_protocols),
             ):
                 return True
             logger.debug(
@@ -245,6 +251,14 @@ class HarnessCatalogueFanoutPublisher:
                     environ=os.environ,
                 )
             )
+            inbound_override = current_model_overrides().harness_protocol(spec.id)
+            if inbound_override is not None:
+                document = apply_inbound_protocol(
+                    catalogue.format_id,
+                    document,
+                    inbound_override,
+                    proxy_root_url=proxy_root_url,
+                )
             if catalogue.merge is not None:
                 merge = catalogue.merge
                 if merge.preserve_bytes:
@@ -299,11 +313,14 @@ class HarnessCatalogueFanoutPublisher:
                     # shape it takes is the harness's own: an Anthropic SDK
                     # appends ``/v1/messages`` to a root, an OpenAI one
                     # appends ``chat/completions`` to ``<root>/v1``.
-                    resolve = (
-                        with_v1_base_url
-                        if catalogue.base_url_shape == "v1"
-                        else with_root_base_url
+                    shape = (
+                        inbound_protocol_base_url_shape(
+                            catalogue.format_id, inbound_override
+                        )
+                        if inbound_override is not None
+                        else catalogue.base_url_shape
                     )
+                    resolve = with_v1_base_url if shape == "v1" else with_root_base_url
                     document = resolve(
                         document, catalogue.base_url_sentinel, proxy_root_url
                     )

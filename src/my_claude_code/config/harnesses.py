@@ -471,6 +471,38 @@ PROTOCOL_LABELS: dict[HarnessProtocol, str] = {
     ),
 }
 
+#: Normalized aliases accepted by ``--inbound-protocol``, ``MCC_INBOUND_PROTOCOL``,
+#: ``model_overrides.json`` (``harness_protocols``), and the admin API.
+INBOUND_PROTOCOL_ALIASES: dict[str, HarnessProtocol] = {
+    "anthropic_messages": HarnessProtocol.ANTHROPIC_MESSAGES,
+    "messages": HarnessProtocol.ANTHROPIC_MESSAGES,
+    "openai_responses": HarnessProtocol.OPENAI_RESPONSES,
+    "responses": HarnessProtocol.OPENAI_RESPONSES,
+    "openai_chat_completions": HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+    "chat_completions": HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+    "chat": HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+    "gemini": HarnessProtocol.GEMINI,
+}
+
+
+def normalize_inbound_protocol(raw: str | None) -> HarnessProtocol | None:
+    """Parse an inbound protocol string (canonical or friendly alias).
+
+    Returns ``None`` when ``raw`` is empty, ``"auto"``, or ``"default"``
+    (meaning: use the harness's built-in default :attr:`HarnessSpec.protocol`).
+    Raises :class:`ValueError` on any unrecognized non-empty value.
+    """
+
+    if raw is None:
+        return None
+    cleaned = raw.strip().casefold().replace("-", "_")
+    if not cleaned or cleaned in {"auto", "default"}:
+        return None
+    resolved = INBOUND_PROTOCOL_ALIASES.get(cleaned)
+    if resolved is None:
+        raise ValueError(f"unknown inbound protocol: {raw!r}")
+    return resolved
+
 
 @dataclass(frozen=True, slots=True)
 class HarnessInvocation:
@@ -925,11 +957,22 @@ class HarnessSpec:
     #: Empty means only :attr:`protocol` is verified; callers read
     #: :meth:`effective_speaks`.
     speaks: tuple[HarnessProtocol, ...] = ()
+    #: Inbound MCC endpoints this agent's launcher can switch between using
+    #: MCC's local proxy auth alone (no external OAuth). Empty means fixed to
+    #: :attr:`protocol`. Callers read :meth:`launchable_inbound_protocols`.
+    switchable_protocols: tuple[HarnessProtocol, ...] = ()
 
     def effective_speaks(self) -> tuple[HarnessProtocol, ...]:
         """Return every inbound wire protocol this agent natively speaks."""
 
         return self.speaks or (self.protocol,)
+
+    def launchable_inbound_protocols(self) -> tuple[HarnessProtocol, ...]:
+        """Return every inbound MCC protocol this launcher can target."""
+
+        if len(self.switchable_protocols) >= 2:
+            return self.switchable_protocols
+        return (self.protocol,)
 
     @property
     def command(self) -> str:
@@ -1136,6 +1179,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessProtocol.OPENAI_RESPONSES,
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         ),
+        switchable_protocols=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint="Install OpenCode with: npm install -g opencode-ai",
         install_methods=OPENCODE_METHODS,
         commands=(
@@ -1182,6 +1230,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         # application/catalogues/opencode.py (v2 uses the same config schema & AI SDK providers)
         speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
+        switchable_protocols=(
             HarnessProtocol.ANTHROPIC_MESSAGES,
             HarnessProtocol.OPENAI_RESPONSES,
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
@@ -1233,6 +1286,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessProtocol.OPENAI_RESPONSES,
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         ),
+        switchable_protocols=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint="Install Kilo CLI with: npm install -g @kilocode/cli",
         install_methods=KILO_METHODS,
         commands=(
@@ -1279,6 +1337,10 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         # application/catalogues/commandcode.py:10 ("openai-completions" | "anthropic-messages")
         speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
+        switchable_protocols=(
             HarnessProtocol.ANTHROPIC_MESSAGES,
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         ),
@@ -1374,6 +1436,10 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         # application/catalogues/openclaw.py:14,74-77 ("openai-completions" | "anthropic-messages")
         speaks=(
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+        ),
+        switchable_protocols=(
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
             HarnessProtocol.ANTHROPIC_MESSAGES,
         ),
@@ -1509,6 +1575,10 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
             HarnessProtocol.ANTHROPIC_MESSAGES,
             HarnessProtocol.OPENAI_RESPONSES,
+        ),
+        switchable_protocols=(
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+            HarnessProtocol.ANTHROPIC_MESSAGES,
         ),
         # A Python tool on PyPI (``hermes-agent``), and its own config code
         # lists ``pip`` and ``homebrew`` as *unsupported* install methods
@@ -1812,6 +1882,10 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         # application/catalogues/crush.py:14-16 ("anthropic" | "openai-compat" / "openai")
         speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
+        switchable_protocols=(
             HarnessProtocol.ANTHROPIC_MESSAGES,
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         ),
@@ -2141,6 +2215,10 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
         # application/catalogues/droid.py:6-16 ("anthropic" | "generic-chat-completion-api")
         speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
+        switchable_protocols=(
             HarnessProtocol.ANTHROPIC_MESSAGES,
             HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
         ),

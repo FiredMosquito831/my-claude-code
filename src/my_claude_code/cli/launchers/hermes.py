@@ -60,18 +60,26 @@ from my_claude_code.config.harness_config_merge import (
     read_text_document,
     unconfigure_owned_block,
 )
+from my_claude_code.config.harness_inbound_protocol import apply_inbound_protocol
 from my_claude_code.config.harnesses import (
     HERMES_API_KEY_ENV,
     HarnessCatalogue,
     HarnessConfigMerge,
+    HarnessProtocol,
     HarnessSpec,
 )
+from my_claude_code.config.model_overrides import current_model_overrides
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.restore_record import UndoMode
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
-from .common import preflight_proxy, run_client_process
+from .common import (
+    preflight_proxy,
+    resolve_launch_inbound_protocol,
+    run_client_process,
+    strip_inbound_protocol_flag,
+)
 
 HARNESS_ID = "hermes"
 
@@ -104,13 +112,14 @@ def launch(argv: Sequence[str] | None = None) -> None:
     if MODELS_FLAG in args:
         raise SystemExit(list_models(spec))
 
+    flag_override, clean_args = strip_inbound_protocol_flag(spec, args)
     binary_path = resolve_harness_binary(spec)
 
-    if is_passthrough(spec, args):
+    if is_passthrough(spec, clean_args):
         # ``hermes config``, ``sessions``, ``--version``: nothing to do with a
         # provider, and they must answer without a running proxy.
         run_client_process(
-            command=[binary_path, *args],
+            command=[binary_path, *clean_args],
             env=os.environ,
             binary_name=spec.binary,
             display_name=spec.display_name,
@@ -118,6 +127,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
         )
         return
 
+    active_protocol = resolve_launch_inbound_protocol(spec, flag_override, os.environ)
     settings = get_settings()
     proxy_root_url = local_proxy_root_url(settings)
     if error := preflight_proxy(proxy_root_url):
@@ -128,9 +138,14 @@ def launch(argv: Sequence[str] | None = None) -> None:
         print("Start it in another terminal with: mcc-server", file=sys.stderr)
         raise SystemExit(1)
 
-    merged = write_provider_block(spec, proxy_root_url, settings.anthropic_auth_token)
+    merged = write_provider_block(
+        spec,
+        proxy_root_url,
+        settings.anthropic_auth_token,
+        inbound_protocol=active_protocol,
+    )
     run_client_process(
-        command=[binary_path, *args],
+        command=[binary_path, *clean_args],
         env=build_hermes_launcher_env(
             merged=merged,
             auth_token=settings.anthropic_auth_token,
@@ -167,7 +182,11 @@ def config_path_for(spec: HarnessSpec, env: Mapping[str, str] | None = None) -> 
 
 
 def write_provider_block(
-    spec: HarnessSpec, proxy_root_url: str, auth_token: str
+    spec: HarnessSpec,
+    proxy_root_url: str,
+    auth_token: str,
+    *,
+    inbound_protocol: HarnessProtocol | None = None,
 ) -> bool:
     """Write MCC's block into the user's config.yaml.
 
@@ -179,6 +198,11 @@ def write_provider_block(
     """
 
     merge = _merge_parts(spec)
+    target_protocol = (
+        inbound_protocol
+        if inbound_protocol is not None
+        else current_model_overrides().harness_protocol(spec.id)
+    )
     try:
         payload = fetch_catalogue_models(proxy_root_url, auth_token)
         document = harness_catalogue(payload, spec.id)
@@ -189,6 +213,13 @@ def write_provider_block(
                 file=sys.stderr,
             )
             return False
+        if target_protocol is not None and spec.catalogue is not None:
+            document = apply_inbound_protocol(
+                spec.catalogue.format_id,
+                document,
+                target_protocol,
+                proxy_root_url=proxy_root_url,
+            )
         result = configure_owned_block(
             merge=merge,
             path=config_path_for(spec),

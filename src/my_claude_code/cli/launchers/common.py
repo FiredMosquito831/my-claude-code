@@ -3,7 +3,7 @@
 import shutil
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -13,9 +13,117 @@ from my_claude_code.cli.process_registry import (
     register_pid,
     unregister_pid,
 )
+from my_claude_code.config.harnesses import (
+    HarnessProtocol,
+    HarnessSpec,
+    normalize_inbound_protocol,
+)
+from my_claude_code.config.model_overrides import current_model_overrides
 
 PROXY_PREFLIGHT_PATH = "/health"
 PROXY_PREFLIGHT_TIMEOUT_SECONDS = 1.5
+INBOUND_PROTOCOL_FLAG = "--inbound-protocol"
+INBOUND_PROTOCOL_ENV = "MCC_INBOUND_PROTOCOL"
+
+
+@dataclass(frozen=True, slots=True)
+class InboundProtocolOverride:
+    """Explicit per-launch inbound protocol request (``None`` means use default)."""
+
+    protocol: HarnessProtocol | None
+
+
+def _invalid_inbound_protocol(spec: HarnessSpec, raw: str) -> SystemExit:
+    valid = ", ".join(str(p) for p in spec.launchable_inbound_protocols())
+    print(
+        f"My Claude Code: invalid {INBOUND_PROTOCOL_FLAG} value {raw!r} for "
+        f"{spec.display_name}. Supported: {valid} (or 'default').",
+        file=sys.stderr,
+    )
+    return SystemExit(2)
+
+
+def strip_inbound_protocol_flag(
+    spec: HarnessSpec, argv: Sequence[str]
+) -> tuple[InboundProtocolOverride | None, list[str]]:
+    """Extract and validate ``--inbound-protocol`` before any ``--`` separator."""
+
+    args = list(argv)
+    try:
+        separator_index = args.index("--")
+    except ValueError:
+        separator_index = len(args)
+
+    leading = args[:separator_index]
+    trailing = args[separator_index:]
+    cleaned: list[str] = []
+    raw_value: str | None = None
+    index = 0
+    while index < len(leading):
+        arg = leading[index]
+        if arg == INBOUND_PROTOCOL_FLAG:
+            if index + 1 >= len(leading):
+                print(
+                    f"My Claude Code: {INBOUND_PROTOCOL_FLAG} requires a value.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+            raw_value = leading[index + 1]
+            index += 2
+            continue
+        if arg.startswith(f"{INBOUND_PROTOCOL_FLAG}="):
+            raw_value = arg.split("=", 1)[1]
+            if not raw_value.strip():
+                print(
+                    f"My Claude Code: {INBOUND_PROTOCOL_FLAG} requires a value.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+            index += 1
+            continue
+        cleaned.append(arg)
+        index += 1
+
+    cleaned.extend(trailing)
+    if raw_value is None:
+        return None, cleaned
+
+    try:
+        parsed = normalize_inbound_protocol(raw_value)
+    except ValueError:
+        raise _invalid_inbound_protocol(spec, raw_value) from None
+    if parsed is not None and parsed not in spec.launchable_inbound_protocols():
+        raise _invalid_inbound_protocol(spec, raw_value)
+    return InboundProtocolOverride(protocol=parsed), cleaned
+
+
+def resolve_launch_inbound_protocol(
+    spec: HarnessSpec,
+    flag_override: InboundProtocolOverride | None,
+    env: Mapping[str, str],
+) -> HarnessProtocol | None:
+    """Resolve active inbound protocol override: CLI flag > env var > model_overrides."""
+
+    if flag_override is not None:
+        return (
+            flag_override.protocol
+            if flag_override.protocol is not None
+            else spec.protocol
+        )
+
+    raw_env = env.get(INBOUND_PROTOCOL_ENV, "").strip()
+    if raw_env:
+        try:
+            parsed = normalize_inbound_protocol(raw_env)
+        except ValueError:
+            raise _invalid_inbound_protocol(spec, raw_env) from None
+        if parsed is None:
+            return spec.protocol
+        if parsed not in spec.launchable_inbound_protocols():
+            raise _invalid_inbound_protocol(spec, raw_env)
+        return parsed
+
+    return current_model_overrides().harness_protocol(spec.id)
 
 
 @dataclass(frozen=True, slots=True)

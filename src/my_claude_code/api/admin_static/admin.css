@@ -9959,6 +9959,22 @@ audio.req-media-preview {
   font-size: 12px;
 }
 
+.agent-inbound-protocol {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-inbound-protocol-select {
+  min-width: 190px;
+  max-width: 100%;
+}
+
+.agent-inbound-protocol-feedback {
+  font-size: 12px;
+}
+
 .agent-surfaces-speaks-hint {
   margin: 0 0 10px;
 }
