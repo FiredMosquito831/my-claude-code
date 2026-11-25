@@ -4901,6 +4901,15 @@ if (process.env.MCC_JSDOM_SCENARIO === "endpoint_readouts") {
   );
   scenario = prepareEndpointReadoutsScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=sdk_harnesses_and_speaks (v8.49.0, PR 12): Coding agents
+   Speaks row, native-protocol compatibility hint, Q8 all-doors dropdown, and
+   non-registry SDK client cards. */
+if (process.env.MCC_JSDOM_SCENARIO === "sdk_harnesses_and_speaks") {
+  const { prepareSdkHarnessesAndSpeaksScenario } = await import(
+    "./admin_jsdom_sdk_speaks.mjs"
+  );
+  scenario = prepareSdkHarnessesAndSpeaksScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=ux_views (7.122.3): every view's DOM digests, for the
    base-tree equality of the UX pass -- the same scenario runs on the base
    tree and here (admin_jsdom_ux_views.mjs). */

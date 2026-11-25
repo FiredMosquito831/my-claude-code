@@ -15702,3 +15702,60 @@ def test_jsdom_endpoint_readouts_cards_modals_and_models_sync(
         "key": "commandcode",
         "surface": "responses",
     }
+
+
+@pytest.fixture(scope="module")
+def sdk_harnesses_and_speaks_ui() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="sdk_harnesses_and_speaks")
+
+
+def test_jsdom_sdk_harnesses_and_speaks_ui_q8_and_xss(
+    sdk_harnesses_and_speaks_ui: dict,
+) -> None:
+    assert sdk_harnesses_and_speaks_ui["fatal"] is None
+    assert sdk_harnesses_and_speaks_ui.get("scenarioError") is None
+    assert sdk_harnesses_and_speaks_ui["scriptErrors"] == []
+    assert sdk_harnesses_and_speaks_ui["consoleErrors"] == []
+
+    initial = sdk_harnesses_and_speaks_ui["initial"]
+    assert initial["launchableCount"] == 15
+    assert initial["sdkCardIds"] == ["claude_agent_sdk", "openai_sdk", "xss_sdk"]
+    assert initial["sdkCardsHaveCodingAgentClass"] is False
+    assert initial["sdkCardsHaveDataHarness"] is False
+    assert "Protocol" in initial["opencodeMeta"]
+    assert "OpenAI Responses" in initial["opencodeMeta"]["Speaks"]
+    assert "OpenAI Chat Completions" in initial["opencodeMeta"]["Speaks"]
+
+    # Q8: Anthropic-only agents still offer ALL valid MCC-translated provider doors!
+    assert "Agent natively speaks:" in initial["claudeSpeaksHint"]
+    assert "MCC translates" in initial["claudeSpeaksHint"]
+    assert initial["claudeCcOptions"] == ["", "chat_completions", "responses"]
+
+    assert initial["sdkBadge"] == "SDK client · attribution"
+    assert initial["sdkMeta"]["Requests (7d)"] == "31"
+    assert "Anthropic Messages" in initial["sdkMeta"]["Speaks"]
+    assert "Agent natively speaks:" in initial["sdkSpeaksHint"]
+    assert initial["sdkCcOptions"] == ["", "chat_completions", "responses"]
+
+    # XSS hygiene on SDK display_name & summary
+    assert "Hostile" in initial["xssTitleText"]
+    assert initial["xssInjectedCount"] == 0
+    assert initial["xssGlobalFlag"] == ""
+
+    after_save = sdk_harnesses_and_speaks_ui["afterSave"]
+    assert after_save["feedbackText"] == "Saved"
+    assert after_save["selectValue"] == "chat_completions"
+    assert "Preferred: Chat Completions" in after_save["statusText"]
+
+    after_filter = sdk_harnesses_and_speaks_ui["afterFilter"]
+    assert after_filter["visibleSdkIds"] == ["claude_agent_sdk"]
+    assert after_filter["visibleLaunchableIds"] == []
+
+    posts = sdk_harnesses_and_speaks_ui["posts"]
+    assert len(posts) == 1
+    assert posts[0]["path"] == "/admin/api/harness-surfaces"
+    assert json.loads(posts[0]["body"]) == {
+        "harness": "claude_agent_sdk",
+        "provider": "commandcode",
+        "surface": "chat_completions",
+    }

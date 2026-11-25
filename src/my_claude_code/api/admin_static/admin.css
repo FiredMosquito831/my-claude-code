@@ -9959,6 +9959,45 @@ audio.req-media-preview {
   font-size: 12px;
 }
 
+.agent-surfaces-speaks-hint {
+  margin: 0 0 10px;
+}
+
+.sdk-agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.sdk-agent-card .agent-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sdk-agent-card h4 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+.sdk-agent-card .agent-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.agent-state.sdk-client {
+  color: var(--text);
+  border-color: var(--accent-border);
+}
+
 /* 7.113.3: the Coding agents page's filter box. One bar above both card
    groups (CLI agents and desktop apps). Filtering hides cards with the
    `hidden` attribute and never removes one, the same choice the Providers

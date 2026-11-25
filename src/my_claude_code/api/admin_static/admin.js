@@ -29478,6 +29478,13 @@ function renderHarnesses(errorMessage) {
     card.append(agentInstallHost(harness.id));
     list.append(card);
   });
+  const sdkHarnesses =
+    state.harnessSurfaces && Array.isArray(state.harnessSurfaces.sdk_harnesses)
+      ? state.harnessSurfaces.sdk_harnesses
+      : [];
+  sdkHarnesses.forEach((sdk) => {
+    list.append(sdkHarnessCard(sdk));
+  });
   // 7.118.1: the agents MCC has assessed and does not configure yet. Last,
   // because they are not launchable: no command, no Install, no Configure,
   // no MCP and no tier rails -- only the dated reason and what would change
@@ -29571,6 +29578,56 @@ function harnessCard(harness) {
     hint.textContent = harness.install_hint;
     card.append(hint);
   }
+  return card;
+}
+
+function sdkHarnessCard(sdk) {
+  const card = document.createElement("div");
+  card.className = "sdk-agent-card";
+  // Never set `data-harness` or `.coding-agent-card`: those belong strictly to
+  // launchable CLI harnesses in HARNESS_SPECS (install hosts, MCP, tiers).
+  card.dataset.sdkHarness = sdk.id || "";
+
+  const heading = document.createElement("div");
+  heading.className = "agent-heading";
+  const title = document.createElement("h4");
+  title.textContent = sdk.display_name || sdk.id || "";
+  const badge = document.createElement("span");
+  badge.className = "agent-state sdk-client";
+  badge.textContent = "SDK client · attribution";
+  heading.append(title, badge);
+  card.append(heading);
+
+  if (sdk.summary) {
+    const summary = document.createElement("p");
+    summary.className = "agent-summary";
+    summary.textContent = sdk.summary;
+    card.append(summary);
+  }
+
+  const meta = document.createElement("dl");
+  meta.className = "agent-meta";
+  const speaksText =
+    Array.isArray(sdk.speaks_labels) && sdk.speaks_labels.length
+      ? sdk.speaks_labels.join(", ")
+      : sdk.protocol_label || "";
+  const rows = [];
+  if (speaksText) {
+    rows.push(["Speaks", speaksText]);
+  }
+  rows.push(harnessUsageRow({ id: sdk.id, installed: true }));
+  rows.push(["Attribution", "Inferred from User-Agent or x-mcc-harness"]);
+  rows.forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    meta.append(term, detail);
+  });
+  card.append(meta);
+
+  const surfaces = harnessSurfacesSection(sdk);
+  if (surfaces) card.append(surfaces);
   return card;
 }
 
@@ -29695,7 +29752,7 @@ function applyCodingAgentsFilter() {
   CODING_AGENT_LIST_IDS.forEach((listId) => {
     const list = byId(listId);
     if (!list) return;
-    list.querySelectorAll(".coding-agent-card").forEach((card) => {
+    list.querySelectorAll(".coding-agent-card, .sdk-agent-card").forEach((card) => {
       const matches = !query || codingAgentHaystack(card).includes(query);
       card.hidden = !matches;
       if (matches) shown += 1;
@@ -31656,6 +31713,18 @@ function harnessSurfacesSection(harness) {
       "Applies per host; fallback models on other providers ignore it.";
   block.append(intro);
 
+  const speaksLabels = Array.isArray(harness.speaks_labels)
+    ? harness.speaks_labels.filter(Boolean)
+    : [];
+  if (speaksLabels.length) {
+    const speaksHint = document.createElement("p");
+    speaksHint.className = "field-description agent-surfaces-speaks-hint";
+    speaksHint.textContent =
+      `Agent natively speaks: ${speaksLabels.join(", ")}. ` +
+      "MCC translates between this protocol and every provider door below.";
+    block.append(speaksHint);
+  }
+
   providers.forEach((provider) => {
     block.append(
       harnessSurfaceRow(
@@ -31924,7 +31993,11 @@ function harnessMeta(harness) {
   meta.className = "agent-meta";
   // Both halves of this function render `rows`, and an agent MCC cannot launch
   // can still have sent requests of its own, so the count belongs in both.
-  const rows = [["Protocol", harness.protocol_label], harnessUsageRow(harness)];
+  const rows = [["Protocol", harness.protocol_label]];
+  if (Array.isArray(harness.speaks_labels) && harness.speaks_labels.length) {
+    rows.push(["Speaks", harness.speaks_labels.join(", ")]);
+  }
+  rows.push(harnessUsageRow(harness));
   const catalogue = harness.catalogue;
 
   if (harness.available === false) {

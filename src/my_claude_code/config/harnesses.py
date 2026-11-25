@@ -52,6 +52,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from my_claude_code.config.constants import (
+    NON_REGISTRY_HARNESS_LABELS,
+    SDK_HARNESS_IDS,
+)
 from my_claude_code.config.install_methods import (
     AIDER_METHODS,
     ANTIGRAVITY_NO_BUTTON_REASON,
@@ -916,6 +920,16 @@ class HarnessSpec:
     #: PATH that does not carry npm's global folder, and a shell started before
     #: the install. dsh and Hermes declare their own between them.
     detection_paths: tuple[tuple[str, ...], ...] = ()
+    #: Inbound wire protocols this agent natively supports, verified strictly
+    #: from MCC's inspected ``application/catalogues/*.py`` schemas/bundles.
+    #: Empty means only :attr:`protocol` is verified; callers read
+    #: :meth:`effective_speaks`.
+    speaks: tuple[HarnessProtocol, ...] = ()
+
+    def effective_speaks(self) -> tuple[HarnessProtocol, ...]:
+        """Return every inbound wire protocol this agent natively speaks."""
+
+        return self.speaks or (self.protocol,)
 
     @property
     def command(self) -> str:
@@ -988,6 +1002,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="Claude Code",
         binary="claude",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        speaks=(HarnessProtocol.ANTHROPIC_MESSAGES,),
         install_hint=(
             "Install Claude Code with: npm install -g @anthropic-ai/claude-code"
         ),
@@ -1035,6 +1050,8 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="Codex CLI",
         binary="codex",
         protocol=HarnessProtocol.OPENAI_RESPONSES,
+        # Modern Codex 0.154.0 speaks Responses only (wire_api="chat" is fatal).
+        speaks=(HarnessProtocol.OPENAI_RESPONSES,),
         install_hint="Install Codex with: npm install -g @openai/codex",
         install_methods=CODEX_METHODS,
         commands=(
@@ -1113,6 +1130,12 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="OpenCode",
         binary="opencode",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # application/catalogues/opencode.py + @ai-sdk/{anthropic,openai,openai-compatible}
+        speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint="Install OpenCode with: npm install -g opencode-ai",
         install_methods=OPENCODE_METHODS,
         commands=(
@@ -1157,6 +1180,12 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="OpenCode 2",
         binary="opencode2",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # application/catalogues/opencode.py (v2 uses the same config schema & AI SDK providers)
+        speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint=("Install OpenCode 2 with: npm install -g @opencode-ai/cli@beta"),
         install_methods=OPENCODE2_METHODS,
         commands=(
@@ -1198,6 +1227,12 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="Kilo CLI",
         binary="kilo",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # application/catalogues/kilo.py (OpenCode fork sharing its @ai-sdk/* config schema)
+        speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint="Install Kilo CLI with: npm install -g @kilocode/cli",
         install_methods=KILO_METHODS,
         commands=(
@@ -1242,6 +1277,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         # unambiguous, and either satisfies the launcher.
         binary_aliases=("cmdc",),
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # application/catalogues/commandcode.py:10 ("openai-completions" | "anthropic-messages")
+        speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint="Install Command Code with: npm install -g command-code",
         install_methods=COMMANDCODE_METHODS,
         commands=(
@@ -1332,6 +1372,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="OpenClaw",
         binary="openclaw",
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        # application/catalogues/openclaw.py:14,74-77 ("openai-completions" | "anthropic-messages")
+        speaks=(
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+        ),
         install_hint=(
             "Install OpenClaw with: npm install -g openclaw "
             "(it needs Node.js 24.22.1 or newer)"
@@ -1459,6 +1504,12 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         # neither is what a user means by "start Hermes".
         binary="hermes",
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        # application/catalogues/hermes.py:26 (openai_chat | anthropic_messages | codex_responses)
+        speaks=(
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+        ),
         # A Python tool on PyPI (``hermes-agent``), and its own config code
         # lists ``pip`` and ``homebrew`` as *unsupported* install methods
         # (``hermes_cli/config.py:578`` of 0.19.0), so neither is the line to
@@ -1605,6 +1656,12 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         # point, ``kimi`` and ``kimi-cli``. Either satisfies the launcher.
         binary_aliases=("kimi-cli",),
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # application/catalogues/kimi.py:71-79 (anthropic | openai_responses | openai_legacy)
+        speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         # A Python tool on PyPI, not an npm package: ``uv tool install`` is
         # Moonshot's own first line and ``pipx install kimi-cli`` is the
         # documented alternative. MCC installs neither -- it prints this and
@@ -1753,6 +1810,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="Crush",
         binary="crush",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # application/catalogues/crush.py:14-16 ("anthropic" | "openai-compat" / "openai")
+        speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint=(
             "Install Crush with: npm install -g @charmland/crush "
             "(or: brew install charmbracelet/tap/crush)"
@@ -1914,6 +1976,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="Goose",
         binary="goose",
         protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        # application/catalogues/goose.py:41-44 (ProviderEngine: openai/openai_compatible | anthropic/anthropic_compatible)
+        speaks=(
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+        ),
         install_hint=(
             "Install Goose with: curl -fsSL "
             "https://github.com/block/goose/releases/download/stable/download_cli.sh | bash"
@@ -2072,6 +2139,11 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         # MCC's own native protocol is the one used. See the launcher.
         binary="droid",
         protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        # application/catalogues/droid.py:6-16 ("anthropic" | "generic-chat-completion-api")
+        speaks=(
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        ),
         install_hint=("Install Droid with: curl -fsSL https://app.factory.ai/cli | sh"),
         install_hint_windows=(
             'Install Droid with: powershell -c "irm https://app.factory.ai/cli/windows | iex"'
@@ -2148,6 +2220,8 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="Gemini CLI",
         binary="gemini",
         protocol=HarnessProtocol.GEMINI,
+        # application/catalogues/gemini_cli.py:38-55 (Gemini generateContentConfig only)
+        speaks=(HarnessProtocol.GEMINI,),
         install_hint=("Install Gemini CLI with: npm install -g @google/gemini-cli"),
         install_methods=GEMINI_METHODS,
         commands=(
@@ -2217,6 +2291,7 @@ HARNESS_SPECS: tuple[HarnessSpec, ...] = (
         display_name="Antigravity",
         binary="agy",
         protocol=HarnessProtocol.GEMINI,
+        speaks=(HarnessProtocol.GEMINI,),
         install_hint="Install Antigravity from https://antigravity.google",
         install_unavailable_reason=ANTIGRAVITY_NO_BUTTON_REASON,
         available=False,
@@ -2438,3 +2513,105 @@ def not_yet_cards() -> tuple[HarnessNotYetCard, ...]:
     """
 
     return NOT_YET_CARDS
+
+
+@dataclass(frozen=True, slots=True)
+class SdkHarnessSpec:
+    """Non-registry SDK / programmatic client shown on the Coding agents page.
+
+    These clients have no ``mcc-<agent>`` launcher and no catalogue file, so
+    they are kept separate from :data:`HARNESS_SPECS` and :func:`harness_ids`.
+    Requests are attributed from ``User-Agent`` or ``x-mcc-harness`` and can
+    carry per-``(harness, provider)`` wire-surface preferences under
+    ``harness_surfaces``.
+    """
+
+    id: str
+    display_name: str
+    protocol: HarnessProtocol
+    speaks: tuple[HarnessProtocol, ...]
+    summary: str
+
+    def effective_speaks(self) -> tuple[HarnessProtocol, ...]:
+        """Return every inbound wire protocol this SDK client speaks."""
+
+        return self.speaks or (self.protocol,)
+
+
+SDK_HARNESS_SPECS: tuple[SdkHarnessSpec, ...] = (
+    SdkHarnessSpec(
+        id="claude_agent_sdk",
+        display_name=NON_REGISTRY_HARNESS_LABELS["claude_agent_sdk"],
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        speaks=(HarnessProtocol.ANTHROPIC_MESSAGES,),
+        summary=(
+            "Anthropic's Claude Agent SDK (Python/TypeScript), attributed from "
+            "its claude-cli agent-sdk User-Agent or x-mcc-harness."
+        ),
+    ),
+    SdkHarnessSpec(
+        id="anthropic_sdk",
+        display_name=NON_REGISTRY_HARNESS_LABELS["anthropic_sdk"],
+        protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
+        speaks=(HarnessProtocol.ANTHROPIC_MESSAGES,),
+        summary=(
+            "Official Anthropic SDKs (Python/JS/TypeScript), speaking "
+            "Anthropic Messages."
+        ),
+    ),
+    SdkHarnessSpec(
+        id="openai_sdk",
+        display_name=NON_REGISTRY_HARNESS_LABELS["openai_sdk"],
+        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        speaks=(
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+            HarnessProtocol.OPENAI_RESPONSES,
+        ),
+        summary=(
+            "Official OpenAI SDKs (Python/Node/JS), speaking OpenAI Chat "
+            "Completions or Responses."
+        ),
+    ),
+    SdkHarnessSpec(
+        id="google_sdk",
+        display_name=NON_REGISTRY_HARNESS_LABELS["google_sdk"],
+        protocol=HarnessProtocol.GEMINI,
+        speaks=(HarnessProtocol.GEMINI,),
+        summary=(
+            "Google GenAI SDKs (google-genai / google-api / "
+            "google-generativeai), speaking Google Gemini."
+        ),
+    ),
+    SdkHarnessSpec(
+        id="ai_sdk",
+        display_name=NON_REGISTRY_HARNESS_LABELS["ai_sdk"],
+        protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+        speaks=(
+            HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
+            HarnessProtocol.OPENAI_RESPONSES,
+            HarnessProtocol.ANTHROPIC_MESSAGES,
+            HarnessProtocol.GEMINI,
+        ),
+        summary=(
+            "Vercel AI SDK (ai-sdk/*), supporting OpenAI Chat Completions, "
+            "Responses, Anthropic Messages, or Google Gemini providers."
+        ),
+    ),
+)
+
+assert tuple(spec.id for spec in SDK_HARNESS_SPECS) == SDK_HARNESS_IDS
+
+
+def sdk_harness_specs() -> tuple[SdkHarnessSpec, ...]:
+    """Return every selectable SDK client descriptor, in presentation order."""
+
+    return SDK_HARNESS_SPECS
+
+
+def sdk_harness_spec(harness_id: str) -> SdkHarnessSpec:
+    """Return one selectable SDK client descriptor by id."""
+
+    for spec in SDK_HARNESS_SPECS:
+        if spec.id == harness_id:
+            return spec
+    raise KeyError(f"unknown SDK harness: {harness_id}")
