@@ -161,7 +161,7 @@ from my_claude_code.core.tier_refs import TIER_PROMPT_CACHE_TTL_SETTINGS
 from my_claude_code.core.wire_capture import redact_wire_value
 from my_claude_code.providers.commandcode import (
     COMMANDCODE_PROVIDER_ID,
-    is_anthropic_messages_model,
+    commandcode_uses_anthropic_messages,
 )
 from my_claude_code.providers.openai_chat import (
     catalogue_discovered_surfaces,
@@ -358,7 +358,7 @@ PROMPT_CACHE_ROUTE_NOTE = (
 #: reach. Every other gateway's Messages models are the ones whose resolved
 #: wire surface is ``messages``.
 MESSAGES_PROTOCOL_MODEL_RULES: Mapping[str, Callable[[str], bool]] = {
-    COMMANDCODE_PROVIDER_ID: is_anthropic_messages_model,
+    COMMANDCODE_PROVIDER_ID: commandcode_uses_anthropic_messages,
 }
 
 

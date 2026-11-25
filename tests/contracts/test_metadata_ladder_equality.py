@@ -238,6 +238,10 @@ from my_claude_code.providers.runtime.openrouter_catalogue import (
     write_openrouter_live_cache,
 )
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.contracts.commandcode_surface_expectations import (
+    commandcode_surface_cases,
+    commandcode_surface_expectation,
+)
 from tests.contracts.go_reasoning_expectations import corrected_expectation
 
 HERE = Path(__file__).parent
@@ -1041,29 +1045,32 @@ def _current_answer(group: str, key: str, value: Any) -> Any:
     """
 
     if _is_messages_gateway_dialect_entry(value):
-        return value[AFTER_8_41]
-    if _is_discovery_categorization_entry(value):
-        return value[AFTER_8_39]
-    if _is_surface_dialect_entry(value):
-        return value[AFTER_8_38]
-    if _is_codex_max_entry(value):
-        return value[AFTER_8_36]
-    if _is_vision_ladder_entry(value):
+        answer = value[AFTER_8_41]
+    elif _is_discovery_categorization_entry(value):
+        answer = value[AFTER_8_39]
+    elif _is_surface_dialect_entry(value):
+        answer = value[AFTER_8_38]
+    elif _is_codex_max_entry(value):
+        answer = value[AFTER_8_36]
+    elif _is_vision_ladder_entry(value):
         # 8.18.0's answer, resolved here for the same reason the 8.13.0 and
         # 7.113.5 ones are: the entry carries its own newest answer, so the
         # corrections file must not be consulted for it.
-        return value[AFTER_8_18]
-    if _is_adaptive_page_entry(value):
+        answer = value[AFTER_8_18]
+    elif _is_adaptive_page_entry(value):
         # 8.13.0's third answer, resolved here for the same reason the 7.113.5
         # one is: the entry carries its own newest answer, so the corrections
         # file must not be consulted for it. (The ``page`` entries still in
         # ``opencode_go_reasoning_expectations.json`` describe the 7.113.2 move
         # and have been dead since 7.113.5 gave the baseline its own version
         # keys; leaving them alone keeps this change to the two cells it owns.)
-        return value[ADAPTIVE_PAGE]
-    if _is_ocgo1_entry(value):
-        return value[AFTER_OCGO1]
-    return corrected_expectation(group, key, _expected(key, value))
+        answer = value[ADAPTIVE_PAGE]
+    elif _is_ocgo1_entry(value):
+        answer = value[AFTER_OCGO1]
+    else:
+        answer = corrected_expectation(group, key, _expected(key, value))
+    cc_group = "metadata_on" if group == "metadata_on" else "metadata"
+    return commandcode_surface_expectation(cc_group, key, answer)
 
 
 def _is_kor_key(key: str) -> bool:
@@ -2150,3 +2157,40 @@ def test_8_41_0_moves_only_messages_gateway_dialects() -> None:
     }
     assert "effort_values=~" in go_before["reasoning_dialect"]
     assert "effort_field=s:output_config.effort" in go_after["reasoning_dialect"]
+
+
+def test_8_47_0_moves_only_commandcode_response_surface_cells() -> None:
+    """8.47.0 moves only the two non-Claude CommandCode ``response_surface`` panels."""
+
+    expected_keys = {
+        "capabilities/commandcode/deepseek/deepseek-v4-flash-fast",
+        "capabilities/commandcode/gpt-6-astra",
+        "page",
+        "k4-blanked/page",
+        "admin/catalogue-models?provenance=1",
+        "k4-blanked/admin/catalogue-models?provenance=1",
+    }
+    for group in ("metadata", "metadata_on"):
+        cases = commandcode_surface_cases(group)
+        assert set(cases) == expected_keys
+        for cap_key in (
+            "capabilities/commandcode/deepseek/deepseek-v4-flash-fast",
+            "capabilities/commandcode/gpt-6-astra",
+        ):
+            before = cases[cap_key]["before"]
+            after = cases[cap_key]["after"]
+            changed = sorted(
+                field
+                for field in set(before) | set(after)
+                if _encoded(before.get(field)) != _encoded(after.get(field))
+            )
+            assert changed == ["response_surface"], (group, cap_key, changed)
+            assert before["response_surface"] is None
+            assert after["response_surface"]["value"] == "chat_completions"
+            assert after["response_surface"]["source"] == "profile"
+            assert [item["value"] for item in after["response_surface"]["offered"]] == [
+                "chat_completions",
+                "responses",
+            ]
+        # Claude models on CommandCode remain delegated via _anthropic and never move.
+        assert "capabilities/commandcode/claude-sonnet-5-5" not in cases

@@ -74,6 +74,11 @@ from my_claude_code.config.model_overrides import (
 )
 from my_claude_code.core.client_family import ClientFamily, current_client_family
 from my_claude_code.core.client_fingerprint import UNKNOWN_HARNESS, current_fingerprint
+from my_claude_code.providers.model_listing import (
+    cached_declared_endpoints,
+    cached_declared_http_surfaces,
+    declared_http_surfaces,
+)
 from my_claude_code.providers.recovery import (
     FACT_PREFERRED_SURFACE_REFUSED,
     FACT_RESPONSE_SURFACE,
@@ -471,6 +476,8 @@ def _resolve_base_surface_ladder(
     no_information: ResponseSurface | None = None,
     by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
     measured: tuple[tuple[str, MeasuredSurfaceSet], ...] = (),
+    declared_endpoints: tuple[ResponseSurface, ...] | None = None,
+    read_declared_endpoints: bool = False,
     optimistic: bool = False,
 ) -> ResolvedSurfaceLadder:
     """Resolve the ladder below the operator pin and preference rungs."""
@@ -499,6 +506,44 @@ def _resolve_base_surface_ladder(
     if published is not None:
         surface, npm = published
         resolved = _constrain(surface, ResponseSurfaceSource.REGISTRY, npm, speakable)
+        if resolved.surface is ResponseSurface.UNSERVABLE and optimistic:
+            return _guessed_ladder(family, speakable, no_information)
+        return _one(resolved)
+
+    model_declared = (
+        declared_endpoints
+        if declared_endpoints is not None
+        else (
+            cached_declared_http_surfaces(provider_id, model_id)
+            if read_declared_endpoints
+            else ()
+        )
+    )
+    if model_declared:
+        supported = tuple(surface for surface in model_declared if surface in speakable)
+        raw_tokens = cached_declared_endpoints(provider_id, model_id)
+        http_tokens = [
+            token for token in raw_tokens if declared_http_surfaces((token,))
+        ]
+        detail = (
+            f"declared by provider /models: {', '.join(http_tokens)}"
+            if http_tokens
+            else "declared by provider /models endpoint list"
+        )
+        if supported:
+            return _ladder_of(
+                supported,
+                family,
+                ResponseSurfaceSource.REGISTRY,
+                detail,
+                speakable,
+            )
+        resolved = _constrain(
+            model_declared[0],
+            ResponseSurfaceSource.REGISTRY,
+            detail,
+            speakable,
+        )
         if resolved.surface is ResponseSurface.UNSERVABLE and optimistic:
             return _guessed_ladder(family, speakable, no_information)
         return _one(resolved)
@@ -560,6 +605,7 @@ def discovered_surfaces(
     no_information: ResponseSurface | None = None,
     by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
     measured: tuple[tuple[str, MeasuredSurfaceSet], ...] = (),
+    declared_endpoints: tuple[ResponseSurface, ...] | None = None,
 ) -> tuple[ResolvedResponseSurface, ...]:
     """Known, non-guessed, speakable doors for one model in discovery order (Q10)."""
 
@@ -573,6 +619,8 @@ def discovered_surfaces(
         no_information=no_information,
         by_upstream=by_upstream,
         measured=measured,
+        declared_endpoints=declared_endpoints,
+        read_declared_endpoints=bool(declared),
         optimistic=False,
     )
     return tuple(
@@ -592,6 +640,7 @@ def resolve_surface_ladder(
     no_information: ResponseSurface | None = None,
     by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
     measured: tuple[tuple[str, MeasuredSurfaceSet], ...] = (),
+    declared_endpoints: tuple[ResponseSurface, ...] | None = None,
     optimistic: bool = False,
 ) -> ResolvedSurfaceLadder:
     """Resolve every door one model is *known* to answer on, in try order.
@@ -608,12 +657,14 @@ def resolve_surface_ladder(
     3. Learned set (this deployment's probes, <= 7 days).
     4. Shipped dated measurement (``MeasuredSurfaceSet``).
     5. Vendor registry (models.dev ``provider.npm``).
-    6. Marketplace upstream (``surface_by_upstream``).
-    7. Profile floor (``no_information_surface``), with optional optimistic
+    6. Provider ``/models`` published HTTP ``declared.endpoints``.
+    7. Marketplace upstream (``surface_by_upstream``).
+    8. Profile floor (``no_information_surface``), with optional optimistic
        guess when unset.
     """
 
     speakable = declared or (DEFAULT_SURFACE,)
+    read_declared = bool(declared)
     family = current_client_family() if client_family is None else client_family
 
     forced = override_surface(provider_id, model_id)
@@ -631,6 +682,8 @@ def resolve_surface_ladder(
             no_information=no_information,
             by_upstream=by_upstream,
             measured=measured,
+            declared_endpoints=declared_endpoints,
+            read_declared_endpoints=read_declared,
             optimistic=optimistic,
         )
 
@@ -644,6 +697,8 @@ def resolve_surface_ladder(
             no_information=no_information,
             by_upstream=by_upstream,
             measured=measured,
+            declared_endpoints=declared_endpoints,
+            read_declared_endpoints=read_declared,
             optimistic=optimistic,
         )
         non_refused = tuple(
@@ -669,6 +724,8 @@ def resolve_surface_ladder(
         no_information=no_information,
         by_upstream=by_upstream,
         measured=measured,
+        declared_endpoints=declared_endpoints,
+        read_declared_endpoints=read_declared,
         optimistic=False,
     )
     known_candidates = tuple(
@@ -717,6 +774,7 @@ def resolve_response_surface(
     no_information: ResponseSurface | None = None,
     by_upstream: tuple[tuple[str, ResponseSurface], ...] = (),
     measured: tuple[tuple[str, MeasuredSurfaceSet], ...] = (),
+    declared_endpoints: tuple[ResponseSurface, ...] | None = None,
     optimistic: bool = False,
 ) -> ResolvedResponseSurface:
     """One model's first door: :attr:`ResolvedSurfaceLadder.primary`.
@@ -736,6 +794,7 @@ def resolve_response_surface(
         no_information=no_information,
         by_upstream=by_upstream,
         measured=measured,
+        declared_endpoints=declared_endpoints,
         optimistic=optimistic,
     ).primary
 
@@ -905,6 +964,10 @@ def catalogue_surface(
         )
     if not profile.response_surfaces:
         return None
+    if profile.surface_excluded_model is not None and profile.surface_excluded_model(
+        model_id
+    ):
+        return None
     resolved = resolve_response_surface(
         provider_id,
         model_id,
@@ -944,6 +1007,10 @@ def catalogue_discovered_surfaces(
             no_information=default_surface_for(declared),
         )
     if not profile.response_surfaces:
+        return ()
+    if profile.surface_excluded_model is not None and profile.surface_excluded_model(
+        model_id
+    ):
         return ()
     return discovered_surfaces(
         provider_id,

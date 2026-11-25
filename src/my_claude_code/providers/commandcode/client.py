@@ -2,15 +2,14 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import replace
 
 from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.config.prompt_cache_lifetimes import prompt_cache_gateway_family
-from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningDialect,
-    ReasoningEffort,
     ReasoningPolicy,
 )
 from my_claude_code.providers.anthropic_messages import (
@@ -19,11 +18,8 @@ from my_claude_code.providers.anthropic_messages import (
 )
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.openai_chat import (
-    NamedEffortReasoning,
-    OpenAIChatProfile,
+    COMMANDCODE_CHAT_PROFILE,
     OpenAIChatProvider,
-    OpenAIChatRequestPolicy,
-    validate_extra_body_does_not_override_canonical_fields,
 )
 from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
@@ -32,22 +28,9 @@ from my_claude_code.providers.openai_responses import (
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import SchemaKeywordRefusal
 
-from .models import extract_commandcode_model_infos, is_anthropic_messages_model
-
-_EFFORTS = (
-    # Command Code publishes no effort vocabulary of its own: every model row
-    # in /v1/models carries a null ``supported_parameters``. The vocabulary
-    # below is the one the gateway itself names when it rejects an unknown
-    # value -- "Invalid option: expected one of low|medium|high|xhigh|max" --
-    # so it is the documented enum for the whole gateway, not a per-model guess.
-    # FCC's MINIMAL has no counterpart there ("minimal" is rejected) and folds
-    # onto the nearest representable rung.
-    (ReasoningEffort.MINIMAL, "low"),
-    (ReasoningEffort.LOW, "low"),
-    (ReasoningEffort.MEDIUM, "medium"),
-    (ReasoningEffort.HIGH, "high"),
-    (ReasoningEffort.XHIGH, "xhigh"),
-    (ReasoningEffort.MAX, "max"),
+from .models import (
+    commandcode_uses_anthropic_messages,
+    extract_commandcode_model_infos,
 )
 
 #: What Command Code's Chat validator refuses in a tool schema: a ``pattern``
@@ -78,48 +61,8 @@ COMMANDCODE_CHAT_TOOL_SCHEMA_DIALECT = ToolSchemaDialect(
     ),
 )
 
-_PROFILE = OpenAIChatProfile(
-    OpenAIChatRequestPolicy(
-        provider_name="COMMANDCODE",
-        # Live captures of ``deepseek/deepseek-v4.1-flash`` stream
-        # ``delta.reasoning_content`` (27,520 / 27,520 deltas vs 0 on
-        # ``delta.reasoning``), so assistant history replays on
-        # ``reasoning_content`` at cold start while runtime observation adapts
-        # per model if another backend streams ``delta.reasoning``.
-        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
-        include_extra_body=True,
-        extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
-    ),
-    # ``reasoning_effort`` is the only reasoning knob this gateway parses. A
-    # top-level ``reasoning`` object, a ``thinking`` object and
-    # ``chat_template_kwargs`` are all accepted and silently discarded -- a
-    # deliberately invalid ``reasoning: {"effort": "bogus_value"}`` still
-    # returns 200, while an invalid ``reasoning_effort`` returns 400.
-    #
-    # No disabled value: the enum has no "none"/"off" rung and the gateway
-    # 400s on both, so reasoning OFF sends no reasoning field at all.
-    #
-    # ``enabled_value="max"`` since 5.71.0. It was deliberately omitted in
-    # 5.69.0 on the belief that "with nothing sent, the gateway's own default
-    # is already its most verbose reasoning setting", so naming a rung would
-    # reduce reasoning. A live A/B on 2026-08-29 refutes that outright --
-    # identical prompt, ``max_tokens: 3000``, ``deepseek/deepseek-v4-flash``:
-    #
-    #     bare (no reasoning_effort)  HTTP 200  reasoning_tokens=132
-    #     reasoning_effort: "max"     HTTP 200  reasoning_tokens=1046
-    #
-    # -- eight times the thinking, not less. Without an enabled value this
-    # encoder had *nothing to emit* for the one policy per-model gating
-    # produces most often here: ``ReasoningPolicy.on()``, control ON with the
-    # effort discarded, which is what both ``_drop_controls`` and the
-    # toggle-only branch return. Gating logged "enabling thinking" while the
-    # body left carrying no reasoning instruction at all, on every Command Code
-    # model whose models.dev row publishes no effort control.
-    NamedEffortReasoning(_EFFORTS, enabled_value="max"),
-    # Primary delta field matches live ``delta.reasoning_content`` captures,
-    # keeping ``reasoning`` as configured fallback for OpenRouter-style models.
-    reasoning_delta_field="reasoning_content",
-    reasoning_delta_fallback_field="reasoning",
+_PROFILE = replace(
+    COMMANDCODE_CHAT_PROFILE,
     chat_tool_schema_dialect=COMMANDCODE_CHAT_TOOL_SCHEMA_DIALECT,
 )
 
@@ -236,6 +179,6 @@ class CommandCodeProvider(BaseProvider):
         )
 
     def _delegate(self, model_id: str) -> BaseProvider:
-        if is_anthropic_messages_model(model_id):
+        if commandcode_uses_anthropic_messages(model_id):
             return self._anthropic
         return self._openai

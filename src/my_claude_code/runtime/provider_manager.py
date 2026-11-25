@@ -63,6 +63,7 @@ from my_claude_code.core.wire_capture import (
     redact_wire_value,
 )
 from my_claude_code.providers.base import BaseProvider
+from my_claude_code.providers.model_listing import set_declared_endpoints_snapshot
 from my_claude_code.providers.runtime import ProviderRuntime
 from my_claude_code.providers.runtime.discovery import (
     ProviderModelDiscovery,
@@ -1003,13 +1004,20 @@ class ProviderRuntimeManager:
             self._publish_model_catalog()
             return result
 
+    def _sync_declared_endpoints_snapshot(self) -> None:
+        set_declared_endpoints_snapshot(
+            self._model_cache.cached_model_infos_by_provider()
+        )
+
     def _ensure_model_catalog(self) -> None:
+        self._sync_declared_endpoints_snapshot()
         publisher = self._model_catalog_publisher
         if publisher is None:
             return
         self._run_model_catalog_publication(publisher.ensure_exists)
 
     def _publish_model_catalog(self) -> None:
+        self._sync_declared_endpoints_snapshot()
         publisher = self._model_catalog_publisher
         if publisher is None:
             return
@@ -1113,6 +1121,7 @@ class ProviderRuntimeManager:
                 loaded += len(infos)
         if not loaded:
             return 0
+        self._sync_declared_endpoints_snapshot()
         self._last_refresh_at = written_at
         self._catalogue_from_store = True
         # Deliberately not published to the harness catalogue documents. Those

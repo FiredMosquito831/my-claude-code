@@ -335,6 +335,18 @@ def _isolate_learned_facts():
 
 
 @pytest.fixture(autouse=True)
+def _reset_declared_endpoints_snapshot():
+    """No test may inherit another test's cached ``declared.endpoints`` snapshot."""
+    from my_claude_code.providers.model_listing import (
+        reset_declared_endpoints_snapshot,
+    )
+
+    reset_declared_endpoints_snapshot()
+    yield
+    reset_declared_endpoints_snapshot()
+
+
+@pytest.fixture(autouse=True)
 def _reset_client_family():
     """No test may inherit the inbound client family another test installed.
 
