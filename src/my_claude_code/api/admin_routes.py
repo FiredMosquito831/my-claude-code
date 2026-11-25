@@ -346,7 +346,9 @@ from my_claude_code.providers.chatgpt_oauth.browser_login import (
     start_browser_login,
 )
 from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
+    latest_live_codex_catalogue,
     load_codex_catalogue,
+    load_codex_models_cache,
     retired_entries,
 )
 from my_claude_code.providers.chatgpt_oauth.credentials import (
@@ -2049,19 +2051,24 @@ def _vendor_client_row(
     """The vendor's own client catalogue row for a model it lists, if any.
 
     Only a record whose listing names the vendor client as its source has
-    one: the Codex CLI's bundled catalogue, which ``codex_catalogue`` reads
-    (memoized per installed file) and which nothing else produces.
+    one: Codex's ``models_cache.json`` (rung S2a) or bundled CLI/Desktop
+    catalogue (rung S2b). Live S1 rows already publish via ``published_row``.
     """
 
     listing = None if info is None else info.listing
     if listing is None or listing.provenance != ModelListingProvenance.VENDOR_CLIENT:
         return None
-    catalogue = load_codex_catalogue()
-    if catalogue is None:
-        return None
+    catalogue = load_codex_models_cache()
+    if catalogue is not None:
+        label = f"Codex cache {catalogue.version}".strip()
+    else:
+        catalogue = load_codex_catalogue()
+        if catalogue is None:
+            return None
+        label = catalogue.label
     for entry in catalogue.entries:
         if entry.slug == model_id and entry.raw is not None:
-            return catalogue.label, entry.raw
+            return label, entry.raw
     return None
 
 
@@ -3775,14 +3782,15 @@ class _ChatGPTOAuthWindows(BaseModel):
 
 
 class _ChatGPTOAuthCatalogue(BaseModel):
-    """Which vendor catalogue rung S2 found, if any."""
+    """Which vendor catalogue rung S1/S2a/S2b found, if any."""
 
     available: bool = False
     version: str = ""
     model_count: int = 0
-    #: File name only. The full path is a local detail the card does not need
-    #: and would only make the readout longer.
+    #: File name or endpoint label only. The full path is a local detail the
+    #: card does not need and would only make the readout longer.
     source_name: str = ""
+    source_label: str = ""
     retired_model_ids: list[str] = []
 
 
@@ -3837,7 +3845,7 @@ def _chatgpt_oauth_accounts() -> list[_ChatGPTOAuthAccountInfo]:
         _ChatGPTOAuthAccountInfo(
             account_id=record.id,
             name=oauth_account_name("chatgpt_oauth", record.id),
-            plan_type=stored_chatgpt_plan_type(),
+            plan_type=stored_chatgpt_plan_type(account_id=record.id),
             origin=record.origin,
             origin_path=record.origin_path,
             write_back=record.write_back,
@@ -3909,6 +3917,26 @@ def _chatgpt_oauth_windows(account_id: str = "") -> _ChatGPTOAuthWindows:
 
 
 def _chatgpt_oauth_catalogue() -> _ChatGPTOAuthCatalogue:
+    live = latest_live_codex_catalogue()
+    if live is not None:
+        return _ChatGPTOAuthCatalogue(
+            available=True,
+            version=live.catalogue.version,
+            model_count=len(live.catalogue.entries),
+            source_name="codex/models",
+            source_label=f"Live Codex API {live.catalogue.version}".strip(),
+            retired_model_ids=[entry.slug for entry in retired_entries(live.catalogue)],
+        )
+    cached = load_codex_models_cache()
+    if cached is not None:
+        return _ChatGPTOAuthCatalogue(
+            available=True,
+            version=cached.version,
+            model_count=len(cached.entries),
+            source_name=Path(cached.source_path).name,
+            source_label=f"Codex cache {cached.version}".strip(),
+            retired_model_ids=[entry.slug for entry in retired_entries(cached)],
+        )
     catalogue = load_codex_catalogue()
     if catalogue is None:
         return _ChatGPTOAuthCatalogue()
@@ -3917,6 +3945,7 @@ def _chatgpt_oauth_catalogue() -> _ChatGPTOAuthCatalogue:
         version=catalogue.version,
         model_count=len(catalogue.entries),
         source_name=Path(catalogue.source_path).name,
+        source_label=catalogue.label,
         retired_model_ids=[entry.slug for entry in retired_entries(catalogue)],
     )
 
@@ -3926,9 +3955,11 @@ async def chatgpt_oauth_status(request: Request):
     """Report what MCC knows about this ChatGPT subscription, offline.
 
     Nothing here contacts OpenAI. The plan comes from the stored ID token's
-    claims, decoded locally; the catalogue comes from the installed Codex
-    CLI's own bundled document; the windows are headers a real response
-    already carried. No token, no ``sub`` and no ``email`` is read out.
+    claims, decoded locally; the catalogue comes from local caches/files (any
+    cached live Codex API snapshot, ``$CODEX_HOME/models_cache.json``, or the
+    installed Codex CLI/Desktop bundle); the windows are headers a real
+    response already carried. No token, no ``sub`` and no ``email`` is read
+    out.
     """
     require_loopback_admin(request)
     plan_type = await asyncio.to_thread(stored_chatgpt_plan_type)

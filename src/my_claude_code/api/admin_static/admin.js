@@ -19484,10 +19484,12 @@ async function refreshChatGPTOAuthStatus(details) {
   }
   const catalogue = status.catalogue || {};
   if (catalogue.available) {
+    const sourceLabel =
+      catalogue.source_label || `Codex CLI ${catalogue.version || "?"}`;
     appendOAuthDetail(
       details,
       "Model catalogue",
-      `Codex CLI ${catalogue.version || "?"} (${catalogue.model_count} models, ` +
+      `${sourceLabel} (${catalogue.model_count} models, ` +
         `read from ${catalogue.source_name})`,
     );
     if ((catalogue.retired_model_ids || []).length) {
@@ -19501,8 +19503,9 @@ async function refreshChatGPTOAuthStatus(details) {
     appendOAuthDetail(
       details,
       "Model catalogue",
-      "Codex CLI not found — the model list falls back to what this " +
-        "credential has already been served, then to the offline seed list.",
+      "No live Codex API snapshot, models_cache.json, or Codex CLI found — " +
+        "the model list falls back to what this credential has already been " +
+        "served, then to the offline seed list.",
     );
   }
   const windows = status.windows || {};

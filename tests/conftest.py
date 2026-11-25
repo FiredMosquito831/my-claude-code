@@ -299,6 +299,19 @@ def _isolate_opencode_client_version():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_codex_catalogue_state(monkeypatch):
+    """No test may inherit another test's Codex live cache, binary memo, or CODEX_HOME."""
+    from my_claude_code.providers.chatgpt_oauth import codex_catalogue
+
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    codex_catalogue.clear_codex_catalogue_cache()
+    codex_catalogue.clear_codex_models_live_cache()
+    yield
+    codex_catalogue.clear_codex_catalogue_cache()
+    codex_catalogue.clear_codex_models_live_cache()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_learned_facts():
     """No test may inherit another test's learned facts.
 

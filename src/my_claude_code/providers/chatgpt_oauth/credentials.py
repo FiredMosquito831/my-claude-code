@@ -2,6 +2,7 @@
 
 import base64
 import dataclasses
+import hashlib
 import json
 import os
 import tempfile
@@ -316,7 +317,9 @@ def _extract_plan_type_from_claims(claims: dict[str, Any]) -> str:
     return ""
 
 
-def stored_chatgpt_plan_type(*, auth_path: Path | None = None) -> str:
+def stored_chatgpt_plan_type(
+    *, auth_path: Path | None = None, account_id: str | None = None
+) -> str:
     """Return this credential's ChatGPT plan, decoded locally, or ``""``.
 
     Strictly local: it reads the stored ID token that is already on disk and
@@ -330,7 +333,7 @@ def stored_chatgpt_plan_type(*, auth_path: Path | None = None) -> str:
     actually use.
     """
     try:
-        source = _load_managed_source(auth_path)
+        source = _load_managed_source(auth_path, account_id=account_id)
     except ChatGPTOAuthError:
         return ""
     for token in (source.id_token, source.access_token):
@@ -338,6 +341,84 @@ def stored_chatgpt_plan_type(*, auth_path: Path | None = None) -> str:
         if plan:
             return plan
     return ""
+
+
+def _is_token_expired(token: str, expires_at: object, now: float) -> bool:
+    """Return True when a stored token's expiry is known and already passed."""
+    if isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool):
+        return float(expires_at) <= now
+    if expires_at is None:
+        exp = _decode_jwt_claims(token).get("exp")
+        if isinstance(exp, (int, float)) and not isinstance(exp, bool):
+            return float(exp) <= now
+    return False
+
+
+def chatgpt_s1_discovery_accounts(
+    *, explicit_api_key: str = "", explicit_account_id: str = ""
+) -> list[tuple[str, str, str]]:
+    """Collect non-expired ``(access_token, account_id, plan_type)`` tuples read-only.
+
+    Never refreshes, migrates, rotates, or follows Codex CLI files: model
+    discovery must never spend a refresh token or bench a credential.
+    """
+    try:
+        records = load_chatgpt_accounts(migrate=False)
+    except Exception:
+        records = []
+
+    now = time.time()
+    seen_keys: set[str] = set()
+    accounts: list[tuple[str, str, str]] = []
+
+    if records:
+        total_records = len(records)
+        for record in records:
+            raw_token = record.tokens.get("access_token")
+            if not isinstance(raw_token, str) or not raw_token.strip():
+                continue
+            token = raw_token.strip()
+            if _is_token_expired(token, record.tokens.get("expires_at"), now):
+                continue
+            record_acct = str(
+                record.tokens.get("account_id") or record.id or ""
+            ).strip()
+            if total_records == 1 or record.ordinal == 1:
+                acct = (explicit_account_id or "").strip() or record_acct
+            else:
+                acct = record_acct
+            dedupe_key = acct or (
+                f"token:{hashlib.sha256(token.encode('utf-8')).hexdigest()[:16]}"
+            )
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            plan_type = ""
+            for candidate_token in (record.tokens.get("id_token"), token):
+                if isinstance(candidate_token, str) and candidate_token.strip():
+                    plan_type = _extract_plan_type_from_claims(
+                        _decode_jwt_claims(candidate_token)
+                    )
+                    if plan_type:
+                        break
+            accounts.append((token, acct, plan_type))
+        return accounts
+
+    explicit = explicit_api_key.strip()
+    if explicit and explicit != CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE:
+        claims = _decode_jwt_claims(explicit)
+        exp = claims.get("exp")
+        if not (
+            isinstance(exp, (int, float))
+            and not isinstance(exp, bool)
+            and float(exp) <= now
+        ):
+            acct = explicit_account_id.strip() or _extract_account_id_from_claims(
+                claims
+            )
+            plan_type = _extract_plan_type_from_claims(claims)
+            accounts.append((explicit, acct, plan_type))
+    return accounts
 
 
 def _access_token_seconds_remaining(access_token: str) -> int | None:

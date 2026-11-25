@@ -737,6 +737,13 @@ async def test_codex_serialiser_emits_vendor_service_tiers(
             ),
         ),
     )
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        provider_module.ChatGPTOAuthProvider,
+        "_gateway_catalogue_bundle",
+        AsyncMock(return_value=({}, {}, None)),
+    )
     monkeypatch.setattr(
         provider_module,
         "vendor_client_evidence",
