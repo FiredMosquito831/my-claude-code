@@ -33,8 +33,10 @@ listing reads this record too: the tuple is held in
 with the same gateway id, so the wire and the catalogues speak one vocabulary.
 """
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from my_claude_code.application.model_kinds import chat_listing_filter
 from my_claude_code.application.model_metadata import (
@@ -154,6 +156,19 @@ class CatalogueModel:
     # -- provenance, for the report and the dashboard ----------------------
     field_provenance: Mapping[str, CatalogueFieldProvenance] = field(
         default_factory=dict
+    )
+    # -- non-canonical Codex vendor tier metadata (8.42.0) -----------------
+    # Carried from ``ProviderModelInfo.published_row`` for ``chatgpt_oauth`` /
+    # ``openai`` so ``codex.py`` emits published tiers without changing
+    # equality, hashing, repr, or non-Codex models.
+    additional_speed_tiers: tuple[str, ...] = field(
+        default=(), compare=False, hash=False, repr=False
+    )
+    service_tiers: tuple[tuple[tuple[str, Any], ...], ...] = field(
+        default=(), compare=False, hash=False, repr=False
+    )
+    default_service_tier: str | None = field(
+        default=None, compare=False, hash=False, repr=False
     )
 
     @property
@@ -511,6 +526,9 @@ def _variant(
         supported_parameters=resolved.supported_parameters,
         default_parameters=resolved.default_parameters,
         field_provenance=resolved.field_provenance,
+        additional_speed_tiers=resolved.additional_speed_tiers,
+        service_tiers=resolved.service_tiers,
+        default_service_tier=resolved.default_service_tier,
     )
 
 
@@ -579,6 +597,48 @@ def _with_live(
     return replace(model, **changes) if changes else model
 
 
+def _codex_service_tier_metadata(
+    provider_id: str, info: ProviderModelInfo | None
+) -> tuple[tuple[str, ...], tuple[tuple[tuple[str, Any], ...], ...], str | None]:
+    """Extract vendor-published Codex service-tier metadata from ``published_row``."""
+    if (
+        provider_id not in {"chatgpt_oauth", "openai"}
+        or info is None
+        or not isinstance(info.published_row, str)
+        or not info.published_row
+    ):
+        return (), (), None
+    try:
+        row = json.loads(info.published_row)
+    except ValueError:
+        return (), (), None
+    if not isinstance(row, Mapping):
+        return (), (), None
+    raw_speed = row.get("additional_speed_tiers")
+    additional_speed_tiers = (
+        tuple(item for item in raw_speed if isinstance(item, str) and item)
+        if isinstance(raw_speed, list)
+        else ()
+    )
+    raw_tiers = row.get("service_tiers")
+    service_tiers = (
+        tuple(
+            tuple((str(k), v) for k, v in item.items())
+            for item in raw_tiers
+            if isinstance(item, Mapping)
+        )
+        if isinstance(raw_tiers, list)
+        else ()
+    )
+    raw_default = row.get("default_service_tier")
+    default_service_tier = (
+        raw_default.strip()
+        if isinstance(raw_default, str) and raw_default.strip()
+        else None
+    )
+    return additional_speed_tiers, service_tiers, default_service_tier
+
+
 def _resolve(
     provider_model_ref: str,
     *,
@@ -612,6 +672,9 @@ def _resolve(
             provider_id, model_id
         )
     prices = runtime.model_prices_tiered(provider_id, model_id)
+    additional_speed_tiers, service_tiers, default_service_tier = (
+        _codex_service_tier_metadata(provider_id, info)
+    )
     resolved = CatalogueModel(
         gateway_id=gateway_model_id(provider_model_ref),
         provider_model_ref=provider_model_ref,
@@ -642,6 +705,9 @@ def _resolve(
         field_provenance=(
             {} if provenance is None else dict(provenance(provider_id, model_id, info))
         ),
+        additional_speed_tiers=additional_speed_tiers,
+        service_tiers=service_tiers,
+        default_service_tier=default_service_tier,
     )
     answer = None if live is None else live(provider_id, model_id)
     if answer is not None and answer.feeds_ladder:

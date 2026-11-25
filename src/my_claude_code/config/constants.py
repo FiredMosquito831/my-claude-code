@@ -125,6 +125,14 @@ CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE = "fcc-managed-oauth"
 # per ``(base_url, account, conversation)`` with a 2-hour TTL.
 CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT = True
 
+# Opt-in service tier for ChatGPT OAuth / ``openai`` requests (8.42.0).
+# ``None`` (default) emits no ``service_tier`` field so wire payloads remain
+# byte-identical to prior releases; ``"priority"`` (with ``"fast"`` normalized
+# to ``"priority"``) requests priority processing when the caller omitted one.
+CHATGPT_OAUTH_SERVICE_TIER_DEFAULT: str | None = None
+CHATGPT_OAUTH_SERVICE_TIER_VALUES: tuple[str, ...] = ("priority",)
+CHATGPT_OAUTH_SERVICE_TIER_ALIASES: dict[str, str] = {"fast": "priority"}
+
 # Whether built-in Mistral Studio (``mistral``) and Mistral Vibe
 # (``mistral_vibe``) requests on ``api.mistral.ai`` send an opaque,
 # restart-stable root-session digest in body ``prompt_cache_key`` and header

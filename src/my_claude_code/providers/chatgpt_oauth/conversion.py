@@ -15,8 +15,11 @@ field, and the wire baseline compares the serialised bytes.
 
 from typing import Any
 
+from my_claude_code.application.catalogues.codex import CODEX_BASE_INSTRUCTIONS
 from my_claude_code.application.errors import InvalidRequestError
+from my_claude_code.config.constants import CHATGPT_OAUTH_SERVICE_TIER_ALIASES
 from my_claude_code.config.settings import (
+    configured_chatgpt_oauth_service_tier,
     configured_reasoning_adaptive,
     configured_responses_parallel_tool_calls,
 )
@@ -130,8 +133,9 @@ def build_chatgpt_oauth_request_body(
     ):
         effective_unspecified = ReasoningEffort.MAX.value
     parallel = configured_responses_parallel_tool_calls()
+    default_service_tier = configured_chatgpt_oauth_service_tier()
     if request.responses_envelope is not None:
-        return build_responses_passthrough_body(
+        body = build_responses_passthrough_body(
             request,
             reasoning=reasoning,
             store=False,
@@ -146,22 +150,33 @@ def build_chatgpt_oauth_request_body(
             unspecified_effort=effective_unspecified,
             drop_reasoning_items=drop_reasoning_items,
             compact=compact,
+            default_instructions=CODEX_BASE_INSTRUCTIONS,
+            default_service_tier=default_service_tier,
         )
-    return build_responses_request_body(
-        request,
-        reasoning=reasoning,
-        store=False,
-        stream=True,
-        # 8.15.0: the adapter-level switch, read here so a dashboard save
-        # reaches the next request. Before it, this line hard-coded ``False``.
-        parallel_tool_calls=parallel,
-        max_output_tokens=None,
-        prompt_cache_key=prompt_cache_key,
-        include_encrypted_reasoning=True,
-        tool_name_max_length=tool_name_max_length,
-        tool_schema_dialect=tool_schema_dialect,
-        wire_notes=wire_notes,
-        origin=origin,
-        plaintext_replay=plaintext_replay,
-        unspecified_effort=effective_unspecified,
-    )
+    else:
+        body = build_responses_request_body(
+            request,
+            reasoning=reasoning,
+            store=False,
+            stream=True,
+            # 8.15.0: the adapter-level switch, read here so a dashboard save
+            # reaches the next request. Before it, this line hard-coded ``False``.
+            parallel_tool_calls=parallel,
+            max_output_tokens=None,
+            prompt_cache_key=prompt_cache_key,
+            include_encrypted_reasoning=True,
+            tool_name_max_length=tool_name_max_length,
+            tool_schema_dialect=tool_schema_dialect,
+            wire_notes=wire_notes,
+            origin=origin,
+            plaintext_replay=plaintext_replay,
+            unspecified_effort=effective_unspecified,
+            default_instructions=CODEX_BASE_INSTRUCTIONS,
+            default_service_tier=default_service_tier,
+        )
+    tier = body.get("service_tier")
+    if isinstance(tier, str):
+        aliased_tier = CHATGPT_OAUTH_SERVICE_TIER_ALIASES.get(tier.strip().lower())
+        if aliased_tier is not None:
+            body["service_tier"] = aliased_tier
+    return body

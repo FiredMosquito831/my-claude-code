@@ -3137,6 +3137,8 @@ The other two buttons are for a credential you already have. **Refresh now** ren
 
 **ChatGPT OAuth per-conversation cache affinity (8.28.0; default `true` since 8.36.0).** `CHATGPT_OAUTH_SESSION_AFFINITY` defaults to `true` (hot-applied from the ChatGPT OAuth card on the next request without restart): MCC derives per-conversation `session-id`, `thread-id`, `x-client-request-id`, and bounded `prompt_cache_key` (`<= 64` chars) from root session headers/metadata/opening turns (sharing Claude Code subagents under the root session) and echoes `x-codex-turn-state` per `(base_url, account, conversation)` with a 2-hour TTL (cleared on HTTP error, never shared across accounts). Setting `CHATGPT_OAUTH_SESSION_AFFINITY=false` restores the v8.27.0 provider-wide `session-id` and omits `prompt_cache_key` and sticky turn-state headers byte for byte.
 
+**ChatGPT OAuth service tier (8.42.0).** `CHATGPT_OAUTH_SERVICE_TIER` defaults to unset (`""`), omitting `service_tier` from outbound bodies; setting `priority` (or `fast`, normalized to `priority`) requests priority processing when the caller omitted `service_tier` (an explicit inbound `service_tier` always wins). Hot-applied on the next request without a restart.
+
 **Downgrade note.** A 7.29.x build reads the **first** account out of the new store and serves it correctly, but the first write it performs replaces the whole document and drops the others. The `.bak-<epoch>` taken when the store was migrated is the recovery path.
 
 If a refresh reports that Anthropic is **rate-limiting** (a 429), that means wait. It does not mean your credential is dead, and signing in again in response would rotate a working refresh token away. MCC will not tell you to sign in again for a 429; when it does say that, it means it.

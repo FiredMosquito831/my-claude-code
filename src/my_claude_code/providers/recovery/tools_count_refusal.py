@@ -161,7 +161,15 @@ def _tool_name(tool: Any) -> str | None:
     if not isinstance(tool, Mapping):
         return None
     name = tool.get("name")
-    return name if isinstance(name, str) and name else None
+    if isinstance(name, str) and name:
+        return name
+    for nested_key in ("function", "custom"):
+        nested = tool.get(nested_key)
+        if isinstance(nested, Mapping):
+            nested_name = nested.get("name")
+            if isinstance(nested_name, str) and nested_name:
+                return nested_name
+    return None
 
 
 def history_tool_names(items: Any) -> frozenset[str]:
@@ -191,8 +199,9 @@ def history_tool_names(items: Any) -> frozenset[str]:
 def forced_tool_names(choice: Any) -> frozenset[str]:
     """The tool names a ``tool_choice`` pins, in any spelling it arrives in.
 
-    ``{"type": "function", "name": X}`` (Responses), the Chat nesting
-    ``{"function": {"name": X}}``, and an ``allowed_tools`` list of either.
+    ``{"type": "function", "name": X}`` (Responses), ``{"type": "custom", "name": X}``,
+    the Chat nestings ``{"function": {"name": X}}`` / ``{"custom": {"name": X}}``,
+    and an ``allowed_tools`` list of any of them.
     ``auto`` / ``required`` / ``none`` pin nothing: ``required`` asks for *a*
     tool, which any kept tool satisfies.
     """
@@ -203,11 +212,24 @@ def forced_tool_names(choice: Any) -> frozenset[str]:
         if isinstance(name, str) and name:
             names.add(name)
         names.update(forced_tool_names(choice.get("function")))
+        names.update(forced_tool_names(choice.get("custom")))
         tools = choice.get("tools")
         if isinstance(tools, Sequence) and not isinstance(tools, str | bytes):
             for tool in tools:
                 names.update(forced_tool_names(tool))
     return frozenset(names)
+
+
+def _tool_matches_pinned(tool: Any, pinned: frozenset[str]) -> bool:
+    """Return True when ``tool`` or any child in ``namespace.tools[]`` is pinned."""
+    name = _tool_name(tool)
+    if name is not None and name in pinned:
+        return True
+    if isinstance(tool, Mapping) and tool.get("type") == "namespace":
+        nested = tool.get("tools")
+        if isinstance(nested, Sequence) and not isinstance(nested, str | bytes):
+            return any(_tool_matches_pinned(child, pinned) for child in nested)
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,7 +280,7 @@ def trim_tool_catalogue(
 
     def _protected(tool: Any) -> bool:
         name = _tool_name(tool)
-        return name is None or name in protected_names
+        return name is None or _tool_matches_pinned(tool, protected_names)
 
     protected_count = sum(1 for tool in tools if _protected(tool))
     if protected_count > max_count:

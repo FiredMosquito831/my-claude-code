@@ -191,6 +191,60 @@ def request_tool_names(request: MessagesRequest) -> frozenset[str]:
     return frozenset(name for name in _request_tool_names(request) if name)
 
 
+def _iter_envelope_tool_def_names(tool: Any) -> Iterable[str]:
+    if not isinstance(tool, Mapping):
+        return
+    name = tool.get("name")
+    if isinstance(name, str):
+        yield name
+    for nested_key in ("function", "custom"):
+        nested = tool.get(nested_key)
+        if isinstance(nested, Mapping):
+            nested_name = nested.get("name")
+            if isinstance(nested_name, str):
+                yield nested_name
+    if tool.get("type") == "namespace":
+        children = tool.get("tools")
+        if isinstance(children, list):
+            for child in children:
+                yield from _iter_envelope_tool_def_names(child)
+
+
+def _iter_envelope_tool_choice_names(choice: Any) -> Iterable[str]:
+    if not isinstance(choice, Mapping):
+        return
+    name = choice.get("name")
+    if isinstance(name, str):
+        yield name
+    for nested_key in ("function", "custom"):
+        nested = choice.get(nested_key)
+        if isinstance(nested, Mapping):
+            nested_name = nested.get("name")
+            if isinstance(nested_name, str):
+                yield nested_name
+    tools = choice.get("tools")
+    if isinstance(tools, list):
+        for sub in tools:
+            yield from _iter_envelope_tool_choice_names(sub)
+
+
+def _iter_envelope_tool_names(envelope: Mapping[str, Any]) -> Iterable[str]:
+    tools = envelope.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            yield from _iter_envelope_tool_def_names(tool)
+    yield from _iter_envelope_tool_choice_names(envelope.get("tool_choice"))
+    items = envelope.get("input")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("type") in {"function_call", "custom_tool_call"}:
+                name = item.get("name")
+                if isinstance(name, str):
+                    yield name
+
+
 def _request_tool_names(request: MessagesRequest) -> Iterable[str]:
     for tool in request.tools or ():
         yield tool.name
@@ -218,6 +272,9 @@ def _request_tool_names(request: MessagesRequest) -> Iterable[str]:
             name = get_block_attr(block, "name")
             if isinstance(name, str):
                 yield name
+
+    if isinstance(request.responses_envelope, Mapping):
+        yield from _iter_envelope_tool_names(request.responses_envelope)
 
 
 def _unique_alias(

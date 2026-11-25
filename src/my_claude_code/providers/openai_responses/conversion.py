@@ -198,6 +198,40 @@ def responses_tool_name_codec(
     )
 
 
+def _alias_responses_tool(
+    tool: Any, tool_names: OpenAIToolNameCodec
+) -> tuple[Any, bool]:
+    """Re-encode one tool definition (flat, nested, ``custom``, or ``namespace``)."""
+    if not isinstance(tool, Mapping):
+        return tool, False
+    if tool.get("type") == "namespace" and isinstance(tool.get("tools"), list):
+        rebuilt_children: list[Any] = []
+        any_changed = False
+        for child in tool["tools"]:
+            aliased_child, child_changed = _alias_responses_tool(child, tool_names)
+            if child_changed:
+                any_changed = True
+            rebuilt_children.append(aliased_child)
+        if any_changed:
+            return {**tool, "tools": rebuilt_children}, True
+        return tool, False
+    name = tool.get("name")
+    if isinstance(name, str):
+        alias = tool_names.encode(name)
+        if alias != name:
+            return {**tool, "name": alias}, True
+        return tool, False
+    tool_type = tool.get("type")
+    if tool_type in {"function", "custom"}:
+        nested = tool.get(tool_type)
+        if isinstance(nested, Mapping) and isinstance(nested.get("name"), str):
+            nested_name = nested["name"]
+            alias = tool_names.encode(nested_name)
+            if alias != nested_name:
+                return {**tool, tool_type: {**nested, "name": alias}}, True
+    return tool, False
+
+
 def alias_responses_body_tool_names(
     body: dict[str, Any], tool_names: OpenAIToolNameCodec
 ) -> dict[str, Any] | None:
@@ -212,9 +246,9 @@ def alias_responses_body_tool_names(
 
     Three sites, the same three :func:`build_responses_request_body` encodes:
     the ``tools`` catalogue, a forced ``tool_choice``, and every replayed
-    ``function_call`` in ``input``. ``encode`` is the identity for a name the
-    codec left alone, so a body with nothing to alias comes back ``None`` and
-    is never retried.
+    ``function_call`` / ``custom_tool_call`` in ``input``. ``encode`` is the
+    identity for a name the codec left alone, so a body with nothing to alias
+    comes back ``None`` and is never retried.
     """
 
     if not tool_names.has_aliases:
@@ -226,13 +260,10 @@ def alias_responses_body_tool_names(
     if isinstance(tools, list):
         rebuilt_tools: list[Any] = []
         for tool in tools:
-            name = tool.get("name") if isinstance(tool, dict) else None
-            alias = tool_names.encode(name) if isinstance(name, str) else None
-            if alias is not None and alias != name:
-                rebuilt_tools.append({**tool, "name": alias})
+            aliased_tool, tool_changed = _alias_responses_tool(tool, tool_names)
+            if tool_changed:
                 changed = True
-            else:
-                rebuilt_tools.append(tool)
+            rebuilt_tools.append(aliased_tool)
         cloned["tools"] = rebuilt_tools
 
     choice = cloned.get("tool_choice")
@@ -251,7 +282,6 @@ def alias_responses_body_tool_names(
                 isinstance(item, dict)
                 and item.get("type") in {"function_call", "custom_tool_call"}
                 and isinstance(name, str)
-                and not item.get("namespace")
             ):
                 alias = tool_names.encode(name)
                 if alias != name:
@@ -265,22 +295,42 @@ def alias_responses_body_tool_names(
 
 
 def _alias_tool_choice(
-    choice: dict[str, Any], tool_names: OpenAIToolNameCodec
+    choice: Mapping[str, Any],
+    tool_names: OpenAIToolNameCodec,
+    *,
+    promote_nested: bool = True,
 ) -> dict[str, Any] | None:
-    """Re-encode a forced choice in either spelling, or ``None`` if unchanged."""
+    """Re-encode a forced choice (``function``, ``custom``, ``allowed_tools``), or ``None``."""
 
+    if choice.get("type") == "allowed_tools" and isinstance(choice.get("tools"), list):
+        rebuilt_sub: list[Any] = []
+        any_changed = False
+        for sub in choice["tools"]:
+            if isinstance(sub, Mapping):
+                aliased_sub = _alias_tool_choice(
+                    sub, tool_names, promote_nested=promote_nested
+                )
+                if aliased_sub is not None:
+                    rebuilt_sub.append(aliased_sub)
+                    any_changed = True
+                    continue
+            rebuilt_sub.append(sub)
+        return {**choice, "tools": rebuilt_sub} if any_changed else None
+
+    choice_type = "custom" if choice.get("type") == "custom" else "function"
     name = choice.get("name")
     if isinstance(name, str):
         alias = tool_names.encode(name)
-        return {"type": "function", "name": alias} if alias != name else None
-    nested = choice.get("function")
-    if isinstance(nested, dict) and isinstance(nested.get("name"), str):
-        alias = tool_names.encode(nested["name"])
-        # Promoted to the Responses spelling on the way, exactly as
-        # ``_convert_tool_choice`` does the moment a codec exists: a host
-        # strict enough to state a name ceiling is the kind that also reads
-        # the published shape.
-        return {"type": "function", "name": alias} if alias != nested["name"] else None
+        return {**choice, "type": choice_type, "name": alias} if alias != name else None
+    for nested_key in ("custom", "function"):
+        nested = choice.get(nested_key)
+        if isinstance(nested, Mapping) and isinstance(nested.get("name"), str):
+            alias = tool_names.encode(nested["name"])
+            if alias == nested["name"]:
+                return None
+            if promote_nested:
+                return {"type": nested_key, "name": alias}
+            return {**choice, nested_key: {**nested, "name": alias}}
     return None
 
 
@@ -1287,6 +1337,8 @@ def build_responses_request_body(
     unspecified_effort: str | None = None,
     apply_responses_sidecars: bool = False,
     allow_openai_responses_sidecars: bool = False,
+    default_instructions: str | None = None,
+    default_service_tier: str | None = None,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -1463,8 +1515,14 @@ def build_responses_request_body(
     if prompt_cache_key:
         body["prompt_cache_key"] = prompt_cache_key
 
-    if instructions:
-        body["instructions"] = instructions
+    effective_instructions = (
+        instructions
+        if isinstance(instructions, str)
+        and (instructions.strip() if default_instructions is not None else instructions)
+        else default_instructions
+    )
+    if effective_instructions:
+        body["instructions"] = effective_instructions
 
     envelope = request.responses_envelope if apply_responses_sidecars else None
     envelope_tools = (
@@ -1531,8 +1589,15 @@ def build_responses_request_body(
             if envelope.get("truncation") is not None:
                 body["truncation"] = deepcopy(envelope["truncation"])
             service_tier = envelope.get("service_tier")
-            if isinstance(service_tier, str) and service_tier:
-                body["service_tier"] = service_tier
+            effective_tier = (
+                service_tier
+                if isinstance(service_tier, str) and service_tier
+                else default_service_tier
+            )
+            if isinstance(effective_tier, str) and effective_tier:
+                body["service_tier"] = effective_tier
+        elif isinstance(default_service_tier, str) and default_service_tier:
+            body["service_tier"] = default_service_tier
         raw_include = envelope.get("include")
         if isinstance(raw_include, list):
             merged_include: list[str] = list(body.get("include", ()))
@@ -1553,6 +1618,8 @@ def build_responses_request_body(
                     merged_include.append(item)
             if merged_include:
                 body["include"] = merged_include
+    elif isinstance(default_service_tier, str) and default_service_tier:
+        body["service_tier"] = default_service_tier
 
     # Recorded beside the body it describes, at the one site both Responses
     # callers (``chatgpt_oauth`` and the OpenCode Responses transport) go
@@ -1622,7 +1689,8 @@ def _sanitize_passthrough_tool(
         nested = copied.get("tools")
         if isinstance(nested, list):
             copied["tools"] = [
-                _sanitize_passthrough_tool(item, tool_names=None) for item in nested
+                _sanitize_passthrough_tool(item, tool_names=tool_names)
+                for item in nested
             ]
         return copied
     if tool_type == "function":
@@ -1661,36 +1729,10 @@ def _sweep_passthrough_tools(
     prepared = [
         _sanitize_passthrough_tool(tool, tool_names=tool_names) for tool in raw_tools
     ]
-    top_sweep = sweep_tool_catalogue(prepared, tool_schema_dialect)
-    result = list(top_sweep.tools)
-    all_removals = list(top_sweep.removals)
-    all_applied = list(top_sweep.applied)
-    all_translations = list(top_sweep.translations)
-
-    for index, tool in enumerate(result):
-        if not isinstance(tool, Mapping) or tool.get("type") != "namespace":
-            continue
-        nested = tool.get("tools")
-        if not isinstance(nested, list) or not nested:
-            continue
-        ns_sweep = sweep_tool_catalogue(nested, tool_schema_dialect)
-        if ns_sweep.tools is not nested:
-            updated_ns = dict(tool)
-            updated_ns["tools"] = list(ns_sweep.tools)
-            result[index] = updated_ns
-        all_removals.extend(ns_sweep.removals)
-        all_applied.extend(ns_sweep.applied)
-        all_translations.extend(ns_sweep.translations)
-
-    if wire_notes is not None and (all_removals or all_translations):
-        combined_sweep = DialectSweep(
-            tools=result,
-            removals=tuple(all_removals),
-            applied=tuple(dict.fromkeys(all_applied)),
-            translations=tuple(all_translations),
-        )
-        wire_notes.update(combined_sweep.wire_marker(tool_schema_dialect))
-    return result
+    sweep = sweep_tool_catalogue(prepared, tool_schema_dialect)
+    if wire_notes is not None and (sweep.removals or sweep.translations):
+        wire_notes.update(sweep.wire_marker(tool_schema_dialect))
+    return list(sweep.tools)
 
 
 def _sanitize_passthrough_reasoning_item(
@@ -1711,6 +1753,9 @@ def _sanitize_passthrough_reasoning_item(
                 if plaintext_replay:
                     summary = item.get("summary")
                     if isinstance(summary, list) and summary:
+                        history_counts[HISTORY_PLAINTEXT_REPLAYED] = (
+                            history_counts.get(HISTORY_PLAINTEXT_REPLAYED, 0) + 1
+                        )
                         return {"type": "reasoning", "summary": deepcopy(summary)}
                 return None
             sanitized = deepcopy(native)
@@ -1783,11 +1828,7 @@ def _sanitize_passthrough_input(
             continue
         if item_type in {"function_call", "custom_tool_call"}:
             name = copied.get("name")
-            if (
-                tool_names is not None
-                and isinstance(name, str)
-                and not copied.get("namespace")
-            ):
+            if tool_names is not None and isinstance(name, str):
                 copied["name"] = tool_names.encode(name)
             sanitized_items.append(copied)
             continue
@@ -1811,6 +1852,8 @@ def build_responses_passthrough_body(
     unspecified_effort: str | None = None,
     drop_reasoning_items: bool = False,
     compact: bool = False,
+    default_instructions: str | None = None,
+    default_service_tier: str | None = None,
 ) -> dict[str, Any]:
     """Reconstruct a Codex Responses body from ``request.responses_envelope``.
 
@@ -1838,6 +1881,8 @@ def build_responses_passthrough_body(
             unspecified_effort=unspecified_effort,
             apply_responses_sidecars=isinstance(envelope, Mapping),
             allow_openai_responses_sidecars=True,
+            default_instructions=default_instructions,
+            default_service_tier=default_service_tier,
         )
         fallback_body.pop("truncation", None)
         return fallback_body
@@ -1856,6 +1901,8 @@ def build_responses_passthrough_body(
     )
     if wire_notes is not None and history_counts:
         wire_notes.update(_carrier_note(history_counts))
+        if plaintext_replay:
+            wire_notes.update(_plaintext_note(history_counts))
 
     caller_parallel = envelope.get("parallel_tool_calls")
     effective_parallel = (
@@ -1876,8 +1923,14 @@ def build_responses_passthrough_body(
         body["prompt_cache_key"] = effective_cache_key
 
     instructions = envelope.get("instructions")
-    if isinstance(instructions, str) and instructions:
-        body["instructions"] = instructions
+    effective_instructions = (
+        instructions
+        if isinstance(instructions, str)
+        and (instructions.strip() if default_instructions is not None else instructions)
+        else default_instructions
+    )
+    if effective_instructions:
+        body["instructions"] = effective_instructions
 
     raw_tools = envelope.get("tools")
     if isinstance(raw_tools, list) and raw_tools:
@@ -1889,20 +1942,24 @@ def build_responses_passthrough_body(
         )
     if "tool_choice" in envelope and envelope["tool_choice"] is not None:
         choice = deepcopy(envelope["tool_choice"])
-        if (
-            tool_names is not None
-            and isinstance(choice, dict)
-            and isinstance(choice.get("name"), str)
-            and not choice.get("namespace")
-        ):
-            choice["name"] = tool_names.encode(choice["name"])
+        if tool_names is not None and isinstance(choice, dict):
+            aliased_choice = _alias_tool_choice(
+                choice, tool_names, promote_nested=False
+            )
+            if aliased_choice is not None:
+                choice = aliased_choice
         body["tool_choice"] = choice
 
     if isinstance(envelope.get("text"), Mapping):
         body["text"] = deepcopy(dict(envelope["text"]))
     service_tier = envelope.get("service_tier")
-    if isinstance(service_tier, str) and service_tier:
-        body["service_tier"] = service_tier
+    effective_tier = (
+        service_tier
+        if isinstance(service_tier, str) and service_tier
+        else default_service_tier
+    )
+    if isinstance(effective_tier, str) and effective_tier:
+        body["service_tier"] = effective_tier
     if isinstance(envelope.get("client_metadata"), Mapping):
         body["client_metadata"] = deepcopy(dict(envelope["client_metadata"]))
 

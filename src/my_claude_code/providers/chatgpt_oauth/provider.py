@@ -1,9 +1,11 @@
 """Direct ChatGPT/Codex OAuth provider using the Responses API."""
 
 import asyncio
+import json
 import platform
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from compression import zstd
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +49,7 @@ from my_claude_code.core.openai_responses import (
 )
 from my_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
+    EFFORT_BY_VALUE,
     ReasoningAdaptationKind,
     ReasoningControl,
     ReasoningDialect,
@@ -54,6 +57,7 @@ from my_claude_code.core.reasoning import (
     ReasoningPolicy,
     effort_intersection,
     narrow_dialect_by_rejections,
+    nearest_effort,
     top_stated_effort,
 )
 from my_claude_code.core.request_log import observed_served_models
@@ -69,6 +73,7 @@ from my_claude_code.core.wire_capture import (
 from my_claude_code.providers.base import BaseProvider, ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
+from my_claude_code.providers.model_listing import published_row_text
 from my_claude_code.providers.oauth_names import account_name
 from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
@@ -163,6 +168,49 @@ CHATGPT_OAUTH_DEFAULT_BASE = "https://chatgpt.com/backend-api"
 #: backend opinion, so both share one set of facts.
 CHATGPT_OAUTH_PROVIDER_ID = "chatgpt_oauth"
 CHATGPT_OAUTH_PROVIDER_IDS: tuple[str, ...] = (CHATGPT_OAUTH_PROVIDER_ID, "openai")
+
+#: Conditional ``Content-Encoding: zstd`` request compression (8.42.0, Q1=Option A).
+#: Normal bodies under 768 KiB remain uncompressed UTF-8 JSON with identical headers;
+#: payloads >= 768 KiB (or rejected with HTTP 413) compress with stdlib zstd level 3.
+CHATGPT_OAUTH_ZSTD_THRESHOLD_BYTES = 786_432
+CHATGPT_OAUTH_ZSTD_LEVEL = 3
+
+
+def _encode_request_payload(
+    body: Mapping[str, Any],
+    headers: Mapping[str, str],
+    *,
+    force_zstd: bool = False,
+) -> tuple[bytes, dict[str, str], bool]:
+    """Serialize ``body`` to compact UTF-8 JSON, compressing with zstd only when needed."""
+    raw_bytes = json.dumps(
+        body, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    compress = force_zstd or len(raw_bytes) >= CHATGPT_OAUTH_ZSTD_THRESHOLD_BYTES
+    if compress:
+        payload = zstd.compress(raw_bytes, level=CHATGPT_OAUTH_ZSTD_LEVEL)
+        wire_headers = dict(headers)
+        wire_headers["Content-Encoding"] = "zstd"
+        return payload, wire_headers, True
+    return raw_bytes, dict(headers), False
+
+
+def _explicit_ultra_requested(
+    request: MessagesRequest, reasoning: ReasoningPolicy
+) -> bool:
+    """Return True when the caller explicitly requested ``effort == 'ultra'``."""
+    if reasoning.control is ReasoningControl.OFF or reasoning.effort is not None:
+        return False
+    candidates: list[object] = []
+    if isinstance(request.responses_envelope, Mapping):
+        env_reasoning = request.responses_envelope.get("reasoning")
+        if isinstance(env_reasoning, Mapping):
+            candidates.append(env_reasoning.get("effort"))
+    if isinstance(request.output_config, Mapping):
+        candidates.append(request.output_config.get("effort"))
+    return any(
+        isinstance(raw, str) and raw.strip().lower() == "ultra" for raw in candidates
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -586,6 +634,65 @@ class ChatGPTOAuthProvider(BaseProvider):
             return self._top_effort_for(model_id)
         return None
 
+    def _effective_reasoning_for_request(
+        self,
+        request: MessagesRequest,
+        reasoning: ReasoningPolicy,
+        *,
+        record_ultra: bool = False,
+    ) -> tuple[ReasoningPolicy, str | None]:
+        """Resolve ``reasoning`` and ``unspecified_effort``, mapping ``ultra -> max``."""
+        if _explicit_ultra_requested(request, reasoning):
+            top_effort_value = self._top_effort_for(request.model)
+            top_effort = (
+                EFFORT_BY_VALUE.get(top_effort_value)
+                if top_effort_value is not None
+                else None
+            )
+            if top_effort is not None:
+                if record_ultra:
+                    record_reasoning_adaptation(
+                        ReasoningAdaptationKind.CLAMPED,
+                        f"CHATGPT_OAUTH mapped 'ultra' reasoning effort to "
+                        f"{top_effort.value!r} for {request.model}",
+                    )
+                mapped_control = (
+                    ReasoningControl.ON
+                    if reasoning.control is ReasoningControl.DEFAULT
+                    else reasoning.control
+                )
+                return (
+                    ReasoningPolicy(control=mapped_control, effort=top_effort),
+                    top_effort.value,
+                )
+        return reasoning, self._unspecified_effort(request.model, reasoning)
+
+    def _apply_learned_reasoning_guard(
+        self, model_id: str, body: dict[str, Any]
+    ) -> None:
+        """Enforce ``RecoveryMemory`` reasoning field/value/summary refusals."""
+        dialect = self.reasoning_dialect(model_id)
+        rejections = self._recovery_memory.rejections_for(model_id) or {}
+        reasoning_block = body.get("reasoning")
+        if isinstance(reasoning_block, dict):
+            if dialect.effort_values is None:
+                body.pop("reasoning", None)
+            else:
+                effort_word = reasoning_block.get("effort")
+                if isinstance(effort_word, str):
+                    requested_effort = EFFORT_BY_VALUE.get(effort_word)
+                    if (
+                        requested_effort is not None
+                        and requested_effort not in dialect.effort_values
+                    ):
+                        reasoning_block["effort"] = nearest_effort(
+                            requested_effort, dialect.effort_values
+                        ).value
+            if "reasoning.summary" in rejections:
+                reasoning_block.pop("summary", None)
+            if not reasoning_block:
+                body.pop("reasoning", None)
+
     def _replay_origin(self, credentials: Any, model: str) -> ReplayOrigin | None:
         """This backend as the five strings a carrier is bound to (8.16.0).
 
@@ -878,9 +985,22 @@ class ChatGPTOAuthProvider(BaseProvider):
         tier 1 -- a change to the ladder, which is out of scope for this
         change and was decided against explicitly.
         """
+        evidence_map = await self.list_model_evidence()
+        catalogue = await asyncio.to_thread(load_codex_catalogue)
+        raw_by_slug: dict[str, str] = {}
+        if catalogue is not None:
+            for entry in catalogue.entries:
+                if entry.raw is not None:
+                    text = published_row_text(entry.raw)
+                    if text is not None:
+                        raw_by_slug[entry.slug] = text
         return frozenset(
-            ProviderModelInfo(model_id=model_id, listing=evidence)
-            for model_id, evidence in (await self.list_model_evidence()).items()
+            ProviderModelInfo(
+                model_id=model_id,
+                listing=evidence,
+                published_row=raw_by_slug.get(model_id),
+            )
+            for model_id, evidence in evidence_map.items()
         )
 
     def preflight_stream(
@@ -890,10 +1010,12 @@ class ChatGPTOAuthProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> None:
         """Validate the upstream request before streaming."""
-        unspecified_effort = self._unspecified_effort(request.model, reasoning)
+        effective_reasoning, unspecified_effort = self._effective_reasoning_for_request(
+            request, reasoning
+        )
         build_chatgpt_oauth_request_body(
             request,
-            reasoning=reasoning,
+            reasoning=effective_reasoning,
             **(
                 {"unspecified_effort": unspecified_effort}
                 if unspecified_effort is not None
@@ -925,11 +1047,21 @@ class ChatGPTOAuthProvider(BaseProvider):
                 send_headers.pop("x-codex-turn-state", None)
             else:
                 send_headers["x-codex-turn-state"] = live_turn_state
+        content, wire_headers, compressed = _encode_request_payload(body, send_headers)
         request = self._client.build_request(
-            "POST", url, headers=send_headers, json=body
+            "POST", url, headers=wire_headers, content=content
         )
         try:
             response = await self._client.send(request, stream=True)
+            if response.status_code == 413 and not compressed:
+                await response.aclose()
+                content, wire_headers, _ = _encode_request_payload(
+                    body, send_headers, force_zstd=True
+                )
+                request = self._client.build_request(
+                    "POST", url, headers=wire_headers, content=content
+                )
+                response = await self._client.send(request, stream=True)
         except Exception:
             if turn_state_key is not None:
                 get_chatgpt_turn_state_cache().delete(turn_state_key)
@@ -1054,13 +1186,15 @@ class ChatGPTOAuthProvider(BaseProvider):
             session_id = self._session_id
             thread_id = None
 
-        unspecified_effort = self._unspecified_effort(request.model, reasoning)
+        effective_reasoning, unspecified_effort = self._effective_reasoning_for_request(
+            request, reasoning, record_ultra=True
+        )
         drop_reasoning_items = (
             self._recovery_memory.responses_reasoning_item_refused_for(request.model)
         )
         body = build_chatgpt_oauth_request_body(
             request,
-            reasoning=reasoning,
+            reasoning=effective_reasoning,
             tool_schema_dialect=self._tool_schema_dialect,
             wire_notes=declared_marker,
             tool_name_max_length=name_limit,
@@ -1082,6 +1216,7 @@ class ChatGPTOAuthProvider(BaseProvider):
                 else {}
             ),
         )
+        self._apply_learned_reasoning_guard(request.model, body)
         url = f"{self._base_url}/codex/responses"
 
         def _build_attempt_headers(

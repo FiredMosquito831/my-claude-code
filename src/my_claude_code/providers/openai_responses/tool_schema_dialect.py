@@ -233,6 +233,49 @@ def translate_schema_patterns(
     return rewrite_schema_keyword(schema, "pattern", _translate, path, visit)
 
 
+def _translate_tool(tool: Any, translations: list[SchemaTranslation]) -> Any:
+    """Translate ``pattern`` in one tool definition recursively, copy-on-write."""
+    if not isinstance(tool, Mapping):
+        return tool
+    if tool.get("type") == "namespace":
+        nested = tool.get("tools")
+        if not isinstance(nested, list):
+            return tool
+        rebuilt: list[Any] = []
+        changed = False
+        for child in nested:
+            translated_child = _translate_tool(child, translations)
+            if translated_child is not child:
+                changed = True
+            rebuilt.append(translated_child)
+        return {**tool, "tools": rebuilt} if changed else tool
+
+    parameters = tool.get("parameters")
+    if parameters is not None:
+        name = str(tool.get("name") or "unknown")
+
+        def _record(where: str, _value: Any, name: str = name) -> None:
+            translations.append(SchemaTranslation(tool=name, path=where))
+
+        translated = translate_schema_patterns(parameters, _record)
+        return tool if translated is parameters else {**tool, "parameters": translated}
+
+    fn = tool.get("function")
+    if isinstance(fn, Mapping) and fn.get("parameters") is not None:
+        fn_parameters = fn["parameters"]
+        name = str(fn.get("name") or tool.get("name") or "unknown")
+
+        def _record_nested(where: str, _value: Any, name: str = name) -> None:
+            translations.append(SchemaTranslation(tool=name, path=where))
+
+        translated = translate_schema_patterns(fn_parameters, _record_nested)
+        if translated is fn_parameters:
+            return tool
+        return {**tool, "function": {**fn, "parameters": translated}}
+
+    return tool
+
+
 def _translate_catalogue(
     tools: Sequence[Any],
 ) -> tuple[Sequence[Any], list[SchemaTranslation]]:
@@ -242,21 +285,10 @@ def _translate_catalogue(
     result: list[Any] = []
     changed = False
     for tool in tools:
-        parameters = tool.get("parameters") if isinstance(tool, Mapping) else None
-        if parameters is None:
-            result.append(tool)
-            continue
-        name = str(tool.get("name") or "unknown")
-
-        def _record(where: str, _value: Any, name: str = name) -> None:
-            translations.append(SchemaTranslation(tool=name, path=where))
-
-        translated = translate_schema_patterns(parameters, _record)
-        if translated is parameters:
-            result.append(tool)
-            continue
-        changed = True
-        result.append({**tool, "parameters": translated})
+        translated = _translate_tool(tool, translations)
+        if translated is not tool:
+            changed = True
+        result.append(translated)
     if not changed:
         return tools, []
     return result, translations

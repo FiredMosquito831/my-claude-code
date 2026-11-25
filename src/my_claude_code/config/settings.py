@@ -32,6 +32,9 @@ from .constants import (
     CATALOGUE_FETCH_TIMEOUT_SECONDS,
     CHAT_STRUCTURED_REASONING_DEFAULT,
     CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+    CHATGPT_OAUTH_SERVICE_TIER_ALIASES,
+    CHATGPT_OAUTH_SERVICE_TIER_DEFAULT,
+    CHATGPT_OAUTH_SERVICE_TIER_VALUES,
     CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
     COST_ESTIMATION_MODE_DEFAULT,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
@@ -352,6 +355,7 @@ BLANK_MEANS_UNSET_FIELDS: tuple[str, ...] = (
     "context7_api_key",
     "deepseek_search_api_key",
     "searxng_base_url",
+    "chatgpt_oauth_service_tier",
 )
 
 
@@ -583,6 +587,14 @@ class Settings(BaseSettings):
     chatgpt_oauth_session_affinity: bool = Field(
         default=CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
         validation_alias="CHATGPT_OAUTH_SESSION_AFFINITY",
+    )
+    # Opt-in service tier for ChatGPT OAuth / ``openai`` requests (8.42.0).
+    # Blank/unset (default) omits ``service_tier`` so request bodies stay
+    # byte-identical; ``priority`` (with ``fast`` normalized to ``priority``)
+    # sets ``service_tier`` when the inbound request did not supply one.
+    chatgpt_oauth_service_tier: str | None = Field(
+        default=CHATGPT_OAUTH_SERVICE_TIER_DEFAULT,
+        validation_alias="CHATGPT_OAUTH_SERVICE_TIER",
     )
     anthropic_oauth_write_back: bool = Field(
         default=True, validation_alias="ANTHROPIC_OAUTH_WRITE_BACK"
@@ -2813,6 +2825,29 @@ class Settings(BaseSettings):
         """``client`` or whole minutes 1-60; blank is ``client``."""
         return normalize_prompt_cache_ttl(value, tier=False)
 
+    @field_validator("chatgpt_oauth_service_tier", mode="before")
+    @classmethod
+    def validate_chatgpt_oauth_service_tier(cls, value: object) -> str | None:
+        """Blank/unset is ``None``; ``fast`` aliases to ``priority``."""
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        if not normalized:
+            return None
+        normalized = CHATGPT_OAUTH_SERVICE_TIER_ALIASES.get(normalized, normalized)
+        if normalized not in CHATGPT_OAUTH_SERVICE_TIER_VALUES:
+            allowed = ", ".join(
+                (
+                    *CHATGPT_OAUTH_SERVICE_TIER_VALUES,
+                    *CHATGPT_OAUTH_SERVICE_TIER_ALIASES,
+                )
+            )
+            raise ValueError(
+                f"CHATGPT_OAUTH_SERVICE_TIER must be blank or one of ({allowed}), "
+                f"got {value!r}"
+            )
+        return normalized
+
     @field_validator(
         "prompt_cache_ttl_mythos",
         "prompt_cache_ttl_fable",
@@ -3782,6 +3817,26 @@ def configured_chatgpt_oauth_session_affinity() -> bool:
             CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
         )
     )
+
+
+def configured_chatgpt_oauth_service_tier() -> str | None:
+    """Optional service tier for ChatGPT OAuth / ``openai`` requests (8.42.0).
+
+    Read per request so a dashboard save applies on the next request without
+    restarting the server. Defaults to ``None`` (omitted from wire bodies).
+    """
+    settings = get_settings()
+    value = getattr(
+        settings,
+        "chatgpt_oauth_service_tier",
+        CHATGPT_OAUTH_SERVICE_TIER_DEFAULT,
+    )
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    return CHATGPT_OAUTH_SERVICE_TIER_ALIASES.get(normalized, normalized)
 
 
 def configured_mistral_prompt_cache_affinity() -> bool:
