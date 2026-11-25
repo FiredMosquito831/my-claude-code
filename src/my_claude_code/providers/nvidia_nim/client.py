@@ -24,6 +24,7 @@ from my_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     complaint_evidence_snippet,
     is_bad_request,
+    model_accepts_pdf_for_provider,
     sampling_parameter_evidence,
     upstream_complaint,
 )
@@ -125,6 +126,12 @@ class NvidiaNimProvider(OpenAIChatProvider):
             self._nim_settings,
             reasoning=reasoning,
             provider_id=self._provider_id,
+            accepts_documents=model_accepts_pdf_for_provider(
+                self._provider_id, request.model
+            ),
+            suppress_structured_output=self._recovery_memory.structured_output_refused(
+                request.model
+            ),
         )
 
     def _prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:

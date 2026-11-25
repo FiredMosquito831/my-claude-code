@@ -26,6 +26,8 @@ def build_nim_request_body(
     *,
     reasoning: ReasoningPolicy,
     provider_id: str = "",
+    accepts_documents: bool = False,
+    suppress_structured_output: bool = False,
 ) -> dict[str, Any]:
     """Build OpenAI-format request body from Anthropic request plus NIM settings."""
     return build_openai_chat_request_body(
@@ -41,6 +43,8 @@ def build_nim_request_body(
             ),
         ),
         provider_id=provider_id,
+        accepts_documents=accepts_documents,
+        suppress_structured_output=suppress_structured_output,
     )
 
 

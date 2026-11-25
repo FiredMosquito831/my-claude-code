@@ -570,3 +570,64 @@ def test_a_short_configured_value_is_never_hashed():
         }
     finally:
         wire_capture.reset_credential_digests()
+
+
+def test_message_shape_records_reasoning_fields_without_leaking_text() -> None:
+    """Assistant replay fields are captured as lengths/counts only, omitted when empty."""
+    secret_reasoning = "internal chain of thought sk-live-999888"
+    secret_cipher = "gAAAAABencrypted_reasoning_payload"
+    body = {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "ok",
+                "reasoning_content": secret_reasoning,
+                "reasoning": "brief reasoning",
+                "reasoning_details": [{"type": "reasoning.text", "text": "hidden"}],
+                "encrypted_content": secret_cipher,
+            },
+            {
+                "role": "assistant",
+                "content": "empty reasoning",
+                "reasoning_content": "",
+                "reasoning": None,
+                "reasoning_details": [],
+                "encrypted_content": None,
+            },
+            {"role": "user", "content": "next"},
+        ],
+    }
+
+    stripped = strip_request_content(body)
+    serialized = json.dumps(stripped)
+
+    assert secret_reasoning not in serialized
+    assert secret_cipher not in serialized
+    assert "brief reasoning" not in serialized
+    assert "hidden" not in serialized
+
+    assert stripped["messages"][0] == {
+        "role": "user",
+        "content": {"type": "text", "chars": 2},
+    }
+    assert stripped["messages"][1]["reasoning_fields"] == {
+        "reasoning_content": len(secret_reasoning),
+        "encrypted_content": len(secret_cipher),
+        "reasoning": len("brief reasoning"),
+        "reasoning_details": 1,
+    }
+    assert "reasoning_fields" not in stripped["messages"][2]
+    assert "reasoning_fields" not in stripped["messages"][3]
+
+    wire_json = summarize_wire_body(body)
+    assert secret_reasoning not in wire_json
+    assert secret_cipher not in wire_json
+    parsed = json.loads(wire_json)
+    assert parsed["messages"][1]["reasoning_fields"] == {
+        "reasoning_content": len(secret_reasoning),
+        "encrypted_content": len(secret_cipher),
+        "reasoning": len("brief reasoning"),
+        "reasoning_details": 1,
+    }

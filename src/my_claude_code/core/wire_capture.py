@@ -336,6 +336,30 @@ def _tool_call_name(call: Any) -> str:
     return str(source.get("name") or "")
 
 
+def _reasoning_fields_shape(message: Mapping[str, Any]) -> dict[str, int]:
+    """Return lightweight length/count metadata for present reasoning replay fields."""
+    fields: dict[str, int] = {}
+    for key in ("reasoning_content", "encrypted_content"):
+        val = message.get(key)
+        if isinstance(val, str) and val:
+            fields[key] = len(val)
+    reasoning_val = message.get("reasoning")
+    if isinstance(reasoning_val, str) and reasoning_val:
+        fields["reasoning"] = len(reasoning_val)
+    elif isinstance(reasoning_val, bool) and reasoning_val:
+        fields["reasoning"] = 1
+    elif isinstance(reasoning_val, Mapping) and reasoning_val:
+        fields["reasoning"] = len(reasoning_val)
+    details_val = message.get("reasoning_details")
+    if (
+        isinstance(details_val, Sequence)
+        and not isinstance(details_val, str | bytes)
+        and details_val
+    ):
+        fields["reasoning_details"] = len(details_val)
+    return fields
+
+
 def _message_shape(message: Any) -> Any:
     if not isinstance(message, Mapping):
         return _content_shape(message)
@@ -354,6 +378,9 @@ def _message_shape(message: Any) -> Any:
     tool_calls = message.get("tool_calls")
     if isinstance(tool_calls, Sequence) and not isinstance(tool_calls, str | bytes):
         shape["tool_calls"] = [{"name": _tool_call_name(c)} for c in tool_calls]
+    reasoning_fields = _reasoning_fields_shape(message)
+    if reasoning_fields:
+        shape["reasoning_fields"] = reasoning_fields
     return shape
 
 
