@@ -46,6 +46,7 @@ from .opencode_identity import (
     log_identity,
 )
 from .profiles import (
+    COMMANDCODE_CHAT_PROFILE,
     GENERIC_OPENAI_PROFILE,
     MISTRAL_CHAT_PROFILE,
     OPENAI_CHAT_PROFILES,
@@ -112,6 +113,7 @@ def create_openai_chat_provider(
 __all__ = [
     "CACHE_AFFINITY_HEADER_NAME",
     "CLIENT_FAMILY_ORDER",
+    "COMMANDCODE_CHAT_PROFILE",
     "GENERIC_OPENAI_PROFILE",
     "MISTRAL_CHAT_PROFILE",
     "NO_REASONING",

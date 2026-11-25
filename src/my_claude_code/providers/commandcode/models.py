@@ -9,6 +9,7 @@ from my_claude_code.providers.model_listing import (
     ModelListResponseError,
     SkippedModelRow,
     declared_from_row,
+    is_commandcode_messages_model,
     listing_date_field,
     model_list_parse,
     published_parameters_from_row,
@@ -20,6 +21,18 @@ from my_claude_code.providers.model_listing import (
 def is_anthropic_messages_model(model_id: str) -> bool:
     """Return whether Command Code documents this ID as a Claude model."""
     return model_id.strip().lower().startswith("claude-")
+
+
+def commandcode_uses_anthropic_messages(model_id: str) -> bool:
+    """Return whether Command Code routes ``model_id`` via ``_anthropic`` ``/messages``.
+
+    Consults cached ``/models`` ``declared.endpoints`` first (routing models that
+    declare ``/messages`` without Chat/Responses to ``_anthropic``, and models
+    that declare Chat/Responses to ``_openai``), falling back to
+    :func:`is_anthropic_messages_model` when no cached endpoints exist.
+    """
+
+    return is_commandcode_messages_model(model_id)
 
 
 def parse_commandcode_model_list(

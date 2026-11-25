@@ -1,6 +1,6 @@
 """Declarative profiles for ordinary OpenAI-compatible providers."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -24,7 +24,10 @@ from my_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
-from my_claude_code.providers.model_listing import RequiredPathValues
+from my_claude_code.providers.model_listing import (
+    RequiredPathValues,
+    is_commandcode_messages_model,
+)
 from my_claude_code.providers.openai_responses import (
     RESPONSES_TOOL_SCHEMA_DIALECT,
     ToolSchemaDialect,
@@ -373,6 +376,10 @@ class OpenAIChatProfile:
     #: including ``mistral_codestral``, ``opencode``, and
     #: ``GENERIC_OPENAI_PROFILE`` -- emits neither header nor body key.
     cache_affinity: CacheAffinitySpec | None = None
+    #: Optional predicate identifying models on a hybrid provider (like
+    #: ``commandcode``) that are delegated to a separate native protocol
+    #: adapter rather than routed through ``OpenAIChatProvider`` surfaces.
+    surface_excluded_model: Callable[[str], bool] | None = None
 
     @property
     def provider_name(self) -> str:
@@ -1317,7 +1324,52 @@ MISTRAL_CHAT_PROFILE = OpenAIChatProfile(
     ),
 )
 
+_COMMANDCODE_EFFORTS = (
+    # Command Code publishes no effort vocabulary of its own: every model row
+    # in /v1/models carries a null ``supported_parameters``. The vocabulary
+    # below is the one the gateway itself names when it rejects an unknown
+    # value -- "Invalid option: expected one of low|medium|high|xhigh|max".
+    (ReasoningEffort.MINIMAL, "low"),
+    (ReasoningEffort.LOW, "low"),
+    (ReasoningEffort.MEDIUM, "medium"),
+    (ReasoningEffort.HIGH, "high"),
+    (ReasoningEffort.XHIGH, "xhigh"),
+    (ReasoningEffort.MAX, "max"),
+)
+
+# Declarative profile shared by ``CommandCodeProvider._openai`` and
+# ``SPECIAL_SURFACE_PROFILES["commandcode"]``. Kept beside ``OPENAI_CHAT_PROFILES``
+# so the Models page and surface admin routes inspect the same single source of
+# truth without importing ``providers.commandcode`` (which would cycle).
+#
+# Live ``v8.40.0``-``v8.46.1`` captures proved Command Code streams
+# ``delta.reasoning_content`` (2,035/2,035 vs 0 ``delta.reasoning``), so
+# ``reasoning_replay=REASONING_CONTENT`` and ``reasoning_delta_field="reasoning_content"``
+# are preserved. ``optimistic_first_try=False`` keeps cold starts without
+# ``/models`` on ``CHAT_COMPLETIONS`` byte-identical, while dual-door models
+# declaring ``("/chat/completions", "/responses")`` in ``/models`` route across
+# both doors.
+COMMANDCODE_CHAT_PROFILE = OpenAIChatProfile(
+    _policy(
+        "COMMANDCODE",
+        ReasoningReplayMode.REASONING_CONTENT,
+        include_extra_body=True,
+        extra_body_validator=validate_extra_body_does_not_override_canonical_fields,
+    ),
+    NamedEffortReasoning(_COMMANDCODE_EFFORTS, enabled_value="max"),
+    reasoning_delta_field="reasoning_content",
+    reasoning_delta_fallback_field="reasoning",
+    response_surfaces=(
+        ResponseSurface.CHAT_COMPLETIONS,
+        ResponseSurface.RESPONSES,
+    ),
+    no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
+    optimistic_first_try=False,
+    surface_excluded_model=is_commandcode_messages_model,
+)
+
 SPECIAL_SURFACE_PROFILES: dict[str, OpenAIChatProfile] = {
+    "commandcode": COMMANDCODE_CHAT_PROFILE,
     "mistral": MISTRAL_CHAT_PROFILE,
     "mistral_vibe": MISTRAL_CHAT_PROFILE,
 }

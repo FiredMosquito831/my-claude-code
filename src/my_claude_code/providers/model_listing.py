@@ -2,10 +2,12 @@
 
 import json
 import math
+import threading
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
@@ -16,11 +18,15 @@ from my_claude_code.application.model_metadata import (
     ModelDefaultParameterValue,
     ModelReasoningCapability,
     ProviderModelDeclaration,
+    ResponseSurface,
     declared_accepts_images,
 )
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
 )
+from my_claude_code.config.paths import config_dir_path
+from my_claude_code.core.derived_cache import DerivedCache
+from my_claude_code.core.model_ids import strip_model_id_tag
 from my_claude_code.core.reasoning import EFFORT_BY_VALUE, ReasoningEffort
 
 type ModelListScalar = str | bool
@@ -1596,3 +1602,234 @@ def _malformed(provider_name: str, reason: str) -> ModelListResponseError:
     return ModelListResponseError(
         f"{provider_name} model-list response is malformed: {reason}"
     )
+
+
+#: Non-HTTP capability words mixed into ``declared.endpoints`` by
+#: :func:`_capability_endpoint_words` for ``application.model_kinds``.
+#: Filtered out at endpoint-display and surface-routing boundaries without
+#: altering stored ``ProviderModelDeclaration.endpoints`` records.
+_NON_HTTP_ENDPOINT_FLAGS = frozenset(
+    {
+        "chat",
+        "non_chat",
+        "ocr",
+        "audio_transcription",
+        "realtime_transcription",
+        "audio_speech",
+        "moderation",
+        "classification",
+        "fim",
+        "embedding",
+        "rerank",
+    }
+)
+
+_PROVIDER_CATALOGUE_ENTRY = "provider-catalogue"
+_CACHE_DIRNAME = "cache"
+_CACHE_SUBDIR = "derived"
+
+_DECLARED_ENDPOINTS_LOCK = threading.Lock()
+_DECLARED_ENDPOINTS_SNAPSHOT: dict[tuple[str, str], tuple[str, ...]] | None = None
+_DISK_DECLARED_ENDPOINTS_MEMO: (
+    tuple[Path, tuple[int, int] | None, dict[tuple[str, str], tuple[str, ...]]] | None
+) = None
+
+
+def http_declared_endpoints(endpoints: Iterable[str] | None) -> tuple[str, ...]:
+    """Return normalized HTTP endpoint tokens, stripping capability flags."""
+
+    if endpoints is None:
+        return ()
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for raw in endpoints:
+        if not isinstance(raw, str):
+            continue
+        token = raw.strip().lower()
+        if not token or token in _NON_HTTP_ENDPOINT_FLAGS or token in seen:
+            continue
+        seen.add(token)
+        cleaned.append(token)
+    return tuple(cleaned)
+
+
+def _http_token_surface(token: str) -> ResponseSurface | None:
+    normalized = token.strip().lower().lstrip("/")
+    if normalized in {
+        "chat_completions",
+        "chat/completions",
+        "openai",
+        "openai-chat",
+    } or normalized.endswith("/chat/completions"):
+        return ResponseSurface.CHAT_COMPLETIONS
+    if normalized in {
+        "responses",
+        "openai-response",
+        "openai-responses",
+    } or normalized.endswith("/responses"):
+        return ResponseSurface.RESPONSES
+    if normalized in {
+        "messages",
+        "anthropic",
+        "anthropic-messages",
+    } or normalized.endswith("/messages"):
+        return ResponseSurface.MESSAGES
+    return None
+
+
+def declared_http_surfaces(
+    endpoints: Iterable[str] | None,
+) -> tuple[ResponseSurface, ...]:
+    """Map published ``/models`` HTTP endpoints to canonical :class:`ResponseSurface`."""
+
+    surfaces: list[ResponseSurface] = []
+    for token in http_declared_endpoints(endpoints):
+        surface = _http_token_surface(token)
+        if surface is not None and surface not in surfaces:
+            surfaces.append(surface)
+    return tuple(surfaces)
+
+
+def set_declared_endpoints_snapshot(
+    catalogues: Mapping[str, Iterable[_ProviderModelInfo]] | None,
+) -> None:
+    """Publish the live in-memory ``(provider_id, model_id) -> endpoints`` snapshot."""
+
+    global _DECLARED_ENDPOINTS_SNAPSHOT
+    if catalogues is None:
+        with _DECLARED_ENDPOINTS_LOCK:
+            _DECLARED_ENDPOINTS_SNAPSHOT = None
+        return
+    snapshot: dict[tuple[str, str], tuple[str, ...]] = {}
+    for provider_id, infos in catalogues.items():
+        for info in infos:
+            declared = info.declared
+            if declared is not None and declared.endpoints:
+                snapshot[(provider_id, info.model_id)] = declared.endpoints
+    with _DECLARED_ENDPOINTS_LOCK:
+        _DECLARED_ENDPOINTS_SNAPSHOT = snapshot
+
+
+def reset_declared_endpoints_snapshot() -> None:
+    """Clear the process-wide declared-endpoints snapshot and disk memo (for tests)."""
+
+    global _DECLARED_ENDPOINTS_SNAPSHOT, _DISK_DECLARED_ENDPOINTS_MEMO
+    with _DECLARED_ENDPOINTS_LOCK:
+        _DECLARED_ENDPOINTS_SNAPSHOT = None
+        _DISK_DECLARED_ENDPOINTS_MEMO = None
+
+
+def _derived_cache_stat(cache_dir: Path) -> tuple[int, int] | None:
+    path = cache_dir / f"{_PROVIDER_CATALOGUE_ENTRY}.json"
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _read_declared_endpoints_from_derived_cache() -> dict[
+    tuple[str, str], tuple[str, ...]
+]:
+    global _DISK_DECLARED_ENDPOINTS_MEMO
+    cache_dir = config_dir_path() / _CACHE_DIRNAME / _CACHE_SUBDIR
+    stamp = _derived_cache_stat(cache_dir)
+    with _DECLARED_ENDPOINTS_LOCK:
+        memo = _DISK_DECLARED_ENDPOINTS_MEMO
+        if memo is not None and memo[0] == cache_dir and memo[1] == stamp:
+            return memo[2]
+    found: dict[tuple[str, str], tuple[str, ...]] = {}
+    if stamp is not None:
+        try:
+            entry = DerivedCache(cache_dir).read(_PROVIDER_CATALOGUE_ENTRY)
+        except Exception:
+            entry = None
+        payload = None if entry is None else entry.payload
+        providers = payload.get("providers") if isinstance(payload, Mapping) else None
+        if isinstance(providers, Sequence) and not isinstance(providers, str | bytes):
+            for provider_entry in providers:
+                if not isinstance(provider_entry, Mapping):
+                    continue
+                pid = provider_entry.get("provider_id")
+                models = provider_entry.get("models")
+                if (
+                    not isinstance(pid, str)
+                    or not isinstance(models, Sequence)
+                    or isinstance(models, str | bytes)
+                ):
+                    continue
+                for model_entry in models:
+                    if not isinstance(model_entry, Mapping):
+                        continue
+                    mid = model_entry.get("model_id") or model_entry.get("id")
+                    declared = model_entry.get("declared")
+                    if not isinstance(mid, str) or not isinstance(declared, Mapping):
+                        continue
+                    endpoints = declared.get("endpoints")
+                    if isinstance(endpoints, Sequence) and not isinstance(
+                        endpoints, str | bytes
+                    ):
+                        words = tuple(
+                            item.strip().lower()
+                            for item in endpoints
+                            if isinstance(item, str) and item.strip()
+                        )
+                        if words:
+                            found[(pid, mid)] = words
+    with _DECLARED_ENDPOINTS_LOCK:
+        _DISK_DECLARED_ENDPOINTS_MEMO = (cache_dir, stamp, found)
+    return found
+
+
+def cached_declared_endpoints(provider_id: str, model_id: str) -> tuple[str, ...]:
+    """Return cached raw ``declared.endpoints`` for ``(provider_id, model_id)``."""
+
+    if not provider_id or not model_id:
+        return ()
+    with _DECLARED_ENDPOINTS_LOCK:
+        snapshot = _DECLARED_ENDPOINTS_SNAPSHOT
+    table = (
+        snapshot
+        if snapshot is not None
+        else _read_declared_endpoints_from_derived_cache()
+    )
+    direct = table.get((provider_id, model_id))
+    if direct is not None:
+        return direct
+    stripped = strip_model_id_tag(model_id)
+    if stripped is not None:
+        for (pid, mid), endpoints in table.items():
+            if pid == provider_id and mid.strip().lower() == stripped:
+                return endpoints
+    return ()
+
+
+def cached_declared_http_endpoints(provider_id: str, model_id: str) -> tuple[str, ...]:
+    """Return cached HTTP endpoint tokens for ``(provider_id, model_id)``."""
+
+    return http_declared_endpoints(cached_declared_endpoints(provider_id, model_id))
+
+
+def cached_declared_http_surfaces(
+    provider_id: str, model_id: str
+) -> tuple[ResponseSurface, ...]:
+    """Return cached :class:`ResponseSurface` doors published by ``/models``."""
+
+    return declared_http_surfaces(cached_declared_endpoints(provider_id, model_id))
+
+
+def is_commandcode_messages_model(model_id: str) -> bool:
+    """Route Command Code models via ``_anthropic`` when ``/models`` declares ``/messages``.
+
+    Falls back to the ``claude-`` name prefix when no cached ``/models``
+    endpoints exist for ``model_id``.
+    """
+
+    surfaces = cached_declared_http_surfaces("commandcode", model_id)
+    if surfaces:
+        return (
+            ResponseSurface.MESSAGES in surfaces
+            and ResponseSurface.CHAT_COMPLETIONS not in surfaces
+            and ResponseSurface.RESPONSES not in surfaces
+        )
+    return model_id.strip().lower().startswith("claude-")
