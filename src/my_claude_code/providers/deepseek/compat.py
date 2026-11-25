@@ -50,6 +50,8 @@ def build_deepseek_request_body(
     *,
     reasoning: ReasoningPolicy,
     provider_id: str = "",
+    accepts_documents: bool = False,
+    suppress_structured_output: bool = False,
 ) -> dict:
     """Build a DeepSeek Chat Completions body from an Anthropic request."""
     logger.debug(
@@ -103,6 +105,8 @@ def build_deepseek_request_body(
         sanitized_request.structured_output_spec = deepcopy(
             request_data.structured_output_spec
         )
+    if request_data.chat_envelope is not None:
+        sanitized_request.chat_envelope = deepcopy(request_data.chat_envelope)
     _preserve_image_details(request_data.messages, sanitized_request.messages)
     _preserve_tool_strict(request_data.tools, sanitized_request.tools)
     body = build_openai_chat_request_body(
@@ -111,6 +115,8 @@ def build_deepseek_request_body(
         policy=DEEPSEEK_REQUEST_POLICY,
         postprocessors=(_apply_deepseek_chat_extras,),
         provider_id=provider_id,
+        accepts_documents=accepts_documents,
+        suppress_structured_output=suppress_structured_output,
     )
     if body.get("max_tokens") is None:
         configured = configured_default_max_output_tokens()

@@ -20,6 +20,7 @@ from my_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     apply_cache_affinity_body,
     build_openai_chat_request_body,
+    model_accepts_pdf_for_provider,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import rejected_reasoning_field
@@ -108,6 +109,12 @@ class MistralProvider(OpenAIChatProvider):
             policy=_REQUEST_POLICY,
             postprocessors=(strip_top_p_on_greedy_temperature,),
             provider_id=self._provider_id,
+            accepts_documents=model_accepts_pdf_for_provider(
+                self._provider_id, request.model
+            ),
+            suppress_structured_output=self._recovery_memory.structured_output_refused(
+                request.model
+            ),
         )
         apply_mistral_reasoning_request_shape(
             body,

@@ -18,6 +18,7 @@ from my_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,
     OpenAIChatProvider,
+    model_accepts_pdf_for_provider,
     usage_int,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
@@ -100,6 +101,12 @@ class DeepSeekProvider(OpenAIChatProvider):
             request,
             reasoning=reasoning,
             provider_id=self._provider_id,
+            accepts_documents=model_accepts_pdf_for_provider(
+                self._provider_id, request.model
+            ),
+            suppress_structured_output=self._recovery_memory.structured_output_refused(
+                request.model
+            ),
         )
 
     def _get_retry_request_body(self, error: Exception, body: dict) -> dict | None:

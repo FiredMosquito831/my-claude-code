@@ -121,4 +121,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
             accepts_documents=model_accepts_pdf_for_provider(
                 self._provider_id, request.model
             ),
+            suppress_structured_output=self._recovery_memory.structured_output_refused(
+                request.model
+            ),
         )
