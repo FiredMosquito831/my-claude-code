@@ -233,3 +233,157 @@ def test_the_provenance_labels_cover_every_rung():
     assert set(payload["provenance_labels"]) == {
         str(member) for member in ModelListingProvenance
     }
+
+
+def test_m6_card_reports_s1_live_s2a_cache_and_per_account_plans(monkeypatch, tmp_path):
+    """M6: status card distinguishes Live Codex API, models_cache.json, and per-account plan_type."""
+    from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
+        parse_codex_catalogue,
+        store_live_codex_snapshot,
+    )
+
+    app = _app(monkeypatch, tmp_path)
+
+    # 1. Per-account plan_type decoded locally per account id.
+    def _jwt(claims_dict: dict) -> str:
+        body = (
+            base64.urlsafe_b64encode(json.dumps(claims_dict).encode())
+            .decode()
+            .rstrip("=")
+        )
+        return f"hdr.{body}.sig"
+
+    tok_plus = _jwt({"https://api.openai.com/auth": {"chatgpt_plan_type": "plus"}})
+    tok_pro = _jwt({"https://api.openai.com/auth": {"chatgpt_plan_type": "pro"}})
+    store = tmp_path / ".mcc" / "auth"
+    store.mkdir(parents=True, exist_ok=True)
+    (store / "chatgpt-oauth.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tokens": {
+                    "access_token": "a1",
+                    "id_token": tok_plus,
+                    "account_id": "acct-1",
+                },
+                "accounts_version": 1,
+                "accounts": [
+                    {
+                        "id": "acct-1",
+                        "ordinal": 1,
+                        "tokens": {
+                            "access_token": "a1",
+                            "id_token": tok_plus,
+                            "account_id": "acct-1",
+                        },
+                    },
+                    {
+                        "id": "acct-2",
+                        "ordinal": 2,
+                        "tokens": {
+                            "access_token": "a2",
+                            "id_token": tok_pro,
+                            "account_id": "acct-2",
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # 2. S2a models_cache.json reports Codex cache when S1 is absent.
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "models_cache.json").write_text(
+        json.dumps(
+            {
+                "client_version": "0.172.0",
+                "models": [
+                    {"slug": "gpt-6.2-sol", "visibility": "list"},
+                    {
+                        "slug": "gpt-5.4",
+                        "visibility": "hide",
+                        "upgrade": {"retirement_at": "2026-08-31T19:00:00Z"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    payload_s2a = _get(app).json()
+    assert [a["plan_type"] for a in payload_s2a["accounts"]] == ["plus", "pro"]
+    assert payload_s2a["catalogue"]["available"] is True
+    assert payload_s2a["catalogue"]["version"] == "0.172.0"
+    assert payload_s2a["catalogue"]["model_count"] == 2
+    assert payload_s2a["catalogue"]["source_name"] == "models_cache.json"
+    assert payload_s2a["catalogue"]["source_label"] == "Codex cache 0.172.0"
+    assert payload_s2a["catalogue"]["retired_model_ids"] == ["gpt-5.4"]
+
+    # 3. S1 live snapshot outranks S2a on the status card.
+    live_doc = {
+        "models": [
+            {"slug": "gpt-6.2-sol", "visibility": "list"},
+            {"slug": "gpt-6-luna", "visibility": "list"},
+            {"slug": "gpt-6.2-astra", "visibility": "list"},
+        ]
+    }
+    live_cat = parse_codex_catalogue(
+        live_doc,
+        version="0.173.0",
+        source_path="https://chatgpt.com/backend-api/codex/models",
+    )
+    assert live_cat is not None
+    store_live_codex_snapshot(
+        ("https://chatgpt.com/backend-api", "acct-1", "0.173.0"),
+        etag='"v1"',
+        document=live_doc,
+        catalogue=live_cat,
+    )
+    payload_s1 = _get(app).json()
+    assert payload_s1["catalogue"]["available"] is True
+    assert payload_s1["catalogue"]["version"] == "0.173.0"
+    assert payload_s1["catalogue"]["model_count"] == 3
+    assert payload_s1["catalogue"]["source_name"] == "codex/models"
+    assert payload_s1["catalogue"]["source_label"] == "Live Codex API 0.173.0"
+
+
+def test_m6_conftest_isolation_part1_pollutes_state(monkeypatch, tmp_path):
+    """Part 1 of M6 isolation check: set CODEX_HOME and populate live cache."""
+    from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
+        parse_codex_catalogue,
+        store_live_codex_snapshot,
+    )
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "custom_codex"))
+    doc = {"models": [{"slug": "gpt-leaked", "visibility": "list"}]}
+    cat = parse_codex_catalogue(
+        doc,
+        version="0.999.0",
+        source_path="https://chatgpt.com/backend-api/codex/models",
+    )
+    assert cat is not None
+    store_live_codex_snapshot(
+        ("https://chatgpt.com/backend-api", "acct-leak", "0.999.0"),
+        etag=None,
+        document=doc,
+        catalogue=cat,
+    )
+
+
+def test_m6_conftest_isolation_part2_sees_clean_state(monkeypatch, tmp_path):
+    """Part 2 of M6 isolation check: conftest cleared CODEX_HOME and live cache."""
+    import os
+
+    from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
+        latest_live_codex_catalogue,
+    )
+
+    assert "CODEX_HOME" not in os.environ
+    assert latest_live_codex_catalogue() is None
+    payload = _get(_app(monkeypatch, tmp_path)).json()
+    assert payload["catalogue"]["available"] is False

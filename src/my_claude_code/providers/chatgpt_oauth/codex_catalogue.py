@@ -1,43 +1,41 @@
-"""Read Codex CLI's own model catalogue off disk -- rung S2 for this provider.
+"""Read ChatGPT/Codex model catalogues -- rungs S1, S2a, and S2b for this provider.
 
-The ChatGPT/Codex backend publishes no model-list endpoint. Its official
-client does not call one either: Codex 0.151.0 contains zero occurrences of
-``backend-api/models``, ``available_models``, ``model_slugs`` or
-``/backend-api/me``, and instead embeds its complete catalogue as a
-pretty-printed JSON document inside the executable (the loader's own assertion
-strings are ``bundled models.json should parse: `` and ``bundled models.json
-should include ``). That document is written by OpenAI, ships with OpenAI's
-client, and updates when the user updates Codex.
+Three vendor tiers feed existence and Option A capability metadata:
 
-This project already reads that binary: ``application/catalogues/codex.py`` was
-written against its ``ModelInfo`` serde struct so MCC can *generate* a
-catalogue Codex will accept. This module reads the *data* alongside the schema
-MCC already trusts.
+1. **S1 (``GATEWAY``):** Live authenticated ``GET {base_url}/codex/models?client_version=...``
+   cached in memory and under ``config_dir_path()/cache/codex-models-live.json``
+   with ``ETag`` revalidation and a 300-second TTL, strictly read-only on stored
+   tokens (zero refresh, zero rotation, zero credential benching).
+2. **S2a (``VENDOR_CLIENT``):** Codex CLI's own local response cache at
+   ``$CODEX_HOME/models_cache.json`` (instant JSON parse, no 300 MB binary scan).
+3. **S2b (``VENDOR_CLIENT``):** Installed Codex CLI or Codex Desktop bundled
+   catalogue (``codex.exe`` / ``codex`` / ``models.json``), read **only** when
+   both S1 and S2a decline, so retired or dropped models in a stale binary
+   cannot ghost back in.
 
-**Existence facts only.** Every entry also carries ``context_window``,
-``max_context_window`` and a per-model effort vocabulary, and none of it is
-read here. Numeric limits and capabilities keep coming off the resolution
-ladder through the existing ``chatgpt_oauth -> openai`` models.dev alias; a
-second source for the same number, arriving at a different tier, is a change
-to the ladder and the ladder is not what is broken. What is broken is the id
-list, so the id list -- plus the lifecycle facts that say when an id stops
-being real -- is all this rung supplies.
+Option A capability extraction reads ``max_context_window`` / ``context_window``,
+``input_modalities``, ``supported_reasoning_levels`` (clamping ``"ultra"`` to
+``"max"``), ``description``, and raw ``published_row`` (preserving PR 4
+``service_tiers`` / ``additional_speed_tiers`` / ``default_service_tier``),
+while leaving pricing and ``max_output_tokens`` ``None`` for ``models.dev``
+gap-filling.
 
-The transplantable shape for any other OAuth/subscription provider is the
-three steps below: locate the vendor's official client without executing it,
-read the catalogue it ships, and publish only what that catalogue states.
-
-Two of those states keep a model out of the listing: ``visibility: hide`` and
+Two listing states keep a model out of the listing: ``visibility: hide`` and
 a passed ``upgrade.retirement_at``. Both are *listing* facts -- see
 :class:`ListingVeto` for which of them a logged success may overturn, and for
 why neither one ever touches a route.
 """
 
+import hashlib
 import json
 import mmap
 import os
 import shutil
+import tempfile
+import threading
+import time
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +47,11 @@ from my_claude_code.application.model_metadata import (
     ModelListingEvidence,
     ModelListingProvenance,
 )
+from my_claude_code.config.paths import config_dir_path
+
+CODEX_CLIENT_VERSION_FLOOR = "0.172.0"
+CODEX_MODELS_LIVE_TTL_SECONDS = 300.0
+CODEX_LIVE_CACHE_FILENAME = "codex-models-live.json"
 
 #: The document's opening bytes as Codex 0.151.0 stores them (pretty-printed,
 #: CRLF) and as a compact build would. Both are searched; whichever appears
@@ -154,6 +157,14 @@ def _parse_instant(value: str | None) -> datetime | None:
 # ------------------------------------------------------------------ locating
 
 
+def codex_home_dir() -> Path:
+    """Return ``$CODEX_HOME`` when set, else ``~/.codex``."""
+    raw = os.environ.get("CODEX_HOME", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".codex"
+
+
 def _npm_package_roots() -> list[Path]:
     """Directories that may hold a global ``node_modules`` tree.
 
@@ -244,6 +255,76 @@ def _catalogue_sources(package_dir: Path) -> list[Path]:
         if path.is_file()
     )
     return sources
+
+
+def _desktop_binary_version(binary_path: Path) -> str:
+    for parent in (binary_path.parent.parent, binary_path.parent):
+        found = _package_version(parent)
+        if found:
+            return found
+    return ""
+
+
+def _codex_desktop_sources() -> list[tuple[Path, str]]:
+    """Read-only Codex Desktop and user-local binary candidates (no execution)."""
+    candidates: list[Path] = []
+    localappdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if localappdata:
+        base = Path(localappdata)
+        for root, pattern in (
+            (base / "OpenAI" / "Codex" / "bin", "*/codex.exe"),
+            (
+                base / "Packages",
+                "OpenAI.Codex_*/LocalCache/Local/OpenAI/Codex/bin/*/codex.exe",
+            ),
+        ):
+            try:
+                candidates.extend(sorted(root.glob(pattern)))
+            except OSError:
+                continue
+    candidates.extend(
+        (
+            Path("/Applications/Codex.app/Contents/Resources/models.json"),
+            Path("/Applications/Codex.app/Contents/Resources/codex"),
+            Path("/Applications/Codex.app/Contents/MacOS/codex"),
+            Path.home() / ".local" / "bin" / "codex",
+        )
+    )
+    found: list[tuple[Path, str]] = []
+    seen: set[Path] = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            is_file = path.is_file()
+        except OSError:
+            continue
+        if is_file:
+            found.append((path, _desktop_binary_version(path)))
+    return found
+
+
+def resolve_codex_client_version() -> str:
+    """Resolve ``client_version`` offline-first with zero external registry calls."""
+    codex_home = codex_home_dir()
+    for filename, key in (
+        ("version.json", "latest_version"),
+        ("models_cache.json", "client_version"),
+    ):
+        try:
+            doc = json.loads((codex_home / filename).read_text(encoding="utf-8"))
+        except OSError, ValueError:
+            continue
+        if isinstance(doc, Mapping):
+            raw = doc.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+    for package_dir in _codex_package_dirs():
+        ver = _package_version(package_dir)
+        if ver:
+            return ver
+    return CODEX_CLIENT_VERSION_FLOOR
 
 
 # ----------------------------------------------------------------- extracting
@@ -352,10 +433,42 @@ def clear_codex_catalogue_cache() -> None:
     _CACHE.clear()
 
 
+def load_codex_models_cache(*, cache_path: Path | None = None) -> CodexCatalogue | None:
+    """Rung S2a -- read ``$CODEX_HOME/models_cache.json`` if present and valid."""
+    path = cache_path or (codex_home_dir() / "models_cache.json")
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    if key in _CACHE:
+        return _CACHE[key]
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        _CACHE[key] = None
+        return None
+    if not isinstance(doc, Mapping):
+        _CACHE[key] = None
+        return None
+    raw_version = doc.get("client_version")
+    version = raw_version.strip() if isinstance(raw_version, str) else ""
+    catalogue = parse_codex_catalogue(doc, version=version, source_path=str(path))
+    _CACHE[key] = catalogue
+    if catalogue is not None:
+        logger.info(
+            "Codex models cache read: version={} models={} source={}",
+            catalogue.version or "unknown",
+            len(catalogue.entries),
+            path.name,
+        )
+    return catalogue
+
+
 def load_codex_catalogue(
     *, binary_path: Path | None = None, version: str = ""
 ) -> CodexCatalogue | None:
-    """Locate the installed Codex CLI and return its bundled catalogue.
+    """Locate the installed Codex CLI/Desktop and return its bundled catalogue.
 
     ``None`` when Codex is not installed, when its packaging changed enough
     that the document cannot be found, or when what was found did not parse.
@@ -371,6 +484,7 @@ def load_codex_catalogue(
             candidates.extend(
                 (source, package_version) for source in _catalogue_sources(package_dir)
             )
+        candidates.extend(_codex_desktop_sources())
     for path, found_version in candidates:
         try:
             stat = path.stat()
@@ -382,7 +496,16 @@ def load_codex_catalogue(
             if cached is not None:
                 return cached
             continue
-        document = embedded_json_document(path)
+        document: dict[str, Any] | None = None
+        if path.suffix.lower() == ".json":
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    document = loaded
+            except OSError, ValueError:
+                document = None
+        if document is None:
+            document = embedded_json_document(path)
         catalogue = (
             None
             if document is None
@@ -403,6 +526,283 @@ def load_codex_catalogue(
             "Codex catalogue not readable from {} -- this rung declines", path.name
         )
     return None
+
+
+def load_offline_codex_catalogue() -> CodexCatalogue | None:
+    """Select S2a ``models_cache.json`` first; fall back to S2b only if absent."""
+    return load_codex_models_cache() or load_codex_catalogue()
+
+
+# ------------------------------------------------------------ S1 live cache
+
+
+@dataclass(frozen=True, slots=True)
+class CodexLiveSnapshot:
+    """One cached S1 ``/codex/models`` response for a single account."""
+
+    base_url: str
+    account_key: str
+    client_version: str
+    fetched_at_mono: float
+    fetched_at_epoch: float
+    etag: str | None
+    catalogue: CodexCatalogue
+    raw_document: Mapping[str, Any] | None = field(
+        default=None, compare=False, hash=False, repr=False
+    )
+
+
+_LIVE_CACHE_LOCK = threading.Lock()
+_LIVE_CACHE: dict[tuple[str, str, str], CodexLiveSnapshot] = {}
+_DISK_HYDRATED_STAMP: tuple[str, int, int] | None = None
+
+
+def validate_codex_models_document(payload: object) -> dict[str, Any] | None:
+    """Accept only a dict carrying a non-empty list of model objects with slugs."""
+    if not isinstance(payload, Mapping):
+        return None
+    models = payload.get("models")
+    if not isinstance(models, list) or not models:
+        return None
+    has_slug = False
+    for item in models:
+        if not isinstance(item, Mapping):
+            continue
+        slug = item.get("slug")
+        if isinstance(slug, str) and slug.strip():
+            has_slug = True
+            break
+    if not has_slug:
+        return None
+    return {str(k): v for k, v in payload.items()}
+
+
+def codex_live_account_key(account_id: str, access_token: str) -> str:
+    """Stable non-secret cache key segment for an account."""
+    acct = account_id.strip()
+    if acct:
+        return acct
+    digest = hashlib.sha256(access_token.encode("utf-8")).hexdigest()[:16]
+    return f"anon:{digest}"
+
+
+def is_live_snapshot_fresh(
+    snapshot: CodexLiveSnapshot, *, now_mono: float | None = None
+) -> bool:
+    """Return True while ``snapshot`` is within ``CODEX_MODELS_LIVE_TTL_SECONDS``."""
+    now = time.monotonic() if now_mono is None else now_mono
+    return (now - snapshot.fetched_at_mono) < CODEX_MODELS_LIVE_TTL_SECONDS
+
+
+def _live_cache_disk_path() -> Path:
+    return config_dir_path() / "cache" / CODEX_LIVE_CACHE_FILENAME
+
+
+def _hydrate_live_cache_locked() -> None:
+    global _DISK_HYDRATED_STAMP
+    disk_path = _live_cache_disk_path()
+    try:
+        stat = disk_path.stat()
+    except OSError:
+        return
+    stamp = (str(disk_path), stat.st_size, stat.st_mtime_ns)
+    if stamp == _DISK_HYDRATED_STAMP:
+        return
+    _DISK_HYDRATED_STAMP = stamp
+    try:
+        payload = json.loads(disk_path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return
+    if not isinstance(payload, Mapping) or payload.get("version") != 1:
+        return
+    entries = payload.get("entries")
+    if not isinstance(entries, Mapping):
+        return
+    now_epoch = time.time()
+    now_mono = time.monotonic()
+    for item in entries.values():
+        if not isinstance(item, Mapping):
+            continue
+        base_url = item.get("base_url")
+        account_key = item.get("account_key")
+        client_version = item.get("client_version")
+        fetched_at_epoch = item.get("fetched_at_epoch")
+        etag = item.get("etag")
+        raw_doc = validate_codex_models_document(item.get("document"))
+        if (
+            not isinstance(base_url, str)
+            or not isinstance(account_key, str)
+            or not isinstance(client_version, str)
+            or isinstance(fetched_at_epoch, bool)
+            or not isinstance(fetched_at_epoch, int | float)
+            or float(fetched_at_epoch) > now_epoch + 60.0
+            or raw_doc is None
+        ):
+            continue
+        norm_base = base_url.rstrip("/")
+        key = (norm_base, account_key, client_version)
+        if key in _LIVE_CACHE:
+            continue
+        catalogue = parse_codex_catalogue(
+            raw_doc,
+            version=client_version,
+            source_path=f"{norm_base}/codex/models",
+        )
+        if catalogue is None:
+            continue
+        age = max(0.0, now_epoch - float(fetched_at_epoch))
+        _LIVE_CACHE[key] = CodexLiveSnapshot(
+            base_url=norm_base,
+            account_key=account_key,
+            client_version=client_version,
+            fetched_at_mono=now_mono - age,
+            fetched_at_epoch=float(fetched_at_epoch),
+            etag=etag.strip() if isinstance(etag, str) and etag.strip() else None,
+            catalogue=catalogue,
+            raw_document=raw_doc,
+        )
+
+
+def _persist_live_cache_locked() -> None:
+    global _DISK_HYDRATED_STAMP
+    disk_path = _live_cache_disk_path()
+    serialized_entries: dict[str, dict[str, Any]] = {}
+    for key, snap in _LIVE_CACHE.items():
+        if snap.raw_document is None:
+            continue
+        entry_id = hashlib.sha256(f"{key[0]}\0{key[1]}\0{key[2]}".encode()).hexdigest()[
+            :24
+        ]
+        serialized_entries[entry_id] = {
+            "base_url": snap.base_url,
+            "account_key": snap.account_key,
+            "client_version": snap.client_version,
+            "fetched_at_epoch": snap.fetched_at_epoch,
+            "etag": snap.etag,
+            "document": dict(snap.raw_document),
+        }
+    payload = {"version": 1, "entries": serialized_entries}
+    temporary: Path | None = None
+    try:
+        disk_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{disk_path.name}.",
+            suffix=".tmp",
+            dir=disk_path.parent,
+            text=True,
+        )
+        temporary = Path(temp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+            handle.write("\n")
+            handle.flush()
+        os.replace(temporary, disk_path)
+        stat = disk_path.stat()
+        _DISK_HYDRATED_STAMP = (str(disk_path), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def get_cached_live_codex_snapshot(
+    key: tuple[str, str, str],
+) -> CodexLiveSnapshot | None:
+    """Return any cached S1 snapshot (fresh or stale for ``If-None-Match``)."""
+    with _LIVE_CACHE_LOCK:
+        _hydrate_live_cache_locked()
+        return _LIVE_CACHE.get(key)
+
+
+def store_live_codex_snapshot(
+    key: tuple[str, str, str],
+    *,
+    etag: str | None,
+    document: Mapping[str, Any],
+    catalogue: CodexCatalogue,
+) -> CodexLiveSnapshot:
+    """Persist a validated S1 live catalogue snapshot in memory and on disk."""
+    norm_base, account_key, client_version = key
+    clean_etag = etag.strip() if isinstance(etag, str) and etag.strip() else None
+    snapshot = CodexLiveSnapshot(
+        base_url=norm_base.rstrip("/"),
+        account_key=account_key,
+        client_version=client_version,
+        fetched_at_mono=time.monotonic(),
+        fetched_at_epoch=time.time(),
+        etag=clean_etag,
+        catalogue=catalogue,
+        raw_document=dict(document),
+    )
+    with _LIVE_CACHE_LOCK:
+        _hydrate_live_cache_locked()
+        _LIVE_CACHE[key] = snapshot
+        _persist_live_cache_locked()
+    return snapshot
+
+
+def touch_live_codex_snapshot(
+    key: tuple[str, str, str], *, etag: str | None = None
+) -> CodexLiveSnapshot | None:
+    """Extend a cached snapshot's TTL after ``304 Not Modified``."""
+    with _LIVE_CACHE_LOCK:
+        _hydrate_live_cache_locked()
+        existing = _LIVE_CACHE.get(key)
+        if existing is None:
+            return None
+        clean_etag = (
+            etag.strip() if isinstance(etag, str) and etag.strip() else existing.etag
+        )
+        refreshed = CodexLiveSnapshot(
+            base_url=existing.base_url,
+            account_key=existing.account_key,
+            client_version=existing.client_version,
+            fetched_at_mono=time.monotonic(),
+            fetched_at_epoch=time.time(),
+            etag=clean_etag,
+            catalogue=existing.catalogue,
+            raw_document=existing.raw_document,
+        )
+        _LIVE_CACHE[key] = refreshed
+        _persist_live_cache_locked()
+        return refreshed
+
+
+def invalidate_live_codex_snapshot(key: tuple[str, str, str]) -> None:
+    """Evict a cached S1 snapshot (e.g. on 401/403 auth rejection)."""
+    with _LIVE_CACHE_LOCK:
+        _hydrate_live_cache_locked()
+        if key in _LIVE_CACHE:
+            _LIVE_CACHE.pop(key, None)
+            _persist_live_cache_locked()
+
+
+def latest_live_codex_catalogue() -> CodexLiveSnapshot | None:
+    """Return the newest cached S1 live snapshot (read-only, zero network calls)."""
+    with _LIVE_CACHE_LOCK:
+        _hydrate_live_cache_locked()
+        if not _LIVE_CACHE:
+            return None
+        now_mono = time.monotonic()
+        fresh = [
+            snap
+            for snap in _LIVE_CACHE.values()
+            if is_live_snapshot_fresh(snap, now_mono=now_mono)
+        ]
+        pool = fresh if fresh else list(_LIVE_CACHE.values())
+        return max(pool, key=lambda snap: snap.fetched_at_epoch)
+
+
+def clear_codex_models_live_cache(*, remove_disk: bool = False) -> None:
+    """Clear in-memory S1 live snapshots (and optionally remove the disk file)."""
+    global _DISK_HYDRATED_STAMP
+    with _LIVE_CACHE_LOCK:
+        _LIVE_CACHE.clear()
+        _DISK_HYDRATED_STAMP = None
+        if remove_disk:
+            with suppress(OSError):
+                _live_cache_disk_path().unlink(missing_ok=True)
 
 
 # -------------------------------------------------------------------- vetoes
@@ -487,6 +887,8 @@ def catalogue_evidence(
     *,
     plan_type: str = "",
     now: datetime | None = None,
+    provenance: ModelListingProvenance = ModelListingProvenance.VENDOR_CLIENT,
+    detail_prefix: str | None = None,
 ) -> dict[str, ModelListingEvidence]:
     """Existence evidence for every entry this plan may still list.
 
@@ -506,16 +908,22 @@ def catalogue_evidence(
     moment = now or datetime.now(UTC)
     vetoes = listing_vetoes(catalogue, now=moment)
     evidence: dict[str, ModelListingEvidence] = {}
+    default_prefix = (
+        f"Live Codex API {catalogue.version}".strip()
+        if provenance == ModelListingProvenance.GATEWAY
+        else catalogue.label
+    )
+    base_detail = detail_prefix if detail_prefix is not None else default_prefix
     for entry in catalogue.entries:
         if entry.slug in vetoes:
             continue
         if not entry.available_to_plan(plan_type):
             continue
-        detail = catalogue.label
+        detail = base_detail
         if entry.retirement_at:
             detail = f"{detail}; retires {entry.retirement_at}"
         evidence[entry.slug] = ModelListingEvidence(
-            provenance=ModelListingProvenance.VENDOR_CLIENT,
+            provenance=provenance,
             detail=detail,
             retirement_at=entry.retirement_at,
             replacement_model_id=entry.replacement_model_id,
@@ -543,18 +951,35 @@ def catalogue_slugs(entries: Iterable[CodexCatalogueEntry]) -> frozenset[str]:
 
 __all__ = [
     "CATALOGUE_MARKERS",
+    "CODEX_CLIENT_VERSION_FLOOR",
+    "CODEX_LIVE_CACHE_FILENAME",
+    "CODEX_MODELS_LIVE_TTL_SECONDS",
     "MAX_DOCUMENT_BYTES",
     "VISIBILITY_HIDDEN",
     "VISIBILITY_LISTED",
     "CodexCatalogue",
     "CodexCatalogueEntry",
+    "CodexLiveSnapshot",
     "ListingVeto",
     "catalogue_evidence",
     "catalogue_slugs",
     "clear_codex_catalogue_cache",
+    "clear_codex_models_live_cache",
+    "codex_home_dir",
+    "codex_live_account_key",
     "embedded_json_document",
+    "get_cached_live_codex_snapshot",
+    "invalidate_live_codex_snapshot",
+    "is_live_snapshot_fresh",
+    "latest_live_codex_catalogue",
     "listing_vetoes",
     "load_codex_catalogue",
+    "load_codex_models_cache",
+    "load_offline_codex_catalogue",
     "parse_codex_catalogue",
+    "resolve_codex_client_version",
     "retired_entries",
+    "store_live_codex_snapshot",
+    "touch_live_codex_snapshot",
+    "validate_codex_models_document",
 ]

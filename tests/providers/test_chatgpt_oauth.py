@@ -415,6 +415,11 @@ async def test_list_model_ids_unions_the_vendor_catalogue_and_the_log(
     from my_claude_code.providers.chatgpt_oauth import provider as provider_module
 
     monkeypatch.setattr(
+        provider_module.ChatGPTOAuthProvider,
+        "_gateway_catalogue_bundle",
+        AsyncMock(return_value=({}, {}, None)),
+    )
+    monkeypatch.setattr(
         provider_module,
         "vendor_client_evidence",
         lambda: {
@@ -448,19 +453,21 @@ async def test_list_model_ids_unions_the_vendor_catalogue_and_the_log(
 
 
 @pytest.mark.asyncio
-async def test_list_model_infos_carries_provenance_and_no_numbers(
+async def test_list_model_infos_populates_codex_capabilities_option_a(
     chatgpt_oauth_provider, monkeypatch
 ):
-    """Rung S2 supplies existence facts only; every limit stays unresolved here.
-
-    Codex's own catalogue publishes ``context_window: 272000`` for the models
-    below, and models.dev publishes 1,050,000 for the same ids. Reading the
-    vendor number here would move it from tier 3 to tier 1 -- a change to the
-    resolution ladder, which this change deliberately does not make. The guard
-    is this assertion: nothing but the id and the provenance may be set.
-    """
+    """Option A: Codex entries populate capabilities while unknown entries stay None."""
     from my_claude_code.providers.chatgpt_oauth import provider as provider_module
+    from my_claude_code.providers.chatgpt_oauth.codex_catalogue import (
+        CodexCatalogue,
+        CodexCatalogueEntry,
+    )
 
+    monkeypatch.setattr(
+        provider_module.ChatGPTOAuthProvider,
+        "_gateway_catalogue_bundle",
+        AsyncMock(return_value=({}, {}, None)),
+    )
     monkeypatch.setattr(
         provider_module,
         "vendor_client_evidence",
@@ -472,6 +479,7 @@ async def test_list_model_infos_carries_provenance_and_no_numbers(
         },
     )
     monkeypatch.setattr(provider_module, "observed_evidence", dict)
+    monkeypatch.setattr(provider_module, "load_codex_catalogue", lambda: None)
 
     infos = await chatgpt_oauth_provider.list_model_infos()
 
@@ -486,6 +494,72 @@ async def test_list_model_infos_carries_provenance_and_no_numbers(
     assert info.supports_vision is None
     assert info.reasoning_capability is None
     assert info.supported_parameters is None
+
+    codex_row = {
+        "slug": "gpt-6.2-sol",
+        "visibility": "list",
+        "description": "Frontier Codex model",
+        "context_window": 500000,
+        "max_context_window": 872000,
+        "input_modalities": ["text", "image"],
+        "supported_reasoning_levels": [
+            {"effort": "low"},
+            {"effort": "medium"},
+            {"effort": "high"},
+            {"effort": "xhigh"},
+            {"effort": "ultra"},
+        ],
+        "additional_speed_tiers": ["fast"],
+        "service_tiers": [
+            {"id": "priority", "name": "Fast", "description": "2x speed"}
+        ],
+    }
+    fake_catalogue = CodexCatalogue(
+        version="0.172.0",
+        source_path="models_cache.json",
+        entries=(
+            CodexCatalogueEntry(slug="gpt-6.2-sol", visibility="list", raw=codex_row),
+        ),
+    )
+    monkeypatch.setattr(
+        provider_module,
+        "vendor_client_evidence",
+        lambda: {
+            "gpt-6.2-sol": ModelListingEvidence(
+                provenance=ModelListingProvenance.VENDOR_CLIENT,
+                detail="Codex cache 0.172.0",
+            )
+        },
+    )
+    monkeypatch.setattr(provider_module, "load_codex_catalogue", lambda: fake_catalogue)
+
+    rich_infos = await chatgpt_oauth_provider.list_model_infos()
+    (rich,) = rich_infos
+    assert rich.model_id == "gpt-6.2-sol"
+    assert rich.context_length == 872000
+    assert rich.supports_vision is True
+    assert rich.supports_thinking is True
+    assert rich.reasoning_capability is not None
+    assert rich.reasoning_capability.can_reason is True
+    assert rich.reasoning_capability.supports_effort_control is True
+    assert rich.reasoning_capability.supported_efforts == frozenset(
+        {
+            ReasoningEffort.LOW,
+            ReasoningEffort.MEDIUM,
+            ReasoningEffort.HIGH,
+            ReasoningEffort.XHIGH,
+            ReasoningEffort.MAX,
+        }
+    )
+    assert rich.declared is not None
+    assert rich.declared.context_length == 872000
+    assert rich.declared.vision is True
+    assert rich.declared.reasoning is True
+    assert rich.declared.description == "Frontier Codex model"
+    assert rich.published_row is not None
+    assert rich.input_price is None
+    assert rich.output_price is None
+    assert rich.max_output_tokens is None
 
 
 @pytest.mark.asyncio
@@ -1131,6 +1205,11 @@ async def test_list_model_ids_falls_back_to_the_seed_when_nothing_answers(
     """
     from my_claude_code.providers.chatgpt_oauth import provider as provider_module
 
+    monkeypatch.setattr(
+        provider_module.ChatGPTOAuthProvider,
+        "_gateway_catalogue_bundle",
+        AsyncMock(return_value=({}, {}, None)),
+    )
     monkeypatch.setattr(provider_module, "vendor_client_evidence", dict)
     monkeypatch.setattr(provider_module, "observed_evidence", dict)
 

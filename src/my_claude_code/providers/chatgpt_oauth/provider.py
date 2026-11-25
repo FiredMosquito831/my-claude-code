@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from compression import zstd
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -16,6 +17,8 @@ from my_claude_code.application.errors import ApplicationUnavailableError
 from my_claude_code.application.model_metadata import (
     ModelListingEvidence,
     ModelListingProvenance,
+    ModelReasoningCapability,
+    ProviderModelDeclaration,
     ProviderModelInfo,
     ResolvedResponseSurface,
     ResponseSurface,
@@ -134,9 +137,21 @@ from .affinity import (
     turn_state_cache_key,
 )
 from .codex_catalogue import (
+    CodexCatalogue,
+    CodexCatalogueEntry,
     catalogue_evidence,
+    codex_live_account_key,
+    get_cached_live_codex_snapshot,
+    invalidate_live_codex_snapshot,
+    is_live_snapshot_fresh,
     listing_vetoes,
     load_codex_catalogue,
+    load_codex_models_cache,
+    parse_codex_catalogue,
+    resolve_codex_client_version,
+    store_live_codex_snapshot,
+    touch_live_codex_snapshot,
+    validate_codex_models_document,
 )
 from .conversion import (
     CHATGPT_OAUTH_TOOL_SCHEMA_DIALECT,
@@ -145,6 +160,7 @@ from .conversion import (
 from .credentials import (
     CODEX_OAUTH_ORIGINATOR,
     ChatGPTOAuthError,
+    chatgpt_s1_discovery_accounts,
     force_refresh_managed_chatgpt_oauth_credentials,
     load_chatgpt_oauth_credentials,
     stored_chatgpt_plan_type,
@@ -282,24 +298,30 @@ class ToolNameLengthRecovery:
         return retry, None
 
 
-#: Last resort, and nothing else: the five ids Codex CLI 0.155.1 publishes with
-#: ``visibility: "list"``, in its own order, plus ``gpt-6.1-sol``, which the
-#: user added on 2026-10-07 ahead of any installed Codex (models.dev's
-#: ``openai`` bucket publishes it as "GPT-6.1 Sol", released 2026-09-29;
-#: Codex 0.155.1 does not list it). It exists so a brand-new offline install
-#: with no Codex and no request log still draws a picker, and it is labelled
-#: ``seed`` on the Models page precisely because nobody stands behind it. No
-#: filter is applied to it -- the list that preceded it held fifteen ids of
-#: which the filter reading it deleted eight, so more than half of it was
-#: unreachable.
+#: Last resort, and nothing else: the 10 models Codex 0.172.0 publishes with
+#: ``visibility: "list"``. It exists only so a brand-new offline install with
+#: no live Codex API access, no ``models_cache.json``, no Codex CLI/Desktop, and
+#: no request log still draws a picker, and it is labelled ``seed`` on the
+#: Models page precisely because nobody stands behind it.
 CHATGPT_OAUTH_SEED_MODELS: tuple[str, ...] = (
-    "gpt-6-astra",
+    "gpt-6.2-sol",
+    "gpt-6.2-astra",
+    "gpt-6.1-terra",
     "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
-    "gpt-5.5",
 )
+
+#: In-flight S1 ``GET /codex/models`` fetches keyed by
+#: ``(id(loop), base_url, account_key, client_version)`` so concurrent
+#: ``chatgpt_oauth`` and ``openai`` discovery tasks coalesce onto one HTTP call.
+_INFLIGHT_LIVE_FETCHES: dict[
+    tuple[int, str, str, str], asyncio.Task[CodexCatalogue | None]
+] = {}
 
 #: What the backend says when it does not have a model, in its own words.
 #: Matched case-insensitively against the error body beside a 404.
@@ -394,23 +416,127 @@ def _user_agent() -> str:
     )
 
 
-def vendor_client_evidence() -> dict[str, ModelListingEvidence]:
-    """Rung S2 -- Codex CLI's own bundled catalogue, read off disk.
+def _active_offline_codex_catalogue() -> CodexCatalogue | None:
+    """Return S2a ``models_cache.json`` if present, else S2b CLI/Desktop."""
+    return load_codex_models_cache() or load_codex_catalogue()
+
+
+def _provider_model_info_from_codex_entry(
+    model_id: str,
+    evidence: ModelListingEvidence,
+    entry: CodexCatalogueEntry | None,
+) -> ProviderModelInfo:
+    """Build Option A ``ProviderModelInfo`` from a Codex entry, or bare listing."""
+    if entry is None or entry.raw is None:
+        return ProviderModelInfo(model_id=model_id, listing=evidence)
+
+    raw = entry.raw
+    context_length: int | None = None
+    for key in ("max_context_window", "context_window"):
+        candidate = raw.get(key)
+        if (
+            isinstance(candidate, int)
+            and not isinstance(candidate, bool)
+            and candidate > 0
+        ):
+            context_length = candidate
+            break
+
+    supports_vision: bool | None = None
+    modalities = raw.get("input_modalities")
+    if isinstance(modalities, list):
+        normalized = [
+            item.strip().lower()
+            for item in modalities
+            if isinstance(item, str) and item.strip()
+        ]
+        if normalized:
+            supports_vision = any(
+                modality == "image" or modality.startswith("image/")
+                for modality in normalized
+            )
+
+    reasoning_capability: ModelReasoningCapability | None = None
+    supports_thinking: bool | None = None
+    levels = raw.get("supported_reasoning_levels")
+    if isinstance(levels, list):
+        efforts: set[ReasoningEffort] = set()
+        for level in levels:
+            if not isinstance(level, Mapping):
+                continue
+            raw_effort = level.get("effort")
+            if not isinstance(raw_effort, str):
+                continue
+            word = raw_effort.strip().lower()
+            if word == "ultra":
+                word = ReasoningEffort.MAX.value
+            mapped = EFFORT_BY_VALUE.get(word)
+            if mapped is not None:
+                efforts.add(mapped)
+        if efforts:
+            reasoning_capability = ModelReasoningCapability(
+                can_reason=True,
+                supports_effort_control=True,
+                supports_toggle_control=False,
+                supports_budget_control=False,
+                supported_efforts=frozenset(efforts),
+            )
+            supports_thinking = True
+
+    raw_description = raw.get("description")
+    description = (
+        raw_description.strip()
+        if isinstance(raw_description, str) and raw_description.strip()
+        else None
+    )
+    declared = ProviderModelDeclaration(
+        context_length=context_length,
+        reasoning=supports_thinking,
+        vision=supports_vision,
+        description=description,
+    )
+    return ProviderModelInfo(
+        model_id=model_id,
+        supports_thinking=supports_thinking,
+        supports_vision=supports_vision,
+        context_length=context_length,
+        reasoning_capability=reasoning_capability,
+        declared=declared,
+        listing=evidence,
+        published_row=published_row_text(raw),
+    )
+
+
+def vendor_client_evidence(
+    *, catalogue: CodexCatalogue | None = None
+) -> dict[str, ModelListingEvidence]:
+    """Rung S2 -- ``$CODEX_HOME/models_cache.json`` (S2a) or bundled Codex CLI/Desktop (S2b).
 
     The plan is decoded from the stored ID token locally; no network call and
     no token refresh happen here or anywhere below. An unknown plan applies no
     plan filter at all, because unknown is not excluded.
     """
-    catalogue = load_codex_catalogue()
-    if catalogue is None:
+    active = catalogue if catalogue is not None else _active_offline_codex_catalogue()
+    if active is None:
         return {}
-    return catalogue_evidence(catalogue, plan_type=stored_chatgpt_plan_type())
+    detail_prefix = (
+        f"Codex cache {active.version}".strip()
+        if Path(active.source_path).name == "models_cache.json"
+        else None
+    )
+    return catalogue_evidence(
+        active,
+        plan_type=stored_chatgpt_plan_type(),
+        detail_prefix=detail_prefix,
+    )
 
 
-def observed_evidence() -> dict[str, ModelListingEvidence]:
+def observed_evidence(
+    *, catalogue: CodexCatalogue | None = None
+) -> dict[str, ModelListingEvidence]:
     """Rung S3 -- ids this credential has already been served successfully.
 
-    The one rung that is proof rather than a document, and the reason S2 and
+    The one rung that is proof rather than a document, and the reason S1/S2 and
     S3 union instead of one shadowing the other: a catalogue can be stale
     about a model the user is using right now.
 
@@ -435,8 +561,8 @@ def observed_evidence() -> dict[str, ModelListingEvidence]:
             )
             if observation.last_ts_iso > last_seen.get(observation.model_id, ""):
                 last_seen[observation.model_id] = observation.last_ts_iso
-    catalogue = load_codex_catalogue()
-    vetoes = {} if catalogue is None else listing_vetoes(catalogue)
+    active = catalogue if catalogue is not None else _active_offline_codex_catalogue()
+    vetoes = {} if active is None else listing_vetoes(active)
     evidence: dict[str, ModelListingEvidence] = {}
     for model_id, count in sorted(successes.items()):
         seen_at = last_seen.get(model_id, "")
@@ -475,28 +601,37 @@ def seed_evidence() -> dict[str, ModelListingEvidence]:
     }
 
 
-def chatgpt_oauth_served_models() -> dict[str, ModelListingEvidence]:
-    """Resolve this provider's model ids from every offline source it has.
+def chatgpt_oauth_served_models(
+    *,
+    gateway_evidence: Mapping[str, ModelListingEvidence] | None = None,
+    active_catalogue: CodexCatalogue | None = None,
+) -> dict[str, ModelListingEvidence]:
+    """Resolve this provider's model ids across S1 live -> S2a/S2b -> S3 -> S5.
 
-    No gateway rung: the backend publishes no model-list endpoint, and its own
-    client does not call one either -- Codex 0.151.0 contains zero occurrences
-    of ``backend-api/models``. Nothing here is added speculatively.
+    When S1 live ``/codex/models`` answered (``gateway_evidence`` non-empty),
+    S2a/S2b is strictly suppressed so a stale local binary cannot ghost retired
+    models (e.g. ``gpt-5.5``) back into the listing, and S3's vetoes read the
+    active S1 catalogue instead of disk.
 
-    **No models.dev rung either, and that is a deliberate departure.** The
-    ``chatgpt_oauth -> openai`` alias stays exactly where it is and keeps
-    supplying every capability and every limit, but it is the wrong source for
-    *existence*: its bucket describes OpenAI's paid API deployment, so it
-    carries 44 ids this surface has never served -- embeddings, image models,
-    the whole ``*-codex`` family -- and the hand filter that used to trim them
-    is what this change removes. Using it as a fallback id set would put those
-    44 ids in the picker the moment Codex was uninstalled.
+    **No models.dev existence rung:** ``chatgpt_oauth -> openai`` still fills
+    pricing and output-limit gaps, never membership.
     """
-    resolved = resolve_served_models(
-        vendor_client=vendor_client_evidence,
-        observed=observed_evidence,
-        seed=seed_evidence,
-        log_tag="CHATGPT_OAUTH",
-    )
+    if gateway_evidence:
+        gateway_copy = dict(gateway_evidence)
+        resolved = resolve_served_models(
+            gateway=lambda: gateway_copy,
+            vendor_client=dict,
+            observed=lambda: observed_evidence(catalogue=active_catalogue),
+            seed=seed_evidence,
+            log_tag="CHATGPT_OAUTH",
+        )
+    else:
+        resolved = resolve_served_models(
+            vendor_client=vendor_client_evidence,
+            observed=observed_evidence,
+            seed=seed_evidence,
+            log_tag="CHATGPT_OAUTH",
+        )
     return {
         model_id: evidence
         for model_id, evidence in resolved.items()
@@ -963,42 +1098,218 @@ class ChatGPTOAuthProvider(BaseProvider):
         """
         return frozenset(await self.list_model_evidence())
 
-    async def list_model_evidence(self) -> dict[str, ModelListingEvidence]:
-        """The served ids plus why each one is listed.
+    async def _do_fetch_live_codex_catalogue(
+        self,
+        *,
+        key: tuple[str, str, str],
+        access_token: str,
+        account_id: str,
+        client_version: str,
+    ) -> CodexCatalogue | None:
+        stale_snapshot = get_cached_live_codex_snapshot(key)
+        if stale_snapshot is not None and is_live_snapshot_fresh(stale_snapshot):
+            return stale_snapshot.catalogue
+        headers: dict[str, str] = {
+            "Authorization": f"Bearer {access_token}",
+            "originator": CODEX_OAUTH_ORIGINATOR,
+            "User-Agent": _user_agent(),
+            "Accept": "application/json",
+        }
+        if account_id:
+            headers["ChatGPT-Account-ID"] = account_id
+        if stale_snapshot is not None and stale_snapshot.etag:
+            headers["If-None-Match"] = stale_snapshot.etag
+        try:
+            response = await self._client.get(
+                f"{self._base_url}/codex/models",
+                params={"client_version": client_version},
+                headers=headers,
+            )
+        except Exception as error:
+            logger.debug("ChatGPT live /codex/models fetch failed: {}", error)
+            return None
+        if response.status_code == 304 and stale_snapshot is not None:
+            refreshed = touch_live_codex_snapshot(
+                key, etag=response.headers.get("etag")
+            )
+            return (
+                refreshed.catalogue
+                if refreshed is not None
+                else stale_snapshot.catalogue
+            )
+        if response.status_code in (401, 403):
+            invalidate_live_codex_snapshot(key)
+            logger.debug(
+                "ChatGPT live /codex/models rejected credentials (HTTP {})",
+                response.status_code,
+            )
+            return None
+        if response.status_code != 200:
+            logger.debug(
+                "ChatGPT live /codex/models returned HTTP {}", response.status_code
+            )
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            logger.debug("ChatGPT live /codex/models returned non-JSON body")
+            return None
+        doc = validate_codex_models_document(payload)
+        if doc is None:
+            logger.debug("ChatGPT live /codex/models returned invalid catalogue shape")
+            return None
+        catalogue = parse_codex_catalogue(
+            doc,
+            version=client_version,
+            source_path=f"{self._base_url}/codex/models",
+        )
+        if catalogue is None:
+            return None
+        store_live_codex_snapshot(
+            key,
+            etag=response.headers.get("etag"),
+            document=doc,
+            catalogue=catalogue,
+        )
+        return catalogue
 
-        Off the event loop: rung S2 memory-maps a 300 MB executable on its
-        first call per Codex version and rung S3 runs a read-only SQL query,
-        and neither belongs on a thread that is also serving ``/v1/messages``.
-        Both run inside discovery, never on the request path.
-        """
-        return await asyncio.to_thread(chatgpt_oauth_served_models)
+    async def _fetch_live_codex_catalogue_for_account(
+        self,
+        access_token: str,
+        account_id: str,
+        client_version: str,
+    ) -> CodexCatalogue | None:
+        account_key = codex_live_account_key(account_id, access_token)
+        key = (self._base_url, account_key, client_version)
+        cached = get_cached_live_codex_snapshot(key)
+        if cached is not None and is_live_snapshot_fresh(cached):
+            return cached.catalogue
+        loop = asyncio.get_running_loop()
+        inflight_key = (id(loop), *key)
+        existing = _INFLIGHT_LIVE_FETCHES.get(inflight_key)
+        if existing is not None:
+            return await asyncio.shield(existing)
+        task = asyncio.create_task(
+            self._do_fetch_live_codex_catalogue(
+                key=key,
+                access_token=access_token,
+                account_id=account_id,
+                client_version=client_version,
+            )
+        )
+        _INFLIGHT_LIVE_FETCHES[inflight_key] = task
+        try:
+            return await task
+        finally:
+            if _INFLIGHT_LIVE_FETCHES.get(inflight_key) is task:
+                _INFLIGHT_LIVE_FETCHES.pop(inflight_key, None)
+
+    async def _gateway_catalogue_bundle(
+        self,
+    ) -> tuple[
+        dict[str, ModelListingEvidence],
+        dict[str, CodexCatalogueEntry],
+        CodexCatalogue | None,
+    ]:
+        accounts = await asyncio.to_thread(
+            chatgpt_s1_discovery_accounts,
+            explicit_api_key=self._api_key,
+            explicit_account_id=self._account_id,
+        )
+        if not accounts:
+            return {}, {}, None
+        client_version = await asyncio.to_thread(resolve_codex_client_version)
+        catalogues = await asyncio.gather(
+            *(
+                self._fetch_live_codex_catalogue_for_account(
+                    token, acct_id, client_version
+                )
+                for token, acct_id, _plan_type in accounts
+            )
+        )
+        merged_evidence: dict[str, ModelListingEvidence] = {}
+        merged_entries: dict[str, CodexCatalogueEntry] = {}
+        veto_candidates: dict[str, CodexCatalogueEntry] = {}
+        active_account_slugs: set[str] = set()
+        returned_catalogues = 0
+        for (_token, _acct_id, plan_type), cat in zip(
+            accounts, catalogues, strict=True
+        ):
+            if cat is None:
+                continue
+            returned_catalogues += 1
+            acct_evidence = catalogue_evidence(
+                cat,
+                plan_type=plan_type,
+                provenance=ModelListingProvenance.GATEWAY,
+                detail_prefix=f"Live Codex API {cat.version}".strip(),
+            )
+            for slug, ev in acct_evidence.items():
+                merged_evidence.setdefault(slug, ev)
+            for entry in cat.entries:
+                if entry.slug in acct_evidence:
+                    if entry.slug not in active_account_slugs:
+                        merged_entries[entry.slug] = entry
+                        veto_candidates[entry.slug] = entry
+                        active_account_slugs.add(entry.slug)
+                elif entry.slug not in veto_candidates:
+                    merged_entries.setdefault(entry.slug, entry)
+                    veto_candidates[entry.slug] = entry
+        if not returned_catalogues:
+            return {}, {}, None
+        combined_catalogue = CodexCatalogue(
+            version=client_version,
+            source_path=f"{self._base_url}/codex/models",
+            entries=tuple(veto_candidates.values()),
+        )
+        return merged_evidence, merged_entries, combined_catalogue
+
+    async def _resolve_listing_and_entries(
+        self,
+    ) -> tuple[dict[str, ModelListingEvidence], dict[str, CodexCatalogueEntry]]:
+        (
+            gateway_evidence,
+            gateway_entries,
+            active_catalogue,
+        ) = await self._gateway_catalogue_bundle()
+
+        def _resolve_offline() -> tuple[
+            dict[str, ModelListingEvidence], dict[str, CodexCatalogueEntry]
+        ]:
+            served = chatgpt_oauth_served_models(
+                gateway_evidence=gateway_evidence or None,
+                active_catalogue=active_catalogue,
+            )
+            if gateway_entries:
+                return served, dict(gateway_entries)
+            offline = _active_offline_codex_catalogue()
+            entries = (
+                {entry.slug: entry for entry in offline.entries}
+                if offline is not None
+                else {}
+            )
+            return served, entries
+
+        return await asyncio.to_thread(_resolve_offline)
+
+    async def list_model_evidence(self) -> dict[str, ModelListingEvidence]:
+        """The served ids plus why each one is listed (S1 live -> S2a/S2b -> S3 -> S5)."""
+        served, _entries = await self._resolve_listing_and_entries()
+        return served
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
-        """Model infos carrying provenance and lifecycle facts -- no numbers.
+        """Option A model infos carrying Codex capabilities and ``published_row``.
 
-        Every capability field is left ``None`` on purpose. The evidence chain
-        answers "which ids exist"; the resolution ladder answers "what are they
-        like", and it keeps answering it through the existing
-        ``chatgpt_oauth -> openai`` models.dev alias exactly as before. Codex's
-        catalogue does publish a ``context_window`` that disagrees with
-        models.dev, and reading it here would move a number from tier 3 to
-        tier 1 -- a change to the ladder, which is out of scope for this
-        change and was decided against explicitly.
+        Capabilities (``context_length``, ``supports_vision``,
+        ``supports_thinking``, ``reasoning_capability``, ``declared``) and
+        ``published_row`` (PR 4 ``service_tiers`` wiring) are populated from the
+        active S1/S2a/S2b Codex entry while ``input_price``, ``output_price``,
+        and ``max_output_tokens`` remain ``None`` for ``models.dev`` enrichment.
         """
-        evidence_map = await self.list_model_evidence()
-        catalogue = await asyncio.to_thread(load_codex_catalogue)
-        raw_by_slug: dict[str, str] = {}
-        if catalogue is not None:
-            for entry in catalogue.entries:
-                if entry.raw is not None:
-                    text = published_row_text(entry.raw)
-                    if text is not None:
-                        raw_by_slug[entry.slug] = text
+        evidence_map, entry_by_slug = await self._resolve_listing_and_entries()
         return frozenset(
-            ProviderModelInfo(
-                model_id=model_id,
-                listing=evidence,
-                published_row=raw_by_slug.get(model_id),
+            _provider_model_info_from_codex_entry(
+                model_id, evidence, entry_by_slug.get(model_id)
             )
             for model_id, evidence in evidence_map.items()
         )
