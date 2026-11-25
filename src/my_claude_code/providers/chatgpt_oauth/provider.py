@@ -33,6 +33,10 @@ from my_claude_code.config.settings import (
 from my_claude_code.core.anthropic.conversion import empty_system_messages_marker
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.anthropic.structured_output import (
+    apply_responses_structured_output_fallback,
+    effective_structured_output_spec,
+)
 from my_claude_code.core.credential_refresh_scope import (
     claimed_scope,
     refresh_exit,
@@ -98,9 +102,11 @@ from my_claude_code.providers.raw_upstream import (
     refusal_line,
 )
 from my_claude_code.providers.recovery import (
+    RUNG_STRUCTURED_OUTPUT,
     RUNG_TOOL_NAME_LENGTH,
     RUNG_TOOL_SCHEMA,
     RUNG_TOOLS_COUNT,
+    ProviderRecovery,
     ReasoningStripRecovery,
     RecoveryLadder,
     RecoveryRung,
@@ -109,6 +115,7 @@ from my_claude_code.providers.recovery import (
     ToolsCountRefusalRecovery,
     apply_learned_tool_schema_refusals,
     apply_tools_max_count,
+    classify_structured_output_refusal,
     complaint_evidence_snippet,
     complaint_refuses_a_replayed_reasoning_item,
     effective_tools_max_count,
@@ -1636,6 +1643,13 @@ class ChatGPTOAuthProvider(BaseProvider):
                     # only once the cut catalogue was accepted.
                     pending_count: int | None = None
                     count_evidence = ""
+                    pending_structured_output_evidence: str | None = None
+                    if self._recovery_memory.structured_output_refused(request.model):
+                        fallback = apply_responses_structured_output_fallback(
+                            attempt_body
+                        )
+                        if fallback is not None:
+                            attempt_body = fallback
                     while True:
                         # Commit boundary: the body is final once it is handed
                         # to the sender, and the surface it was sent on is
@@ -1768,6 +1782,8 @@ class ChatGPTOAuthProvider(BaseProvider):
                                     pending_name_limit = stated
                                     name_evidence = recovered.evidence
                                     accepted_name_limit = stated
+                            if recovered.kind == RUNG_STRUCTURED_OUTPUT:
+                                pending_structured_output_evidence = recovered.evidence
                             # Carried on the *retry* row, so the ladder in the
                             # modal reads "400 ... / 200 (responses_tool_schema)"
                             # and the operator can see which rewrite the second
@@ -1799,6 +1815,11 @@ class ChatGPTOAuthProvider(BaseProvider):
                             stripped_reasoning,
                             stripped_evidence,
                             stripped_values,
+                        )
+                    if pending_structured_output_evidence is not None:
+                        self._remember_structured_output_refusal(
+                            request.model,
+                            evidence=pending_structured_output_evidence,
                         )
                     try:
                         if response.status_code >= 400:
@@ -1977,18 +1998,50 @@ class ChatGPTOAuthProvider(BaseProvider):
         stated; it renames, never removes), and the reasoning strip last.
         """
 
-        return RecoveryLadder(
-            (
-                ToolSchemaRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
-                ToolsCountRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
-                ToolNameLengthRecovery(
-                    request,
-                    applied_limit=applied_name_limit,
-                    log_tag="CHATGPT_OAUTH_STREAM",
-                ).rung(),
-                ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+        rungs: list[Any] = [
+            ToolSchemaRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+            ToolsCountRefusalRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung(),
+            ToolNameLengthRecovery(
+                request,
+                applied_limit=applied_name_limit,
+                log_tag="CHATGPT_OAUTH_STREAM",
+            ).rung(),
+        ]
+        if effective_structured_output_spec(request) is not None:
+            rungs.append(
+                ProviderRecovery(
+                    kind=RUNG_STRUCTURED_OUTPUT,
+                    rewrite=self._rewrite_without_structured_output,
+                ).rung()
             )
+        rungs.append(ReasoningStripRecovery(log_tag="CHATGPT_OAUTH_STREAM").rung())
+        return RecoveryLadder(tuple(rungs))
+
+    def _rewrite_without_structured_output(
+        self, error: Exception, body: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        evidence = classify_structured_output_refusal(error, wire_field="text.format")
+        if evidence is None:
+            return None
+        retry = apply_responses_structured_output_fallback(body)
+        if retry is None:
+            return None
+        logger.warning(
+            "CHATGPT_OAUTH_STREAM: retrying without text.format (prompt fallback) -- "
+            "upstream refused it: {}",
+            evidence,
         )
+        return retry
+
+    def _remember_structured_output_refusal(self, model: str, *, evidence: str) -> None:
+        if self._recovery_memory.remember_structured_output_refusal(
+            model, evidence=evidence
+        ):
+            logger.warning(
+                "CHATGPT_OAUTH_STREAM: {} refuses text.format -- later requests "
+                "use prompt instruction fallback",
+                model,
+            )
 
     def _tool_name_max_length(self) -> int | None:
         """The longest tool name this backend accepts, or ``None`` for no limit.

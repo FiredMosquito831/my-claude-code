@@ -17,6 +17,7 @@ from my_claude_code.providers.openai_chat import (
     OpenAIChatProfile,
     OpenAIChatProvider,
     build_openai_chat_request_body,
+    model_accepts_pdf_for_provider,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 
@@ -116,4 +117,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
                 *self._profile.request_postprocessors,
             ),
             provider_id=self._provider_id,
+            accepts_documents=model_accepts_pdf_for_provider(
+                self._provider_id, request.model
+            ),
         )

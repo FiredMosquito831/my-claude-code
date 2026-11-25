@@ -1,6 +1,7 @@
 """DeepSeek Anthropic-to-OpenAI chat request policy."""
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from loguru import logger
@@ -98,6 +99,12 @@ def build_deepseek_request_body(
         )
 
     sanitized_request = MessagesRequest.model_validate(data)
+    if request_data.structured_output_spec is not None:
+        sanitized_request.structured_output_spec = deepcopy(
+            request_data.structured_output_spec
+        )
+    _preserve_image_details(request_data.messages, sanitized_request.messages)
+    _preserve_tool_strict(request_data.tools, sanitized_request.tools)
     body = build_openai_chat_request_body(
         sanitized_request,
         reasoning=effective_reasoning,
@@ -119,6 +126,30 @@ def build_deepseek_request_body(
         len(body.get("tools", [])),
     )
     return body
+
+
+def _preserve_image_details(
+    source_messages: list[Any], target_messages: list[Any]
+) -> None:
+    """Copy ``exclude=True`` ``ContentBlockImage.detail`` across DeepSeek sanitization."""
+    for src_msg, dst_msg in zip(source_messages, target_messages, strict=False):
+        src_content = getattr(src_msg, "content", None)
+        dst_content = getattr(dst_msg, "content", None)
+        if not isinstance(src_content, list) or not isinstance(dst_content, list):
+            continue
+        src_details = [
+            getattr(block, "detail", None)
+            for block in src_content
+            if getattr(block, "type", None) == "image"
+        ]
+        if not any(src_details):
+            continue
+        detail_iter = iter(src_details)
+        for dst_block in dst_content:
+            if getattr(dst_block, "type", None) == "image":
+                detail = next(detail_iter, None)
+                if detail is not None:
+                    dst_block.detail = detail
 
 
 def sanitize_deepseek_messages_for_openai(messages: Any) -> Any:
@@ -359,6 +390,14 @@ def _normalize_tool_result_content(messages: Any) -> Any:
         normalized.append(new_msg)
 
     return normalized
+
+
+def _preserve_tool_strict(source_tools: Any, target_tools: Any) -> None:
+    if not source_tools or not target_tools:
+        return
+    for source, target in zip(source_tools, target_tools, strict=False):
+        if isinstance(getattr(source, "strict", None), bool):
+            target.strict = source.strict
 
 
 def _apply_deepseek_chat_extras(

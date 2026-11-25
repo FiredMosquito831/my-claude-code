@@ -276,6 +276,8 @@ FACT_KIND_LABELS: dict[str, str] = {
     "preferred_surface_refused": "preferred wire surface refused",
     # 8.40.0: the Chat reasoning delta channel this model actually streamed.
     "reasoning_channel": "reasoning wire field",
+    # 8.44.0: structured-output format field rejected, using prompt fallback.
+    "structured_output_unsupported": "no structured output",
 }
 
 #: Kinds whose label the Models page payload's ``fact_labels`` table does not
@@ -292,6 +294,7 @@ PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
         "responses_reasoning_item_rejected",
         "preferred_surface_refused",
         "reasoning_channel",
+        "structured_output_unsupported",
     }
 )
 

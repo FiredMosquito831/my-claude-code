@@ -255,7 +255,28 @@ def convert_tools(
     return tools
 
 
+def tool_choice_forbids_tools(value: Any) -> bool:
+    """Whether the client asked for no tool to be callable at all."""
+    return value == "none" or (
+        isinstance(value, Mapping) and value.get("type") == "none"
+    )
+
+
 def convert_tool_choice(
+    value: Any,
+    *,
+    parallel_tool_calls: bool | None = None,
+    allow_web_search: bool = False,
+) -> dict[str, Any] | None:
+    choice = _base_tool_choice(value, allow_web_search=allow_web_search)
+    if parallel_tool_calls is False and not tool_choice_forbids_tools(value):
+        if choice is None:
+            choice = {"type": "auto"}
+        choice = {**choice, "disable_parallel_tool_use": True}
+    return choice
+
+
+def _base_tool_choice(
     value: Any,
     *,
     allow_web_search: bool = False,
@@ -268,6 +289,8 @@ def convert_tool_choice(
         return {"type": "any"}
     if isinstance(value, dict):
         choice_type = value.get("type")
+        if choice_type == "none":
+            return None
         if choice_type == "function":
             namespace = optional_str(value.get("namespace"))
             name = required_str(value.get("name"), "tool_choice.name")
@@ -300,6 +323,8 @@ def convert_tool_choice(
                     ),
                 }
             return dict(value)
+        if choice_type == "required":
+            return {"type": "any"}
         if choice_type in {"auto", "any"}:
             return dict(value)
         if allow_web_search and choice_type in SUPPORTED_RESPONSES_WEB_SEARCH_TYPES:
@@ -513,6 +538,9 @@ def _convert_function_tool(
     }
     if description := optional_str(source.get("description")):
         converted["description"] = description
+    strict = source.get("strict")
+    if isinstance(strict, bool):
+        converted["strict"] = strict
     return converted
 
 

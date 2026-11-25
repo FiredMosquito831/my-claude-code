@@ -2,10 +2,16 @@
 
 import base64
 import binascii
-import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from my_claude_code.core.anthropic.structured_output import (
+    StructuredOutputValidationError,
+    has_tool_history,
+    parse_chat_response_format,
+    parse_pdf_data_url,
+    synthesize_missing_history_tools,
+)
 from my_claude_code.core.carrier_surface import (
     CHAT_DETAILS_CARRIER,
     CHAT_DETAILS_OTHER,
@@ -35,11 +41,6 @@ IGNORED_REQUEST_FIELDS: tuple[str, ...] = (
     "presence_penalty",
     "seed",
     "top_logprobs",
-)
-
-_JSON_OBJECT_INSTRUCTION = (
-    "Respond with a single valid JSON object and nothing else. "
-    "Do not wrap it in Markdown code fences and do not add commentary."
 )
 
 _DATA_URL_PREFIX = "data:"
@@ -74,13 +75,23 @@ def convert_request_to_anthropic_payload(
 
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
+    pending_tool_call_ids: set[str] = set()
     for message in request.messages:
         if carrier_surface is not None:
             _note_reasoning_details(message, carrier_surface)
-        _append_message(message, messages=messages, system_parts=system_parts)
+        _append_message(
+            message,
+            messages=messages,
+            system_parts=system_parts,
+            pending_tool_call_ids=pending_tool_call_ids,
+        )
 
-    if instruction := _response_format_instruction(request.response_format):
-        system_parts.append(instruction)
+    try:
+        structured_spec, output_fmt = parse_chat_response_format(
+            request.response_format
+        )
+    except StructuredOutputValidationError as exc:
+        raise ChatCompletionsConversionError(exc.message, param=exc.param) from exc
 
     if not messages:
         raise ChatCompletionsConversionError(
@@ -97,7 +108,12 @@ def convert_request_to_anthropic_payload(
         payload["system"] = "\n\n".join(system_parts)
     # ``max_completion_tokens`` is the field OpenAI moved to; when a client
     # sends both, the newer one is the one it means.
-    if (max_tokens := request.max_completion_tokens or request.max_tokens) is not None:
+    max_tokens = (
+        request.max_completion_tokens
+        if request.max_completion_tokens is not None
+        else request.max_tokens
+    )
+    if max_tokens is not None:
         payload["max_tokens"] = max_tokens
     if request.temperature is not None:
         payload["temperature"] = request.temperature
@@ -112,6 +128,11 @@ def convert_request_to_anthropic_payload(
     elif thinking := _reasoning_budget_thinking(request.reasoning):
         payload["thinking"] = thinking
 
+    if structured_spec is not None:
+        payload["structured_output_spec"] = structured_spec
+    if output_fmt is not None:
+        payload.setdefault("output_config", {})["format"] = output_fmt
+
     if allow_web_search:
         extract_chat_web_search_spec(
             request.tools,
@@ -121,7 +142,12 @@ def convert_request_to_anthropic_payload(
         )
 
     tools = convert_tools(request.tools, allow_web_search=allow_web_search)
-    if tools and not tool_choice_forbids_tools(request.tool_choice):
+    forbids_tools = tool_choice_forbids_tools(request.tool_choice)
+    history_has_tools = has_tool_history(messages)
+    if forbids_tools and history_has_tools:
+        payload["tools"] = synthesize_missing_history_tools(messages, tools)
+        payload["tool_choice"] = {"type": "none"}
+    elif tools and not forbids_tools:
         payload["tools"] = tools
         tool_choice = convert_tool_choice(
             request.tool_choice,
@@ -185,6 +211,7 @@ def _append_message(
     *,
     messages: list[dict[str, Any]],
     system_parts: list[str],
+    pending_tool_call_ids: set[str],
 ) -> None:
     role = message.role
     if role in {"system", "developer"}:
@@ -192,7 +219,11 @@ def _append_message(
             system_parts.append(text)
         return
     if role == "tool":
-        _append_tool_result(message, messages)
+        _append_tool_result(
+            message,
+            messages,
+            pending_tool_call_ids=pending_tool_call_ids,
+        )
         return
     if role == "user":
         messages.append(
@@ -200,7 +231,11 @@ def _append_message(
         )
         return
     if role == "assistant":
-        _append_assistant(message, messages)
+        _append_assistant(
+            message,
+            messages,
+            pending_tool_call_ids=pending_tool_call_ids,
+        )
         return
     raise ChatCompletionsConversionError(
         f"Unsupported message role: {role!r}", param="messages"
@@ -208,7 +243,10 @@ def _append_message(
 
 
 def _append_assistant(
-    message: ChatCompletionMessage, messages: list[dict[str, Any]]
+    message: ChatCompletionMessage,
+    messages: list[dict[str, Any]],
+    *,
+    pending_tool_call_ids: set[str],
 ) -> None:
     blocks: list[dict[str, Any]] = []
     content = _convert_message_content(message.content, allow_empty=True)
@@ -217,7 +255,10 @@ def _append_assistant(
             blocks.append({"type": "text", "text": content})
     else:
         blocks.extend(content)
-    blocks.extend(_tool_use_block(call) for call in message.tool_calls or ())
+    for call in message.tool_calls or ():
+        tool_block = _tool_use_block(call)
+        pending_tool_call_ids.add(tool_block["id"])
+        blocks.append(tool_block)
 
     if not blocks and message.reasoning_content is None:
         # An assistant turn with neither text nor a tool call carries nothing
@@ -256,17 +297,23 @@ def _tool_use_block(call: Any) -> dict[str, Any]:
 
 
 def _append_tool_result(
-    message: ChatCompletionMessage, messages: list[dict[str, Any]]
+    message: ChatCompletionMessage,
+    messages: list[dict[str, Any]],
+    *,
+    pending_tool_call_ids: set[str],
 ) -> None:
     tool_call_id = message.tool_call_id
     if not isinstance(tool_call_id, str) or not tool_call_id:
         raise ChatCompletionsConversionError(
             "A tool message requires tool_call_id", param="messages"
         )
+    if tool_call_id not in pending_tool_call_ids:
+        return
+    pending_tool_call_ids.discard(tool_call_id)
     block = {
         "type": "tool_result",
         "tool_use_id": tool_call_id,
-        "content": _content_as_text(message.content),
+        "content": _tool_result_content(message.content),
     }
     # Consecutive tool results belong to one user turn, the way Anthropic
     # expects them: OpenAI sends one message per result, Anthropic one message
@@ -319,12 +366,15 @@ def _convert_message_content(
         if part_type == "image_url":
             blocks.append(_image_block(part))
             continue
+        if part_type == "file":
+            blocks.append(_file_block(part))
+            continue
         if part_type == "refusal":
             blocks.append({"type": "text", "text": str(part.get("refusal", ""))})
             continue
         raise ChatCompletionsConversionError(
             f"Unsupported content part type: {part_type!r}. "
-            "MCC accepts text and image_url parts on /v1/chat/completions.",
+            "MCC accepts text, image_url, and file parts on /v1/chat/completions.",
             param="messages",
         )
     return blocks
@@ -338,9 +388,61 @@ def _image_block(part: Mapping[str, Any]) -> dict[str, Any]:
         raise ChatCompletionsConversionError(
             "image_url.url must be a non-empty string", param="messages"
         )
+    detail = source.get("detail") if source else part.get("detail")
     if url.startswith(_DATA_URL_PREFIX):
-        return {"type": "image", "source": _data_url_source(url)}
-    return {"type": "image", "source": {"type": "url", "url": url}}
+        block: dict[str, Any] = {"type": "image", "source": _data_url_source(url)}
+    else:
+        block = {"type": "image", "source": {"type": "url", "url": url}}
+    if isinstance(detail, str) and detail in {"low", "high"}:
+        block["detail"] = detail
+    return block
+
+
+def _file_block(part: Mapping[str, Any]) -> dict[str, Any]:
+    file_obj = part.get("file")
+    if not isinstance(file_obj, Mapping):
+        raise ChatCompletionsConversionError(
+            "file content part requires a file object", param="messages"
+        )
+    file_data = file_obj.get("file_data")
+    if not isinstance(file_data, str) or not file_data:
+        file_id = file_obj.get("file_id")
+        if isinstance(file_id, str) and file_id:
+            raise ChatCompletionsConversionError(
+                f"file_id {file_id!r} is not supported: MCC has no Files API to read "
+                "it from. Send the file inline as file.file_data.",
+                param="messages",
+            )
+        raise ChatCompletionsConversionError(
+            "file.file_data must be a non-empty base64 PDF data URL",
+            param="messages",
+        )
+    try:
+        media_type, data = parse_pdf_data_url(file_data, error_context="file.file_data")
+    except StructuredOutputValidationError as exc:
+        raise ChatCompletionsConversionError(exc.message, param=exc.param) from exc
+    block: dict[str, Any] = {
+        "type": "document",
+        "source": {"type": "base64", "media_type": media_type, "data": data},
+    }
+    filename = file_obj.get("filename")
+    if isinstance(filename, str) and filename.strip():
+        block["title"] = filename.strip()
+    return block
+
+
+def _tool_result_content(content: Any) -> str | list[dict[str, Any]]:
+    converted = _convert_message_content(content, allow_empty=True)
+    if isinstance(converted, str):
+        return converted
+    has_media = any(block.get("type") in {"image", "document"} for block in converted)
+    if not has_media:
+        return "\n".join(
+            str(block.get("text", ""))
+            for block in converted
+            if block.get("type") == "text"
+        )
+    return converted
 
 
 def _data_url_source(url: str) -> dict[str, Any]:
@@ -431,51 +533,6 @@ def _reasoning_budget_thinking(
     ):
         return {"type": "enabled", "budget_tokens": raw_max_tokens}
     return None
-
-
-def _response_format_instruction(response_format: Any) -> str | None:
-    """Map ``response_format`` onto the nearest Anthropic mechanism.
-
-    Anthropic has no server-enforced JSON mode, so the honest translation is
-    an instruction the model can follow, appended to the system prompt. A
-    ``json_schema`` request additionally carries its schema verbatim, which is
-    what makes the difference between "some JSON" and "this JSON".
-    """
-    if response_format is None:
-        return None
-    if not isinstance(response_format, Mapping):
-        raise ChatCompletionsConversionError(
-            "response_format must be an object", param="response_format"
-        )
-    format_type = response_format.get("type")
-    if format_type in (None, "text"):
-        return None
-    if format_type == "json_object":
-        return _JSON_OBJECT_INSTRUCTION
-    if format_type == "json_schema":
-        schema_holder = response_format.get("json_schema")
-        if not isinstance(schema_holder, Mapping):
-            raise ChatCompletionsConversionError(
-                "response_format.json_schema must be an object",
-                param="response_format",
-            )
-        schema = schema_holder.get("schema")
-        if not isinstance(schema, Mapping):
-            raise ChatCompletionsConversionError(
-                "response_format.json_schema.schema must be an object",
-                param="response_format",
-            )
-        name = schema_holder.get("name")
-        label = f" named {name!r}" if isinstance(name, str) and name else ""
-        return (
-            f"{_JSON_OBJECT_INSTRUCTION} The object{label} must validate "
-            f"against this JSON Schema:\n{json.dumps(schema, sort_keys=True)}"
-        )
-    raise ChatCompletionsConversionError(
-        f"Unsupported response_format type: {format_type!r}. "
-        "MCC accepts text, json_object and json_schema.",
-        param="response_format",
-    )
 
 
 def _trace_ignored_fields(request: OpenAIChatCompletionRequest) -> None:

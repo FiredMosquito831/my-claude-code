@@ -20,6 +20,7 @@ class ContentBlockText(_AnthropicBlockBase):
 class ContentBlockImage(_AnthropicBlockBase):
     type: Literal["image"]
     source: dict[str, Any]
+    detail: Literal["low", "high", "auto"] | None = Field(default=None, exclude=True)
 
 
 class ContentBlockDocument(_AnthropicBlockBase):
@@ -162,6 +163,7 @@ class Tool(_AnthropicBlockBase):
     type: str | None = None
     description: str | None = None
     input_schema: dict[str, Any] | None = None
+    strict: bool | None = Field(default=None, exclude=True)
 
 
 class ThinkingConfig(BaseModel):
@@ -236,6 +238,11 @@ class MessagesRequest(BaseModel):
     #: ``model_copy(deep=True)`` for same-protocol Responses egress while
     #: remaining invisible to ``model_dump()`` and cross-door conversions.
     responses_envelope: dict[str, Any] | None = Field(default=None, exclude=True)
+    #: Canonical cross-door structured output specification (8.44.0), or
+    #: ``None``. Preserves ``json_object`` / ``text`` / ``json_schema`` metadata
+    #: (``name``, ``strict``, ``description``) without polluting
+    #: ``output_config.format`` or ``model_dump()``.
+    structured_output_spec: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @property
     def prompt_cache_ask(self) -> PromptCacheAsk | None:

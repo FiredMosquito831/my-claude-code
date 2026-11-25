@@ -441,4 +441,7 @@ def _convert_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
     description = source.get("description")
     if isinstance(description, str) and description:
         converted["description"] = description
+    strict = source.get("strict")
+    if isinstance(strict, bool):
+        converted["strict"] = strict
     return converted

@@ -47,6 +47,10 @@ from my_claude_code.core.anthropic.conversion import empty_system_messages_marke
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.anthropic.openai_tool_names import EMPTY_TOOL_CATALOGUE
 from my_claude_code.core.anthropic.streaming import AnthropicStreamLedger
+from my_claude_code.core.anthropic.structured_output import (
+    apply_responses_structured_output_fallback,
+    disables_parallel_tool_use,
+)
 from my_claude_code.core.client_fingerprint import current_fingerprint
 from my_claude_code.core.generation_rate import GenerationClock
 from my_claude_code.core.openai_responses import (
@@ -99,6 +103,7 @@ from my_claude_code.providers.raw_upstream import (
     refusal_line,
 )
 from my_claude_code.providers.recovery import (
+    RUNG_STRUCTURED_OUTPUT,
     RUNG_TOOL_NAME_LENGTH,
     RUNG_TOOL_SCHEMA,
     RUNG_TOOLS_COUNT,
@@ -108,6 +113,7 @@ from my_claude_code.providers.recovery import (
     ToolsCountRecovery,
     apply_learned_tool_schema_refusals,
     apply_tools_max_count,
+    classify_structured_output_refusal,
     clone_body_without_reasoning_field,
     clone_body_without_tool_choice,
     complaint_evidence_snippet,
@@ -139,6 +145,7 @@ from .marketplace import (
 )
 from .opencode_catalogue import STAND_IN_INPUT_SCHEMA
 from .opencode_identity import identity_wire_record
+from .request_policy import model_accepts_pdf_for_provider
 
 #: What a surface probe asks for. Small enough that a host which answers it has
 #: cost the user a rounding error, and large enough that a model with a
@@ -171,6 +178,7 @@ _RUNG_TOOL_CHOICE = "responses_tool_choice"
 #: ladder: one word for one event, whichever of the two senders paid for it.
 _RUNG_TOOL_SCHEMA = RUNG_TOOL_SCHEMA
 _RUNG_TOOLS_COUNT = RUNG_TOOLS_COUNT
+_RUNG_STRUCTURED_OUTPUT = RUNG_STRUCTURED_OUTPUT
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +304,19 @@ def _next_responses_recovery(
                 evidence=complaint_evidence_snippet(upstream_complaint(error)),
                 log_line="host states only tool_choice=auto is supported",
             )
+    if _RUNG_STRUCTURED_OUTPUT not in used:
+        evidence = classify_structured_output_refusal(error, wire_field="text.format")
+        if evidence is not None:
+            retry = apply_responses_structured_output_fallback(dict(body))
+            if retry is not None:
+                used.add(_RUNG_STRUCTURED_OUTPUT)
+                return _ResponsesLearning(
+                    kind=_RUNG_STRUCTURED_OUTPUT,
+                    body=retry,
+                    value=True,
+                    evidence=evidence,
+                    log_line="host rejects text.format (prompt fallback)",
+                )
     if _RUNG_REASONING_SUMMARY not in used and is_bad_request(error):
         reasoning_block = body.get("reasoning")
         if isinstance(reasoning_block, Mapping) and "summary" in reasoning_block:
@@ -701,6 +722,8 @@ class ResponsesTransport:
         effective_parallel_tool_calls = configured_responses_parallel_tool_calls()
         if has_envelope and isinstance(envelope.get("parallel_tool_calls"), bool):
             effective_parallel_tool_calls = envelope["parallel_tool_calls"]
+        if disables_parallel_tool_use(request.tool_choice):
+            effective_parallel_tool_calls = False
         openai_destination = _is_openai_responses_destination(
             self._provider_id, self._base_url
         )
@@ -735,6 +758,9 @@ class ResponsesTransport:
             plaintext_replay=self.plaintext_replay(request.model),
             apply_responses_sidecars=has_envelope,
             allow_openai_responses_sidecars=openai_destination,
+            accepts_documents=model_accepts_pdf_for_provider(
+                self._provider_id, request.model
+            ),
         )
         dialect = self.reasoning_dialect(request.model)
         surface_rejections = (
@@ -1026,6 +1052,10 @@ class ResponsesTransport:
         swept, count_base = apply_tools_max_count(swept, cap, cap_source)
         count_marker = count_base
         current = dict(swept)
+        if self._memory.structured_output_refused(request.model):
+            fallback = apply_responses_structured_output_fallback(current)
+            if fallback is not None:
+                current = fallback
         while True:
             identity = self.identity_headers(current)
             marker = (
@@ -1176,6 +1206,17 @@ class ResponsesTransport:
                 self._provider_name,
                 learning.value,
             )
+            return
+        if learning.kind == _RUNG_STRUCTURED_OUTPUT:
+            if self._memory.remember_structured_output_refusal(
+                request.model, evidence=learning.evidence
+            ):
+                logger.warning(
+                    "{}_RESPONSES: {} refuses text.format -- later requests "
+                    "use prompt instruction fallback",
+                    self._provider_name,
+                    request.model,
+                )
             return
         if learning.kind in {_RUNG_REASONING_SUMMARY, _RUNG_REASONING_FIELD}:
             field_name, values, should_record = learning.value

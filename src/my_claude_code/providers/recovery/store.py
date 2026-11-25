@@ -54,6 +54,7 @@ from .facts import (
     FACT_RESPONSES_TOOL_SCHEMA_KEYWORD,
     FACT_RESPONSES_TOOLS_MAX_COUNT,
     FACT_STREAM_USAGE_UNSUPPORTED,
+    FACT_STRUCTURED_OUTPUT_UNSUPPORTED,
     FACTS_KEY,
     MAX_FACT_ROWS,
     PROVIDER_WIDE_MODEL_ID,
@@ -598,6 +599,8 @@ class LearnedFactStore:
                     ).setdefault(field_name, set()).add(value)
             elif fact.fact_kind == FACT_STREAM_USAGE_UNSUPPORTED:
                 memory.stream_usage_unsupported.add(fact.model_id)
+            elif fact.fact_kind == FACT_STRUCTURED_OUTPUT_UNSUPPORTED:
+                memory.structured_output_unsupported.add(fact.model_id)
             elif fact.fact_kind == FACT_HISTORY_THINKING_REJECTED:
                 memory.history_thinking_rejected.add(fact.model_id)
             elif fact.fact_kind == FACT_RESPONSES_REASONING_ITEM_REJECTED:
@@ -654,6 +657,7 @@ class LearnedFactStore:
             memory.rejected_reasoning_fields.clear()
             memory.rejected_effort_values.clear()
             memory.stream_usage_unsupported.clear()
+            memory.structured_output_unsupported.clear()
             memory.history_thinking_rejected.clear()
             memory.responses_reasoning_item_rejected.clear()
             memory.reasoning_channels.clear()

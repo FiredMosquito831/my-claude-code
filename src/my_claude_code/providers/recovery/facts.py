@@ -46,6 +46,9 @@ FACT_REASONING_FIELD_REJECTED = "reasoning_field_rejected"
 FACT_MODEL_WITHHELD = "model_withheld"
 #: ``stream_options.include_usage`` this host answers with a 400. Value: ``True``.
 FACT_STREAM_USAGE_UNSUPPORTED = "stream_usage_unsupported"
+#: Structured-output parameter (``response_format`` / ``output_config.format`` /
+#: ``text.format``) this model's host answered with a 400. Value: ``True``.
+FACT_STRUCTURED_OUTPUT_UNSUPPORTED = "structured_output_unsupported"
 #: The effort words a host named in its own rejection. Value: ``list[str]``.
 FACT_EFFORT_ENUM = "effort_enum"
 #: One reasoning *value* a model refused, proven by a retry that succeeded
@@ -243,6 +246,7 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_EFFORT_VALUE_REJECTED,
         FACT_VISION_UNSUPPORTED,
         FACT_TOOL_CALLS_UNSUPPORTED,
+        FACT_STRUCTURED_OUTPUT_UNSUPPORTED,
         FACT_MODELS_ETAG,
         FACT_CLIENT_IDENTITY_REQUIRED,
         FACT_RESPONSE_SURFACE,
@@ -350,6 +354,7 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # one would silently re-take the whole channel.
     FACT_EFFORT_VALUE_REJECTED: INFERRED_FACT_TTL_SECONDS,
     FACT_STREAM_USAGE_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
+    FACT_STRUCTURED_OUTPUT_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_VISION_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_TOOL_CALLS_UNSUPPORTED: INFERRED_FACT_TTL_SECONDS,
     FACT_REASONING_CHANNEL: INFERRED_FACT_TTL_SECONDS,

@@ -23,7 +23,10 @@ from my_claude_code.core.anthropic import (
     AnthropicToOpenAIConverter,
     OpenAIToolNameCodec,
     ReasoningReplayMode,
+    apply_chat_structured_output_fallback,
     build_base_request_body,
+    inject_chat_system_instruction,
+    render_response_format_instruction,
 )
 from my_claude_code.core.anthropic.conversion import OpenAIConversionError
 from my_claude_code.core.anthropic.models import MessagesRequest
@@ -98,6 +101,8 @@ def build_openai_chat_request_body(
     overrides: ModelParameterOverrides | None = None,
     tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
     tool_schema_dialect: ToolSchemaDialect | None = None,
+    accepts_documents: bool = False,
+    suppress_structured_output: bool = False,
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible chat request body from an Anthropic request.
 
@@ -150,6 +155,7 @@ def build_openai_chat_request_body(
             # could not follow a dashboard save. ``auto`` emits nothing.
             image_detail=configured_image_detail(),
             reasoning_by_message=assistant_details,
+            accepts_documents=accepts_documents,
         )
     except OpenAIConversionError as exc:
         raise InvalidRequestError(str(exc)) from exc
@@ -168,6 +174,10 @@ def build_openai_chat_request_body(
             body["extra_body"] = extra_body
 
     _apply_common_openai_chat_policy(body, policy)
+    if suppress_structured_output and "response_format" in body:
+        fallback = apply_chat_structured_output_fallback(body)
+        if fallback is not None:
+            body = fallback
 
     if assistant_details:
         # Written **here**, in the provider layer, and not in
@@ -367,6 +377,13 @@ def _apply_common_openai_chat_policy(
     if policy.strip_message_names:
         _strip_message_names(body.get("messages"))
 
+    if "response_format" in policy.unsupported_body_keys and isinstance(
+        response_format := body.get("response_format"), Mapping
+    ):
+        instruction = render_response_format_instruction(response_format)
+        if instruction:
+            inject_chat_system_instruction(body, instruction)
+
     for key in policy.unsupported_body_keys:
         body.pop(key, None)
 
@@ -375,6 +392,14 @@ def _apply_common_openai_chat_policy(
 
     if policy.normalize_n_to_one and body.get("n") is not None:
         body["n"] = 1
+
+
+def model_accepts_pdf_for_provider(provider_id: str, model_id: str) -> bool:
+    """Return whether ``models.dev`` declares PDF input for ``(provider_id, model_id)``."""
+    # Deferred: ``providers.runtime`` imports provider packages at startup.
+    from my_claude_code.providers.runtime.models_dev import model_accepts_pdf
+
+    return model_accepts_pdf(provider_id, model_id)
 
 
 def _strip_message_names(messages: Any) -> None:

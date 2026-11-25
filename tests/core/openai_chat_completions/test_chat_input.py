@@ -1,6 +1,5 @@
 """Chat Completions request fields land where the Anthropic protocol keeps them."""
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -130,7 +129,15 @@ def test_an_assistant_tool_call_round_trips_into_tool_use_and_tool_result() -> N
                                 "name": "add",
                                 "arguments": '{"a": 1, "b": 2}',
                             },
-                        }
+                        },
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {
+                                "name": "add",
+                                "arguments": '{"a": 2, "b": 2}',
+                            },
+                        },
                     ],
                 },
                 {"role": "tool", "tool_call_id": "call_1", "content": "3"},
@@ -142,7 +149,8 @@ def test_an_assistant_tool_call_round_trips_into_tool_use_and_tool_result() -> N
     assistant = payload["messages"][1]
     assert assistant["reasoning_content"] == "I should add"
     assert assistant["content"] == [
-        {"type": "tool_use", "id": "call_1", "name": "add", "input": {"a": 1, "b": 2}}
+        {"type": "tool_use", "id": "call_1", "name": "add", "input": {"a": 1, "b": 2}},
+        {"type": "tool_use", "id": "call_2", "name": "add", "input": {"a": 2, "b": 2}},
     ]
     # Two OpenAI tool messages, one Anthropic user turn holding both results.
     assert payload["messages"][2] == {
@@ -261,13 +269,17 @@ def test_a_non_function_tool_type_is_refused_by_name() -> None:
     assert "web_search_preview" in str(excinfo.value)
 
 
-def test_response_format_json_object_appends_a_json_instruction() -> None:
+def test_response_format_json_object_preserves_structured_output_without_eager_prompt() -> (
+    None
+):
     payload = _convert(_minimal(response_format={"type": "json_object"}))
 
-    assert "single valid JSON object" in payload["system"]
+    assert "system" not in payload
+    assert payload["structured_output_spec"] == {"type": "json_object"}
+    assert "output_config" not in payload
 
 
-def test_response_format_json_schema_carries_the_schema_verbatim() -> None:
+def test_response_format_json_schema_carries_the_schema_without_eager_prompt() -> None:
     schema = {"type": "object", "properties": {"a": {"type": "integer"}}}
     payload = _convert(
         _minimal(
@@ -278,8 +290,15 @@ def test_response_format_json_schema_carries_the_schema_verbatim() -> None:
         )
     )
 
-    assert "named 'answer'" in payload["system"]
-    assert json.dumps(schema, sort_keys=True) in payload["system"]
+    assert "system" not in payload
+    assert payload["structured_output_spec"] == {
+        "type": "json_schema",
+        "name": "answer",
+        "schema": schema,
+    }
+    assert payload["output_config"] == {
+        "format": {"type": "json_schema", "schema": schema}
+    }
 
 
 def test_an_unknown_response_format_type_is_refused_by_name() -> None:

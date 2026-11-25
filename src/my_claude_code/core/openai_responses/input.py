@@ -9,6 +9,14 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
+from my_claude_code.core.anthropic.structured_output import (
+    StructuredOutputValidationError,
+    has_tool_history,
+    is_http_url,
+    parse_pdf_data_url,
+    parse_responses_text_format,
+    synthesize_missing_history_tools,
+)
 from my_claude_code.core.trace import trace_event
 
 from .errors import ResponsesConversionError
@@ -28,6 +36,7 @@ from .tools import (
     parse_arguments,
     required_str,
     responses_tool_name_to_anthropic_name,
+    tool_choice_forbids_tools,
 )
 
 #: How an inline image URL starts (the Chat Completions door's same constant).
@@ -67,6 +76,9 @@ def convert_request_to_anthropic_payload(
     messages: list[dict[str, Any]] = []
     pending = _PendingReasoning()
     quarantined_function_call_ids: set[str] = set()
+    emitted_call_ids: set[str] = set()
+    dropped_orphan_call_ids: set[str] = set()
+    has_previous_response_id = bool(request.previous_response_id)
     for item in _iter_input_items(request.input):
         pending = _append_input_item(
             item,
@@ -74,9 +86,17 @@ def convert_request_to_anthropic_payload(
             system_parts=system_parts,
             pending=pending,
             quarantined_function_call_ids=quarantined_function_call_ids,
+            emitted_call_ids=emitted_call_ids,
+            dropped_orphan_call_ids=dropped_orphan_call_ids,
+            has_previous_response_id=has_previous_response_id,
             allow_web_search=allow_web_search,
         )
     _append_pending_reasoning(messages, pending)
+
+    try:
+        structured_spec, output_fmt = parse_responses_text_format(request.text)
+    except StructuredOutputValidationError as exc:
+        raise ResponsesConversionError(exc.message) from exc
 
     if not messages:
         raise ResponsesConversionError("Responses request input must contain a message")
@@ -99,6 +119,10 @@ def convert_request_to_anthropic_payload(
 
     if output_config := responses_reasoning_to_output_config(request.reasoning):
         payload["output_config"] = output_config
+    if structured_spec is not None:
+        payload["structured_output_spec"] = structured_spec
+    if output_fmt is not None:
+        payload.setdefault("output_config", {})["format"] = output_fmt
 
     if allow_web_search:
         extract_responses_web_search_spec(
@@ -107,17 +131,26 @@ def convert_request_to_anthropic_payload(
 
     raw_tool_choice = request.tool_choice
     tools = convert_tools(request.tools, allow_web_search=allow_web_search)
-    if tools and raw_tool_choice != "none":
-        payload["tools"] = tools
-    tool_choice = convert_tool_choice(
-        raw_tool_choice, allow_web_search=allow_web_search
-    )
-    if tool_choice is not None:
-        payload["tool_choice"] = tool_choice
+    forbids_tools = tool_choice_forbids_tools(raw_tool_choice)
+    history_has_tools = has_tool_history(messages)
+    if forbids_tools and history_has_tools:
+        payload["tools"] = synthesize_missing_history_tools(messages, tools)
+        payload["tool_choice"] = {"type": "none"}
+    elif not forbids_tools:
+        if tools:
+            payload["tools"] = tools
+        tool_choice = convert_tool_choice(
+            raw_tool_choice,
+            parallel_tool_calls=request.parallel_tool_calls if tools else None,
+            allow_web_search=allow_web_search,
+        )
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
 
     payload["responses_envelope"] = _build_responses_envelope(
         request,
         quarantined_function_call_ids=quarantined_function_call_ids,
+        dropped_orphan_call_ids=dropped_orphan_call_ids,
     )
 
     return payload
@@ -130,6 +163,9 @@ def _append_input_item(
     system_parts: list[str],
     pending: _PendingReasoning,
     quarantined_function_call_ids: set[str],
+    emitted_call_ids: set[str],
+    dropped_orphan_call_ids: set[str],
+    has_previous_response_id: bool,
     allow_web_search: bool = False,
 ) -> _PendingReasoning:
     if isinstance(item, str):
@@ -177,6 +213,7 @@ def _append_input_item(
             "name": responses_tool_name_to_anthropic_name(name, namespace=namespace),
             "input": tool_input,
         }
+        emitted_call_ids.add(call_id)
         _append_tool_use_message(
             messages,
             tool_use,
@@ -191,13 +228,16 @@ def _append_input_item(
             and call_id in quarantined_function_call_ids
         ):
             return pending
+        if not has_previous_response_id and call_id not in emitted_call_ids:
+            dropped_orphan_call_ids.add(call_id)
+            return pending
         _append_pending_reasoning_before_tool_output(messages, pending)
         _append_tool_result_message(
             messages,
             {
                 "type": "tool_result",
                 "tool_use_id": call_id,
-                "content": _function_call_output_text(item.get("output", "")),
+                "content": _function_call_output_content(item.get("output", "")),
             },
         )
         return _PendingReasoning()
@@ -266,6 +306,7 @@ def _append_input_item(
             "name": "local_shell",
             "input": tool_input,
         }
+        emitted_call_ids.add(call_id)
         _append_tool_use_message(
             messages,
             tool_use,
@@ -275,13 +316,16 @@ def _append_input_item(
         return _PendingReasoning()
     if item_type == "local_shell_call_output":
         call_id = call_id_from_item(item)
+        if not has_previous_response_id and call_id not in emitted_call_ids:
+            dropped_orphan_call_ids.add(call_id)
+            return pending
         _append_pending_reasoning_before_tool_output(messages, pending)
         _append_tool_result_message(
             messages,
             {
                 "type": "tool_result",
                 "tool_use_id": call_id,
-                "content": _function_call_output_text(item.get("output", "")),
+                "content": _function_call_output_content(item.get("output", "")),
             },
         )
         return _PendingReasoning()
@@ -297,6 +341,7 @@ def _normalize_envelope_input_item(
     item: Any,
     *,
     quarantined_function_call_ids: set[str],
+    dropped_orphan_call_ids: set[str],
 ) -> dict[str, Any] | None:
     if isinstance(item, str):
         return {
@@ -317,6 +362,14 @@ def _normalize_envelope_input_item(
         call_id = optional_str(item.get("call_id")) or optional_str(item.get("id"))
         if call_id and call_id in quarantined_function_call_ids:
             return None
+    if item_type in {
+        "function_call_output",
+        "custom_tool_call_output",
+        "local_shell_call_output",
+    }:
+        call_id = optional_str(item.get("call_id")) or optional_str(item.get("id"))
+        if call_id and call_id in dropped_orphan_call_ids:
+            return None
     copied = deepcopy(dict(item))
     if (item_type is None or "role" in copied) and "type" not in copied:
         copied["type"] = "message"
@@ -327,6 +380,7 @@ def _build_responses_envelope(
     request: OpenAIResponsesRequest,
     *,
     quarantined_function_call_ids: set[str],
+    dropped_orphan_call_ids: set[str],
 ) -> dict[str, Any]:
     """Capture the lossless inbound ``/v1/responses`` structures for same-protocol egress."""
     envelope_input: list[dict[str, Any]] = []
@@ -334,6 +388,7 @@ def _build_responses_envelope(
         normalized = _normalize_envelope_input_item(
             item,
             quarantined_function_call_ids=quarantined_function_call_ids,
+            dropped_orphan_call_ids=dropped_orphan_call_ids,
         )
         if normalized is not None:
             envelope_input.append(normalized)
@@ -461,29 +516,48 @@ def _append_tool_use_message(
         content.append(tool_use)
 
 
-def _function_call_output_text(output: Any) -> str:
-    """Normalise a client's ``function_call_output`` to text.
-
-    The Responses format allows this field to be a list of content parts, so a
-    client could otherwise land an arbitrary list -- images included -- straight
-    inside ``tool_result.content``, which is the one shape the rest of MCC is
-    entitled to assume came from a tool it converted itself. The other two
-    inbound doors already force a tool result to text; this makes the third
-    agree. Accepting images from a client is deliberately a separate question.
-    """
+def _function_call_output_content(output: Any) -> str | list[dict[str, Any]]:
+    """Convert Responses ``function_call_output.output`` into text or Anthropic blocks."""
     if isinstance(output, str):
         return output
     if isinstance(output, list):
-        parts: list[str] = []
+        blocks: list[dict[str, Any]] = []
+        has_media = False
         for item in output:
             if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, Mapping):
+                if item:
+                    blocks.append({"type": "text", "text": item})
+                continue
+            if isinstance(item, Mapping):
+                part_type = item.get("type")
+                if part_type == "input_image":
+                    blocks.append(_image_block(item))
+                    has_media = True
+                    continue
+                if part_type == "input_file":
+                    blocks.append(_input_file_block(item))
+                    has_media = True
+                    continue
                 text = item.get("text")
-                parts.append(text if isinstance(text, str) else json.dumps(dict(item)))
-            else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part)
+                if isinstance(text, str):
+                    if text:
+                        blocks.append({"type": "text", "text": text})
+                    continue
+                if part_type in {"input_text", "output_text", "text"}:
+                    extracted = _text_from_part(item)
+                    if extracted:
+                        blocks.append({"type": "text", "text": extracted})
+                    continue
+                blocks.append({"type": "text", "text": json.dumps(dict(item))})
+                continue
+            text_val = str(item)
+            if text_val:
+                blocks.append({"type": "text", "text": text_val})
+        if not has_media:
+            return "\n".join(
+                str(block.get("text", "")) for block in blocks if block.get("text")
+            )
+        return blocks
     if output is None:
         return ""
     if isinstance(output, Mapping):
@@ -615,6 +689,9 @@ def _convert_message_content(
                 # capture see it exactly as they see that door's images.
                 blocks.append(_image_block(part))
                 continue
+            if part_type == "input_file" and allow_images:
+                blocks.append(_input_file_block(part))
+                continue
             raise ResponsesConversionError(
                 f"Unsupported Responses content part type: {part_type!r}"
             )
@@ -636,6 +713,11 @@ def _image_block(part: Mapping[str, Any]) -> dict[str, Any]:
     which MCC does not have, so it is refused by name rather than guessed at.
     """
     image_url = part.get("image_url")
+    detail = (
+        image_url.get("detail")
+        if isinstance(image_url, Mapping)
+        else part.get("detail")
+    )
     url = image_url.get("url") if isinstance(image_url, Mapping) else image_url
     if url is None or url == "":
         file_id = part.get("file_id")
@@ -651,12 +733,56 @@ def _image_block(part: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(url, str):
         raise ResponsesConversionError("input_image.image_url must be a string.")
     if url.startswith(_DATA_URL_PREFIX):
-        return {"type": "image", "source": _data_url_source(url)}
-    if urlsplit(url).scheme.lower() in {"http", "https"}:
-        return {"type": "image", "source": {"type": "url", "url": url}}
-    raise ResponsesConversionError(
-        "input_image.image_url must be a base64 data URL or an http(s) URL."
-    )
+        block: dict[str, Any] = {"type": "image", "source": _data_url_source(url)}
+    elif urlsplit(url).scheme.lower() in {"http", "https"}:
+        block = {"type": "image", "source": {"type": "url", "url": url}}
+    else:
+        raise ResponsesConversionError(
+            "input_image.image_url must be a base64 data URL or an http(s) URL."
+        )
+    if isinstance(detail, str) and detail in {"low", "high"}:
+        block["detail"] = detail
+    return block
+
+
+def _input_file_block(part: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert an ``input_file`` part (data URL or HTTP(S) URL) to Anthropic ``document``."""
+    file_data = part.get("file_data")
+    file_url = part.get("file_url")
+    if isinstance(file_data, str) and file_data:
+        try:
+            media_type, data = parse_pdf_data_url(
+                file_data, error_context="input_file.file_data"
+            )
+        except StructuredOutputValidationError as exc:
+            raise ResponsesConversionError(exc.message) from exc
+        source: dict[str, Any] = {
+            "type": "base64",
+            "media_type": media_type,
+            "data": data,
+        }
+    elif isinstance(file_url, str) and file_url:
+        if not is_http_url(file_url):
+            raise ResponsesConversionError(
+                "input_file.file_url must be an http(s) URL."
+            )
+        source = {"type": "url", "url": file_url}
+    else:
+        file_id = part.get("file_id")
+        if isinstance(file_id, str) and file_id:
+            raise ResponsesConversionError(
+                f"input_file file_id {file_id!r} is not supported: MCC has no "
+                "Files API to read it from. Send the file inline as file_data "
+                "(a base64 PDF data URL) or an http(s) file_url."
+            )
+        raise ResponsesConversionError(
+            "input_file needs file_data (a base64 PDF data URL) or an http(s) file_url."
+        )
+    block: dict[str, Any] = {"type": "document", "source": source}
+    filename = optional_str(part.get("filename"))
+    if filename and filename.strip():
+        block["title"] = filename.strip()
+    return block
 
 
 def _data_url_source(url: str) -> dict[str, Any]:
