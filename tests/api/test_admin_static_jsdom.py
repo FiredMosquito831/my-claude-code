@@ -15759,3 +15759,54 @@ def test_jsdom_sdk_harnesses_and_speaks_ui_q8_and_xss(
         "provider": "commandcode",
         "surface": "chat_completions",
     }
+
+
+@pytest.fixture(scope="module")
+def inbound_protocol_switch_ui() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="inbound_protocol_switch")
+
+
+def test_jsdom_inbound_protocol_selector_and_xss(
+    inbound_protocol_switch_ui: dict,
+) -> None:
+    assert inbound_protocol_switch_ui["fatal"] is None
+    assert inbound_protocol_switch_ui.get("scenarioError") is None
+    assert inbound_protocol_switch_ui["scriptErrors"] == []
+    assert inbound_protocol_switch_ui["consoleErrors"] == []
+
+    initial = inbound_protocol_switch_ui["initial"]
+    assert initial["claudeHasSelector"] is False
+    assert initial["codexHasSelector"] is False
+    assert initial["opencodeAriaLabel"] == "Inbound MCC endpoint for OpenCode"
+    assert [opt["value"] for opt in initial["opencodeOptions"]] == [
+        "",
+        "anthropic_messages",
+        "openai_responses",
+        "openai_chat_completions",
+    ]
+    assert initial["opencodeOptions"][0]["text"].startswith("Default (")
+    assert initial["opencodeValue"] == ""
+    assert "Anthropic Messages" in initial["opencodeProtocolBefore"]
+    assert initial["xssInjectedCount"] == 0
+    assert initial["xssGlobalFlag"] == ""
+
+    after_switch = inbound_protocol_switch_ui["afterSwitch"]
+    assert after_switch["value"] == "openai_responses"
+    assert after_switch["feedback"] == "Saved"
+    assert "OpenAI Responses" in after_switch["protocolText"]
+
+    after_reset = inbound_protocol_switch_ui["afterReset"]
+    assert after_reset["value"] == ""
+    assert after_reset["feedback"] == "Saved"
+    assert "Anthropic Messages" in after_reset["protocolText"]
+
+    posts = inbound_protocol_switch_ui["posts"]
+    assert len(posts) == 2
+    assert json.loads(posts[0]["body"]) == {
+        "harness": "opencode",
+        "protocol": "openai_responses",
+    }
+    assert json.loads(posts[1]["body"]) == {
+        "harness": "opencode",
+        "protocol": "",
+    }

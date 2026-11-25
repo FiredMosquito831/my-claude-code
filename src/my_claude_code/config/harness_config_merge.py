@@ -353,6 +353,7 @@ def owned_block_names(
     sentinel: str = COMMANDCODE_BASE_URL_SENTINEL,
     preserve_bytes: bool = False,
     document_format: str = "json",
+    accept_root: bool = False,
 ) -> bool:
     """Whether MCC's block in the user's document already names *this* server.
 
@@ -393,7 +394,14 @@ def owned_block_names(
     if not isinstance(current, str):
         return False
     ours = with_base_url({key: sentinel}, proxy_root_url, key=key, sentinel=sentinel)
-    return current.rstrip("/") == str(ours[key]).rstrip("/")
+    v1_url = str(ours[key]).rstrip("/")
+    stripped_current = current.rstrip("/")
+    if stripped_current == v1_url:
+        return True
+    if accept_root:
+        root_url = v1_url.removesuffix("/v1").rstrip("/")
+        return stripped_current == root_url
+    return False
 
 
 def read_text_document(
@@ -1022,6 +1030,7 @@ def _names_this_server(
         sentinel=merge.base_url_sentinel,
         preserve_bytes=merge.preserve_bytes,
         document_format=merge.document_format,
+        accept_root=True,
     )
 
 

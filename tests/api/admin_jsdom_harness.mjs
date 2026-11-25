@@ -4910,6 +4910,14 @@ if (process.env.MCC_JSDOM_SCENARIO === "sdk_harnesses_and_speaks") {
   );
   scenario = prepareSdkHarnessesAndSpeaksScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=inbound_protocol_switch (v8.50.0, PR 13): Coding agents
+   per-harness inbound MCC endpoint selector (.agent-inbound-protocol-select). */
+if (process.env.MCC_JSDOM_SCENARIO === "inbound_protocol_switch") {
+  const { prepareInboundProtocolSwitchScenario } = await import(
+    "./admin_jsdom_inbound_protocol.mjs"
+  );
+  scenario = prepareInboundProtocolSwitchScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=ux_views (7.122.3): every view's DOM digests, for the
    base-tree equality of the UX pass -- the same scenario runs on the base
    tree and here (admin_jsdom_ux_views.mjs). */
