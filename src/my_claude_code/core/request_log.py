@@ -11288,6 +11288,135 @@ class RequestLogStore:
                 self._stats_cache.popitem(last=False)
         return [dict(row) for row in payload]
 
+    def recent_wire_surfaces(self, *, max_rows: int = 2000) -> dict[str, Any]:
+        """Return bounded recent wire-surface observations per model and provider.
+
+        Reads only ``provider``, ``model_ref``, ``params``, ``outcome`` and
+        ``ts_epoch`` from ``request_attempts`` (never ``wire_body``), bounded by
+        ``LIMIT max_rows`` ordered newest-first.
+        """
+
+        bounded = max(1, int(max_rows))
+        by_model: dict[str, dict[str, Any]] = {}
+        provider_buckets: dict[str, dict[str, dict[str, Any]]] = {}
+        unlabeled_by_model: dict[str, dict[str, Any]] = {}
+        unlabeled_provider_buckets: dict[str, dict[str, Any]] = {}
+        try:
+            with self._connection() as conn:
+                rows = conn.execute(
+                    "SELECT provider, model_ref, params, outcome, ts_epoch"
+                    " FROM request_attempts"
+                    " WHERE ts_epoch IS NOT NULL"
+                    " AND params IS NOT NULL"
+                    " ORDER BY ts_epoch DESC"
+                    " LIMIT ?",
+                    (bounded,),
+                ).fetchall()
+        except sqlite3.Error as exc:
+            logger.warning("Recent wire surface lookup unavailable: {}", exc)
+            return {
+                "by_model": {},
+                "by_provider": {},
+                "unlabeled_by_model": {},
+                "unlabeled_by_provider": {},
+            }
+
+        for row in rows:
+            parsed = _loads_or_none(row["params"])
+            if not isinstance(parsed, Mapping):
+                continue
+            ts_raw = row["ts_epoch"]
+            if not isinstance(ts_raw, int | float):
+                continue
+            ts_val = float(ts_raw)
+            ts_iso = datetime.fromtimestamp(ts_val, tz=UTC).isoformat()
+            outcome = str(row["outcome"] or "")
+            model_ref = str(row["model_ref"] or "").strip()
+            provider_id = str(row["provider"] or "").strip()
+            if not provider_id and "/" in model_ref:
+                provider_id = model_ref.split("/", 1)[0].strip()
+
+            surface = _extract_wire_surface_from_parsed(parsed)
+            if not surface:
+                if model_ref and model_ref not in unlabeled_by_model:
+                    unlabeled_by_model[model_ref] = {
+                        "outcome": outcome,
+                        "ts_epoch": ts_val,
+                        "ts_iso": ts_iso,
+                    }
+                if provider_id:
+                    u_bucket = unlabeled_provider_buckets.get(provider_id)
+                    if u_bucket is None:
+                        unlabeled_provider_buckets[provider_id] = {
+                            "count": 1,
+                            "last_used_at": ts_iso,
+                            "last_outcome": outcome,
+                            "_latest_ts": ts_val,
+                        }
+                    else:
+                        u_bucket["count"] += 1
+                        if ts_val > u_bucket["_latest_ts"]:
+                            u_bucket["_latest_ts"] = ts_val
+                            u_bucket["last_used_at"] = ts_iso
+                            u_bucket["last_outcome"] = outcome
+                continue
+
+            if model_ref and model_ref not in by_model:
+                by_model[model_ref] = {
+                    "surface": surface,
+                    "outcome": outcome,
+                    "ts_epoch": ts_val,
+                    "ts_iso": ts_iso,
+                }
+
+            if provider_id:
+                surfaces = provider_buckets.setdefault(provider_id, {})
+                bucket = surfaces.get(surface)
+                if bucket is None:
+                    surfaces[surface] = {
+                        "surface": surface,
+                        "count": 1,
+                        "last_used_at": ts_iso,
+                        "last_outcome": outcome,
+                        "_latest_ts": ts_val,
+                    }
+                else:
+                    bucket["count"] += 1
+                    if ts_val > bucket["_latest_ts"]:
+                        bucket["_latest_ts"] = ts_val
+                        bucket["last_used_at"] = ts_iso
+                        bucket["last_outcome"] = outcome
+
+        by_provider: dict[str, list[dict[str, Any]]] = {}
+        for provider_id, buckets in provider_buckets.items():
+            ordered = sorted(
+                buckets.values(),
+                key=lambda item: (-float(item["_latest_ts"]), -int(item["count"])),
+            )
+            by_provider[provider_id] = [
+                {
+                    "surface": item["surface"],
+                    "count": item["count"],
+                    "last_used_at": item["last_used_at"],
+                    "last_outcome": item["last_outcome"],
+                }
+                for item in ordered
+            ]
+        unlabeled_by_provider = {
+            pid: {
+                "count": bucket["count"],
+                "last_used_at": bucket["last_used_at"],
+                "last_outcome": bucket["last_outcome"],
+            }
+            for pid, bucket in unlabeled_provider_buckets.items()
+        }
+        return {
+            "by_model": by_model,
+            "by_provider": by_provider,
+            "unlabeled_by_model": unlabeled_by_model,
+            "unlabeled_by_provider": unlabeled_by_provider,
+        }
+
     def in_loop_text_only_by_model(
         self, *, since: float | None = None, limit: int = _BREAKDOWN_LIMIT
     ) -> list[dict[str, Any]]:
@@ -15266,6 +15395,35 @@ def _loads_or_none(raw: Any) -> Any:
         return json.loads(raw)
     except json.JSONDecodeError:
         return None
+
+
+_CANONICAL_WIRE_SURFACES = frozenset({"chat_completions", "responses", "messages"})
+
+
+def _extract_wire_surface_from_parsed(parsed: Any) -> str | None:
+    """Extract and normalize ``params.wire.surface`` from a decoded params dict."""
+
+    if not isinstance(parsed, Mapping):
+        return None
+    wire = parsed.get("wire")
+    if not isinstance(wire, Mapping):
+        return None
+    surface = wire.get("surface")
+    if not isinstance(surface, str):
+        return None
+    cleaned = surface.strip()
+    if not cleaned:
+        return None
+    head = cleaned.split("(", 1)[0].strip().split()[0]
+    if head in _CANONICAL_WIRE_SURFACES:
+        return head
+    return cleaned
+
+
+def _extract_wire_surface(raw_params: Any) -> str | None:
+    """Return normalized ``params.wire.surface`` from a serialized attempt params blob."""
+
+    return _extract_wire_surface_from_parsed(_loads_or_none(raw_params))
 
 
 def _with_exit_facts(params: Any) -> Any:

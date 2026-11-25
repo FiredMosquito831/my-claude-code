@@ -179,21 +179,35 @@ def merge_moving_parts(
     image_estimates: Mapping[str, Mapping[str, Any]] | None,
     learned: Mapping[str, Sequence[Mapping[str, Any]]] | None,
     catalogue_refresh: Mapping[str, Any] | None,
+    recent_surfaces: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Put the four moving parts back, exactly where the one-shot build puts them.
+    """Put the moving parts back, exactly where the one-shot build puts them.
 
     Mutates and returns ``payload``; callers pass a payload they own -- either
     one they just built or one freshly parsed out of the cache file.
     """
 
     payload["catalogue_refresh"] = dict(catalogue_refresh or {})
+    by_provider = (
+        recent_surfaces.get("by_provider") if recent_surfaces is not None else None
+    )
+    by_model = recent_surfaces.get("by_model") if recent_surfaces is not None else None
     for provider in payload.get("providers", []):
         provider_id = str(provider.get("provider_id", ""))
         provider["image_estimate"] = _image_estimate_row(image_estimates, provider_id)
+        if recent_surfaces is not None:
+            provider["endpoint_observations"] = list(
+                (by_provider or {}).get(provider_id) or ()
+            )
         for model in provider.get("models", []):
             model_ref = str(model.get("model_ref", ""))
             row = None if measured is None else measured.get(model_ref)
             model["reasoning_measured"] = None if row is None else dict(row)
+            if recent_surfaces is not None:
+                obs = (by_model or {}).get(model_ref)
+                model["last_used_endpoint"] = (
+                    dict(obs) if isinstance(obs, Mapping) else None
+                )
             # `attach_learned_facts` hangs each fact on the capability field it
             # narrows, which is a mutation of `capabilities` -- the same one the
             # one-shot build performs, on a capabilities dict that (like this

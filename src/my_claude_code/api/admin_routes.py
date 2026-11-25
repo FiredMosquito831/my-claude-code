@@ -52,6 +52,7 @@ from my_claude_code.api.model_admin import (
     prompt_cache_gateway_models,
     prompt_cache_lifetimes_payload,
     prompt_cache_write_1h_prices,
+    provider_endpoint_summary,
     render_patterns,
     speakable_surfaces,
     visibility_payload,
@@ -850,7 +851,41 @@ def _config_response() -> dict[str, Any]:
         for provider_id, descriptor in WEBSEARCH_CATALOG.items()
         if not descriptor.auto_select
     ]
+    _attach_provider_status_endpoints(payload)
     return payload
+
+
+def _attach_provider_status_endpoints(
+    payload: Mapping[str, Any],
+    *,
+    cached_models: Mapping[str, frozenset[str]] | None = None,
+    observed_by_provider: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    learned: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    unlabeled_by_provider: Mapping[str, Mapping[str, Any]] | None = None,
+) -> None:
+    """Attach read-only/preference ``endpoint_summary`` to each ``provider_status[]`` entry."""
+
+    statuses = payload.get("provider_status")
+    if not isinstance(statuses, list):
+        return
+    overrides = current_model_overrides()
+    cached = cached_models or {}
+    observed = observed_by_provider or {}
+    unlabeled = unlabeled_by_provider or {}
+    for entry in statuses:
+        if not isinstance(entry, dict):
+            continue
+        pid = str(entry.get("provider_id") or "")
+        if not pid:
+            continue
+        entry["endpoint_summary"] = provider_endpoint_summary(
+            pid,
+            model_ids=sorted(cached.get(pid, ())),
+            overrides=overrides,
+            observed_rows=observed.get(pid),
+            learned=learned,
+            unlabeled_attempt=unlabeled.get(pid),
+        )
 
 
 async def _pool_key_health(
@@ -914,6 +949,14 @@ async def get_admin_config(
 ):
     require_loopback_admin(request)
     payload = _config_response()
+    recent_surfaces = await asyncio.to_thread(services.admin.recent_wire_surfaces)
+    _attach_provider_status_endpoints(
+        payload,
+        cached_models=services.admin.cached_model_ids(),
+        observed_by_provider=recent_surfaces.get("by_provider"),
+        learned=services.admin.learned_facts_by_model(),
+        unlabeled_by_provider=recent_surfaces.get("unlabeled_by_provider"),
+    )
     payload["route_status"] = await _route_status(payload, services)
     return payload
 
@@ -1973,12 +2016,14 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     # `stale` and `computed_at` describe the *capability half*, which is what
     # can be served from an earlier computation. The measurements merged in
     # below are always current.
+    recent_surfaces = services.admin.recent_wire_surfaces()
     merged = merge_moving_parts(
         payload,
         measured=measured,
         image_estimates=image_estimates,
         learned=services.admin.learned_facts_by_model(),
         catalogue_refresh=services.admin.catalogue_refresh_status(),
+        recent_surfaces=recent_surfaces,
     )
     # The declared prompt-cache lifetimes (7.104.0): a fact about providers,
     # joined to each model on the page. Outside the capability half, so the
@@ -2003,7 +2048,13 @@ def _models_page_payload(services: ApiServices) -> dict[str, Any]:
     # route-note rows, beside the cached half for the same reason: the market
     # snapshot moves hourly and the pinned half must not.
     merged["marketplaces"] = marketplaces_payload(merged)
-    return with_surface_preferences(merged, overrides)
+    return with_surface_preferences(
+        merged,
+        overrides,
+        observed_by_provider=recent_surfaces.get("by_provider"),
+        unlabeled_by_provider=recent_surfaces.get("unlabeled_by_provider"),
+        unlabeled_by_model=recent_surfaces.get("unlabeled_by_model"),
+    )
 
 
 @router.get("/admin/api/model-admin")

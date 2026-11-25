@@ -4892,6 +4892,15 @@ if (process.env.MCC_JSDOM_SCENARIO === "harness_surfaces") {
   );
   scenario = prepareHarnessSurfacesScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=endpoint_readouts (v8.48.0): Provider card face summaries,
+   overlay Endpoints panels + synchronized Preferred wire endpoint selector,
+   custom 1-door details, and Models page un-gated readouts + last_used. */
+if (process.env.MCC_JSDOM_SCENARIO === "endpoint_readouts") {
+  const { prepareEndpointReadoutsScenario } = await import(
+    "./admin_jsdom_endpoint_readouts.mjs"
+  );
+  scenario = prepareEndpointReadoutsScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=ux_views (7.122.3): every view's DOM digests, for the
    base-tree equality of the UX pass -- the same scenario runs on the base
    tree and here (admin_jsdom_ux_views.mjs). */

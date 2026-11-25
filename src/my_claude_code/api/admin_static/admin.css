@@ -4615,6 +4615,118 @@ audio.req-media-preview {
   color: var(--muted);
 }
 
+.provider-endpoints-summary {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.pv-endpoints-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface-alt, rgba(255, 255, 255, 0.02));
+}
+
+.pv-endpoints-title {
+  margin: 0 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pv-endpoints-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.pv-endpoints-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.pv-endpoints-value {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.pv-preferred-surface-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.pv-preferred-surface-row .pv-endpoints-label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pv-preferred-surface {
+  min-width: 220px;
+}
+
+.pv-preferred-surface-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pv-preferred-surface-status.ok {
+  color: var(--ok);
+}
+
+.pv-preferred-surface-status.error {
+  color: var(--error);
+}
+
+.models-provider-endpoints {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.models-endpoint-readout {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+}
+
+.models-endpoint-readout-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.models-endpoint-readout-line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.models-chip-endpoint {
+  border-color: var(--line);
+  color: var(--text);
+}
+
 .cp-edit {
   white-space: nowrap;
 }

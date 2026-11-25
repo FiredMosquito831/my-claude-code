@@ -1818,6 +1818,37 @@ def cached_declared_http_surfaces(
     return declared_http_surfaces(cached_declared_endpoints(provider_id, model_id))
 
 
+def cached_provider_http_endpoints(
+    provider_id: str, model_ids: Iterable[str] = ()
+) -> list[tuple[str, int]]:
+    """Aggregate cached HTTP endpoint tokens and model counts for ``provider_id``."""
+
+    if not provider_id:
+        return []
+    with _DECLARED_ENDPOINTS_LOCK:
+        snapshot = _DECLARED_ENDPOINTS_SNAPSHOT
+    table = (
+        snapshot
+        if snapshot is not None
+        else _read_declared_endpoints_from_derived_cache()
+    )
+    counts: dict[str, int] = {}
+    wanted = tuple(model_ids)
+    if wanted:
+        for model_id in wanted:
+            for token in http_declared_endpoints(
+                cached_declared_endpoints(provider_id, model_id)
+            ):
+                counts[token] = counts.get(token, 0) + 1
+    else:
+        for (pid, _mid), raw_endpoints in table.items():
+            if pid != provider_id:
+                continue
+            for token in http_declared_endpoints(raw_endpoints):
+                counts[token] = counts.get(token, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
 def is_commandcode_messages_model(model_id: str) -> bool:
     """Route Command Code models via ``_anthropic`` when ``/models`` declares ``/messages``.
 
