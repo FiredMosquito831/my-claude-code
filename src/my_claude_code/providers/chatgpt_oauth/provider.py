@@ -1048,8 +1048,14 @@ class ChatGPTOAuthProvider(BaseProvider):
             else:
                 send_headers["x-codex-turn-state"] = live_turn_state
         content, wire_headers, compressed = _encode_request_payload(body, send_headers)
-        request = self._client.build_request(
-            "POST", url, headers=wire_headers, content=content
+        request = (
+            self._client.build_request(
+                "POST", url, headers=wire_headers, content=content
+            )
+            if compressed
+            else self._client.build_request(
+                "POST", url, headers=wire_headers, json=body
+            )
         )
         try:
             response = await self._client.send(request, stream=True)
