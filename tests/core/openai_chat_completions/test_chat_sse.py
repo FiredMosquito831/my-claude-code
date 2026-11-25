@@ -417,9 +417,9 @@ async def test_an_upstream_error_frame_becomes_an_error_object_then_done() -> No
     assert frames[-1] == "data: [DONE]\n\n"
     assert _payloads(frames)[-1]["error"] == {
         "message": "busy",
-        "type": "overloaded_error",
+        "type": "server_error",
         "param": None,
-        "code": None,
+        "code": "server_error",
     }
 
 

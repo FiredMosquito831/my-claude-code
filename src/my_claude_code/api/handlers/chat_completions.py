@@ -6,6 +6,14 @@ from typing import Any
 
 from fastapi.responses import JSONResponse
 
+from my_claude_code.api.handler_policies import (
+    ENVELOPE_MEDIA_AND_MESSAGE_KEYS,
+    apply_describe_outcome,
+    apply_message_routing_policies,
+    fold_request_tool_changes_with_envelope_sync,
+    invalidate_envelope_keys,
+    try_store_from_settings,
+)
 from my_claude_code.api.request_capture import RequestCapture, build_capture
 from my_claude_code.api.request_errors import (
     http_status_for_unexpected_api_exception,
@@ -29,6 +37,7 @@ from my_claude_code.application.execution import (
 from my_claude_code.application.ports import ProviderResolver
 from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
 from my_claude_code.application.routing import ModelRouter
+from my_claude_code.application.vision_describe import VisionDescribeAdapter
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
     MessagesRequest,
@@ -50,6 +59,10 @@ from my_claude_code.core.openai_chat_completions import (
     iter_chat_sse_from_loop,
     openai_error_type_for_failure,
     openai_failure_payload,
+)
+from my_claude_code.core.openai_common import (
+    normalize_anthropic_error_to_openai,
+    stream_error_fields,
 )
 
 
@@ -88,6 +101,12 @@ class ChatCompletionsHandler:
             log_raw_payloads=settings.log_raw_api_payloads,
             retry_first=settings.fallback_retry_first,
             provider_lookup=self._throttle_lookup,
+        )
+        self._describe_adapter = VisionDescribeAdapter(
+            router=self._model_router,
+            executor=self._provider_executor,
+            store=try_store_from_settings(settings),
+            concurrency=settings.describe_concurrency,
         )
 
     def _throttle_lookup(self, provider_id: str) -> float | None:
@@ -139,6 +158,9 @@ class ChatCompletionsHandler:
                 allow_web_search=allow_web_search,
             )
             chat_request = MessagesRequest(**anthropic_payload)
+            chat_request = fold_request_tool_changes_with_envelope_sync(
+                chat_request, request_id=request_id
+            )
             stamp_prompt_cache_ask(self._settings, chat_request)
             capture = build_capture(
                 self._settings,
@@ -157,6 +179,16 @@ class ChatCompletionsHandler:
             )
             require_non_empty_messages(chat_request.messages)
             harness = harness_from_headers(headers).harness
+            described = await self._describe_adapter.apply(
+                chat_request,
+                request_id=request_id,
+                harness=harness,
+                on_attempt=capture.record_describe_attempt,
+            )
+            if described.applied:
+                chat_request = invalidate_envelope_keys(
+                    chat_request, ENVELOPE_MEDIA_AND_MESSAGE_KEYS
+                )
             if web_search_spec is not None:
                 return await self._create_web_search_response(
                     request_data,
@@ -173,6 +205,14 @@ class ChatCompletionsHandler:
             plan = self._model_router.resolve_messages_plan(
                 chat_request, harness=harness
             )
+            plan = apply_describe_outcome(
+                plan,
+                chat_request,
+                described,
+                model_router=self._model_router,
+                harness=harness,
+            )
+            plan = apply_message_routing_policies(plan)
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
 
@@ -284,8 +324,18 @@ class ChatCompletionsHandler:
             initial_force_search=spec.forced,
             search_allowed_disjoint=spec.allowed_disjoint,
         )
-        loop_result = await run_routed_web_tool_loop(
+        loop_request = invalidate_envelope_keys(
             chat_request,
+            (
+                "messages",
+                "tools",
+                "tool_choice",
+                "response_format",
+                "parallel_tool_calls",
+            ),
+        )
+        loop_result = await run_routed_web_tool_loop(
+            loop_request,
             config,
             self._settings,
             model_router=self._model_router,
@@ -381,19 +431,9 @@ class ChatCompletionsHandler:
     def _stream_error_response(
         self, error: Mapping[str, object], *, request_id: str
     ) -> JSONResponse:
-        raw_type = error.get("type")
-        error_type = (
-            raw_type.strip()
-            if isinstance(raw_type, str) and raw_type.strip()
-            else "api_error"
-        )
-        raw_message = error.get("message")
-        message = (
-            raw_message.strip()
-            if isinstance(raw_message, str) and raw_message.strip()
-            else "Provider request failed unexpectedly."
-        )
-        status_code = anthropic_status_for_error_type(error_type)
+        raw_type, message, raw_code = stream_error_fields(error)
+        status_code = anthropic_status_for_error_type(raw_type)
+        error_type, error_code = normalize_anthropic_error_to_openai(raw_type, raw_code)
         trace_terminal_execution_error(
             wire_api="chat_completions",
             request_id=request_id,
@@ -403,7 +443,7 @@ class ChatCompletionsHandler:
         return terminal_execution_error_response(
             status_code=status_code,
             content=self._chat_adapter.error_payload(
-                message=message, error_type=error_type
+                message=message, error_type=error_type, code=error_code
             ),
         )
 

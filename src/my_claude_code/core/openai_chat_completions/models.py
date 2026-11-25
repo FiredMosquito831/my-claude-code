@@ -61,6 +61,9 @@ class OpenAIChatCompletionRequest(BaseModel):
     response_format: dict[str, Any] | None = None
     logprobs: bool | None = None
     top_logprobs: int | None = None
+    service_tier: str | None = None
+    store: bool | None = None
+    prompt_cache_key: str | None = None
     metadata: dict[str, Any] | None = None
     user: str | None = None
 

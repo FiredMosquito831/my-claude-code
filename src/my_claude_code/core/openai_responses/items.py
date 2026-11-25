@@ -40,7 +40,23 @@ def web_search_call_item(
     return item
 
 
-def reasoning_item(item_id: str, text: str, status: str) -> dict[str, Any]:
+def reasoning_item(
+    item_id: str,
+    text: str,
+    status: str,
+    *,
+    as_summary: bool = False,
+) -> dict[str, Any]:
+    if as_summary:
+        summary: list[dict[str, str]] = (
+            [{"type": "summary_text", "text": text}] if text else []
+        )
+        return {
+            "id": item_id,
+            "type": "reasoning",
+            "status": status,
+            "summary": summary,
+        }
     return {
         "id": item_id,
         "type": "reasoning",

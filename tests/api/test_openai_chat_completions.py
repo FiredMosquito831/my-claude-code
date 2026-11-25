@@ -388,7 +388,7 @@ def test_a_pre_start_provider_failure_is_a_terminal_openai_error() -> None:
     assert error["type"] == "rate_limit_error"
     assert error["message"].startswith("upstream is busy")
     assert error["param"] is None
-    assert error["code"] is None
+    assert error["code"] == "rate_limit_exceeded"
 
 
 def test_unknown_top_level_fields_are_accepted_rather_than_rejected(
@@ -533,16 +533,19 @@ def _anthropic_reasoning_stream() -> list[str]:
 
 
 @pytest.mark.parametrize(
-    ("error_type", "expected_status"),
+    ("raw_error_type", "expected_status", "expected_type", "expected_code"),
     [
-        ("rate_limit_error", 429),
-        ("invalid_request_error", 400),
-        ("overloaded_error", 529),
-        ("api_error", 500),
+        ("rate_limit_error", 429, "rate_limit_error", "rate_limit_exceeded"),
+        ("invalid_request_error", 400, "invalid_request_error", None),
+        ("overloaded_error", 529, "server_error", "server_error"),
+        ("api_error", 500, "server_error", "server_error"),
     ],
 )
 def test_non_streaming_internal_sse_error_maps_http_status(
-    error_type: str, expected_status: int
+    raw_error_type: str,
+    expected_status: int,
+    expected_type: str,
+    expected_code: str | None,
 ) -> None:
     provider = FakeProvider(
         [
@@ -550,7 +553,7 @@ def test_non_streaming_internal_sse_error_maps_http_status(
                 "error",
                 {
                     "type": "error",
-                    "error": {"type": error_type, "message": "upstream failure"},
+                    "error": {"type": raw_error_type, "message": "upstream failure"},
                 },
             )
         ]
@@ -564,5 +567,6 @@ def test_non_streaming_internal_sse_error_maps_http_status(
 
     assert response.status_code == expected_status
     error = response.json()["error"]
-    assert error["type"] == error_type
+    assert error["type"] == expected_type
+    assert error["code"] == expected_code
     assert error["message"] == "upstream failure"

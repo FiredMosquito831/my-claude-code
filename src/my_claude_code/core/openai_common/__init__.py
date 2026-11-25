@@ -10,10 +10,14 @@ other's internals to say the same thing.
 
 from .anthropic_sse import AnthropicSseEvent, iter_sse_events, parse_sse_event
 from .errors import (
+    normalize_anthropic_error_to_openai,
+    openai_error_code_for_failure,
+    openai_error_from_anthropic_error,
     openai_error_from_failure,
     openai_error_payload,
     openai_error_type_for_failure,
     openai_failure_payload,
+    stream_error_fields,
 )
 from .usage import estimate_text_tokens
 
@@ -21,9 +25,13 @@ __all__ = [
     "AnthropicSseEvent",
     "estimate_text_tokens",
     "iter_sse_events",
+    "normalize_anthropic_error_to_openai",
+    "openai_error_code_for_failure",
+    "openai_error_from_anthropic_error",
     "openai_error_from_failure",
     "openai_error_payload",
     "openai_error_type_for_failure",
     "openai_failure_payload",
     "parse_sse_event",
+    "stream_error_fields",
 ]

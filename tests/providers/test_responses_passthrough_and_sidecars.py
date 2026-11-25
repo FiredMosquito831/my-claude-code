@@ -815,12 +815,15 @@ async def test_responses_transport_profiles_gate_destination_end_to_end() -> Non
         assert body["text"]["format"]["type"] == "json_schema"
         assert body["tools"][0]["type"] == "custom"
         assert body["tools"][1]["strict"] is True
-        assert "client_metadata" not in body
         if expect_openai:
+            assert body["client_metadata"] == {"codex_version": "0.169.0"}
+            assert body["input"][0]["role"] == "developer"
+            assert body["input"][2]["type"] == "compaction"
             assert body["text"]["verbosity"] == "low"
             assert body["service_tier"] == "priority"
             assert body["truncation"] == "auto"
         else:
+            assert "client_metadata" not in body
             assert "verbosity" not in body["text"]
             assert "service_tier" not in body
             assert "truncation" not in body

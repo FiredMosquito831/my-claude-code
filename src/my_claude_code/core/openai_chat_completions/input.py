@@ -3,6 +3,7 @@
 import base64
 import binascii
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 from my_claude_code.core.anthropic.structured_output import (
@@ -76,6 +77,7 @@ def convert_request_to_anthropic_payload(
     system_parts: list[str] = []
     messages: list[dict[str, Any]] = []
     pending_tool_call_ids: set[str] = set()
+    reasoning_details_by_message: dict[int, list[dict[str, Any]]] = {}
     for message in request.messages:
         if carrier_surface is not None:
             _note_reasoning_details(message, carrier_surface)
@@ -84,6 +86,7 @@ def convert_request_to_anthropic_payload(
             messages=messages,
             system_parts=system_parts,
             pending_tool_call_ids=pending_tool_call_ids,
+            reasoning_details_by_message=reasoning_details_by_message,
         )
 
     try:
@@ -157,7 +160,43 @@ def convert_request_to_anthropic_payload(
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
 
+    if chat_envelope := _build_chat_envelope(
+        request,
+        reasoning_details_by_message=reasoning_details_by_message,
+    ):
+        payload["chat_envelope"] = chat_envelope
+
     return payload
+
+
+def _build_chat_envelope(
+    request: OpenAIChatCompletionRequest,
+    *,
+    reasoning_details_by_message: Mapping[int, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    envelope: dict[str, Any] = {}
+    for field_name in (
+        "seed",
+        "frequency_penalty",
+        "presence_penalty",
+        "logprobs",
+        "top_logprobs",
+        "store",
+    ):
+        value = getattr(request, field_name, None)
+        if value is not None:
+            envelope[field_name] = value
+    for str_field in ("service_tier", "prompt_cache_key"):
+        value = getattr(request, str_field, None)
+        if isinstance(value, str) and value:
+            envelope[str_field] = value
+    if isinstance(request.parallel_tool_calls, bool):
+        envelope["parallel_tool_calls"] = request.parallel_tool_calls
+    if reasoning_details_by_message:
+        envelope["reasoning_details_by_message"] = deepcopy(
+            dict(reasoning_details_by_message)
+        )
+    return envelope
 
 
 def _note_reasoning_details(
@@ -212,6 +251,7 @@ def _append_message(
     messages: list[dict[str, Any]],
     system_parts: list[str],
     pending_tool_call_ids: set[str],
+    reasoning_details_by_message: dict[int, list[dict[str, Any]]] | None = None,
 ) -> None:
     role = message.role
     if role in {"system", "developer"}:
@@ -235,6 +275,7 @@ def _append_message(
             message,
             messages,
             pending_tool_call_ids=pending_tool_call_ids,
+            reasoning_details_by_message=reasoning_details_by_message,
         )
         return
     raise ChatCompletionsConversionError(
@@ -247,6 +288,7 @@ def _append_assistant(
     messages: list[dict[str, Any]],
     *,
     pending_tool_call_ids: set[str],
+    reasoning_details_by_message: dict[int, list[dict[str, Any]]] | None = None,
 ) -> None:
     blocks: list[dict[str, Any]] = []
     content = _convert_message_content(message.content, allow_empty=True)
@@ -269,6 +311,15 @@ def _append_assistant(
     if message.reasoning_content is not None:
         anthropic_message["reasoning_content"] = message.reasoning_content
     messages.append(anthropic_message)
+    if reasoning_details_by_message is not None:
+        extra = getattr(message, "model_extra", None)
+        details = extra.get("reasoning_details") if isinstance(extra, Mapping) else None
+        if _is_sequence(details) and details:
+            copied_details = [
+                deepcopy(dict(entry)) for entry in details if isinstance(entry, Mapping)
+            ]
+            if copied_details:
+                reasoning_details_by_message[len(messages) - 1] = copied_details
 
 
 def _tool_use_block(call: Any) -> dict[str, Any]:

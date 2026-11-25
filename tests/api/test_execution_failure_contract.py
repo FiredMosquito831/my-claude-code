@@ -397,9 +397,9 @@ def test_responses_pre_start_execution_failure_is_correlated_terminal_json() -> 
     assert response.json() == {
         "error": {
             "message": f"provider overloaded\n\nRequest ID: {request_id}",
-            "type": "overloaded_error",
+            "type": "server_error",
             "param": None,
-            "code": None,
+            "code": "server_error",
         }
     }
     assert provider.stream_kwargs[0]["request_id"] == request_id
@@ -426,9 +426,9 @@ def test_chat_completions_pre_start_failure_is_correlated_terminal_json() -> Non
     assert response.json() == {
         "error": {
             "message": f"provider overloaded\n\nRequest ID: {request_id}",
-            "type": "overloaded_error",
+            "type": "server_error",
             "param": None,
-            "code": None,
+            "code": "server_error",
         }
     }
     assert provider.stream_kwargs[0]["request_id"] == request_id
@@ -710,7 +710,7 @@ def test_responses_post_start_execution_failure_retains_id_after_block_close() -
         "message": f"upstream is busy\n\nRequest ID: {request_id}",
         "type": "rate_limit_error",
         "param": None,
-        "code": None,
+        "code": "rate_limit_exceeded",
     }
     assert _terminal_trace(trace_mock) == {
         "stage": "egress",

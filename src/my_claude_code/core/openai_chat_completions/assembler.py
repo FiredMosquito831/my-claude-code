@@ -8,6 +8,7 @@ from typing import Any
 from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.openai_common import (
     AnthropicSseEvent,
+    openai_error_from_anthropic_error,
     openai_error_from_failure,
 )
 
@@ -64,7 +65,7 @@ class ChatCompletionsStreamAssembler:
         if event.event == "message_stop":
             return self.complete()
         if event.event == "error":
-            return self.fail(_error_object(event.data))
+            return self.fail(openai_error_from_anthropic_error(event.data))
         return []
 
     def finish_if_needed(self) -> list[str]:
@@ -232,18 +233,6 @@ class ChatCompletionsStreamAssembler:
             "created": self._created,
             "model": self._model,
         }
-
-
-def _error_object(data: Mapping[str, Any]) -> dict[str, Any]:
-    error = data.get("error")
-    if not isinstance(error, Mapping):
-        error = {"type": "api_error", "message": str(data)}
-    return {
-        "message": str(error.get("message", "")),
-        "type": str(error.get("type", "api_error")),
-        "param": None,
-        "code": None,
-    }
 
 
 def _event_index(data: Mapping[str, Any]) -> int | None:

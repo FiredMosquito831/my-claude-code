@@ -83,6 +83,7 @@ from my_claude_code.providers.openai_responses import (
     ResponsesStreamConverter,
     ToolSchemaDialect,
     alias_responses_body_tool_names,
+    build_responses_passthrough_body,
     build_responses_request_body,
     history_carrier_marker,
     history_plaintext_marker,
@@ -728,40 +729,62 @@ class ResponsesTransport:
             self._provider_id, self._base_url
         )
 
-        body = build_responses_request_body(
-            request,
-            reasoning=reasoning,
-            store=False,
-            stream=True,
-            # 8.15.0: the adapter-level switch, read here so a dashboard save
-            # reaches the next request. Before it, this line hard-coded
-            # ``False``. The same setting serves the ChatGPT subscription
-            # (``providers/chatgpt_oauth/conversion.py``): it is a property of
-            # the Responses protocol, not of one host.
-            parallel_tool_calls=effective_parallel_tool_calls,
-            max_output_tokens=max_output_tokens,
-            extra_body=extra_body,
-            tool_name_max_length=self.tool_name_max_length,
-            tool_catalogue=self.tool_catalogue(request),
-            include_tool_choice=not self._tool_choice_refused(request),
-            tool_schema_dialect=self._tool_schema_dialect,
-            wire_notes=wire_notes,
-            # 8.16.0: the host this body is about to be sent to, or ``None``
-            # when the operator has not turned carrier replay on. Both this and
-            # ``stream``'s converter read the same value, so a carrier minted
-            # here can only ever be replayed to this host, account and model.
-            origin=self.replay_origin(request.model),
-            # 8.17.0: the operator's plaintext switch, minus what this model's
-            # host has been proven to refuse. Its own setting, not the
-            # carrier's: an operator whose host rejects a summary item can turn
-            # this off and keep carriers.
-            plaintext_replay=self.plaintext_replay(request.model),
-            apply_responses_sidecars=has_envelope,
-            allow_openai_responses_sidecars=openai_destination,
-            accepts_documents=model_accepts_pdf_for_provider(
-                self._provider_id, request.model
-            ),
-        )
+        if openai_destination and has_envelope and "input" in envelope:
+            body = build_responses_passthrough_body(
+                request,
+                reasoning=reasoning,
+                store=False,
+                stream=True,
+                parallel_tool_calls=effective_parallel_tool_calls,
+                max_output_tokens=max_output_tokens,
+                tool_name_max_length=self.tool_name_max_length,
+                tool_catalogue=self.tool_catalogue(request),
+                include_tool_choice=not self._tool_choice_refused(request),
+                tool_schema_dialect=self._tool_schema_dialect,
+                wire_notes=wire_notes,
+                origin=self.replay_origin(request.model),
+                plaintext_replay=self.plaintext_replay(request.model),
+                accepts_documents=model_accepts_pdf_for_provider(
+                    self._provider_id, request.model
+                ),
+                allow_truncation=True,
+                extra_body=extra_body,
+            )
+        else:
+            body = build_responses_request_body(
+                request,
+                reasoning=reasoning,
+                store=False,
+                stream=True,
+                # 8.15.0: the adapter-level switch, read here so a dashboard save
+                # reaches the next request. Before it, this line hard-coded
+                # ``False``. The same setting serves the ChatGPT subscription
+                # (``providers/chatgpt_oauth/conversion.py``): it is a property of
+                # the Responses protocol, not of one host.
+                parallel_tool_calls=effective_parallel_tool_calls,
+                max_output_tokens=max_output_tokens,
+                extra_body=extra_body,
+                tool_name_max_length=self.tool_name_max_length,
+                tool_catalogue=self.tool_catalogue(request),
+                include_tool_choice=not self._tool_choice_refused(request),
+                tool_schema_dialect=self._tool_schema_dialect,
+                wire_notes=wire_notes,
+                # 8.16.0: the host this body is about to be sent to, or ``None``
+                # when the operator has not turned carrier replay on. Both this and
+                # ``stream``'s converter read the same value, so a carrier minted
+                # here can only ever be replayed to this host, account and model.
+                origin=self.replay_origin(request.model),
+                # 8.17.0: the operator's plaintext switch, minus what this model's
+                # host has been proven to refuse. Its own setting, not the
+                # carrier's: an operator whose host rejects a summary item can turn
+                # this off and keep carriers.
+                plaintext_replay=self.plaintext_replay(request.model),
+                apply_responses_sidecars=has_envelope,
+                allow_openai_responses_sidecars=openai_destination,
+                accepts_documents=model_accepts_pdf_for_provider(
+                    self._provider_id, request.model
+                ),
+            )
         dialect = self.reasoning_dialect(request.model)
         surface_rejections = (
             self._memory.rejections_for(request.model, surface=_RESPONSES_SURFACE) or {}

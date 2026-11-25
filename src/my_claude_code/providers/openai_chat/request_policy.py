@@ -30,6 +30,7 @@ from my_claude_code.core.anthropic import (
 )
 from my_claude_code.core.anthropic.conversion import OpenAIConversionError
 from my_claude_code.core.anthropic.models import MessagesRequest
+from my_claude_code.core.anthropic.structured_output import disables_parallel_tool_use
 from my_claude_code.core.reasoning import ReasoningPolicy
 from my_claude_code.providers.openai_responses import (
     ToolSchemaDialect,
@@ -145,6 +146,25 @@ def build_openai_chat_request_body(
         if policy.reasoning_details_source is not None
         else None
     )
+    chat_envelope = request_data.chat_envelope
+    if (
+        isinstance(chat_envelope, Mapping)
+        and policy.reasoning_details_source is not None
+        and "reasoning_details" not in policy.unsupported_body_keys
+    ):
+        raw_env_details = chat_envelope.get("reasoning_details_by_message")
+        if isinstance(raw_env_details, Mapping):
+            merged_details = dict(assistant_details or {})
+            for raw_idx, details_val in raw_env_details.items():
+                if (
+                    isinstance(raw_idx, int)
+                    and isinstance(details_val, list)
+                    and details_val
+                    and raw_idx not in merged_details
+                ):
+                    merged_details[raw_idx] = deepcopy(details_val)
+            if merged_details:
+                assistant_details = merged_details
     try:
         body = build_base_request_body(
             request_data,
@@ -172,6 +192,11 @@ def build_openai_chat_request_body(
                 except ValueError as exc:
                     raise InvalidRequestError(str(exc)) from exc
             body["extra_body"] = extra_body
+
+    if isinstance(chat_envelope, Mapping):
+        _apply_chat_envelope_scalars(
+            body, chat_envelope, policy=policy, request_data=request_data
+        )
 
     _apply_common_openai_chat_policy(body, policy)
     if suppress_structured_output and "response_format" in body:
@@ -369,6 +394,42 @@ def _attach_reasoning_details(
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         message["reasoning_details"] = list(details)
+
+
+_CHAT_ENVELOPE_SCALAR_KEYS: tuple[str, ...] = (
+    "seed",
+    "frequency_penalty",
+    "presence_penalty",
+    "logprobs",
+    "top_logprobs",
+    "service_tier",
+    "store",
+    "prompt_cache_key",
+)
+
+
+def _apply_chat_envelope_scalars(
+    body: dict[str, Any],
+    chat_envelope: Mapping[str, Any],
+    *,
+    policy: OpenAIChatRequestPolicy,
+    request_data: MessagesRequest,
+) -> None:
+    """Replay explicit same-protocol Chat Completions fields onto ``body``."""
+    for key in _CHAT_ENVELOPE_SCALAR_KEYS:
+        if key in policy.unsupported_body_keys or key in body:
+            continue
+        value = chat_envelope.get(key)
+        if value is not None:
+            body[key] = deepcopy(value)
+    parallel_calls = chat_envelope.get("parallel_tool_calls")
+    if (
+        isinstance(parallel_calls, bool)
+        and "parallel_tool_calls" not in policy.unsupported_body_keys
+        and "tools" in body
+        and not disables_parallel_tool_use(request_data.tool_choice)
+    ):
+        body.setdefault("parallel_tool_calls", parallel_calls)
 
 
 def _apply_common_openai_chat_policy(

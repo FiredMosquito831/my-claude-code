@@ -557,13 +557,6 @@ def test_inflight_for_each_of_four_surfaces(surface, stream, fail) -> None:
     ):
         response = client.post(path, json=payload)
         text = response.text
-    if surface == "responses" and not stream:
-        # ``/v1/responses`` is streaming-only and refuses a JSON ask before a
-        # capture exists -- so there is nothing to register and nothing left.
-        assert response.status_code == 400
-        assert not provider.seen
-        assert request_tasks.count() == 0
-        return
     assert provider.seen, (surface, response.status_code, text[:300])
     during = provider.seen[0]
     assert during["total"] == 1, during

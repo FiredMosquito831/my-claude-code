@@ -2,12 +2,17 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from fastapi.responses import JSONResponse, Response
 from loguru import logger
 
-from my_claude_code.api.detection import is_safety_classifier_request
+from my_claude_code.api.handler_policies import (
+    apply_describe_outcome,
+    apply_message_routing_policies,
+    fold_request_tool_changes_with_envelope_sync,
+    try_store_from_settings,
+)
 from my_claude_code.api.optimization_handlers import (
     PROBE_AUTO_RESPONSE,
     LocalOptimization,
@@ -24,7 +29,6 @@ from my_claude_code.api.request_errors import (
     unexpected_http_exception,
 )
 from my_claude_code.api.request_ids import new_request_id
-from my_claude_code.api.request_tool_changes import fold_request_tool_changes
 from my_claude_code.api.response_streams import (
     EmptyStreamError,
     StreamKeepalive,
@@ -58,14 +62,12 @@ from my_claude_code.application.ports import ProviderResolver
 from my_claude_code.application.prompt_cache import stamp_prompt_cache_ask
 from my_claude_code.application.routing import (
     ModelRouter,
-    RouteDiversion,
     RoutedMessagesPlan,
     RoutedMessagesRequest,
 )
 from my_claude_code.application.vision_describe import (
     DescribeResult,
     VisionDescribeAdapter,
-    describe_failure_texts,
 )
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.anthropic import (
@@ -82,36 +84,10 @@ from my_claude_code.core.anthropic import (
     get_token_count,
     trim_tool_results,
 )
-from my_claude_code.core.anthropic.request_modalities import request_image_inputs
-from my_claude_code.core.anthropic.tool_result_media import (
-    MediaDelivery,
-    collect_tool_names,
-    replace_request_media_with_text,
-)
 from my_claude_code.core.client_fingerprint import harness_from_headers
 from my_claude_code.core.diagnostics import safe_exception_message
 from my_claude_code.core.failures import ExecutionFailure, find_execution_failure
-from my_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
-from my_claude_code.core.request_log import store_from_settings
 from my_claude_code.core.trace import trace_event
-
-
-def _with_delivery(
-    plan: RoutedMessagesPlan, delivery: MediaDelivery
-) -> RoutedMessagesPlan:
-    """Say how the pictures travelled, on every rung of the chain.
-
-    Per attempt rather than per plan because that is where the marker lives:
-    the router derives it from each attempt's own model, and a request whose
-    images are already text has to overrule that derivation for all of them,
-    not only for the one that happens to answer.
-    """
-    return replace(
-        plan,
-        attempts=tuple(
-            replace(attempt, image_delivery=delivery) for attempt in plan.attempts
-        ),
-    )
 
 
 @dataclass(frozen=True)
@@ -172,7 +148,7 @@ class MessagesHandler:
         self._describe_adapter = VisionDescribeAdapter(
             router=self._model_router,
             executor=self._provider_executor,
-            store=store_from_settings(settings),
+            store=try_store_from_settings(settings),
             # Read from this handler's settings, and a handler is built per
             # request from its lease -- so a saved DESCRIBE_CONCURRENCY is the
             # number the next request's adapter is built with, and a request
@@ -217,7 +193,9 @@ class MessagesHandler:
         # capture, describe mode, the plan, every attempt of the chain -- sees
         # the one tool list the conversation's tool changes add up to. A
         # request without such changes is the same object as before.
-        request_data = fold_request_tool_changes(request_data, request_id=request_id)
+        request_data = fold_request_tool_changes_with_envelope_sync(
+            request_data, request_id=request_id
+        )
         # The operator's prompt-cache lifetime for this route, if one is set
         # (7.104.0). Nothing set stamps nothing.
         stamp_prompt_cache_ask(self._settings, request_data)
@@ -599,103 +577,18 @@ class MessagesHandler:
         described: DescribeResult,
         harness: str | None,
     ) -> RoutedMessagesPlan:
-        """Record what describe mode did, or climb down from it.
-
-        Three outcomes, and the ladder between them is the whole failure
-        policy (spec 5A.7): a request never fails because of the adapter.
-
-        * It worked -- the plan carries no images any more, so it says so:
-          ``vision_described``, and every attempt marked ``described``.
-        * It did not run at all -- the mode is ``route``, the primary can see,
-          or nothing was visual. The plan is exactly what it always was.
-        * It ran and failed -- the request still holds its images, so the plan
-          that was just resolved is already today's route-mode diversion. That
-          is the first fallback, and it needs nothing done to it. Only when the
-          route has nowhere to divert to does the last rung apply: replace the
-          images with a sentence that says why they are missing, and let the
-          blind model answer without them.
-        """
-        if described.applied:
-            return replace(
-                _with_delivery(plan, MediaDelivery.DESCRIBED),
-                diversion=RouteDiversion.VISION_DESCRIBED,
-            )
-        if not described.failed:
-            return plan
-        if not self._route_is_a_dead_end(plan, described):
-            logger.info("VISION DESCRIBE: falling back to route mode for this request")
-            return plan
-        images = request_image_inputs(request_data)
-        replace_request_media_with_text(
-            request_data.messages,
-            describe_failure_texts(len(images)),
-            tool_names=collect_tool_names(request_data.messages),
+        return apply_describe_outcome(
+            plan,
+            request_data,
+            described,
+            model_router=self._model_router,
+            harness=harness,
         )
-        logger.warning(
-            "VISION DESCRIBE: no description and no vision route; sending {}"
-            " placeholder(s) instead",
-            len(images),
-        )
-        return replace(
-            _with_delivery(
-                self._model_router.resolve_messages_plan(request_data, harness=harness),
-                MediaDelivery.STRIP,
-            ),
-            diversion=RouteDiversion.VISION_UNAVAILABLE,
-        )
-
-    @staticmethod
-    def _route_is_a_dead_end(
-        plan: RoutedMessagesPlan, described: DescribeResult
-    ) -> bool:
-        """Whether diverting this request would walk into the same wall twice.
-
-        Route mode diverts to the vision chain. When the describe call failed
-        *because* nothing on that chain could be reached, the diversion is not
-        a fallback -- it is the same request to the same dead models, paying
-        their timeouts again and failing the client anyway. The exception is a
-        route that still has a sighted fallback of its own behind the adapter:
-        that is a genuine second answer, and it is tried.
-        """
-        if plan.diversion is RouteDiversion.VISION_UNAVAILABLE:
-            return True
-        if not described.unreachable_refs:
-            return False
-        # ``model_refs`` rather than the attempts: this asks about the
-        # route, and routing a rung to answer it would undo the laziness.
-        return all(ref in described.unreachable_refs for ref in plan.model_refs())
 
     def _apply_message_routing_policies(
         self, plan: RoutedMessagesPlan
     ) -> RoutedMessagesPlan:
-        """Apply request-shaped policies to every attempt in the plan.
-
-        A policy that depends on the request rather than the model has to hold
-        for a fallback too, or the same request would gain thinking back merely
-        by being served by the second model in a chain.
-        """
-        if not is_safety_classifier_request(plan.primary.request):
-            return plan
-        changed = any(
-            attempt.reasoning.control is not ReasoningControl.OFF
-            for attempt in plan.attempts
-        )
-        trace_event(
-            stage="routing",
-            event="my_claude_code.api.optimization.safety_classifier_no_thinking",
-            source="api",
-            model=plan.primary.request.model,
-            changed=changed,
-        )
-        if not changed:
-            return plan
-        return replace(
-            plan,
-            attempts=tuple(
-                replace(attempt, reasoning=ReasoningPolicy.off())
-                for attempt in plan.attempts
-            ),
-        )
+        return apply_message_routing_policies(plan, trace_fn=trace_event)
 
     def _run_message_intercepts(
         self, plan: RoutedMessagesPlan

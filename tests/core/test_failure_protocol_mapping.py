@@ -7,6 +7,7 @@ from my_claude_code.core.anthropic.errors import (
     anthropic_failure_payload,
 )
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
+from my_claude_code.core.openai_common.errors import openai_error_code_for_failure
 from my_claude_code.core.openai_responses.errors import (
     openai_error_type_for_failure,
     openai_failure_payload,
@@ -14,31 +15,54 @@ from my_claude_code.core.openai_responses.errors import (
 
 
 @pytest.mark.parametrize(
-    ("kind", "anthropic_type", "openai_type"),
+    ("kind", "anthropic_type", "openai_type", "openai_code"),
     [
-        (FailureKind.INVALID_REQUEST, "invalid_request_error", "invalid_request_error"),
-        (FailureKind.AUTHENTICATION, "authentication_error", "authentication_error"),
-        (FailureKind.PERMISSION, "permission_error", "permission_error"),
-        # An account out of credits is a billing fact on both wires, and both
-        # protocols already had the type for it -- it was only ever reachable
-        # through a PERMISSION failure that happened to carry a 402.
-        (FailureKind.QUOTA, "billing_error", "billing_error"),
-        (FailureKind.RATE_LIMIT, "rate_limit_error", "rate_limit_error"),
-        (FailureKind.OVERLOADED, "overloaded_error", "overloaded_error"),
-        # Existing finalized transport timeouts are exposed as api_error; the
-        # semantic kind becomes more precise without changing that wire contract.
-        (FailureKind.TIMEOUT, "api_error", "api_error"),
-        (FailureKind.UPSTREAM, "api_error", "api_error"),
-        (FailureKind.UNAVAILABLE, "api_error", "api_error"),
+        (
+            FailureKind.INVALID_REQUEST,
+            "invalid_request_error",
+            "invalid_request_error",
+            None,
+        ),
+        (
+            FailureKind.CONTEXT_LENGTH,
+            "invalid_request_error",
+            "invalid_request_error",
+            "context_length_exceeded",
+        ),
+        (
+            FailureKind.AUTHENTICATION,
+            "authentication_error",
+            "invalid_request_error",
+            "invalid_api_key",
+        ),
+        (FailureKind.PERMISSION, "permission_error", "permission_error", None),
+        (
+            FailureKind.QUOTA,
+            "billing_error",
+            "insufficient_quota",
+            "insufficient_quota",
+        ),
+        (
+            FailureKind.RATE_LIMIT,
+            "rate_limit_error",
+            "rate_limit_error",
+            "rate_limit_exceeded",
+        ),
+        (FailureKind.OVERLOADED, "overloaded_error", "server_error", "server_error"),
+        (FailureKind.TIMEOUT, "api_error", "server_error", "timeout"),
+        (FailureKind.UPSTREAM, "api_error", "server_error", "server_error"),
+        (FailureKind.UNAVAILABLE, "api_error", "server_error", "server_error"),
     ],
 )
 def test_each_protocol_owns_failure_kind_to_wire_type_mapping(
     kind: FailureKind,
     anthropic_type: str,
     openai_type: str,
+    openai_code: str | None,
 ) -> None:
     assert anthropic_error_type_for_failure(kind) == anthropic_type
     assert openai_error_type_for_failure(kind) == openai_type
+    assert openai_error_code_for_failure(kind) == openai_code
 
 
 def test_finalized_status_502_timeout_keeps_existing_api_error_wire_type() -> None:
@@ -50,4 +74,5 @@ def test_finalized_status_502_timeout_keeps_existing_api_error_wire_type() -> No
     )
 
     assert anthropic_failure_payload(failure)["error"]["type"] == "api_error"
-    assert openai_failure_payload(failure)["error"]["type"] == "api_error"
+    assert openai_failure_payload(failure)["error"]["type"] == "server_error"
+    assert openai_failure_payload(failure)["error"]["code"] == "timeout"

@@ -671,11 +671,11 @@ async def test_responses_handler_bypasses_message_only_optimizations() -> None:
 
 
 @pytest.mark.asyncio
-async def test_responses_handler_does_not_apply_safety_classifier_policy() -> None:
+async def test_responses_handler_applies_safety_classifier_policy() -> None:
     provider = FakeProvider()
     handler = ResponsesHandler(Settings(), provider_resolver=lambda _: provider)
 
-    with patch("my_claude_code.api.handlers.messages.trace_event") as trace_mock:
+    with patch("my_claude_code.api.handler_policies.trace_event") as trace_mock:
         response = await handler.create(
             OpenAIResponsesRequest(
                 model="nvidia_nim/test-model",
@@ -687,15 +687,20 @@ async def test_responses_handler_does_not_apply_safety_classifier_policy() -> No
         assert isinstance(response, StreamingResponse)
         await _streaming_body_text(response)
 
-    assert provider.preflight_calls[0][1] == ReasoningPolicy.provider_default()
-    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.provider_default()
-    assert (
-        _trace_events(
-            trace_mock,
-            "my_claude_code.api.optimization.safety_classifier_no_thinking",
-        )
-        == []
-    )
+    assert provider.preflight_calls[0][1] == ReasoningPolicy.off()
+    assert provider.stream_kwargs[0]["reasoning"] == ReasoningPolicy.off()
+    assert _trace_events(
+        trace_mock,
+        "my_claude_code.api.optimization.safety_classifier_no_thinking",
+    ) == [
+        {
+            "stage": "routing",
+            "event": "my_claude_code.api.optimization.safety_classifier_no_thinking",
+            "source": "api",
+            "model": "test-model",
+            "changed": True,
+        }
+    ]
 
 
 def test_token_count_handler_routes_and_counts_tokens() -> None:

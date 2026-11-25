@@ -243,6 +243,15 @@ class MessagesRequest(BaseModel):
     #: (``name``, ``strict``, ``description``) without polluting
     #: ``output_config.format`` or ``model_dump()``.
     structured_output_spec: dict[str, Any] | None = Field(default=None, exclude=True)
+    #: Lossless ``/v1/chat/completions`` ingress sidecar (8.45.0), or ``None``.
+    #:
+    #: Preserves same-protocol Chat Completions parameters (``seed``,
+    #: ``frequency_penalty``, ``presence_penalty``, ``logprobs``, ``top_logprobs``,
+    #: ``service_tier``, ``store``, ``prompt_cache_key``, explicit
+    #: ``parallel_tool_calls``, and per-turn ``reasoning_details``) across
+    #: ``model_copy(deep=True)`` while remaining invisible to ``model_dump()``
+    #: and cross-door conversions.
+    chat_envelope: dict[str, Any] | None = Field(default=None, exclude=True)
 
     @property
     def prompt_cache_ask(self) -> PromptCacheAsk | None:

@@ -2,7 +2,7 @@
 
 import asyncio
 import sys
-from collections.abc import AsyncIterable, AsyncIterator, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
 from typing import Any
 
 from my_claude_code.core.diagnostics import safe_exception_message
@@ -95,3 +95,39 @@ def _unexpected_error_data(exc: BaseException) -> dict[str, dict[str, str]]:
             "message": safe_exception_message(exc),
         }
     }
+
+
+async def complete_response_from_anthropic_sse(
+    chunks: AsyncIterable[Any],
+    request: OpenAIResponsesRequest,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Assemble one non-streaming Responses payload from an Anthropic SSE stream."""
+    assembler = ResponsesStreamAssembler(request)
+    raw_error: dict[str, Any] | None = None
+    events = iter_sse_events(chunks)
+    try:
+        async for event in events:
+            if event.event == "error" and not assembler.terminal:
+                err_obj = event.data.get("error")
+                raw_error = (
+                    dict(err_obj)
+                    if isinstance(err_obj, Mapping)
+                    else {"type": "api_error", "message": str(event.data)}
+                )
+            assembler.process_anthropic_event(event)
+            if assembler.terminal:
+                await drain_after_terminal(events, owner="openai_responses.stream")
+                break
+        if not assembler.terminal:
+            assembler.finish_if_needed()
+    finally:
+        await close_stream_input(
+            events,
+            owner="openai_responses.stream",
+            source="core",
+            preserved_error=sys.exception(),
+        )
+    response_payload = assembler.final_response or assembler.response_payload(
+        status="completed"
+    )
+    return response_payload, raw_error

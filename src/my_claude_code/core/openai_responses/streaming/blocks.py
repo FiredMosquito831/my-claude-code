@@ -18,7 +18,10 @@ class ReasoningBlockState:
     output_index: int
     item_id: str
     text_parts: list[str] = field(default_factory=list)
+    signature_parts: list[str] = field(default_factory=list)
     encrypted_content: str | None = None
+    emit_summary: bool = True
+    summary_part_added: bool = False
 
 
 @dataclass(slots=True)
@@ -31,6 +34,16 @@ class ToolBlockState:
     name: str
     namespace: str | None = None
     argument_parts: list[str] = field(default_factory=list)
+    streamed_arguments: bool = False
 
 
-BlockState = TextBlockState | ReasoningBlockState | ToolBlockState
+@dataclass(slots=True)
+class WebSearchBlockState:
+    index: int
+    output_index: int
+    item_id: str
+    call_id: str
+    argument_parts: list[str] = field(default_factory=list)
+
+
+BlockState = TextBlockState | ReasoningBlockState | ToolBlockState | WebSearchBlockState

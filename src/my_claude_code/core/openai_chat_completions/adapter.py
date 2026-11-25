@@ -73,8 +73,8 @@ class OpenAIChatCompletionsAdapter:
         message: str,
         error_type: str,
         param: str | None = None,
+        code: str | None = None,
     ) -> dict[str, Any]:
-        payload = openai_error_payload(message=message, error_type=error_type)
-        if param is not None:
-            payload["error"]["param"] = param
-        return payload
+        return openai_error_payload(
+            message=message, error_type=error_type, param=param, code=code
+        )

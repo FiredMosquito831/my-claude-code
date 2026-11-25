@@ -10,6 +10,7 @@ from my_claude_code.core.failures import ExecutionFailure
 from my_claude_code.core.trace import trace_event
 
 from ..anthropic_sse import AnthropicSseEvent
+from ..carrier import is_carrier
 from ..errors import ResponsesConversionError, openai_error_from_failure
 from ..ids import (
     new_call_id,
@@ -17,10 +18,16 @@ from ..ids import (
     new_reasoning_item_id,
     new_response_id,
 )
+from ..items import web_search_call_item
 from ..models import OpenAIResponsesRequest
 from ..tools import responses_tool_identity_from_anthropic_name
 from . import event_builders as events
-from .blocks import ReasoningBlockState, TextBlockState, ToolBlockState
+from .blocks import (
+    ReasoningBlockState,
+    TextBlockState,
+    ToolBlockState,
+    WebSearchBlockState,
+)
 from .completion import ResponseBlockCompleter, reasoning_output_item, tool_item
 from .error_mapping import (
     openai_error_from_anthropic_error,
@@ -193,14 +200,33 @@ class ResponsesStreamAssembler:
         if block_type == "redacted_thinking":
             if index is None:
                 return []
+            data_str = _string_value(block.get("data"))
+            if not is_carrier(data_str):
+                return []
             chunks, _state = self._start_reasoning_block(
-                index, encrypted_content=_string_value(block.get("data"))
+                index, encrypted_content=data_str
             )
             return chunks
         if block_type == "tool_use":
             if index is None:
                 return []
             return self._start_tool_block(index, block)
+        if block_type == "server_tool_use":
+            if index is None:
+                return []
+            return self._start_server_tool_block(index, block)
+        if block_type in {
+            "web_search_tool_result",
+            "web_fetch_tool_result",
+            "compaction",
+        }:
+            trace_event(
+                stage="responses",
+                event="responses.output.unsupported_block_ignored",
+                source="openai_responses",
+                block_type=block_type,
+            )
+            return []
         return []
 
     def _handle_content_block_delta(self, data: Mapping[str, Any]) -> list[str]:
@@ -241,13 +267,21 @@ class ResponsesStreamAssembler:
             if isinstance(state, ReasoningBlockState):
                 signature = _string_value(delta.get("signature"))
                 if signature:
-                    state.encrypted_content = (
-                        state.encrypted_content or ""
-                    ) + signature
+                    state.signature_parts.append(signature)
             return []
         if delta_type == "input_json_delta":
             state = self._ledger.active_block(index) if index is not None else None
             if isinstance(state, ToolBlockState):
+                fragment = _string_value(delta.get("partial_json"))
+                state.argument_parts.append(fragment)
+                if state.kind == "function" and fragment:
+                    state.streamed_arguments = True
+                    return [
+                        events.function_call_arguments_delta(
+                            state.item_id, state.output_index, fragment
+                        )
+                    ]
+            elif isinstance(state, WebSearchBlockState):
                 state.argument_parts.append(_string_value(delta.get("partial_json")))
         return []
 
@@ -286,6 +320,14 @@ class ResponsesStreamAssembler:
         )
         return chunks, state
 
+    def _emit_summary_reasoning(self) -> bool:
+        reasoning = self._request.reasoning
+        return not (
+            isinstance(reasoning, Mapping)
+            and "summary" in reasoning
+            and reasoning["summary"] in (None, "none")
+        )
+
     def _start_reasoning_block(
         self, index: int, *, encrypted_content: str | None = None
     ) -> tuple[list[str], ReasoningBlockState | None]:
@@ -298,6 +340,7 @@ class ResponsesStreamAssembler:
             output_index=output_index,
             item_id=new_reasoning_item_id(),
             encrypted_content=encrypted_content,
+            emit_summary=self._emit_summary_reasoning(),
         )
         self._ledger.set_active_block(state)
         chunks.append(
@@ -337,6 +380,53 @@ class ResponsesStreamAssembler:
                 tool_item(state, status="in_progress"),
             )
         )
+        if identity.kind == "function" and state.argument_parts:
+            state.streamed_arguments = True
+            chunks.append(
+                events.function_call_arguments_delta(
+                    state.item_id, state.output_index, state.argument_parts[0]
+                )
+            )
+        return chunks
+
+    def _start_server_tool_block(
+        self, index: int, block: Mapping[str, Any]
+    ) -> list[str]:
+        name = _string_value(block.get("name"))
+        if name != "web_search" and not name.startswith("web_search_"):
+            trace_event(
+                stage="responses",
+                event="responses.output.unsupported_block_ignored",
+                source="openai_responses",
+                block_type="server_tool_use",
+                tool_name=name,
+            )
+            return []
+        chunks = self._complete_existing_block(index)
+        if self.terminal:
+            return chunks
+        call_id = _string_value(block.get("id")) or new_call_id()
+        ws_id = f"ws_{call_id.removeprefix('srvtoolu_')}"
+        output_index = self._ledger.reserve_output_slot()
+        state = WebSearchBlockState(
+            index=index,
+            output_index=output_index,
+            item_id=ws_id,
+            call_id=call_id,
+        )
+        initial_input = block.get("input")
+        if isinstance(initial_input, dict) and initial_input:
+            state.argument_parts.append(json.dumps(initial_input))
+        self._ledger.set_active_block(state)
+        chunks.extend(
+            [
+                events.output_item_added(
+                    output_index,
+                    web_search_call_item(ws_id, "in_progress"),
+                ),
+                events.web_search_call_in_progress(ws_id, output_index),
+            ]
+        )
         return chunks
 
     def _emit_text_delta(self, state: TextBlockState, text: str) -> list[str]:
@@ -349,6 +439,21 @@ class ResponsesStreamAssembler:
         if not text:
             return []
         state.text_parts.append(text)
+        if state.emit_summary:
+            chunks: list[str] = []
+            if not state.summary_part_added:
+                state.summary_part_added = True
+                chunks.append(
+                    events.reasoning_summary_part_added(
+                        state.item_id, state.output_index
+                    )
+                )
+            chunks.append(
+                events.reasoning_summary_text_delta(
+                    state.item_id, state.output_index, text
+                )
+            )
+            return chunks
         return [events.reasoning_text_delta(state.item_id, state.output_index, text)]
 
     def _complete_existing_block(self, index: int) -> list[str]:
