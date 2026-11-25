@@ -577,6 +577,45 @@ def _prune(
     return rewrite_schema_keyword(node, refusal.keyword, _drop, path, _record)
 
 
+def _prune_tool(
+    tool: Any,
+    refusal: SchemaKeywordRefusal,
+    removals: list[SchemaRemoval],
+) -> Any:
+    """Sweep one tool definition (including ``namespace.tools[]`` and nested ``function``)."""
+    if not isinstance(tool, Mapping):
+        return tool
+    if tool.get("type") == "namespace":
+        nested = tool.get("tools")
+        if not isinstance(nested, list):
+            return tool
+        rebuilt: list[Any] = []
+        changed = False
+        for child in nested:
+            pruned_child = _prune_tool(child, refusal, removals)
+            if pruned_child is not child:
+                changed = True
+            rebuilt.append(pruned_child)
+        return {**tool, "tools": rebuilt} if changed else tool
+
+    parameters = tool.get("parameters")
+    if parameters is not None:
+        name = str(tool.get("name") or "unknown")
+        pruned = _prune(parameters, refusal, name, "$", removals)
+        return tool if pruned is parameters else {**tool, "parameters": pruned}
+
+    fn = tool.get("function")
+    if isinstance(fn, Mapping) and fn.get("parameters") is not None:
+        fn_parameters = fn["parameters"]
+        name = str(fn.get("name") or tool.get("name") or "unknown")
+        pruned = _prune(fn_parameters, refusal, name, "$", removals)
+        if pruned is fn_parameters:
+            return tool
+        return {**tool, "function": {**fn, "parameters": pruned}}
+
+    return tool
+
+
 def prune_tool_catalogue(
     tools: Sequence[Any], refusal: SchemaKeywordRefusal
 ) -> tuple[Sequence[Any], tuple[SchemaRemoval, ...]]:
@@ -592,20 +631,10 @@ def prune_tool_catalogue(
     pruned_tools: list[Any] = []
     changed = False
     for tool in tools:
-        if not isinstance(tool, Mapping):
-            pruned_tools.append(tool)
-            continue
-        parameters = tool.get("parameters")
-        if parameters is None:
-            pruned_tools.append(tool)
-            continue
-        name = str(tool.get("name") or "unknown")
-        pruned = _prune(parameters, refusal, name, "$", removals)
-        if pruned is parameters:
-            pruned_tools.append(tool)
-            continue
-        changed = True
-        pruned_tools.append({**tool, "parameters": pruned})
+        pruned = _prune_tool(tool, refusal, removals)
+        if pruned is not tool:
+            changed = True
+        pruned_tools.append(pruned)
     if not changed:
         return tools, ()
     return pruned_tools, tuple(removals)

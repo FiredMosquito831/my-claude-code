@@ -827,6 +827,11 @@ async def test_responses_transport_profiles_gate_destination_end_to_end() -> Non
 
 
 def test_p5_empty_instructions_omitted_and_compact_omits_store_and_include() -> None:
+    from my_claude_code.application.catalogues.codex import CODEX_BASE_INSTRUCTIONS
+    from my_claude_code.providers.openai_responses.conversion import (
+        build_responses_passthrough_body,
+    )
+
     msg_req = _to_messages_request(
         {
             "model": "gpt-5.6-terra",
@@ -844,10 +849,17 @@ def test_p5_empty_instructions_omitted_and_compact_omits_store_and_include() -> 
     normal = build_chatgpt_oauth_request_body(
         msg_req, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
     )
-    assert "instructions" not in normal
+    assert normal["instructions"] == CODEX_BASE_INSTRUCTIONS
     assert normal["store"] is False
     assert normal["include"] == ["reasoning.encrypted_content"]
     assert normal["input"][0]["role"] == "developer"
+
+    generic = build_responses_passthrough_body(
+        msg_req,
+        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM),
+        default_instructions=None,
+    )
+    assert "instructions" not in generic
 
     compacted = build_chatgpt_oauth_request_body(
         msg_req,

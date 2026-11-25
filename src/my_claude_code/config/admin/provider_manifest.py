@@ -949,6 +949,25 @@ def _chatgpt_oauth_account_field_specs() -> tuple[dict[str, Any], ...]:
             ),
         },
         {
+            "key": "CHATGPT_OAUTH_SERVICE_TIER",
+            "label": "Service Tier (ChatGPT OAuth)",
+            "section_id": "providers",
+            "provider": "chatgpt_oauth",
+            "field_type": "select",
+            "options": (ConfigOptionSpec("priority", "Fast (priority)"),),
+            "default": "",
+            "settings_attr": "chatgpt_oauth_service_tier",
+            "description": (
+                "Optional service tier for ChatGPT OAuth / openai requests. "
+                "Default (none) omits service_tier so request bodies stay "
+                "byte-identical; selecting Fast (priority) sends "
+                "service_tier='priority' (an env value of 'fast' also "
+                "normalizes to 'priority'). Explicit inbound /v1/responses "
+                "service_tier wins when provided. Applies on the next "
+                "request without a restart."
+            ),
+        },
+        {
             "key": "ANTHROPIC_OAUTH_WRITE_BACK",
             "label": "Write Refreshed Claude Tokens Back to Claude Code",
             "section_id": "providers",

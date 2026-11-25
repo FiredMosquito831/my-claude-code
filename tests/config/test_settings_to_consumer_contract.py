@@ -1673,3 +1673,74 @@ async def test_the_mistral_prompt_cache_affinity_setting_reaches_the_wire(
         assert body["prompt_cache_key"] == headers["x-affinity"]
         assert str(body["prompt_cache_key"]).startswith("mcc-aff-")
         assert len(str(body["prompt_cache_key"])) == 40
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("value", "expected_tier"),
+    [
+        (None, None),
+        ("", None),
+        ("priority", "priority"),
+        ("fast", "priority"),
+    ],
+)
+async def test_the_chatgpt_oauth_service_tier_setting_reaches_the_wire(
+    value: str | None, expected_tier: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """8.42.0's CHATGPT_OAUTH_SERVICE_TIER, from ``Settings`` to the wire."""
+    import json
+
+    import httpx
+
+    from my_claude_code.config import settings as config_settings
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.providers.base import ProviderConfig
+    from my_claude_code.providers.chatgpt_oauth.provider import ChatGPTOAuthProvider
+    from tests.providers.support import passthrough_rate_limiter
+
+    if value is None:
+        monkeypatch.delenv("CHATGPT_OAUTH_SERVICE_TIER", raising=False)
+    else:
+        monkeypatch.setenv("CHATGPT_OAUTH_SERVICE_TIER", value)
+    config_settings.get_settings.cache_clear()
+    captured: list[dict[str, object]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content.decode("utf-8")))
+
+        async def _sse() -> Any:
+            yield b'data: {"type":"response.completed","response":{}}\n\n'
+
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(),
+        )
+
+    try:
+        provider = ChatGPTOAuthProvider(
+            ProviderConfig(
+                api_key="test_token",
+                base_url="https://chatgpt.com/backend-api",
+                rate_limit=10,
+                rate_window=60,
+                max_concurrency=5,
+            ),
+            rate_limiter=passthrough_rate_limiter(),
+        )
+        provider._client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+        request = MessagesRequest.model_validate(
+            {
+                "model": "gpt-6-luna",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        )
+        _ = [chunk async for chunk in provider.stream_response(request)]
+    finally:
+        monkeypatch.delenv("CHATGPT_OAUTH_SERVICE_TIER", raising=False)
+        config_settings.get_settings.cache_clear()
+
+    assert len(captured) == 1
+    assert captured[0].get("service_tier") == expected_tier

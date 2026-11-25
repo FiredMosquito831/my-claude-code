@@ -183,8 +183,8 @@ def _entry(
         "visibility": "list",
         "supported_in_api": True,
         "priority": priority,
-        "additional_speed_tiers": [],
-        "service_tiers": [],
+        "additional_speed_tiers": list(model.additional_speed_tiers),
+        "service_tiers": [dict(tier) for tier in model.service_tiers],
         "base_instructions": CODEX_BASE_INSTRUCTIONS,
         "default_reasoning_summary": "none",
         "support_verbosity": True,
@@ -201,6 +201,8 @@ def _entry(
         **_context_fields(model, slug, defaulted),
         **_reasoning_fields(model, slug, defaulted),
     }
+    if model.default_service_tier is not None:
+        entry["default_service_tier"] = model.default_service_tier
     return entry
 
 
