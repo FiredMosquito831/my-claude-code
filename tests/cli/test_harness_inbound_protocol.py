@@ -1,6 +1,7 @@
 """PR 13 (EM-PR5): Multi-protocol inbound launcher switch & persisted overrides."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -31,7 +32,10 @@ from my_claude_code.cli.launchers.common import (
     strip_inbound_protocol_flag,
 )
 from my_claude_code.config.document_codecs import yaml_mapping_at
-from my_claude_code.config.harness_config_merge import owned_block_names
+from my_claude_code.config.harness_config_merge import (
+    merge_config_path,
+    owned_block_names,
+)
 from my_claude_code.config.harnesses import (
     HARNESS_SPECS,
     HarnessProtocol,
@@ -742,8 +746,10 @@ def test_merge_launchers_switch_protocol_and_preserve_user_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # CommandCode -> openai-completions
-    cc_path = tmp_path / ".commandcode" / "providers.json"
-    cc_path.parent.mkdir(parents=True)
+    cc_spec = harness_spec("commandcode_cli")
+    assert cc_spec.catalogue is not None and cc_spec.catalogue.merge is not None
+    cc_path = merge_config_path(cc_spec.catalogue.merge, os.environ)
+    cc_path.parent.mkdir(parents=True, exist_ok=True)
     cc_path.write_text(
         json.dumps({"provider": {"ollama": {}}, "theme": "dark"}), encoding="utf-8"
     )
@@ -754,7 +760,7 @@ def test_merge_launchers_switch_protocol_and_preserve_user_bytes(
     )
     assert (
         commandcode.merge_provider_block(
-            harness_spec("commandcode_cli"),
+            cc_spec,
             ROOT,
             FAKE_TOKEN,
             inbound_protocol=HarnessProtocol.OPENAI_CHAT_COMPLETIONS,
@@ -768,8 +774,13 @@ def test_merge_launchers_switch_protocol_and_preserve_user_bytes(
     assert cc_doc["theme"] == "dark"
 
     # Hermes -> anthropic_messages (root URL without /v1)
-    hermes_path = tmp_path / "AppData" / "Local" / "hermes" / "config.yaml"
-    hermes_path.parent.mkdir(parents=True)
+    hermes_spec_entry = harness_spec("hermes")
+    assert (
+        hermes_spec_entry.catalogue is not None
+        and hermes_spec_entry.catalogue.merge is not None
+    )
+    hermes_path = merge_config_path(hermes_spec_entry.catalogue.merge, os.environ)
+    hermes_path.parent.mkdir(parents=True, exist_ok=True)
     hermes_path.write_text("# user comment\n_config_version: 33\n", encoding="utf-8")
     monkeypatch.setattr(
         hermes,
@@ -778,7 +789,7 @@ def test_merge_launchers_switch_protocol_and_preserve_user_bytes(
     )
     assert (
         hermes.write_provider_block(
-            harness_spec("hermes"),
+            hermes_spec_entry,
             ROOT,
             FAKE_TOKEN,
             inbound_protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
@@ -793,8 +804,10 @@ def test_merge_launchers_switch_protocol_and_preserve_user_bytes(
     assert hermes_block["api"] == ROOT
 
     # OpenClaw -> anthropic-messages (root URL without /v1)
-    claw_path = tmp_path / ".openclaw" / "openclaw.json"
-    claw_path.parent.mkdir(parents=True)
+    claw_spec = harness_spec("openclaw")
+    assert claw_spec.catalogue is not None and claw_spec.catalogue.merge is not None
+    claw_path = merge_config_path(claw_spec.catalogue.merge, os.environ)
+    claw_path.parent.mkdir(parents=True, exist_ok=True)
     claw_path.write_text('// keep comment\n{"theme": "dark"}\n', encoding="utf-8")
     monkeypatch.setattr(
         openclaw,
@@ -807,7 +820,7 @@ def test_merge_launchers_switch_protocol_and_preserve_user_bytes(
     )
     assert (
         openclaw.write_provider_block(
-            harness_spec("openclaw"),
+            claw_spec,
             ROOT,
             FAKE_TOKEN,
             inbound_protocol=HarnessProtocol.ANTHROPIC_MESSAGES,
