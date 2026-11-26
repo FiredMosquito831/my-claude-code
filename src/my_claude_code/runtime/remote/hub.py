@@ -20,21 +20,24 @@ from my_claude_code.application.remote_ports import (
     RemoteNotFoundError,
 )
 from my_claude_code.cli.claude_env import build_claude_proxy_env
-from my_claude_code.config.constants import (
-    RC_PERMISSION_MODE_VALUES,
-)
+from my_claude_code.config.constants import RC_PERMISSION_MODE_VALUES
 from my_claude_code.config.harnesses import HARNESS_SPECS, harness_spec
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 
 from .claude_driver import ClaudeBidirectionalDriver
+from .codex_driver import CodexAppServerDriver
+from .discovery import discover_local_sessions, is_within_allowed_roots
+from .drivers import StructuredDriver
 from .git_workspace import (
     collect_git_diff,
     create_session_worktree,
     detect_git_root,
     remove_session_worktree,
 )
+from .openclaw_driver import OpenClawGatewayDriver
+from .opencode_driver import OPENCODE_FAMILY_HARNESSES, OpenCodeFamilyDriver
 from .pty_bridge import PtySession
 from .qr import render_qr_svg
 from .store import RemoteStore
@@ -44,13 +47,30 @@ _ACTIVE_STATUSES = frozenset(
     {"starting", "idle", "running", "awaiting_approval", "awaiting_question"}
 )
 
+_HARNESS_DRIVER_TIERS: dict[str, str] = {
+    "claude": "tier_1b_claude",
+    "opencode": "tier_1a_opencode",
+    "opencode2": "tier_1a_opencode",
+    "kilo": "tier_1a_opencode",
+    "codex": "tier_1a_codex",
+    "openclaw": "tier_1a_openclaw",
+}
+
+
+def driver_tier_for_harness(harness: str, *, driver_mode: str = "auto") -> str:
+    """Return the effective driver tier badge for *harness* and *driver_mode*."""
+
+    if driver_mode == "pty":
+        return "tier_3_pty"
+    return _HARNESS_DRIVER_TIERS.get(harness, "tier_3_pty")
+
 
 @dataclass(slots=True)
 class _LiveSession:
     session_id: str
     harness: str
     driver_tier: str
-    claude_driver: ClaudeBidirectionalDriver | None = None
+    driver: StructuredDriver | None = None
     pty_session: PtySession | None = None
     repo_root: Path | None = None
     worktree_path: Path | None = None
@@ -75,16 +95,6 @@ def _parse_allowed_dirs(raw: str) -> list[Path]:
         with contextlib.suppress(OSError, RuntimeError):
             roots.append(Path(cleaned).expanduser().resolve())
     return roots
-
-
-def _is_within_allowed_roots(candidate: Path, roots: list[Path]) -> bool:
-    if not roots:
-        return False
-    try:
-        resolved = candidate.expanduser().resolve()
-    except OSError, RuntimeError:
-        return False
-    return any(resolved == root or resolved.is_relative_to(root) for root in roots)
 
 
 def _default_shell_argv() -> list[str]:
@@ -250,7 +260,7 @@ class RemoteRuntimeHub:
                 ],
             }
         target = Path(path).expanduser()
-        if not _is_within_allowed_roots(target, roots):
+        if not is_within_allowed_roots(target, roots):
             raise RemoteForbiddenError("Requested directory is outside RC_ALLOWED_DIRS")
         resolved = target.resolve()
         if not resolved.is_dir():
@@ -262,7 +272,7 @@ class RemoteRuntimeHub:
                     continue
                 if item.name.startswith("."):
                     continue
-                if _is_within_allowed_roots(item, roots):
+                if is_within_allowed_roots(item, roots):
                     children.append(
                         {
                             "name": item.name,
@@ -283,7 +293,7 @@ class RemoteRuntimeHub:
         for spec in HARNESS_SPECS:
             if not spec.available:
                 continue
-            tier = "tier_1b_claude" if spec.id == "claude" else "tier_3_pty"
+            tier = driver_tier_for_harness(spec.id)
             items.append(
                 {
                     "id": spec.id,
@@ -291,7 +301,7 @@ class RemoteRuntimeHub:
                     "binary": spec.binary,
                     "installed": shutil.which(spec.binary) is not None,
                     "driver_tier": tier,
-                    "supports_structured": spec.id == "claude",
+                    "supports_structured": tier != "tier_3_pty",
                     "supports_pty": True,
                 }
             )
@@ -307,6 +317,13 @@ class RemoteRuntimeHub:
             }
         )
         return items
+
+    def list_discovered_sessions(
+        self, *, harness: str | None = None
+    ) -> list[dict[str, Any]]:
+        settings = self._require_enabled()
+        roots = _parse_allowed_dirs(settings.rc_allowed_dirs)
+        return discover_local_sessions(roots, harness_filter=harness)
 
     # ------------------------------------------------------------ sessions --
 
@@ -332,6 +349,103 @@ class RemoteRuntimeHub:
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(event)
 
+    def _build_structured_driver(
+        self,
+        *,
+        harness: str,
+        session_id: str,
+        cwd: str,
+        title: str,
+        proxy_root: str,
+        auth_token: str,
+        permission_mode: str,
+        model: str,
+        external_session_id: str | None,
+        fork_session: bool,
+        server_url: str | None,
+    ) -> StructuredDriver | None:
+        async def _on_event(kind: str, payload: dict[str, Any]) -> None:
+            await self._emit(session_id, kind, payload)
+
+        async def _on_approval(
+            approval_id: str,
+            tool_name: str,
+            tool_use_id: str,
+            tool_input: dict[str, Any],
+        ) -> dict[str, Any]:
+            return self._store.create_approval(
+                approval_id=approval_id,
+                session_id=session_id,
+                tool_name=tool_name,
+                tool_use_id=tool_use_id,
+                tool_input=tool_input,
+            )
+
+        async def _on_state(**fields: Any) -> None:
+            self._store.update_session(session_id, **fields)
+
+        if harness == "claude":
+            return ClaudeBidirectionalDriver(
+                session_id=session_id,
+                cwd=cwd,
+                proxy_root_url=proxy_root,
+                auth_token=auth_token,
+                permission_mode=permission_mode,
+                model=model,
+                external_session_id=external_session_id,
+                fork_session=fork_session,
+                on_event=_on_event,
+                on_approval_create=_on_approval,
+                on_state_update=_on_state,
+            )
+        if harness in OPENCODE_FAMILY_HARNESSES:
+            return OpenCodeFamilyDriver(
+                harness=harness,
+                session_id=session_id,
+                cwd=cwd,
+                proxy_root_url=proxy_root,
+                auth_token=auth_token,
+                permission_mode=permission_mode,
+                model=model,
+                title=title,
+                external_session_id=external_session_id,
+                fork_session=fork_session,
+                server_url=server_url,
+                on_event=_on_event,
+                on_approval_create=_on_approval,
+                on_state_update=_on_state,
+            )
+        if harness == "codex":
+            return CodexAppServerDriver(
+                session_id=session_id,
+                cwd=cwd,
+                proxy_root_url=proxy_root,
+                auth_token=auth_token,
+                permission_mode=permission_mode,
+                model=model,
+                external_session_id=external_session_id,
+                fork_session=fork_session,
+                on_event=_on_event,
+                on_approval_create=_on_approval,
+                on_state_update=_on_state,
+            )
+        if harness == "openclaw":
+            return OpenClawGatewayDriver(
+                session_id=session_id,
+                cwd=cwd,
+                proxy_root_url=proxy_root,
+                auth_token=auth_token,
+                permission_mode=permission_mode,
+                model=model,
+                external_session_id=external_session_id,
+                fork_session=fork_session,
+                server_url=server_url,
+                on_event=_on_event,
+                on_approval_create=_on_approval,
+                on_state_update=_on_state,
+            )
+        return None
+
     async def create_session(
         self,
         *,
@@ -345,13 +459,18 @@ class RemoteRuntimeHub:
         driver_mode: str = "auto",
         external_session_id: str | None = None,
         fork_session: bool = False,
+        server_url: str | None = None,
         cols: int = 120,
         rows: int = 36,
     ) -> dict[str, Any]:
         settings = self._require_enabled()
         roots = _parse_allowed_dirs(settings.rc_allowed_dirs)
+        if not cwd or not cwd.strip():
+            raise RemoteForbiddenError(
+                "Workspace directory is required and must be inside RC_ALLOWED_DIRS"
+            )
         candidate_cwd = Path(cwd).expanduser()
-        if not _is_within_allowed_roots(candidate_cwd, roots):
+        if not is_within_allowed_roots(candidate_cwd, roots):
             raise RemoteForbiddenError(
                 "Workspace directory is outside RC_ALLOWED_DIRS (or RC_ALLOWED_DIRS is empty)"
             )
@@ -394,11 +513,11 @@ class RemoteRuntimeHub:
                 effective_cwd = worktree_path_obj
                 worktree_path_str = str(worktree_path_obj)
 
-            use_claude_structured = harness == "claude" and driver_mode in (
+            driver_tier = driver_tier_for_harness(harness, driver_mode=driver_mode)
+            use_structured = driver_tier != "tier_3_pty" and driver_mode in (
                 "auto",
                 "structured",
             )
-            driver_tier = "tier_1b_claude" if use_claude_structured else "tier_3_pty"
             now = time.time()
             session_title = title.strip() or f"{harness} — {effective_cwd.name}"
             self._store.create_session(
@@ -415,6 +534,8 @@ class RemoteRuntimeHub:
                     "model": (model or "").strip(),
                     "provider_id": "",
                     "external_session_id": (external_session_id or "").strip(),
+                    "server_url": (server_url or "").strip(),
+                    "attach_hint": "",
                     "pid": None,
                     "created_at": now,
                     "updated_at": now,
@@ -434,47 +555,37 @@ class RemoteRuntimeHub:
             proxy_root = local_proxy_root_url(settings)
             auth_token = settings.anthropic_auth_token
 
-            if use_claude_structured:
-
-                async def _on_event(kind: str, payload: dict[str, Any]) -> None:
-                    await self._emit(session_id, kind, payload)
-
-                async def _on_approval(
-                    approval_id: str,
-                    tool_name: str,
-                    tool_use_id: str,
-                    tool_input: dict[str, Any],
-                ) -> dict[str, Any]:
-                    return self._store.create_approval(
-                        approval_id=approval_id,
-                        session_id=session_id,
-                        tool_name=tool_name,
-                        tool_use_id=tool_use_id,
-                        tool_input=tool_input,
-                    )
-
-                async def _on_state(**fields: Any) -> None:
-                    self._store.update_session(session_id, **fields)
-
-                driver = ClaudeBidirectionalDriver(
+            driver = (
+                self._build_structured_driver(
+                    harness=harness,
                     session_id=session_id,
                     cwd=str(effective_cwd),
-                    proxy_root_url=proxy_root,
+                    title=session_title,
+                    proxy_root=proxy_root,
                     auth_token=auth_token,
                     permission_mode=chosen_mode,
                     model=(model or "").strip(),
                     external_session_id=external_session_id,
                     fork_session=fork_session,
-                    on_event=_on_event,
-                    on_approval_create=_on_approval,
-                    on_state_update=_on_state,
+                    server_url=server_url,
                 )
-                live.claude_driver = driver
+                if use_structured
+                else None
+            )
+
+            if driver is not None:
+                live.driver = driver
                 await driver.start()
                 if prompt.strip():
                     await driver.send_user_message(prompt.strip())
             else:
-                argv = self._build_pty_argv(harness, model=model, prompt=prompt)
+                argv = self._build_pty_argv(
+                    harness,
+                    model=model,
+                    prompt=prompt,
+                    external_session_id=external_session_id,
+                    server_url=server_url,
+                )
                 env = self._build_pty_env(settings, session_id=session_id)
                 pty_sess = PtySession()
                 live.pty_session = pty_sess
@@ -514,18 +625,117 @@ class RemoteRuntimeHub:
 
         return self.get_session(session_id)
 
+    async def import_session(
+        self,
+        *,
+        external_session_id: str,
+        harness: str,
+        cwd: str,
+        title: str = "",
+        permission_mode: str | None = None,
+        model: str | None = None,
+        fork_session: bool = False,
+        create_worktree: bool = False,
+        driver_mode: str = "auto",
+        server_url: str | None = None,
+    ) -> dict[str, Any]:
+        settings = self._require_enabled()
+        roots = _parse_allowed_dirs(settings.rc_allowed_dirs)
+        if not cwd or not cwd.strip():
+            raise RemoteForbiddenError(
+                "Discovered session has no workspace directory inside RC_ALLOWED_DIRS"
+            )
+        if not is_within_allowed_roots(Path(cwd).expanduser(), roots):
+            raise RemoteForbiddenError(
+                "Discovered session workspace is outside RC_ALLOWED_DIRS"
+            )
+        return await self.create_session(
+            harness=harness,
+            cwd=cwd,
+            title=title,
+            permission_mode=permission_mode,
+            model=model,
+            create_worktree=create_worktree,
+            driver_mode=driver_mode,
+            external_session_id=external_session_id,
+            fork_session=fork_session,
+            server_url=server_url,
+        )
+
+    async def ensure_pty(
+        self, session_id: str, *, cols: int = 120, rows: int = 36
+    ) -> dict[str, Any]:
+        settings = self._require_enabled()
+        rec = self.get_session(session_id)
+        live = self._sessions.get(session_id)
+        if live is None:
+            raise RemoteNotFoundError(f"Active session {session_id!r} not found")
+        if live.pty_session is not None:
+            return rec
+
+        argv = self._build_pty_argv(
+            str(rec["harness"]),
+            model=str(rec.get("model") or "") or None,
+            external_session_id=str(rec.get("external_session_id") or "") or None,
+            server_url=str(rec.get("server_url") or "") or None,
+            fallback_shell=True,
+        )
+        env = self._build_pty_env(settings, session_id=session_id)
+        pty_sess = PtySession()
+        live.pty_session = pty_sess
+
+        def _on_pty_exit(rc: int) -> None:
+            if live.driver is None:
+                self._store.update_session(session_id, status="exited", pid=None)
+            asyncio.create_task(
+                self._emit(session_id, "terminal.exited", {"returncode": rc})
+            )
+
+        await pty_sess.spawn(
+            argv,
+            cwd=str(rec["cwd"]),
+            env=env,
+            cols=cols,
+            rows=rows,
+            on_exit=_on_pty_exit,
+        )
+        return self.get_session(session_id)
+
     def _build_pty_argv(
-        self, harness: str, *, model: str | None = None, prompt: str = ""
+        self,
+        harness: str,
+        *,
+        model: str | None = None,
+        prompt: str = "",
+        external_session_id: str | None = None,
+        server_url: str | None = None,
+        fallback_shell: bool = False,
     ) -> list[str]:
         if harness == "terminal":
             return _default_shell_argv()
         spec = harness_spec(harness)
         binary = shutil.which(spec.binary)
         if binary is None:
+            if fallback_shell:
+                return _default_shell_argv()
             raise RemoteControlError(
                 f"Harness binary {spec.binary!r} is not installed on PATH"
             )
+        if harness in {"opencode", "kilo"} and server_url:
+            argv = [binary, "attach", server_url]
+            if external_session_id:
+                argv.extend(["--session", external_session_id])
+            return argv
+        if harness == "opencode2" and server_url:
+            argv = [binary, "--server", server_url]
+            if external_session_id:
+                argv.extend(["--session", external_session_id])
+            return argv
+        if harness == "codex" and external_session_id:
+            return [binary, "resume", external_session_id]
         argv = [binary]
+        if harness == "claude" and external_session_id:
+            argv.extend(["--resume", external_session_id])
         if model and model.strip() and harness == "claude":
             argv.extend(["--model", model.strip()])
         if prompt.strip() and harness == "claude":
@@ -552,8 +762,8 @@ class RemoteRuntimeHub:
         live = self._sessions.get(session_id)
         if live is None:
             raise RemoteNotFoundError(f"Active session {session_id!r} not found")
-        if live.claude_driver is not None:
-            await live.claude_driver.send_user_message(text)
+        if live.driver is not None:
+            await live.driver.send_user_message(text)
             return self.get_session(session_id)
         if live.pty_session is not None:
             await live.pty_session.write((text.rstrip("\r\n") + "\r").encode("utf-8"))
@@ -572,12 +782,12 @@ class RemoteRuntimeHub:
     ) -> dict[str, Any]:
         self._require_enabled()
         live = self._sessions.get(session_id)
-        if live is None or live.claude_driver is None:
+        if live is None or live.driver is None:
             raise RemoteNotFoundError(
                 f"Active structured session {session_id!r} not found"
             )
         try:
-            await live.claude_driver.resolve_approval(
+            await live.driver.resolve_approval(
                 approval_id,
                 decision=decision,
                 updated_input=updated_input,
@@ -604,8 +814,8 @@ class RemoteRuntimeHub:
         live = self._sessions.get(session_id)
         if live is None:
             raise RemoteNotFoundError(f"Active session {session_id!r} not found")
-        if live.claude_driver is not None:
-            await live.claude_driver.set_permission_mode(normalized)
+        if live.driver is not None:
+            await live.driver.set_permission_mode(normalized)
         else:
             self._store.update_session(session_id, permission_mode=normalized)
             await self._emit(
@@ -618,8 +828,8 @@ class RemoteRuntimeHub:
         live = self._sessions.get(session_id)
         if live is None:
             raise RemoteNotFoundError(f"Active session {session_id!r} not found")
-        if live.claude_driver is not None:
-            await live.claude_driver.set_model(model)
+        if live.driver is not None:
+            await live.driver.set_model(model)
         else:
             self._store.update_session(session_id, model=model.strip())
         return self.get_session(session_id)
@@ -629,8 +839,8 @@ class RemoteRuntimeHub:
         live = self._sessions.get(session_id)
         if live is None:
             raise RemoteNotFoundError(f"Active session {session_id!r} not found")
-        if live.claude_driver is not None:
-            await live.claude_driver.interrupt()
+        if live.driver is not None:
+            await live.driver.interrupt()
         elif live.pty_session is not None:
             await live.pty_session.send_signal("SIGINT")
         return self.get_session(session_id)
@@ -643,6 +853,27 @@ class RemoteRuntimeHub:
             raise RemoteConflictError(
                 "Parent session has no external_session_id yet to fork from"
             )
+        live = self._sessions.get(session_id)
+        if live is not None and live.driver is not None:
+            native_fork = await live.driver.fork_session(title=title)
+            if isinstance(native_fork, dict):
+                thread_obj = native_fork.get("thread")
+                forked_id = str(
+                    native_fork.get("id")
+                    or (thread_obj.get("id") if isinstance(thread_obj, dict) else "")
+                    or ""
+                )
+                if forked_id:
+                    return await self.create_session(
+                        harness=str(parent["harness"]),
+                        cwd=str(parent["cwd"]),
+                        title=title or f"{parent['title']} (fork)",
+                        permission_mode=str(parent["permission_mode"]),
+                        model=str(parent.get("model") or ""),
+                        external_session_id=forked_id,
+                        fork_session=False,
+                        server_url=str(parent.get("server_url") or "") or None,
+                    )
         return await self.create_session(
             harness=str(parent["harness"]),
             cwd=str(parent["cwd"]),
@@ -662,8 +893,8 @@ class RemoteRuntimeHub:
         self.get_session(session_id)
         live = self._sessions.get(session_id)
         if live is not None:
-            if live.claude_driver is not None:
-                await live.claude_driver.close()
+            if live.driver is not None:
+                await live.driver.close()
             if live.pty_session is not None:
                 await live.pty_session.close()
         self._store.update_session(session_id, status="stopped", pid=None)
@@ -674,8 +905,8 @@ class RemoteRuntimeHub:
         self._require_enabled()
         live = self._sessions.pop(session_id, None)
         if live is not None:
-            if live.claude_driver is not None:
-                await live.claude_driver.close()
+            if live.driver is not None:
+                await live.driver.close()
             if live.pty_session is not None:
                 await live.pty_session.close()
             if live.repo_root is not None and live.worktree_path is not None:
@@ -742,9 +973,9 @@ class RemoteRuntimeHub:
             live = self._sessions.pop(session_id, None)
             if live is None:
                 continue
-            if live.claude_driver is not None:
+            if live.driver is not None:
                 with contextlib.suppress(Exception):
-                    await live.claude_driver.close()
+                    await live.driver.close()
             if live.pty_session is not None:
                 with contextlib.suppress(Exception):
                     await live.pty_session.close()

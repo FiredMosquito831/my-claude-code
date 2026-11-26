@@ -87,6 +87,8 @@ class RemoteStore:
                 model TEXT NOT NULL DEFAULT '',
                 provider_id TEXT NOT NULL DEFAULT '',
                 external_session_id TEXT NOT NULL DEFAULT '',
+                server_url TEXT NOT NULL DEFAULT '',
+                attach_hint TEXT NOT NULL DEFAULT '',
                 pid INTEGER,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
@@ -120,6 +122,18 @@ class RemoteStore:
                 ON rc_approvals (session_id, status);
             """
         )
+        cols = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(rc_sessions)").fetchall()
+        }
+        if "server_url" not in cols:
+            conn.execute(
+                "ALTER TABLE rc_sessions ADD COLUMN server_url TEXT NOT NULL DEFAULT ''"
+            )
+        if "attach_hint" not in cols:
+            conn.execute(
+                "ALTER TABLE rc_sessions ADD COLUMN attach_hint TEXT NOT NULL DEFAULT ''"
+            )
         conn.commit()
 
     def close(self) -> None:
@@ -140,8 +154,9 @@ class RemoteStore:
                 INSERT INTO rc_sessions (
                     id, harness, driver_tier, title, cwd, worktree_path,
                     branch_name, permission_mode, status, model, provider_id,
-                    external_session_id, pid, created_at, updated_at, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    external_session_id, server_url, attach_hint,
+                    pid, created_at, updated_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"],
@@ -156,6 +171,8 @@ class RemoteStore:
                     record.get("model", ""),
                     record.get("provider_id", ""),
                     record.get("external_session_id", ""),
+                    record.get("server_url", ""),
+                    record.get("attach_hint", ""),
                     record.get("pid"),
                     record["created_at"],
                     record["updated_at"],
@@ -181,6 +198,8 @@ class RemoteStore:
             "model",
             "provider_id",
             "external_session_id",
+            "server_url",
+            "attach_hint",
             "pid",
             "updated_at",
             "last_error",
