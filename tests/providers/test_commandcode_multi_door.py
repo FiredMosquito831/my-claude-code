@@ -53,6 +53,7 @@ from my_claude_code.providers.openai_chat import (
     surface_profile_for,
 )
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import learned_fact_store
 from tests.api.support import create_test_app, provider_manager_for_app
 
 
@@ -299,21 +300,25 @@ def test_derived_cache_fallback_provides_declared_http_surfaces(
 
 
 def test_commandcode_profile_contract_and_reasoning_field_preserved() -> None:
-    """M3 target: CommandCode declares Chat + Responses, optimistic=False, reasoning_content kept."""
+    """M1/M2/M3 target: CommandCode speaks Chat/Responses/Messages, unsigned/think-tags on."""
 
     assert surface_profile_for("commandcode") is COMMANDCODE_CHAT_PROFILE
     assert speakable_surfaces("commandcode") == (
         ResponseSurface.CHAT_COMPLETIONS,
         ResponseSurface.RESPONSES,
+        ResponseSurface.MESSAGES,
     )
     assert _COMMANDCODE_PROFILE.response_surfaces == (
         ResponseSurface.CHAT_COMPLETIONS,
         ResponseSurface.RESPONSES,
+        ResponseSurface.MESSAGES,
     )
     assert (
         _COMMANDCODE_PROFILE.no_information_surface is ResponseSurface.CHAT_COMPLETIONS
     )
     assert _COMMANDCODE_PROFILE.optimistic_first_try is False
+    assert _COMMANDCODE_PROFILE.messages_signs_thinking is False
+    assert _COMMANDCODE_PROFILE.messages_extract_think_tags is True
     assert _COMMANDCODE_PROFILE.reasoning_delta_field == "reasoning_content"
     assert (
         _COMMANDCODE_PROFILE.request_policy.reasoning_replay
@@ -611,3 +616,401 @@ def test_commandcode_preferred_surface_and_harness_surfaces_admin_apis_return_20
     # Cleanup override file cleanly
     save_model_overrides(ModelParameterOverrides())
     assert response_surface_payload("commandcode", "claude-sonnet-5") is None
+
+
+def test_commandcode_triple_door_ladder_and_preferred_surface_rung_1() -> None:
+    """M1/M4 target: triple-door resolves MESSAGES->RESPONSES->CHAT for Anthropic."""
+
+    infos = extract_commandcode_model_infos(
+        {
+            "data": [
+                {
+                    "id": "deepseek/deepseek-v4.1-flash",
+                    "context_length": 1_000_000,
+                    "supported_endpoints": [
+                        "/chat/completions",
+                        "/messages",
+                        "/responses",
+                    ],
+                },
+                {
+                    "id": "claude-sonnet-5",
+                    "context_length": 1_000_000,
+                    "supported_endpoints": ["/messages"],
+                },
+            ]
+        },
+        provider_name="COMMANDCODE",
+    )
+    set_declared_endpoints_snapshot({"commandcode": infos})
+
+    anthropic_ladder = resolve_surface_ladder(
+        "commandcode",
+        "deepseek/deepseek-v4.1-flash",
+        client_family=ClientFamily.ANTHROPIC,
+        declared=_COMMANDCODE_PROFILE.response_surfaces,
+        no_information=_COMMANDCODE_PROFILE.no_information_surface,
+        optimistic=_COMMANDCODE_PROFILE.optimistic_first_try,
+    )
+    assert [c.surface for c in anthropic_ladder.candidates] == [
+        ResponseSurface.MESSAGES,
+        ResponseSurface.RESPONSES,
+        ResponseSurface.CHAT_COMPLETIONS,
+    ]
+    assert all(
+        c.source is ResponseSurfaceSource.REGISTRY for c in anthropic_ladder.candidates
+    )
+
+    openai_ladder = resolve_surface_ladder(
+        "commandcode",
+        "deepseek/deepseek-v4.1-flash",
+        client_family=ClientFamily.OPENAI,
+        declared=_COMMANDCODE_PROFILE.response_surfaces,
+        no_information=_COMMANDCODE_PROFILE.no_information_surface,
+        optimistic=_COMMANDCODE_PROFILE.optimistic_first_try,
+    )
+    assert [c.surface for c in openai_ladder.candidates][:2] == [
+        ResponseSurface.RESPONSES,
+        ResponseSurface.CHAT_COMPLETIONS,
+    ]
+
+    # Models page (ClientFamily.UNKNOWN) preserves discovery order; Claude stays excluded.
+    page_triple = catalogue_surface("commandcode", "deepseek/deepseek-v4.1-flash")
+    assert page_triple is not None
+    assert page_triple.surface is ResponseSurface.CHAT_COMPLETIONS
+    assert [
+        c.surface
+        for c in catalogue_discovered_surfaces(
+            "commandcode", "deepseek/deepseek-v4.1-flash"
+        )
+    ] == [
+        ResponseSurface.CHAT_COMPLETIONS,
+        ResponseSurface.MESSAGES,
+        ResponseSurface.RESPONSES,
+    ]
+    assert commandcode_uses_anthropic_messages("claude-sonnet-5") is True
+    assert catalogue_surface("commandcode", "claude-sonnet-5") is None
+
+    # Explicit preferred_surface override wins at Rung 1.
+    try:
+        for pref, expected_first in (
+            ("responses", ResponseSurface.RESPONSES),
+            ("chat_completions", ResponseSurface.CHAT_COMPLETIONS),
+            ("messages", ResponseSurface.MESSAGES),
+        ):
+            save_model_overrides(
+                ModelParameterOverrides(
+                    models={
+                        "commandcode/deepseek/deepseek-v4.1-flash": {
+                            "preferred_surface": pref
+                        }
+                    }
+                )
+            )
+            overridden = resolve_surface_ladder(
+                "commandcode",
+                "deepseek/deepseek-v4.1-flash",
+                client_family=ClientFamily.ANTHROPIC,
+                declared=_COMMANDCODE_PROFILE.response_surfaces,
+                no_information=_COMMANDCODE_PROFILE.no_information_surface,
+                optimistic=_COMMANDCODE_PROFILE.optimistic_first_try,
+            )
+            assert overridden.primary.surface is expected_first
+            assert overridden.primary.source is ResponseSurfaceSource.REGISTRY
+            assert len(overridden.candidates) == 3
+    finally:
+        save_model_overrides(ModelParameterOverrides())
+
+
+@pytest.mark.asyncio
+async def test_commandcode_triple_door_messages_first_fallback_and_overrides() -> None:
+    """Triple-door /v1/messages tries /messages first, falls back, and honors pins."""
+
+    set_declared_endpoints_snapshot(
+        {
+            "commandcode": (
+                ProviderModelInfo(
+                    model_id="deepseek/deepseek-v4.1-flash",
+                    declared=ProviderModelDeclaration(
+                        endpoints=("/chat/completions", "/messages", "/responses")
+                    ),
+                ),
+            )
+        }
+    )
+
+    # 1. Auto under /v1/messages hits /provider/v1/messages FIRST with gateway auth + reasoning.
+    provider = _provider()
+    seen_requests: list[tuple[str, dict[str, str], dict[str, Any]]] = []
+
+    def ok_messages_handler(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.content)
+        seen_requests.append((req.url.path, dict(req.headers), body))
+        return _messages_sse("ok-messages")
+
+    mock_http = httpx.AsyncClient(transport=httpx.MockTransport(ok_messages_handler))
+    provider._openai._messages._provider._client = mock_http
+    try:
+        with client_family_scope("messages"):
+            chunks = await _drain(
+                provider.stream_response(
+                    _request("deepseek/deepseek-v4.1-flash"),
+                    reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+                )
+            )
+    finally:
+        await provider.cleanup()
+        await mock_http.aclose()
+
+    assert len(seen_requests) == 1
+    path, headers, sent_body = seen_requests[0]
+    assert path == "/provider/v1/messages"
+    assert headers.get("authorization") == "Bearer user_secret_commandcode_key"
+    assert headers.get("x-api-key") == "user_secret_commandcode_key"
+    assert headers.get("anthropic-version")
+    assert sent_body.get("thinking", {}).get("type") == "adaptive"
+    assert sent_body.get("output_config", {}).get("effort") == "max"
+    assert any("ok-messages" in chunk for chunk in chunks)
+
+    # 2. Same-attempt fallback: /messages 400 -> /responses 400 -> /chat/completions 200.
+    provider2 = _provider()
+    seen_paths2: list[str] = []
+
+    def triple_fallback_handler(req: httpx.Request) -> httpx.Response:
+        seen_paths2.append(req.url.path)
+        if req.url.path.endswith("/messages"):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "Use /responses for this model"}},
+            )
+        if req.url.path.endswith("/responses"):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "Use /chat/completions for this model"}},
+            )
+        return _chat_sse("triple-fallback-chat", "reasoned-on-chat")
+
+    mock_http2 = httpx.AsyncClient(
+        transport=httpx.MockTransport(triple_fallback_handler)
+    )
+    provider2._openai._messages._provider._client = mock_http2
+    provider2._openai._responses._client = mock_http2
+    provider2._openai._client._client = mock_http2
+    try:
+        with client_family_scope("messages"):
+            chunks2 = await _drain(
+                provider2.stream_response(
+                    _request("deepseek/deepseek-v4.1-flash"),
+                    reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+                )
+            )
+    finally:
+        await provider2.cleanup()
+        await mock_http2.aclose()
+
+    assert seen_paths2 == [
+        "/provider/v1/messages",
+        "/provider/v1/responses",
+        "/provider/v1/chat/completions",
+    ]
+    joined2 = "".join(chunks2)
+    assert "triple-fallback-chat" in joined2
+    assert "reasoned-on-chat" in joined2
+
+    # Forget learned surface facts from the fallback test before testing Rung 1 pins.
+    learned_fact_store().forget("commandcode", "deepseek/deepseek-v4.1-flash")
+
+    # 3. Explicit preferred_surface="responses" and "chat_completions" override at Rung 1.
+    for pref, expected_path, marker in (
+        ("responses", "/provider/v1/responses", "pinned-resp"),
+        ("chat_completions", "/provider/v1/chat/completions", "pinned-chat"),
+    ):
+        try:
+            save_model_overrides(
+                ModelParameterOverrides(
+                    models={
+                        "commandcode/deepseek/deepseek-v4.1-flash": {
+                            "preferred_surface": pref
+                        }
+                    }
+                )
+            )
+            provider3 = _provider()
+            seen3: list[str] = []
+
+            def pinned_handler(
+                req: httpx.Request,
+                *,
+                _marker: str = marker,
+                _seen: list[str] = seen3,
+            ) -> httpx.Response:
+                _seen.append(req.url.path)
+                if req.url.path.endswith("/responses"):
+                    return _responses_sse(_marker)
+                return _chat_sse(_marker)
+
+            mock_http3 = httpx.AsyncClient(
+                transport=httpx.MockTransport(pinned_handler)
+            )
+            provider3._openai._responses._client = mock_http3
+            provider3._openai._client._client = mock_http3
+            try:
+                with client_family_scope("messages"):
+                    chunks3 = await _drain(
+                        provider3.stream_response(
+                            _request("deepseek/deepseek-v4.1-flash"),
+                            reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+                        )
+                    )
+            finally:
+                await provider3.cleanup()
+                await mock_http3.aclose()
+
+            assert seen3 == [expected_path]
+            assert any(marker in chunk for chunk in chunks3)
+        finally:
+            save_model_overrides(ModelParameterOverrides())
+
+
+@pytest.mark.asyncio
+async def test_commandcode_messages_unsigned_thinking_and_think_tag_extraction() -> (
+    None
+):
+    """M2 & M3 targets: unsigned thinking history replays and <think> tags extract."""
+
+    set_declared_endpoints_snapshot(
+        {
+            "commandcode": (
+                ProviderModelInfo(
+                    model_id="deepseek/deepseek-v4.1-flash",
+                    declared=ProviderModelDeclaration(
+                        endpoints=("/chat/completions", "/messages", "/responses")
+                    ),
+                ),
+            )
+        }
+    )
+
+    provider = _provider()
+    captured_bodies: list[dict[str, Any]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured_bodies.append(json.loads(req.content))
+        frames = [
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_think_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": "deepseek/deepseek-v4.1-flash",
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "text_delta",
+                    "text": "<think>step by step</think>final visible reply",
+                },
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 4},
+            },
+            {"type": "message_stop"},
+        ]
+        payload = "".join(
+            f"event: {item['type']}\ndata: {json.dumps(item)}\n\n" for item in frames
+        ).encode("utf-8")
+        return _sse_stream(payload)
+
+    mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider._openai._messages._provider._client = mock_http
+
+    multi_turn = MessagesRequest.model_validate(
+        {
+            "model": "deepseek/deepseek-v4.1-flash",
+            "max_tokens": 256,
+            "stream": True,
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "unsigned prior reasoning"},
+                        {"type": "text", "text": "prior reply"},
+                    ],
+                },
+                {"role": "user", "content": "next"},
+            ],
+        }
+    )
+
+    try:
+        with client_family_scope("messages"):
+            chunks = await _drain(
+                provider.stream_response(
+                    multi_turn,
+                    reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX),
+                )
+            )
+    finally:
+        await provider.cleanup()
+        await mock_http.aclose()
+
+    assert len(captured_bodies) == 1
+    sent = captured_bodies[0]
+    assistant_msg = next(m for m in sent["messages"] if m["role"] == "assistant")
+    assert any(
+        block.get("type") == "thinking"
+        and block.get("thinking") == "unsigned prior reasoning"
+        for block in assistant_msg["content"]
+    )
+
+    sse = "".join(chunks)
+    assert '"type": "thinking_delta"' in sse or '"type":"thinking_delta"' in sse
+    assert "step by step" in sse
+    assert "final visible reply" in sse
+    assert "<think>" not in sse
+
+
+@pytest.mark.asyncio
+async def test_commandcode_pure_messages_and_claude_delegate_to_anthropic() -> None:
+    """M4 target: pure-/messages and cold-start claude-* stay on _anthropic."""
+
+    provider = _provider()
+    try:
+        assert provider._delegate("claude-sonnet-5") is provider._anthropic
+
+        set_declared_endpoints_snapshot(
+            {
+                "commandcode": (
+                    ProviderModelInfo(
+                        model_id="claude-sonnet-5",
+                        declared=ProviderModelDeclaration(endpoints=("/messages",)),
+                    ),
+                    ProviderModelInfo(
+                        model_id="deepseek/deepseek-v4.1-flash",
+                        declared=ProviderModelDeclaration(
+                            endpoints=("/chat/completions", "/messages", "/responses")
+                        ),
+                    ),
+                )
+            }
+        )
+        assert provider._delegate("claude-sonnet-5") is provider._anthropic
+        assert provider._delegate("deepseek/deepseek-v4.1-flash") is provider._openai
+    finally:
+        await provider.cleanup()

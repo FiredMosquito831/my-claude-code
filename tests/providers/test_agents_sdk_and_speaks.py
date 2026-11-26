@@ -260,11 +260,11 @@ def test_harness_surfaces_api_accepts_sdk_harnesses_and_keeps_all_doors_q8(
     for sdk_id in SDK_HARNESS_IDS:
         assert sdk_id in payload["harnesses"]
 
-    # Q8: commandcode exposes BOTH chat_completions and responses regardless of agent speaks.
+    # Q8: commandcode exposes all three doors regardless of agent speaks.
     providers_by_id = {p["provider_id"]: p for p in payload["providers"]}
     assert "commandcode" in providers_by_id
     cc_doors = [opt["value"] for opt in providers_by_id["commandcode"]["offered"]]
-    assert cc_doors == ["chat_completions", "responses"]
+    assert cc_doors == ["chat_completions", "responses", "messages"]
 
     # Save claude_agent_sdk -> commandcode = chat_completions -> 200!
     post_resp = client.post(

@@ -279,6 +279,7 @@ def test_provider_endpoint_summary_filters_capability_words_and_maps_single_door
     assert [item["value"] for item in cc["surface_preference"]["offered"]] == [
         "chat_completions",
         "responses",
+        "messages",
     ]
     assert cc["observed"][0]["surface"] == "responses"
     assert cc["observed"][0]["count"] == 3

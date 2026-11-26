@@ -1346,9 +1346,11 @@ _COMMANDCODE_EFFORTS = (
 # ``delta.reasoning_content`` (2,035/2,035 vs 0 ``delta.reasoning``), so
 # ``reasoning_replay=REASONING_CONTENT`` and ``reasoning_delta_field="reasoning_content"``
 # are preserved. ``optimistic_first_try=False`` keeps cold starts without
-# ``/models`` on ``CHAT_COMPLETIONS`` byte-identical, while dual-door models
-# declaring ``("/chat/completions", "/responses")`` in ``/models`` route across
-# both doors.
+# ``/models`` on ``CHAT_COMPLETIONS`` byte-identical, while multi-door models
+# declaring ``("/chat/completions", "/messages", "/responses")`` in ``/models``
+# route across all three doors (``MESSAGES -> RESPONSES -> CHAT_COMPLETIONS``
+# for ``/v1/messages`` callers) and pure-``/messages`` / ``claude-*`` models
+# remain on ``CommandCodeProvider._anthropic`` via ``surface_excluded_model``.
 COMMANDCODE_CHAT_PROFILE = OpenAIChatProfile(
     _policy(
         "COMMANDCODE",
@@ -1362,9 +1364,12 @@ COMMANDCODE_CHAT_PROFILE = OpenAIChatProfile(
     response_surfaces=(
         ResponseSurface.CHAT_COMPLETIONS,
         ResponseSurface.RESPONSES,
+        ResponseSurface.MESSAGES,
     ),
     no_information_surface=ResponseSurface.CHAT_COMPLETIONS,
     optimistic_first_try=False,
+    messages_signs_thinking=False,
+    messages_extract_think_tags=True,
     surface_excluded_model=is_commandcode_messages_model,
 )
 
