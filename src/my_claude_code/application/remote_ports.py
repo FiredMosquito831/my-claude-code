@@ -117,6 +117,10 @@ class RemoteSessionPort(Protocol):
         self, session_id: str, *, cols: int = 120, rows: int = 36
     ) -> dict[str, Any]: ...
 
+    async def switch_to_pty(
+        self, session_id: str, *, cols: int = 120, rows: int = 36
+    ) -> dict[str, Any]: ...
+
     async def send_message(self, session_id: str, text: str) -> dict[str, Any]: ...
 
     async def resolve_approval(

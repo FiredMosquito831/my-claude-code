@@ -138,8 +138,33 @@
         return "Tier 1A · Codex";
       case "tier_1a_openclaw":
         return "Tier 1A · OpenClaw";
+      case "tier_2_acp":
+        return "Tier 2 · ACP";
+      case "tier_2_pi_rpc":
+        return "Tier 2 · RPC";
+      case "tier_2_commandcode":
+        return "Tier 2 · JSON";
       default:
         return "Tier 3 · PTY";
+    }
+  }
+
+  function harnessTierShortLabel(tier) {
+    switch (tier) {
+      case "tier_1a_opencode":
+      case "tier_1a_codex":
+      case "tier_1a_openclaw":
+        return "Tier 1A";
+      case "tier_1b_claude":
+        return "Tier 1B";
+      case "tier_2_acp":
+        return "Tier 2 ACP";
+      case "tier_2_pi_rpc":
+        return "Tier 2 RPC";
+      case "tier_2_commandcode":
+        return "Tier 2 JSON";
+      default:
+        return "Tier 3 PTY";
     }
   }
 
@@ -324,6 +349,23 @@
       state.streamingThinkingEl = null;
       refreshActiveMeta().catch(() => {});
     } else if (kind === "session.mode_changed" || kind === "session.state" || kind === "session.exited") {
+      if (payload.recommend_pty && state.activeSession && isStructuredTier(state.activeSession.driver_tier)) {
+        addTimelineEntry("rc-alert rc-alert-warn", (node) => {
+          const msg = document.createElement("span");
+          msg.textContent = String(
+            payload.message || "Switch to Interactive TUI (PTY) to approve tools."
+          );
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "rc-btn rc-btn-primary";
+          btn.textContent = "Open Interactive TUI (PTY)";
+          btn.addEventListener("click", () => {
+            switchToInteractivePty().catch(() => {});
+          });
+          node.appendChild(msg);
+          node.appendChild(btn);
+        });
+      }
       refreshActiveMeta().catch(() => {});
     } else if (kind === "session.error") {
       addTimelineEntry("rc-alert rc-alert-error", (node) => {
@@ -398,6 +440,10 @@
       attachBadge.hidden = true;
     }
     el("btnSwitchTerminal").hidden = !isStructuredTier(sess.driver_tier);
+    const tabSwitchBar = el("terminalSwitchBar");
+    if (tabSwitchBar) {
+      tabSwitchBar.hidden = !isStructuredTier(sess.driver_tier);
+    }
     el("btnForkSession").hidden = !sess.external_session_id;
   }
 
@@ -600,7 +646,7 @@
     state.harnesses.forEach((h) => {
       const opt = document.createElement("option");
       opt.value = h.id;
-      const tierLabel = isStructuredTier(h.driver_tier) ? "Structured" : "PTY";
+      const tierLabel = harnessTierShortLabel(h.driver_tier);
       const installed = h.installed ? "" : " (not found)";
       opt.textContent = `${h.label} [${tierLabel}]${installed}`;
       select.appendChild(opt);
@@ -835,9 +881,32 @@
     });
   });
 
-  el("btnSwitchTerminal").addEventListener("click", () => {
+  async function switchToInteractivePty() {
+    if (!state.activeSessionId) return;
+    const cols = (state.term && state.term.cols) || 120;
+    const rows = (state.term && state.term.rows) || 36;
+    const resp = await apiJson(`/rc/api/sessions/${state.activeSessionId}/switch-pty`, {
+      method: "POST",
+      body: { cols, rows },
+    });
+    if (resp && resp.session) {
+      state.activeSession = resp.session;
+    }
+    renderActiveSessionHeader();
+    renderMetaTab();
+    await loadInitialWorkspace();
     setActiveTab("terminal");
+  }
+
+  el("btnSwitchTerminal").addEventListener("click", () => {
+    switchToInteractivePty().catch(() => {});
   });
+
+  if (el("btnTabSwitchPty")) {
+    el("btnTabSwitchPty").addEventListener("click", () => {
+      switchToInteractivePty().catch(() => {});
+    });
+  }
 
   el("btnCloseDialog").addEventListener("click", () => {
     el("newSessionDialog").close();

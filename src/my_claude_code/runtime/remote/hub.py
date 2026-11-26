@@ -21,13 +21,22 @@ from my_claude_code.application.remote_ports import (
 )
 from my_claude_code.cli.claude_env import build_claude_proxy_env
 from my_claude_code.config.constants import RC_PERMISSION_MODE_VALUES
-from my_claude_code.config.harnesses import HARNESS_SPECS, harness_spec
+from my_claude_code.config.harnesses import (
+    COMMANDCODE_API_KEY_ENV,
+    DROID_API_KEY_ENV,
+    HARNESS_SPECS,
+    HERMES_API_KEY_ENV,
+    QWEN_API_KEY_ENV,
+    harness_spec,
+)
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 
+from .acp_driver import ACP_HARNESSES, AcpSessionDriver
 from .claude_driver import ClaudeBidirectionalDriver
 from .codex_driver import CodexAppServerDriver
+from .commandcode_driver import CommandCodeStructuredDriver
 from .discovery import discover_local_sessions, is_within_allowed_roots
 from .drivers import StructuredDriver
 from .git_workspace import (
@@ -38,6 +47,7 @@ from .git_workspace import (
 )
 from .openclaw_driver import OpenClawGatewayDriver
 from .opencode_driver import OPENCODE_FAMILY_HARNESSES, OpenCodeFamilyDriver
+from .pi_driver import PiRpcDriver
 from .pty_bridge import PtySession
 from .qr import render_qr_svg
 from .store import RemoteStore
@@ -54,6 +64,15 @@ _HARNESS_DRIVER_TIERS: dict[str, str] = {
     "kilo": "tier_1a_opencode",
     "codex": "tier_1a_codex",
     "openclaw": "tier_1a_openclaw",
+    "hermes": "tier_2_acp",
+    "gemini_cli": "tier_2_acp",
+    "qwen_code": "tier_2_acp",
+    "kimi_code": "tier_2_acp",
+    "cline_cli": "tier_2_acp",
+    "goose": "tier_2_acp",
+    "droid": "tier_2_acp",
+    "pi": "tier_2_pi_rpc",
+    "commandcode_cli": "tier_2_commandcode",
 }
 
 
@@ -444,6 +463,49 @@ class RemoteRuntimeHub:
                 on_approval_create=_on_approval,
                 on_state_update=_on_state,
             )
+        if harness in ACP_HARNESSES:
+            return AcpSessionDriver(
+                harness=harness,
+                session_id=session_id,
+                cwd=cwd,
+                proxy_root_url=proxy_root,
+                auth_token=auth_token,
+                permission_mode=permission_mode,
+                model=model,
+                external_session_id=external_session_id,
+                fork_session=fork_session,
+                on_event=_on_event,
+                on_approval_create=_on_approval,
+                on_state_update=_on_state,
+            )
+        if harness == "pi":
+            return PiRpcDriver(
+                session_id=session_id,
+                cwd=cwd,
+                proxy_root_url=proxy_root,
+                auth_token=auth_token,
+                permission_mode=permission_mode,
+                model=model,
+                external_session_id=external_session_id,
+                fork_session=fork_session,
+                on_event=_on_event,
+                on_approval_create=_on_approval,
+                on_state_update=_on_state,
+            )
+        if harness == "commandcode_cli":
+            return CommandCodeStructuredDriver(
+                session_id=session_id,
+                cwd=cwd,
+                proxy_root_url=proxy_root,
+                auth_token=auth_token,
+                permission_mode=permission_mode,
+                model=model,
+                external_session_id=external_session_id,
+                fork_session=fork_session,
+                on_event=_on_event,
+                on_approval_create=_on_approval,
+                on_state_update=_on_state,
+            )
         return None
 
     async def create_session(
@@ -701,6 +763,70 @@ class RemoteRuntimeHub:
         )
         return self.get_session(session_id)
 
+    async def switch_to_pty(
+        self, session_id: str, *, cols: int = 120, rows: int = 36
+    ) -> dict[str, Any]:
+        """Stop structured driver if active and resume session inside interactive PTY."""
+
+        settings = self._require_enabled()
+        self.get_session(session_id)
+        live = self._sessions.get(session_id)
+        if live is None:
+            raise RemoteNotFoundError(f"Active session {session_id!r} not found")
+
+        if live.driver is not None:
+            with contextlib.suppress(Exception):
+                await live.driver.close()
+            live.driver = None
+
+        rec = self.get_session(session_id)
+        if live.pty_session is None:
+            argv = self._build_pty_argv(
+                str(rec["harness"]),
+                model=str(rec.get("model") or "") or None,
+                external_session_id=str(rec.get("external_session_id") or "") or None,
+                server_url=str(rec.get("server_url") or "") or None,
+                fallback_shell=True,
+            )
+            env = self._build_pty_env(settings, session_id=session_id)
+            pty_sess = PtySession()
+            live.pty_session = pty_sess
+
+            def _on_pty_exit(rc: int) -> None:
+                self._store.update_session(session_id, status="exited", pid=None)
+                asyncio.create_task(
+                    self._emit(session_id, "session.exited", {"returncode": rc})
+                )
+
+            await pty_sess.spawn(
+                argv,
+                cwd=str(rec["cwd"]),
+                env=env,
+                cols=cols,
+                rows=rows,
+                on_exit=_on_pty_exit,
+            )
+
+        live.driver_tier = "tier_3_pty"
+        pid = live.pty_session.pid if live.pty_session is not None else None
+        self._store.update_session(
+            session_id,
+            driver_tier="tier_3_pty",
+            status="running",
+            pid=pid,
+        )
+        await self._emit(
+            session_id,
+            "session.state",
+            {
+                "status": "running",
+                "pid": pid,
+                "driver_tier": "tier_3_pty",
+                "switched_to_pty": True,
+            },
+        )
+        return self.get_session(session_id)
+
     def _build_pty_argv(
         self,
         harness: str,
@@ -734,25 +860,44 @@ class RemoteRuntimeHub:
         if harness == "codex" and external_session_id:
             return [binary, "resume", external_session_id]
         argv = [binary]
-        if harness == "claude" and external_session_id:
+        if (
+            harness in {"claude", "commandcode_cli", "gemini_cli", "hermes"}
+            and external_session_id
+        ):
             argv.extend(["--resume", external_session_id])
-        if model and model.strip() and harness == "claude":
+        elif harness == "pi" and external_session_id:
+            argv.extend(["--session", external_session_id])
+        if (
+            model
+            and model.strip()
+            and harness
+            in {"claude", "commandcode_cli", "gemini_cli", "pi", "qwen_code", "goose"}
+        ):
             argv.extend(["--model", model.strip()])
-        if prompt.strip() and harness == "claude":
+        if prompt.strip() and harness in {"claude", "commandcode_cli"}:
             argv.append(prompt.strip())
         return argv
 
     def _build_pty_env(self, settings: Settings, *, session_id: str) -> dict[str, str]:
         proxy_root = local_proxy_root_url(settings)
         token = settings.anthropic_auth_token
+        proxied_tok = proxy_auth_token(token)
         env = build_claude_proxy_env(
             proxy_root_url=proxy_root,
             auth_token=token,
             base_env=os.environ,
         )
         env["OPENAI_BASE_URL"] = f"{proxy_root}/v1"
-        env["OPENAI_API_KEY"] = proxy_auth_token(token)
+        env["OPENAI_API_KEY"] = proxied_tok
         env["GEMINI_API_BASE_URL"] = proxy_root
+        env["GOOGLE_GEMINI_BASE_URL"] = proxy_root
+        env["GEMINI_API_KEY"] = proxied_tok
+        env[COMMANDCODE_API_KEY_ENV] = proxied_tok
+        env[HERMES_API_KEY_ENV] = proxied_tok
+        env[QWEN_API_KEY_ENV] = proxied_tok
+        env[DROID_API_KEY_ENV] = proxied_tok
+        env["MCC_PI_BASE_URL"] = proxy_root
+        env["MCC_PI_API_KEY"] = proxied_tok
         env["MCC_RC_SESSION_ID"] = session_id
         env["TERM"] = "xterm-256color"
         return env

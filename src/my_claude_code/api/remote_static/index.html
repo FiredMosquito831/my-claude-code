@@ -125,7 +125,7 @@
                   <option value="yolo">YOLO (Bypass)</option>
                 </select>
                 <button id="btnSwitchTerminal" class="rc-btn rc-btn-ghost" type="button" hidden>
-                  Switch to Terminal
+                  Open Interactive TUI (PTY)
                 </button>
                 <button id="btnForkSession" class="rc-btn rc-btn-ghost" type="button">
                   Fork
@@ -181,6 +181,14 @@
             </div>
 
             <div id="tabTerminal" class="rc-tab-pane" hidden>
+              <div id="terminalSwitchBar" class="rc-terminal-head" hidden>
+                <span class="rc-muted">
+                  Structured driver active — hand off into live interactive TUI:
+                </span>
+                <button id="btnTabSwitchPty" class="rc-btn rc-btn-primary" type="button">
+                  Open Interactive TUI (PTY)
+                </button>
+              </div>
               <div id="ptyContainer" class="rc-pty-box"></div>
               <div class="rc-keybar" aria-label="Terminal keys">
                 <button class="rc-key" type="button" data-key="\u001b">Esc</button>
@@ -335,6 +343,12 @@
                 <option value="codex">Codex CLI</option>
                 <option value="openclaw">OpenClaw</option>
                 <option value="hermes">Hermes</option>
+                <option value="gemini_cli">Gemini CLI</option>
+                <option value="qwen_code">Qwen Code</option>
+                <option value="kimi_code">Kimi Code</option>
+                <option value="commandcode_cli">Command Code</option>
+                <option value="pi">Pi</option>
+                <option value="goose">Goose</option>
               </select>
               <select id="discoverModeSelect" class="rc-select" aria-label="Import permission mode">
                 <option value="ask">Ask</option>
