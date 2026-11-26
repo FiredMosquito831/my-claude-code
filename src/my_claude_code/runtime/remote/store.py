@@ -90,7 +90,9 @@ class RemoteStore:
                 external_session_id TEXT NOT NULL DEFAULT '',
                 server_url TEXT NOT NULL DEFAULT '',
                 attach_hint TEXT NOT NULL DEFAULT '',
+                origin TEXT NOT NULL DEFAULT '',
                 pid INTEGER,
+                sidecar_pid INTEGER,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL,
                 last_error TEXT NOT NULL DEFAULT ''
@@ -151,6 +153,12 @@ class RemoteStore:
             conn.execute(
                 "ALTER TABLE rc_sessions ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
             )
+        if "origin" not in cols:
+            conn.execute(
+                "ALTER TABLE rc_sessions ADD COLUMN origin TEXT NOT NULL DEFAULT ''"
+            )
+        if "sidecar_pid" not in cols:
+            conn.execute("ALTER TABLE rc_sessions ADD COLUMN sidecar_pid INTEGER")
         conn.commit()
 
     def close(self) -> None:
@@ -172,8 +180,8 @@ class RemoteStore:
                     id, harness, driver_tier, title, cwd, worktree_path,
                     branch_name, permission_mode, status, model, reasoning_effort,
                     provider_id, external_session_id, server_url, attach_hint,
-                    pid, created_at, updated_at, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    origin, pid, sidecar_pid, created_at, updated_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"],
@@ -191,7 +199,9 @@ class RemoteStore:
                     record.get("external_session_id", ""),
                     record.get("server_url", ""),
                     record.get("attach_hint", ""),
+                    record.get("origin", ""),
                     record.get("pid"),
+                    record.get("sidecar_pid"),
                     record["created_at"],
                     record["updated_at"],
                     record.get("last_error", ""),
@@ -220,7 +230,9 @@ class RemoteStore:
             "external_session_id",
             "server_url",
             "attach_hint",
+            "origin",
             "pid",
+            "sidecar_pid",
             "updated_at",
             "last_error",
         }

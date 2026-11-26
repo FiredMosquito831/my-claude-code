@@ -19,7 +19,7 @@ from my_claude_code.config.paths import mcp_media_claude_config_path
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
 
-from .common import preflight_proxy, run_client_process
+from .common import preflight_proxy, rc_launch_kwargs, run_client_process, strip_rc_flag
 
 HARNESS_ID = "claude"
 _DISCOVER_MODELS_FLAG = "--discover-models"
@@ -104,7 +104,7 @@ def _launch_claude(
 
     spec = spec_for(HARNESS_ID)
     binary_path = resolve_harness_binary(spec)
-    args = list(sys.argv[1:] if argv is None else argv)
+    rc_enabled, args = strip_rc_flag(list(sys.argv[1:] if argv is None else argv))
     run_client_process(
         command=build_claude_launcher_command(
             binary_path=binary_path,
@@ -120,6 +120,9 @@ def _launch_claude(
         binary_name=spec.binary,
         display_name=spec.display_name,
         install_hint=spec.install_hint,
+        **rc_launch_kwargs(
+            rc_enabled, harness_id=spec.id, proxy_root_url=proxy_root_url
+        ),
     )
 
 

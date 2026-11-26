@@ -21,6 +21,7 @@ from my_claude_code.application.remote_ports import (
     RemoteNotFoundError,
 )
 from my_claude_code.cli.claude_env import build_claude_proxy_env
+from my_claude_code.cli.process_registry import kill_pid_tree_best_effort
 from my_claude_code.config.constants import (
     RC_PERMISSION_MODE_VALUES,
     RC_REASONING_EFFORT_VALUES,
@@ -33,6 +34,7 @@ from my_claude_code.config.harnesses import (
     QWEN_API_KEY_ENV,
     harness_spec,
 )
+from my_claude_code.config.paths import rc_runtime_path, rc_sessions_db_path
 from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
@@ -55,6 +57,13 @@ from .opencode_driver import OPENCODE_FAMILY_HARNESSES, OpenCodeFamilyDriver
 from .pi_driver import PiRpcDriver
 from .pty_bridge import PtySession
 from .qr import render_qr_svg
+from .sidecar import (
+    SidecarPtyClient,
+    is_pid_alive,
+    read_rc_runtime,
+    remove_rc_runtime_entry,
+    upsert_rc_runtime_entry,
+)
 from .store import RemoteStore
 from .telemetry import collect_session_telemetry
 from .tunnels import TunnelManager
@@ -96,7 +105,7 @@ class _LiveSession:
     harness: str
     driver_tier: str
     driver: StructuredDriver | None = None
-    pty_session: PtySession | None = None
+    pty_session: PtySession | SidecarPtyClient | None = None
     repo_root: Path | None = None
     worktree_path: Path | None = None
 
@@ -214,7 +223,34 @@ class RemoteRuntimeHub:
             "tunnel_mode": settings.rc_tunnel_mode,
             "active_tunnel_mode": self._tunnels.active_mode(),
             "device_count": len(self._store.list_devices()),
+            "sidecar_count": len(self.list_sidecars()),
         }
+
+    def list_sidecars(self) -> list[dict[str, Any]]:
+        if not rc_runtime_path().is_file():
+            return []
+        entries = read_rc_runtime(prune_stale=True)
+        out: list[dict[str, Any]] = []
+        for sid, rec in entries.items():
+            out.append(
+                {
+                    "session_id": sid,
+                    "harness": str(rec.get("harness") or ""),
+                    "cwd": str(rec.get("cwd") or ""),
+                    "title": str(rec.get("title") or sid),
+                    "permission_mode": str(rec.get("permission_mode") or "ask"),
+                    "pid": rec.get("pid"),
+                    "sidecar_pid": rec.get("sidecar_pid"),
+                    "host": str(rec.get("host") or "127.0.0.1"),
+                    "port": rec.get("port"),
+                    "started_at": rec.get("started_at"),
+                    "origin": str(rec.get("origin") or "rc_server"),
+                    "connected": sid in self._sessions,
+                    "alive": is_pid_alive(rec.get("sidecar_pid")),
+                }
+            )
+        out.sort(key=lambda item: float(item.get("started_at") or 0.0), reverse=True)
+        return out
 
     async def inspect_tunnels(self) -> dict[str, Any]:
         return await self._tunnels.inspect(self.current_settings())
@@ -598,6 +634,7 @@ class RemoteRuntimeHub:
         server_url: str | None = None,
         cols: int = 120,
         rows: int = 36,
+        detached: bool = True,
     ) -> dict[str, Any]:
         settings = self._require_enabled()
         roots = _parse_allowed_dirs(settings.rc_allowed_dirs)
@@ -672,7 +709,9 @@ class RemoteRuntimeHub:
                     "external_session_id": (external_session_id or "").strip(),
                     "server_url": (server_url or "").strip(),
                     "attach_hint": "",
+                    "origin": "rc_server",
                     "pid": None,
+                    "sidecar_pid": None,
                     "created_at": now,
                     "updated_at": now,
                     "last_error": "",
@@ -723,35 +762,70 @@ class RemoteRuntimeHub:
                     server_url=server_url,
                 )
                 env = self._build_pty_env(settings, session_id=session_id)
-                pty_sess = PtySession()
-                live.pty_session = pty_sess
 
                 def _on_pty_exit(rc: int) -> None:
                     self._store.update_session(session_id, status="exited", pid=None)
-                    asyncio.create_task(
+                    self._spawn_bg(
                         self._emit(session_id, "session.exited", {"returncode": rc})
                     )
 
-                await pty_sess.spawn(
-                    argv,
-                    cwd=str(effective_cwd),
-                    env=env,
-                    cols=cols,
-                    rows=rows,
-                    on_exit=_on_pty_exit,
-                )
-                self._store.update_session(
-                    session_id, status="running", pid=pty_sess.pid
-                )
-                await self._emit(
-                    session_id,
-                    "session.state",
-                    {
-                        "status": "running",
-                        "pid": pty_sess.pid,
-                        "driver_tier": driver_tier,
-                    },
-                )
+                if detached:
+                    sidecar_client = await SidecarPtyClient.spawn(
+                        session_id=session_id,
+                        harness=harness,
+                        cwd=str(effective_cwd),
+                        title=session_title,
+                        permission_mode=chosen_mode,
+                        argv=argv,
+                        env=env,
+                        cols=cols,
+                        rows=rows,
+                        model=(model or "").strip(),
+                        driver_tier=driver_tier,
+                        origin="rc_server",
+                        on_exit=_on_pty_exit,
+                    )
+                    live.pty_session = sidecar_client
+                    self._store.update_session(
+                        session_id,
+                        status="running",
+                        pid=sidecar_client.pid,
+                        sidecar_pid=sidecar_client.sidecar_pid,
+                    )
+                    await self._emit(
+                        session_id,
+                        "session.state",
+                        {
+                            "status": "running",
+                            "pid": sidecar_client.pid,
+                            "sidecar_pid": sidecar_client.sidecar_pid,
+                            "driver_tier": driver_tier,
+                            "detached": True,
+                        },
+                    )
+                else:
+                    pty_sess = PtySession()
+                    live.pty_session = pty_sess
+                    await pty_sess.spawn(
+                        argv,
+                        cwd=str(effective_cwd),
+                        env=env,
+                        cols=cols,
+                        rows=rows,
+                        on_exit=_on_pty_exit,
+                    )
+                    self._store.update_session(
+                        session_id, status="running", pid=pty_sess.pid
+                    )
+                    await self._emit(
+                        session_id,
+                        "session.state",
+                        {
+                            "status": "running",
+                            "pid": pty_sess.pid,
+                            "driver_tier": driver_tier,
+                        },
+                    )
         except Exception as exc:
             self._store.update_session(
                 session_id, status="error", last_error=str(exc), pid=None
@@ -760,6 +834,303 @@ class RemoteRuntimeHub:
             raise RemoteControlError(f"Failed to start session: {exc}") from exc
 
         return self.get_session(session_id)
+
+    def _make_pty_exit_handler(self, session_id: str) -> Callable[[int], None]:
+        def _on_pty_exit(rc: int) -> None:
+            self._store.update_session(session_id, status="exited", pid=None)
+            self._spawn_bg(self._emit(session_id, "session.exited", {"returncode": rc}))
+
+        return _on_pty_exit
+
+    async def register_external_sidecar(
+        self,
+        *,
+        session_id: str,
+        harness: str,
+        cwd: str,
+        host: str,
+        port: int,
+        secret: str,
+        pid: int | None = None,
+        sidecar_pid: int | None = None,
+        title: str = "",
+        permission_mode: str | None = None,
+        model: str | None = None,
+        origin: str = "cli_rc",
+    ) -> dict[str, Any]:
+        settings = self._require_enabled()
+        roots = _parse_allowed_dirs(settings.rc_allowed_dirs)
+        if not cwd or not cwd.strip():
+            raise RemoteForbiddenError(
+                "Workspace directory is required. Add it to RC_ALLOWED_DIRS in Admin -> Remote Control."
+            )
+        candidate_cwd = Path(cwd).expanduser()
+        if not is_within_allowed_roots(candidate_cwd, roots):
+            raise RemoteForbiddenError(
+                f"Add {candidate_cwd} to RC_ALLOWED_DIRS in Admin -> Remote Control."
+            )
+        resolved_cwd = candidate_cwd.resolve()
+        if not resolved_cwd.is_dir():
+            raise RemoteNotFoundError(
+                f"Workspace directory does not exist: {resolved_cwd}"
+            )
+
+        clean_host = (host or "").strip().lower()
+        if clean_host not in {"127.0.0.1", "::1", "localhost"}:
+            raise RemoteForbiddenError("Sidecar host must be a loopback address")
+
+        chosen_mode = (
+            (permission_mode or settings.rc_permission_mode or "ask").strip().lower()
+        )
+        if chosen_mode not in RC_PERMISSION_MODE_VALUES:
+            raise RemoteForbiddenError(f"Invalid permission mode: {chosen_mode!r}")
+
+        valid_harnesses = {s.id for s in HARNESS_SPECS if s.available} | {"terminal"}
+        if harness not in valid_harnesses:
+            raise RemoteControlError(f"Unknown or unavailable harness: {harness!r}")
+
+        clean_session_id = session_id.strip()
+        if not clean_session_id:
+            raise RemoteControlError("session_id is required")
+
+        async with self._lock:
+            existing = self._store.get_session(clean_session_id)
+            if existing is None:
+                all_sessions = self._store.list_sessions()
+                active_count = sum(
+                    1 for s in all_sessions if s.get("status") in _ACTIVE_STATUSES
+                )
+                if active_count >= settings.rc_max_sessions:
+                    raise RemoteLimitError(
+                        f"Maximum active Remote Control sessions ({settings.rc_max_sessions}) reached"
+                    )
+
+            client = await SidecarPtyClient.connect(
+                session_id=clean_session_id,
+                host=clean_host,
+                port=int(port),
+                secret=secret,
+                sidecar_pid=sidecar_pid,
+                on_exit=self._make_pty_exit_handler(clean_session_id),
+            )
+            effective_pid = client.pid if client.pid is not None else pid
+            effective_sidecar_pid = (
+                client.sidecar_pid if client.sidecar_pid is not None else sidecar_pid
+            )
+            now = time.time()
+            session_title = (
+                title.strip() or f"{harness} — {resolved_cwd.name} (Live CLI)"
+            )
+            clean_origin = (origin or "cli_rc").strip() or "cli_rc"
+            attach_hint = (
+                "Live CLI · Dual-Sync" if clean_origin == "cli_rc" else "Detached PTY"
+            )
+
+            repo_root = await detect_git_root(resolved_cwd)
+            if existing is None:
+                self._store.create_session(
+                    {
+                        "id": clean_session_id,
+                        "harness": harness,
+                        "driver_tier": "tier_3_pty",
+                        "title": session_title,
+                        "cwd": str(resolved_cwd),
+                        "worktree_path": "",
+                        "branch_name": "",
+                        "permission_mode": chosen_mode,
+                        "status": "running",
+                        "model": (model or "").strip(),
+                        "provider_id": "",
+                        "external_session_id": "",
+                        "server_url": "",
+                        "attach_hint": attach_hint,
+                        "origin": clean_origin,
+                        "pid": effective_pid,
+                        "sidecar_pid": effective_sidecar_pid,
+                        "created_at": now,
+                        "updated_at": now,
+                        "last_error": "",
+                    }
+                )
+            else:
+                self._store.update_session(
+                    clean_session_id,
+                    driver_tier="tier_3_pty",
+                    title=session_title,
+                    cwd=str(resolved_cwd),
+                    permission_mode=chosen_mode,
+                    status="running",
+                    attach_hint=attach_hint,
+                    origin=clean_origin,
+                    pid=effective_pid,
+                    sidecar_pid=effective_sidecar_pid,
+                )
+
+            self._sessions[clean_session_id] = _LiveSession(
+                session_id=clean_session_id,
+                harness=harness,
+                driver_tier="tier_3_pty",
+                pty_session=client,
+                repo_root=repo_root,
+            )
+            upsert_rc_runtime_entry(
+                {
+                    "session_id": clean_session_id,
+                    "harness": harness,
+                    "cwd": str(resolved_cwd),
+                    "title": session_title,
+                    "permission_mode": chosen_mode,
+                    "model": (model or "").strip(),
+                    "driver_tier": "tier_3_pty",
+                    "pid": effective_pid,
+                    "sidecar_pid": effective_sidecar_pid,
+                    "host": clean_host,
+                    "port": int(port),
+                    "secret": secret,
+                    "started_at": now,
+                    "origin": clean_origin,
+                }
+            )
+
+        await self._emit(
+            clean_session_id,
+            "session.state",
+            {
+                "status": "running",
+                "pid": effective_pid,
+                "sidecar_pid": effective_sidecar_pid,
+                "driver_tier": "tier_3_pty",
+                "origin": clean_origin,
+                "dual_sync": clean_origin == "cli_rc",
+            },
+        )
+        return self.get_session(clean_session_id)
+
+    async def reconcile_surviving_sidecars(self) -> list[dict[str, Any]]:
+        """Reconnect to live detached sidecars from ``rc_runtime.json`` after restart."""
+
+        if not self.is_enabled():
+            return []
+
+        entries = (
+            read_rc_runtime(prune_stale=True) if rc_runtime_path().is_file() else {}
+        )
+        if rc_sessions_db_path().is_file():
+            for rec in self._store.list_sessions():
+                sid = str(rec.get("id") or "")
+                if (
+                    sid
+                    and sid not in entries
+                    and sid not in self._sessions
+                    and rec.get("status") in _ACTIVE_STATUSES
+                    and (
+                        rec.get("sidecar_pid") is not None
+                        or rec.get("origin") == "cli_rc"
+                    )
+                ):
+                    self._store.update_session(sid, status="exited", pid=None)
+
+        reconciled: list[dict[str, Any]] = []
+        for sid, entry in entries.items():
+            if sid in self._sessions:
+                continue
+            host = str(entry.get("host") or "127.0.0.1").strip()
+            port = entry.get("port")
+            secret = str(entry.get("secret") or "")
+            if not port or not secret or host not in {"127.0.0.1", "::1", "localhost"}:
+                remove_rc_runtime_entry(sid)
+                continue
+            try:
+                client = await SidecarPtyClient.connect(
+                    session_id=sid,
+                    host=host,
+                    port=int(port),
+                    secret=secret,
+                    sidecar_pid=entry.get("sidecar_pid"),
+                    on_exit=self._make_pty_exit_handler(sid),
+                )
+            except Exception:
+                remove_rc_runtime_entry(sid)
+                if self._store.get_session(sid) is not None:
+                    self._store.update_session(sid, status="exited", pid=None)
+                    await self._emit(sid, "session.exited", {"returncode": -1})
+                continue
+
+            if client.exit_code is not None:
+                rc = int(client.exit_code)
+                await client.detach()
+                remove_rc_runtime_entry(sid)
+                if self._store.get_session(sid) is not None:
+                    self._store.update_session(sid, status="exited", pid=None)
+                    await self._emit(sid, "session.exited", {"returncode": rc})
+                continue
+
+            cwd_str = str(entry.get("cwd") or "")
+            harness = str(entry.get("harness") or "terminal")
+            origin = str(entry.get("origin") or "rc_server")
+            attach_hint = "Live CLI · Dual-Sync" if origin == "cli_rc" else ""
+            existing = self._store.get_session(sid)
+            now = time.time()
+            if existing is None:
+                self._store.create_session(
+                    {
+                        "id": sid,
+                        "harness": harness,
+                        "driver_tier": "tier_3_pty",
+                        "title": str(entry.get("title") or sid),
+                        "cwd": cwd_str,
+                        "worktree_path": "",
+                        "branch_name": "",
+                        "permission_mode": str(entry.get("permission_mode") or "ask"),
+                        "status": "running",
+                        "model": str(entry.get("model") or ""),
+                        "provider_id": "",
+                        "external_session_id": "",
+                        "server_url": "",
+                        "attach_hint": attach_hint,
+                        "origin": origin,
+                        "pid": client.pid,
+                        "sidecar_pid": client.sidecar_pid,
+                        "created_at": float(entry.get("started_at") or now),
+                        "updated_at": now,
+                        "last_error": "",
+                    }
+                )
+            else:
+                self._store.update_session(
+                    sid,
+                    driver_tier="tier_3_pty",
+                    status="running",
+                    pid=client.pid,
+                    sidecar_pid=client.sidecar_pid,
+                    origin=origin or str(existing.get("origin") or ""),
+                    attach_hint=attach_hint or str(existing.get("attach_hint") or ""),
+                )
+
+            repo_root = await detect_git_root(Path(cwd_str)) if cwd_str else None
+            worktree_str = str(existing.get("worktree_path") or "") if existing else ""
+            self._sessions[sid] = _LiveSession(
+                session_id=sid,
+                harness=harness,
+                driver_tier="tier_3_pty",
+                pty_session=client,
+                repo_root=repo_root,
+                worktree_path=Path(worktree_str) if worktree_str else None,
+            )
+            await self._emit(
+                sid,
+                "session.reconnected",
+                {
+                    "session_id": sid,
+                    "pid": client.pid,
+                    "sidecar_pid": client.sidecar_pid,
+                    "origin": origin,
+                    "scrollback_bytes": len(client.scrollback_bytes()),
+                },
+            )
+            reconciled.append(self.get_session(sid))
+
+        return reconciled
 
     async def import_session(
         self,
@@ -1215,6 +1586,15 @@ class RemoteRuntimeHub:
                 await live.driver.close()
             if live.pty_session is not None:
                 await live.pty_session.close()
+        elif rc_runtime_path().is_file():
+            orphan = read_rc_runtime(prune_stale=False).get(session_id)
+            if orphan is not None:
+                for pid_val in (orphan.get("pid"), orphan.get("sidecar_pid")):
+                    if is_pid_alive(pid_val):
+                        await asyncio.to_thread(
+                            kill_pid_tree_best_effort, int(pid_val or 0)
+                        )
+                remove_rc_runtime_entry(session_id)
         self._store.update_session(session_id, status="stopped", pid=None)
         await self._emit(session_id, "session.state", {"status": "stopped"})
         return self.get_session(session_id)
@@ -1229,6 +1609,8 @@ class RemoteRuntimeHub:
                 await live.pty_session.close()
             if live.repo_root is not None and live.worktree_path is not None:
                 await remove_session_worktree(live.repo_root, live.worktree_path)
+        if rc_runtime_path().is_file():
+            remove_rc_runtime_entry(session_id)
         return self._store.delete_session(session_id)
 
     async def pty_input(self, session_id: str, data: bytes) -> None:
@@ -1302,6 +1684,9 @@ class RemoteRuntimeHub:
                     await live.driver.close()
             if live.pty_session is not None:
                 with contextlib.suppress(Exception):
-                    await live.pty_session.close()
+                    if isinstance(live.pty_session, SidecarPtyClient):
+                        await live.pty_session.detach()
+                    else:
+                        await live.pty_session.close()
         await self._tunnels.close(self.current_settings())
         self._store.close()

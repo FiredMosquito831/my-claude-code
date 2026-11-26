@@ -608,6 +608,13 @@ class ApplicationRuntime:
             self._runner_start_task = asyncio.create_task(
                 asyncio.to_thread(self._proxy_runners.start_enabled)
             )
+            if self._remote_hub is not None:
+                state.mark("remote-sidecars")
+                await best_effort(
+                    "remote_hub.reconcile_sidecars",
+                    self._remote_hub.reconcile_surviving_sidecars(),
+                    log_verbose_errors=self.settings.log_api_error_tracebacks,
+                )
             self._started = True
         except asyncio.CancelledError:
             await self.close()
