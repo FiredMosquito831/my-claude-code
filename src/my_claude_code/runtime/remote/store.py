@@ -189,6 +189,7 @@ class RemoteStore:
         if not fields:
             return self.get_session(session_id)
         allowed = {
+            "driver_tier",
             "title",
             "cwd",
             "worktree_path",

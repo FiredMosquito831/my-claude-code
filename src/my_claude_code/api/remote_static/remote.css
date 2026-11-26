@@ -447,11 +447,13 @@ body {
 }
 
 .rc-changes-head,
+.rc-terminal-head,
 .rc-dir-row,
 .rc-model-row {
   display: flex;
   gap: 8px;
   align-items: center;
+  justify-content: space-between;
 }
 
 .rc-dir-list {

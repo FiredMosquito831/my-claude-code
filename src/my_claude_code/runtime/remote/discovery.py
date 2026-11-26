@@ -28,6 +28,8 @@ _RESUMABLE_HARNESSES = frozenset(
         "qwen_code",
         "kimi_code",
         "commandcode_cli",
+        "cline_cli",
+        "droid",
         "pi",
         "goose",
     }

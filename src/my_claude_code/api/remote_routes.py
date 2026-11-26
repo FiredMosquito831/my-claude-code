@@ -533,6 +533,22 @@ async def rc_ensure_terminal(
         raise _translate_remote_error(exc) from exc
 
 
+@remote_router.post("/rc/api/sessions/{session_id}/switch-pty")
+async def rc_switch_to_pty(
+    request: Request,
+    session_id: str,
+    body: TerminalAttachRequest | None = None,
+) -> dict[str, Any]:
+    remote, _device_id = _require_rc_write(request)
+    cols = body.cols if body is not None else 120
+    rows = body.rows if body is not None else 36
+    try:
+        session = await remote.switch_to_pty(session_id, cols=cols, rows=rows)
+        return {"session": session}
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
 @remote_router.get("/rc/api/sessions/{session_id}")
 def rc_get_session(
     request: Request,
