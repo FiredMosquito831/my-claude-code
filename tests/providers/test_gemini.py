@@ -755,3 +755,76 @@ def test_gemini_envelope_restores_tool_call_signature_without_skip_sentinel(
         "google": {"thought_signature": "sig-from-gemini-envelope"}
     }
     assert GEMINI_THOUGHT_SIGNATURE_SKIPPED not in notes
+
+
+def test_image_only_followup_user_turn_establishes_turn_boundary(
+    gemini_provider,
+) -> None:
+    from my_claude_code.providers.gemini.quirks import (
+        _message_has_standard_user_content,
+    )
+
+    assert _message_has_standard_user_content(
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "https://x/a.png"}}],
+        }
+    )
+    assert _message_has_standard_user_content(
+        {"role": "user", "content": [{"type": "input_audio", "input_audio": {}}]}
+    )
+    assert _message_has_standard_user_content(
+        {"role": "user", "content": [{"type": "file", "file": {}}]}
+    )
+    assert not _message_has_standard_user_content(
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
+        }
+    )
+
+    req = make_request(
+        system=None,
+        messages=[
+            {"role": "user", "content": "Find files"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call_prior",
+                        "name": "Glob",
+                        "input": {"pattern": "*.py"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_prior",
+                        "content": "[]",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": "https://example.test/shot.png",
+                        },
+                    }
+                ],
+            },
+        ],
+    )
+    notes: dict[str, Any] = {}
+    body = gemini_provider._build_request_body(
+        req, reasoning=reasoning_for(req), wire_notes=notes
+    )
+    assert "extra_content" not in body["messages"][1]["tool_calls"][0]
+    assert GEMINI_THOUGHT_SIGNATURE_SKIPPED not in notes

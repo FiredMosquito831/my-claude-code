@@ -35,6 +35,7 @@ class ToolBlockState:
     namespace: str | None = None
     argument_parts: list[str] = field(default_factory=list)
     streamed_arguments: bool = False
+    seeded_input: bool = False
 
 
 @dataclass(slots=True)
@@ -44,6 +45,7 @@ class WebSearchBlockState:
     item_id: str
     call_id: str
     argument_parts: list[str] = field(default_factory=list)
+    seeded_input: bool = False
 
 
 BlockState = TextBlockState | ReasoningBlockState | ToolBlockState | WebSearchBlockState

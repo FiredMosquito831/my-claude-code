@@ -1587,3 +1587,78 @@ async def test_responses_completed_omits_incomplete_details() -> None:
 
     assert response["status"] == "completed"
     assert "incomplete_details" not in response
+
+
+@pytest.mark.asyncio
+async def test_seeded_tool_input_is_replaced_when_input_json_delta_streams() -> None:
+    events_in = [
+        format_sse_event("message_start", {"type": "message_start", "message": {}}),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_seed",
+                    "name": "echo",
+                    "input": {"k": "old"},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"k":"new"}'},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop", {"type": "content_block_stop", "index": 0}
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    text = await _collect_sse(
+        _responses_sse(
+            _aiter(events_in),
+            {"model": "nvidia_nim/test-model", "stream": True},
+        )
+    )
+    events = parse_sse_text(text)
+    deltas = [
+        ev.data["delta"]
+        for ev in events
+        if ev.event == "response.function_call_arguments.delta"
+    ]
+    assert deltas == ['{"k":"new"}']
+    assert events[-1].data["response"]["output"][0]["arguments"] == '{"k":"new"}'
+
+
+@pytest.mark.asyncio
+async def test_seeded_tool_input_emits_when_no_deltas_arrive() -> None:
+    events_in = [
+        format_sse_event("message_start", {"type": "message_start", "message": {}}),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_only",
+                    "name": "echo",
+                    "input": {"k": "only"},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_stop", {"type": "content_block_stop", "index": 0}
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    response = await _completed_response_from_sse(
+        _aiter(events_in),
+        {"model": "nvidia_nim/test-model", "stream": True},
+    )
+    assert response["output"][0]["arguments"] == '{"k":"only"}'

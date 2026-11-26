@@ -11,6 +11,7 @@ from my_claude_code.core.openai_common import (
     openai_error_from_anthropic_error,
     openai_error_from_failure,
 )
+from my_claude_code.core.trace import trace_event
 
 from .events import DONE_FRAME, finish_reason_for, format_chat_sse_data
 from .ids import new_tool_call_id
@@ -36,6 +37,7 @@ class ChatCompletionsStreamAssembler:
         self._created = int(time.time())
         self._usage = ChatUsageLedger()
         self._tool_call_index: dict[int, int] = {}
+        self._pending_seeded_tools: dict[int, dict[str, Any]] = {}
         self._next_tool_call_index = 0
         self._emitted_tool_calls = False
         self._role_emitted = False
@@ -56,6 +58,8 @@ class ChatCompletionsStreamAssembler:
             return self._handle_block_start(event.data)
         if event.event == "content_block_delta":
             return self._handle_block_delta(event.data)
+        if event.event == "content_block_stop":
+            return self._handle_block_stop(event.data)
         if event.event == "message_delta":
             self._usage.record_usage_delta(event.data)
             delta = event.data.get("delta")
@@ -79,6 +83,19 @@ class ChatCompletionsStreamAssembler:
             return []
         self.terminal = True
         chunks = self._ensure_role_chunk()
+        for _index, pending in sorted(
+            self._pending_seeded_tools.items(),
+            key=lambda item: int(item[1]["call_index"]),
+        ):
+            chunks.append(
+                self._tool_call_opener_chunk(
+                    pending["call_index"],
+                    pending["id"],
+                    pending["name"],
+                    pending["arguments"],
+                )
+            )
+        self._pending_seeded_tools.clear()
         chunks.append(
             self._chunk(
                 {},
@@ -132,6 +149,15 @@ class ChatCompletionsStreamAssembler:
             return chunks
         if block_type == "tool_use" and index is not None:
             return self._start_tool_call(index, block)
+        if block_type == "server_tool_use":
+            trace_event(
+                stage="chat_completions",
+                event="chat_completions.output.unsupported_block_ignored",
+                source="openai_chat_completions",
+                block_type="server_tool_use",
+                tool_name=_text(block.get("name")),
+            )
+            return []
         return []
 
     def _handle_block_delta(self, data: Mapping[str, Any]) -> list[str]:
@@ -156,7 +182,19 @@ class ChatCompletionsStreamAssembler:
             fragment = _text(delta.get("partial_json"))
             if not fragment:
                 return []
-            return [
+            chunks: list[str] = []
+            pending = self._pending_seeded_tools.pop(index, None)
+            if pending is not None:
+                chunks.extend(self._ensure_role_chunk())
+                chunks.append(
+                    self._tool_call_opener_chunk(
+                        pending["call_index"],
+                        pending["id"],
+                        pending["name"],
+                        "",
+                    )
+                )
+            chunks.append(
                 self._chunk(
                     {
                         "tool_calls": [
@@ -167,8 +205,26 @@ class ChatCompletionsStreamAssembler:
                         ]
                     }
                 )
-            ]
+            )
+            return chunks
         return []
+
+    def _handle_block_stop(self, data: Mapping[str, Any]) -> list[str]:
+        index = _event_index(data)
+        if index is None:
+            return []
+        pending = self._pending_seeded_tools.pop(index, None)
+        if pending is None:
+            return []
+        return [
+            *self._ensure_role_chunk(),
+            self._tool_call_opener_chunk(
+                pending["call_index"],
+                pending["id"],
+                pending["name"],
+                pending["arguments"],
+            ),
+        ]
 
     def _start_tool_call(self, index: int, block: Mapping[str, Any]) -> list[str]:
         chunks = self._ensure_role_chunk()
@@ -176,30 +232,40 @@ class ChatCompletionsStreamAssembler:
         self._next_tool_call_index += 1
         self._tool_call_index[index] = call_index
         self._emitted_tool_calls = True
+        tool_id = _text(block.get("id")) or new_tool_call_id()
+        name = _text(block.get("name"))
         initial_input = block.get("input")
-        arguments = (
-            json.dumps(initial_input, separators=(",", ":"))
-            if isinstance(initial_input, Mapping) and initial_input
-            else ""
-        )
-        chunks.append(
-            self._chunk(
-                {
-                    "tool_calls": [
-                        {
-                            "index": call_index,
-                            "id": _text(block.get("id")) or new_tool_call_id(),
-                            "type": "function",
-                            "function": {
-                                "name": _text(block.get("name")),
-                                "arguments": arguments,
-                            },
-                        }
-                    ]
-                }
-            )
-        )
+        if isinstance(initial_input, Mapping) and initial_input:
+            # Hold seeded arguments until block stop so subsequent input_json_delta
+            # chunks replace the fallback instead of concatenating onto it.
+            self._pending_seeded_tools[index] = {
+                "call_index": call_index,
+                "id": tool_id,
+                "name": name,
+                "arguments": json.dumps(initial_input, separators=(",", ":")),
+            }
+            return chunks
+        chunks.append(self._tool_call_opener_chunk(call_index, tool_id, name, ""))
         return chunks
+
+    def _tool_call_opener_chunk(
+        self, call_index: int, tool_id: str, name: str, arguments: str
+    ) -> str:
+        return self._chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": call_index,
+                        "id": tool_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments,
+                        },
+                    }
+                ]
+            }
+        )
 
     def _reasoning_chunk(self, text: str) -> str:
         self._usage.add_reasoning_text(text)

@@ -448,3 +448,74 @@ def test_vertex_replays_gemini_envelope_tool_call_signature() -> None:
         "google": {"thought_signature": "sig-vertex-env"}
     }
     assert GOOGLE_THOUGHT_SIGNATURE_SKIPPED not in notes
+
+
+def test_vertex_image_only_followup_user_turn_establishes_turn_boundary() -> None:
+    from my_claude_code.core.anthropic.models import MessagesRequest
+    from my_claude_code.providers.google_openai.thought_signatures import (
+        GOOGLE_THOUGHT_SIGNATURE_SKIPPED,
+        _message_has_standard_user_content,
+    )
+    from tests.providers.support import reasoning_for
+
+    assert _message_has_standard_user_content(
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "https://x/a.png"}}],
+        }
+    )
+    assert not _message_has_standard_user_content(
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}],
+        }
+    )
+
+    provider = _vertex_provider()
+    req = MessagesRequest.model_validate(
+        {
+            "model": "google/gemini-2.5-pro",
+            "messages": [
+                {"role": "user", "content": "find"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call_prior",
+                            "name": "Glob",
+                            "input": {"pattern": "*.py"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_prior",
+                            "content": "[]",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "url",
+                                "url": "https://example.test/shot.png",
+                            },
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    notes: dict[str, Any] = {}
+    body = provider._build_request_body(
+        req, reasoning=reasoning_for(req), wire_notes=notes
+    )
+    assert "extra_content" not in body["messages"][1]["tool_calls"][0]
+    assert GOOGLE_THOUGHT_SIGNATURE_SKIPPED not in notes

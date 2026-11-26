@@ -5,6 +5,8 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
+from my_claude_code.core.trace import trace_event
+
 from .events import finish_reason_for
 from .ids import new_tool_call_id
 from .models import OpenAIChatCompletionRequest
@@ -31,6 +33,14 @@ def extract_completion_blocks(
             reasoning_parts.append(_text(block.get("thinking")))
         elif block_type == "tool_use":
             tool_calls.append(tool_call_from_block(block))
+        elif block_type == "server_tool_use":
+            trace_event(
+                stage="chat_completions",
+                event="chat_completions.output.unsupported_block_ignored",
+                source="openai_chat_completions",
+                block_type="server_tool_use",
+                tool_name=_text(block.get("name")),
+            )
 
     for reasoning in reasoning_parts:
         usage.add_reasoning_text(reasoning)

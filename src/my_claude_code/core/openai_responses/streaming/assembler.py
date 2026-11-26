@@ -273,6 +273,9 @@ class ResponsesStreamAssembler:
             state = self._ledger.active_block(index) if index is not None else None
             if isinstance(state, ToolBlockState):
                 fragment = _string_value(delta.get("partial_json"))
+                if state.seeded_input and fragment:
+                    state.argument_parts.clear()
+                    state.seeded_input = False
                 state.argument_parts.append(fragment)
                 if state.kind == "function" and fragment:
                     state.streamed_arguments = True
@@ -282,7 +285,11 @@ class ResponsesStreamAssembler:
                         )
                     ]
             elif isinstance(state, WebSearchBlockState):
-                state.argument_parts.append(_string_value(delta.get("partial_json")))
+                fragment = _string_value(delta.get("partial_json"))
+                if state.seeded_input and fragment:
+                    state.argument_parts.clear()
+                    state.seeded_input = False
+                state.argument_parts.append(fragment)
         return []
 
     def _handle_content_block_stop(self, data: Mapping[str, Any]) -> list[str]:
@@ -373,6 +380,7 @@ class ResponsesStreamAssembler:
             isinstance(initial_input, dict) and initial_input
         ):
             state.argument_parts.append(json.dumps(initial_input))
+            state.seeded_input = True
         self._ledger.set_active_block(state)
         chunks.append(
             events.output_item_added(
@@ -380,13 +388,6 @@ class ResponsesStreamAssembler:
                 tool_item(state, status="in_progress"),
             )
         )
-        if identity.kind == "function" and state.argument_parts:
-            state.streamed_arguments = True
-            chunks.append(
-                events.function_call_arguments_delta(
-                    state.item_id, state.output_index, state.argument_parts[0]
-                )
-            )
         return chunks
 
     def _start_server_tool_block(
@@ -417,6 +418,7 @@ class ResponsesStreamAssembler:
         initial_input = block.get("input")
         if isinstance(initial_input, dict) and initial_input:
             state.argument_parts.append(json.dumps(initial_input))
+            state.seeded_input = True
         self._ledger.set_active_block(state)
         chunks.extend(
             [

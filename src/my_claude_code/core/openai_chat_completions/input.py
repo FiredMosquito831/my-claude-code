@@ -9,6 +9,7 @@ from typing import Any
 from my_claude_code.core.anthropic.structured_output import (
     StructuredOutputValidationError,
     has_tool_history,
+    is_http_url,
     parse_chat_response_format,
     parse_pdf_data_url,
     synthesize_missing_history_tools,
@@ -302,10 +303,13 @@ def _append_assistant(
         pending_tool_call_ids.add(tool_block["id"])
         blocks.append(tool_block)
 
-    if not blocks and message.reasoning_content is None:
-        # An assistant turn with neither text nor a tool call carries nothing
-        # a model can condition on; keeping it would send an empty content
-        # array upstream, which several providers reject outright.
+    has_reasoning = isinstance(message.reasoning_content, str) and bool(
+        message.reasoning_content
+    )
+    if not blocks and not has_reasoning:
+        # An assistant turn with neither text, a tool call, nor non-empty
+        # reasoning carries nothing a model can condition on; keeping it would
+        # send an empty content array upstream, which providers reject.
         return
     anthropic_message: dict[str, Any] = {"role": "assistant", "content": blocks}
     if message.reasoning_content is not None:
@@ -442,8 +446,13 @@ def _image_block(part: Mapping[str, Any]) -> dict[str, Any]:
     detail = source.get("detail") if source else part.get("detail")
     if url.startswith(_DATA_URL_PREFIX):
         block: dict[str, Any] = {"type": "image", "source": _data_url_source(url)}
-    else:
+    elif is_http_url(url):
         block = {"type": "image", "source": {"type": "url", "url": url}}
+    else:
+        raise ChatCompletionsConversionError(
+            "image_url.url must be a base64 data URL or an http(s) URL",
+            param="messages",
+        )
     if isinstance(detail, str) and detail in {"low", "high"}:
         block["detail"] = detail
     return block
@@ -456,26 +465,38 @@ def _file_block(part: Mapping[str, Any]) -> dict[str, Any]:
             "file content part requires a file object", param="messages"
         )
     file_data = file_obj.get("file_data")
-    if not isinstance(file_data, str) or not file_data:
+    file_url = file_obj.get("file_url")
+    if isinstance(file_data, str) and file_data:
+        try:
+            media_type, data = parse_pdf_data_url(
+                file_data, error_context="file.file_data"
+            )
+        except StructuredOutputValidationError as exc:
+            raise ChatCompletionsConversionError(exc.message, param=exc.param) from exc
+        source: dict[str, Any] = {
+            "type": "base64",
+            "media_type": media_type,
+            "data": data,
+        }
+    elif isinstance(file_url, str) and file_url:
+        if not is_http_url(file_url):
+            raise ChatCompletionsConversionError(
+                "file.file_url must be an http(s) URL", param="messages"
+            )
+        source = {"type": "url", "url": file_url}
+    else:
         file_id = file_obj.get("file_id")
         if isinstance(file_id, str) and file_id:
             raise ChatCompletionsConversionError(
                 f"file_id {file_id!r} is not supported: MCC has no Files API to read "
-                "it from. Send the file inline as file.file_data.",
+                "it from. Send the file inline as file.file_data or an http(s) file.file_url.",
                 param="messages",
             )
         raise ChatCompletionsConversionError(
-            "file.file_data must be a non-empty base64 PDF data URL",
+            "file requires file.file_data (a base64 PDF data URL) or an http(s) file.file_url",
             param="messages",
         )
-    try:
-        media_type, data = parse_pdf_data_url(file_data, error_context="file.file_data")
-    except StructuredOutputValidationError as exc:
-        raise ChatCompletionsConversionError(exc.message, param=exc.param) from exc
-    block: dict[str, Any] = {
-        "type": "document",
-        "source": {"type": "base64", "media_type": media_type, "data": data},
-    }
+    block: dict[str, Any] = {"type": "document", "source": source}
     filename = file_obj.get("filename")
     if isinstance(filename, str) and filename.strip():
         block["title"] = filename.strip()

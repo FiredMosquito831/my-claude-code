@@ -3,6 +3,7 @@
 import json
 from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -603,3 +604,118 @@ async def test_streaming_tool_call_serializes_prepopulated_input() -> None:
             "function": {"name": "ping", "arguments": ""},
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_tool_call_replaces_seeded_input_on_input_json_delta() -> None:
+    stream = [
+        format_sse_event("message_start", {"type": "message_start", "message": {}}),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call_override",
+                    "name": "echo",
+                    "input": {"k": "old"},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"k":"new"}'},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        format_sse_event(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    frames = await _collect(_chunks(*stream), _request())
+    calls = [
+        call
+        for delta in _deltas(_payloads(frames))
+        for call in delta.get("tool_calls", ())
+    ]
+    assembled = "".join(call["function"]["arguments"] for call in calls)
+    assert json.loads(assembled) == {"k": "new"}
+
+
+@pytest.mark.asyncio
+async def test_server_tool_use_is_ignored_and_traced_in_stream_and_completion() -> None:
+    stream = [
+        format_sse_event("message_start", {"type": "message_start", "message": {}}),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "test"},
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"query":"x"}'},
+            },
+        ),
+        format_sse_event(
+            "content_block_stop", {"type": "content_block_stop", "index": 0}
+        ),
+        *_text_stream("done")[1:],
+    ]
+
+    with patch(
+        "my_claude_code.core.openai_chat_completions.assembler.trace_event"
+    ) as stream_trace:
+        frames = await _collect(_chunks(*stream), _request())
+
+    payloads = _payloads(frames)
+    assert all("tool_calls" not in delta for delta in _deltas(payloads))
+    assert payloads[-1]["choices"][0]["finish_reason"] == "stop"
+    assert stream_trace.call_args.kwargs["event"] == (
+        "chat_completions.output.unsupported_block_ignored"
+    )
+    assert stream_trace.call_args.kwargs["block_type"] == "server_tool_use"
+
+    with patch(
+        "my_claude_code.core.openai_chat_completions.completion.trace_event"
+    ) as comp_trace:
+        completion = _ADAPTER.completion_from_anthropic_message(
+            {
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "srvtoolu_1",
+                        "name": "web_search",
+                        "input": {"query": "test"},
+                    },
+                    {"type": "text", "text": "done"},
+                ],
+                "stop_reason": "end_turn",
+            },
+            OpenAIChatCompletionRequest.model_validate(_request(stream=False)),
+            completion_id=_COMPLETION_ID,
+        )
+    assert "tool_calls" not in completion["choices"][0]["message"]
+    assert comp_trace.call_args.kwargs["event"] == (
+        "chat_completions.output.unsupported_block_ignored"
+    )

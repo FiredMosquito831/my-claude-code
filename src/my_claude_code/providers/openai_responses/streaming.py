@@ -8,6 +8,7 @@ Nothing in this module names a provider, a base URL or a credential.
 """
 
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
@@ -382,17 +383,23 @@ class ResponsesStreamConverter:
                 # ``*_call_output``, so it is the only id the client may see.
                 item_id = item.get("id") or f"call_{len(self._active_tool_calls)}"
                 tool_id = call_id_from_item(item)
-                name = item.get("name") or "unknown"
-                if self._tool_names is not None:
-                    # The only frame whose name reaches the client: the
-                    # tool_use block is opened here, and the argument and
-                    # ``.done`` frames are matched by item id, never by name.
-                    name = self._tool_names.decode(name)
+                raw_name = item.get("name") or "unknown"
+                name = (
+                    self._tool_names.decode(raw_name)
+                    if self._tool_names is not None
+                    else raw_name
+                )
                 namespace = item.get("namespace")
                 if isinstance(namespace, str) and namespace:
-                    name = responses_tool_name_to_anthropic_name(
-                        name, namespace=namespace
+                    # Avoid double-prefixing when an aliased or wire name
+                    # already carries the ``namespace__`` prefix.
+                    normalized_ns = (
+                        re.sub(r"[^A-Za-z0-9_-]+", "_", namespace).strip("_") or "tool"
                     )
+                    if not name.startswith((f"{namespace}__", f"{normalized_ns}__")):
+                        name = responses_tool_name_to_anthropic_name(
+                            name, namespace=namespace
+                        )
                 self._active_tool_calls[item_id] = {
                     "id": item_id,
                     # The ``call_id`` this entry's tool_use block was opened
@@ -473,7 +480,14 @@ class ResponsesStreamConverter:
                 if tool is not None:
                     # Ensure the complete argument object has been emitted.
                     full_args = item.get("arguments") or tool.get("arguments") or "{}"
-                    if tool["arguments"] != full_args:
+                    if (
+                        isinstance(full_args, str)
+                        and full_args != tool["arguments"]
+                        and (
+                            not tool["arguments"]
+                            or full_args.startswith(tool["arguments"])
+                        )
+                    ):
                         remaining = full_args[len(tool["arguments"]) :]
                         if remaining:
                             yield self._ledger.emit_tool_delta(tool["index"], remaining)
