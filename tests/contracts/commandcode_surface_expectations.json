@@ -168,6 +168,10 @@
        {
         "label": "Responses (/responses)",
         "value": "responses"
+       },
+       {
+        "label": "Messages (/messages)",
+        "value": "messages"
        }
       ],
       "override": "",
@@ -543,6 +547,10 @@
        {
         "label": "Responses (/responses)",
         "value": "responses"
+       },
+       {
+        "label": "Messages (/messages)",
+        "value": "messages"
        }
       ],
       "override": "",
@@ -773,8 +781,8 @@
    },
    "k4-blanked/page": {
     "after": {
-     "bytes": 80016,
-     "sha256": "a058e419e32a992ba0b7be1216919a6a80e84240ae68e99212e8f45eb595b158"
+     "bytes": 80200,
+     "sha256": "8c6323480b5aecdc0f6626d208aca348c0696962771f5eba0489b0b30bd8e180"
     },
     "before": {
      "bytes": 78790,
@@ -783,8 +791,8 @@
    },
    "page": {
     "after": {
-     "bytes": 203113,
-     "sha256": "103b419b10e7e8bacc2a8646095c1c68bad4d866326d842ddff28ab1b62ab540"
+     "bytes": 203297,
+     "sha256": "1c3041f714ce390c0ef19b8063e10060a23833626ca3cc1141c1272c52fa755e"
     },
     "before": {
      "bytes": 201887,
@@ -987,6 +995,10 @@
        {
         "label": "Responses (/responses)",
         "value": "responses"
+       },
+       {
+        "label": "Messages (/messages)",
+        "value": "messages"
        }
       ],
       "override": "",
@@ -1429,6 +1441,10 @@
        {
         "label": "Responses (/responses)",
         "value": "responses"
+       },
+       {
+        "label": "Messages (/messages)",
+        "value": "messages"
        }
       ],
       "override": "",
@@ -1709,8 +1725,8 @@
    },
    "k4-blanked/page": {
     "after": {
-     "bytes": 102661,
-     "sha256": "d4e5025c737187fa61e6254dff6238f4fb8262df79f1edf7365deb61a0c620ce"
+     "bytes": 102845,
+     "sha256": "a8547a4eb606a4a28ff0061d8d29456dde2cc7a35c712e05805593a2880177b2"
     },
     "before": {
      "bytes": 101435,
@@ -1719,8 +1735,8 @@
    },
    "page": {
     "after": {
-     "bytes": 228180,
-     "sha256": "c7e565c181bdbe630c758713be8b620bb3ff8b15bdf80f25e066917bda160e8d"
+     "bytes": 228364,
+     "sha256": "10aa741c8c7b32b31c8028a6bf8d5a59f6847e7a93884398dc6e9c9a909f17c4"
     },
     "before": {
      "bytes": 226954,

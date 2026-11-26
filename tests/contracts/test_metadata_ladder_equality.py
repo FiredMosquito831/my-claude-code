@@ -2191,6 +2191,7 @@ def test_8_47_0_moves_only_commandcode_response_surface_cells() -> None:
             assert [item["value"] for item in after["response_surface"]["offered"]] == [
                 "chat_completions",
                 "responses",
+                "messages",
             ]
         # Claude models on CommandCode remain delegated via _anthropic and never move.
         assert "capabilities/commandcode/claude-sonnet-5-5" not in cases
