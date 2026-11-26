@@ -5036,6 +5036,20 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "Leave blank to auto-generate and persist a key under ~/.mcc."
         ),
     ),
+    ConfigFieldSpec(
+        "RC_MESSAGING_ALERTS",
+        "Remote Control Telegram / Discord alerts",
+        "remote_control",
+        "boolean",
+        settings_attr="rc_messaging_alerts",
+        default="false",
+        affects_providers=False,
+        description=(
+            "Opt-in bridge to forward Remote Control approval prompts, turn "
+            "completions, and session errors to your configured Telegram or "
+            "Discord chat via MCC's active messaging bot."
+        ),
+    ),
 )
 
 

@@ -1449,10 +1449,11 @@ wheels = [
 
 [[package]]
 name = "my-claude-code"
-version = "8.55.0"
+version = "8.56.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "cryptography" },
     { name = "ddgs" },
     { name = "discord-py" },
     { name = "fastapi", extra = ["standard"] },
@@ -1492,7 +1493,6 @@ voice-local = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "cryptography" },
     { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1506,6 +1506,7 @@ dev = [
 requires-dist = [
     { name = "accelerate", marker = "extra == 'voice-local'", specifier = ">=1.14.0" },
     { name = "aiohttp", specifier = ">=3.14.1" },
+    { name = "cryptography", specifier = ">=45.0.0" },
     { name = "ddgs", specifier = ">=9.16.1" },
     { name = "discord-py", specifier = ">=2.7.1" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.139.0" },
@@ -1539,7 +1540,6 @@ provides-extras = ["voice", "voice-local"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "cryptography", specifier = ">=45.0.0" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },

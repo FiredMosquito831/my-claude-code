@@ -81,6 +81,7 @@ from my_claude_code.messaging.platforms.factory import MessagingPlatformOptions
 from my_claude_code.messaging.platforms.ports import (
     MessagingPlatformComponents,
     MessagingRuntime,
+    OutboundMessenger,
 )
 from my_claude_code.messaging.voice import Transcriber
 from my_claude_code.providers.chatgpt_oauth.provider import (
@@ -324,6 +325,8 @@ class ApplicationRuntime:
         self._config_lock = asyncio.Lock()
         self._pending_fields: list[str] = []
         self._messaging_runtime: MessagingRuntime | None = None
+        self._messaging_outbound: OutboundMessenger | None = None
+        self._messaging_platform_name: str = ""
         self._messaging_workflow: messaging_workflow_module.MessagingWorkflow | None = (
             None
         )
@@ -431,6 +434,29 @@ class ApplicationRuntime:
     def is_closed(self) -> bool:
         """Whether this runtime released its complete ownership graph."""
         return self._closed
+
+    @property
+    def messaging_outbound(self) -> OutboundMessenger | None:
+        """Active Telegram/Discord outbound messenger when messaging is running."""
+        return self._messaging_outbound
+
+    def rc_messaging_targets(self) -> tuple[OutboundMessenger | None, list[str]]:
+        """Return ``(outbound, chat_or_channel_ids)`` for opt-in /rc alerts."""
+
+        outbound = self._messaging_outbound
+        if outbound is None:
+            return (None, [])
+        platform = self._messaging_platform_name
+        if platform == "telegram":
+            raw = (self.settings.allowed_telegram_user_id or "").strip()
+        elif platform == "discord":
+            raw = (self.settings.allowed_discord_channels or "").strip()
+        else:
+            raw = ""
+        targets = (
+            [part.strip() for part in raw.split(",") if part.strip()] if raw else []
+        )
+        return (outbound, targets)
 
     async def start(self) -> None:
         if self._started:
@@ -1456,6 +1482,8 @@ class ApplicationRuntime:
     ) -> None:
         settings = self.settings
         self._messaging_runtime = components.runtime
+        self._messaging_outbound = components.outbound
+        self._messaging_platform_name = components.name
         workspace = (
             os.path.abspath(settings.allowed_dir)
             if settings.allowed_dir
@@ -1749,6 +1777,8 @@ class ApplicationRuntime:
                 return False
             if self._messaging_runtime is runtime:
                 self._messaging_runtime = None
+                self._messaging_outbound = None
+                self._messaging_platform_name = ""
         return True
 
     async def _cleanup_transcriber(self) -> bool:

@@ -1671,3 +1671,14 @@ RC_CLOUDFLARE_BINARY_DEFAULT = ""
 RC_CLOUDFLARE_TUNNEL_TOKEN_DEFAULT = ""
 RC_CLOUDFLARE_PUBLIC_HOSTNAME_DEFAULT = ""
 RC_SESSION_SECRET_DEFAULT = ""
+RC_MESSAGING_ALERTS_DEFAULT = False
+RC_REASONING_EFFORT_VALUES: tuple[str, ...] = (
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "auto",
+)

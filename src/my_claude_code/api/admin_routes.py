@@ -2788,6 +2788,47 @@ async def save_model_surface_override(
     return await asyncio.to_thread(_models_page_payload, services)
 
 
+def commit_preferred_surface(
+    *, scope: str, key: str, surface: str
+) -> tuple[str, str, str]:
+    """Validate and atomically persist one provider/model preferred wire surface."""
+
+    clean_scope = scope.strip().lower()
+    if clean_scope not in (PROVIDER_SCOPE, MODEL_SCOPE):
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope must be '{PROVIDER_SCOPE}' or '{MODEL_SCOPE}'",
+        )
+    clean_key = key.strip()
+    if not clean_key:
+        raise HTTPException(status_code=400, detail="key must not be empty")
+    provider_id = (
+        clean_key if clean_scope == PROVIDER_SCOPE else clean_key.split("/", 1)[0]
+    )
+    clean_surface = surface.strip()
+    if clean_surface == INHERIT_SENTINEL:
+        clean_surface = ""
+    if clean_surface:
+        offered = [item.value for item in speakable_surfaces(provider_id)]
+        if len(offered) < 2 or clean_surface not in offered:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{provider_id} does not declare the {clean_surface!r} surface. "
+                    f"It serves: {offered or ['chat_completions']}."
+                ),
+            )
+    with _HARNESS_SURFACE_WRITE_LOCK:
+        updated = with_preferred_surface_row(
+            load_model_overrides(),
+            scope=clean_scope,
+            key=clean_key,
+            surface=clean_surface,
+        )
+        save_model_overrides(updated)
+    return clean_scope, clean_key, clean_surface
+
+
 @router.post("/admin/api/model-admin/preferred-surface")
 async def save_preferred_surface_override(
     payload: PreferredSurfacePayload,
@@ -2801,35 +2842,12 @@ async def save_preferred_surface_override(
     """
 
     require_loopback_admin(request)
-    if payload.scope not in (PROVIDER_SCOPE, MODEL_SCOPE):
-        raise HTTPException(
-            status_code=400,
-            detail=f"scope must be '{PROVIDER_SCOPE}' or '{MODEL_SCOPE}'",
-        )
-    key = payload.key.strip()
-    if not key:
-        raise HTTPException(status_code=400, detail="key must not be empty")
-    provider_id = key if payload.scope == PROVIDER_SCOPE else key.split("/", 1)[0]
-    surface = payload.surface.strip()
-    if surface == INHERIT_SENTINEL:
-        surface = ""
-    if surface:
-        offered = [item.value for item in speakable_surfaces(provider_id)]
-        if len(offered) < 2 or surface not in offered:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"{provider_id} does not declare the {surface!r} surface. "
-                    f"It serves: {offered or ['chat_completions']}."
-                ),
-            )
-    updated = with_preferred_surface_row(
-        current_model_overrides(),
+    await asyncio.to_thread(
+        commit_preferred_surface,
         scope=payload.scope,
-        key=key,
-        surface=surface,
+        key=payload.key,
+        surface=payload.surface,
     )
-    await asyncio.to_thread(save_model_overrides, updated)
     return await asyncio.to_thread(_models_page_payload, services)
 
 

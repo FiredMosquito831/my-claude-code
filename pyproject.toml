@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "8.55.0"
+version = "8.56.0"
 description = "Local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents: 60 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -58,6 +58,11 @@ dependencies = [
     "pillow>=11.4.0",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",
     "mcp>=2.3,<3",
+    # Used lazily inside runtime/remote/notifications.py for /rc Web Push VAPID
+    # ES256 signing (RFC 8292) and aes128gcm content encryption (RFC 8291).
+    # Function-local imports only -- pinned by DEFERRED_UNTIL_FIRST_USE in
+    # tests/contracts/test_startup_import_cost.py.
+    "cryptography>=45.0.0",
 ]
 
 [project.urls]
@@ -175,12 +180,6 @@ dev = [
     # against each CLI's own published JSON Schema, vendored under
     # tests/fixtures/schemas/. Test-only: nothing at runtime reads a schema.
     "jsonschema>=4.26.0",
-    # The proxy checker's security control is proved against a MITM proxy the
-    # test stands up itself: a CA it mints, one certificate that chains to it
-    # and one that does not. Test-only -- nothing at runtime builds or reads a
-    # certificate, which is the property
-    # tests/contracts/test_tls_verification_is_never_weakened.py enforces.
-    "cryptography>=45.0.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",

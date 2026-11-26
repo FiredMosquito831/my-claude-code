@@ -59,6 +59,11 @@ DEFERRED_UNTIL_FIRST_USE: dict[str, str] = {
         "(measured 2026-10-30: first use 28.9 ms / 57 modules after the bump, "
         "against 163.7 ms / 77 before)."
     ),
+    "cryptography": (
+        "Only ``runtime.remote.notifications`` needs it for /rc Web Push VAPID "
+        "ES256 signing and RFC 8291 aes128gcm encryption; imported lazily inside "
+        "notification helpers on first use so cold startup loads zero cryptography."
+    ),
 }
 
 _PROBE = "\n".join(

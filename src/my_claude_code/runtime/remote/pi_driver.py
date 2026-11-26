@@ -161,6 +161,7 @@ class PiRpcDriver:
         self._always_allowed: set[str] = set()
         self._stderr_tail: list[str] = []
         self._is_streaming = False
+        self.reasoning_effort = ""
         self._closed = False
 
     @property
@@ -273,6 +274,13 @@ class PiRpcDriver:
 
     async def set_thinking_level(self, level: str) -> None:
         await self._send_command("set_thinking_level", level=level.strip())
+
+    async def set_reasoning_effort(self, effort: str) -> None:
+        norm = effort.strip().lower()
+        self.reasoning_effort = norm
+        if norm and norm != "auto":
+            await self.set_thinking_level(norm)
+        await self._on_state_update(reasoning_effort=norm)
 
     async def fork_session(self, *, title: str = "") -> dict[str, Any] | None:
         del title

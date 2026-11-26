@@ -85,6 +85,7 @@ class RemoteStore:
                 permission_mode TEXT NOT NULL,
                 status TEXT NOT NULL,
                 model TEXT NOT NULL DEFAULT '',
+                reasoning_effort TEXT NOT NULL DEFAULT '',
                 provider_id TEXT NOT NULL DEFAULT '',
                 external_session_id TEXT NOT NULL DEFAULT '',
                 server_url TEXT NOT NULL DEFAULT '',
@@ -120,6 +121,18 @@ class RemoteStore:
 
             CREATE INDEX IF NOT EXISTS idx_rc_approvals_session_status
                 ON rc_approvals (session_id, status);
+
+            CREATE TABLE IF NOT EXISTS rc_push_subscriptions (
+                endpoint TEXT PRIMARY KEY,
+                p256dh TEXT NOT NULL,
+                auth TEXT NOT NULL,
+                device_id TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_rc_push_subs_device
+                ON rc_push_subscriptions (device_id);
             """
         )
         cols = {
@@ -133,6 +146,10 @@ class RemoteStore:
         if "attach_hint" not in cols:
             conn.execute(
                 "ALTER TABLE rc_sessions ADD COLUMN attach_hint TEXT NOT NULL DEFAULT ''"
+            )
+        if "reasoning_effort" not in cols:
+            conn.execute(
+                "ALTER TABLE rc_sessions ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
             )
         conn.commit()
 
@@ -153,10 +170,10 @@ class RemoteStore:
                 """
                 INSERT INTO rc_sessions (
                     id, harness, driver_tier, title, cwd, worktree_path,
-                    branch_name, permission_mode, status, model, provider_id,
-                    external_session_id, server_url, attach_hint,
+                    branch_name, permission_mode, status, model, reasoning_effort,
+                    provider_id, external_session_id, server_url, attach_hint,
                     pid, created_at, updated_at, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"],
@@ -169,6 +186,7 @@ class RemoteStore:
                     record["permission_mode"],
                     record["status"],
                     record.get("model", ""),
+                    record.get("reasoning_effort", ""),
                     record.get("provider_id", ""),
                     record.get("external_session_id", ""),
                     record.get("server_url", ""),
@@ -197,6 +215,7 @@ class RemoteStore:
             "permission_mode",
             "status",
             "model",
+            "reasoning_effort",
             "provider_id",
             "external_session_id",
             "server_url",
@@ -513,3 +532,61 @@ class RemoteStore:
             if count:
                 self._write_devices_map(devices)
             return count
+
+    # --------------------------------------------------- push subscriptions --
+
+    def upsert_push_subscription(
+        self,
+        *,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        device_id: str,
+    ) -> dict[str, Any]:
+        now = time.time()
+        with self._lock:
+            conn = self._connect()
+            conn.execute(
+                """
+                INSERT INTO rc_push_subscriptions (
+                    endpoint, p256dh, auth, device_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(endpoint) DO UPDATE SET
+                    p256dh = excluded.p256dh,
+                    auth = excluded.auth,
+                    device_id = excluded.device_id,
+                    updated_at = excluded.updated_at
+                """,
+                (endpoint, p256dh, auth, device_id, now, now),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM rc_push_subscriptions WHERE endpoint = ?", (endpoint,)
+            ).fetchone()
+            return dict(row) if row is not None else {}
+
+    def delete_push_subscription(self, endpoint: str) -> bool:
+        with self._lock:
+            conn = self._connect()
+            cur = conn.execute(
+                "DELETE FROM rc_push_subscriptions WHERE endpoint = ?", (endpoint,)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def list_push_subscriptions(
+        self, *, device_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            conn = self._connect()
+            if device_id:
+                rows = conn.execute(
+                    "SELECT * FROM rc_push_subscriptions WHERE device_id = ? "
+                    "ORDER BY updated_at DESC",
+                    (device_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM rc_push_subscriptions ORDER BY updated_at DESC"
+                ).fetchall()
+            return [dict(row) for row in rows]

@@ -140,6 +140,34 @@ class RemoteSessionPort(Protocol):
 
     async def set_model(self, session_id: str, model: str) -> dict[str, Any]: ...
 
+    async def get_session_telemetry(
+        self, session_id: str, *, emit_event: bool = False
+    ) -> dict[str, Any]: ...
+
+    async def set_proxy_controls(
+        self,
+        session_id: str,
+        *,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        preferred_surface_info: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+    def vapid_public_key(self) -> dict[str, Any]: ...
+
+    def subscribe_push(
+        self,
+        *,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        device_id: str,
+    ) -> dict[str, Any]: ...
+
+    def unsubscribe_push(self, endpoint: str) -> bool: ...
+
+    async def send_test_push(self, device_id: str) -> dict[str, Any]: ...
+
     async def interrupt_session(self, session_id: str) -> dict[str, Any]: ...
 
     async def fork_session(
