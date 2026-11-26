@@ -80,6 +80,9 @@ MCP_MEDIA_CLAUDE_CONFIG_FILENAME = "mcp-claude.json"
 MCP_MEDIA_OUTPUT_DIRNAME = "mcp-media"
 MCP_MEDIA_CACHE_DIRNAME = "cache"
 MCP_MEDIA_CATALOGUE_CACHE_FILENAME = "mcp-media-catalogue.json"
+CACHE_DIRNAME = "cache"
+OPENROUTER_LIVE_CACHE_FILENAME = "openrouter-models.json"
+LITELLM_CACHE_FILENAME = "litellm-prices.json"
 RC_SESSIONS_DB_FILENAME = "rc_sessions.db"
 RC_DEVICES_FILENAME = "rc_devices.json"
 RC_SESSION_SECRET_FILENAME = "rc_session_secret.key"
@@ -762,6 +765,18 @@ def mcp_media_catalogue_cache_path() -> Path:
     return (
         config_dir_path() / MCP_MEDIA_CACHE_DIRNAME / MCP_MEDIA_CATALOGUE_CACHE_FILENAME
     )
+
+
+def openrouter_live_cache_path() -> Path:
+    """Return the OpenRouter live model list cache path."""
+
+    return config_dir_path() / CACHE_DIRNAME / OPENROUTER_LIVE_CACHE_FILENAME
+
+
+def litellm_cache_path() -> Path:
+    """Return the LiteLLM price map cache path."""
+
+    return config_dir_path() / CACHE_DIRNAME / LITELLM_CACHE_FILENAME
 
 
 def chatgpt_oauth_auth_path() -> Path:
