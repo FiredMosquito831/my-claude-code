@@ -146,6 +146,7 @@ class CodexAppServerDriver:
         self._always_allowed: set[str] = set()
         self._stderr_tail: list[str] = []
         self._current_turn_id = ""
+        self.reasoning_effort = ""
         self._closed = False
 
     @property
@@ -280,6 +281,8 @@ class CodexAppServerDriver:
         }
         if self.model:
             params["model"] = self.model
+        if self.reasoning_effort and self.reasoning_effort != "auto":
+            params["effort"] = self.reasoning_effort
         res = await self._rpc_call("turn/start", params)
         turn = _as_dict(res.get("turn"))
         tid = str(turn.get("id") or res.get("turnId") or "")
@@ -301,6 +304,10 @@ class CodexAppServerDriver:
         self.model = model.strip()
         await self._on_state_update(model=self.model)
         await self._on_event("session.model_changed", {"model": self.model})
+
+    async def set_reasoning_effort(self, effort: str) -> None:
+        self.reasoning_effort = effort.strip().lower()
+        await self._on_state_update(reasoning_effort=self.reasoning_effort)
 
     async def set_permission_mode(self, mode: str) -> None:
         self.permission_mode = mode

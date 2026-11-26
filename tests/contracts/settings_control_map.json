@@ -1752,6 +1752,10 @@
       "control": "field-RC_MAX_SESSIONS",
       "page": "remote_control"
     },
+    "RC_MESSAGING_ALERTS": {
+      "control": "field-RC_MESSAGING_ALERTS",
+      "page": "remote_control"
+    },
     "RC_PERMISSION_MODE": {
       "control": "field-RC_PERMISSION_MODE",
       "page": "remote_control"

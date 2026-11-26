@@ -143,6 +143,7 @@ class CommandCodeStructuredDriver:
         self._proc: asyncio.subprocess.Process | None = None
         self._turn_task: asyncio.Task[None] | None = None
         self._turn_lock = asyncio.Lock()
+        self.reasoning_effort = ""
         self._closed = False
 
     @property
@@ -194,6 +195,8 @@ class CommandCodeStructuredDriver:
                 auth_token=self.auth_token,
                 session_id=self.session_id,
             )
+            if self.reasoning_effort and self.reasoning_effort != "auto":
+                env["MCC_RC_REASONING_EFFORT"] = self.reasoning_effort
             creationflags = (
                 int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
                 if sys.platform == "win32"
@@ -390,6 +393,10 @@ class CommandCodeStructuredDriver:
         self.model = model.strip()
         await self._on_state_update(model=self.model)
         await self._on_event("session.model_changed", {"model": self.model})
+
+    async def set_reasoning_effort(self, effort: str) -> None:
+        self.reasoning_effort = effort.strip().lower()
+        await self._on_state_update(reasoning_effort=self.reasoning_effort)
 
     async def interrupt(self) -> None:
         if self._proc is not None and self._proc.returncode is None:

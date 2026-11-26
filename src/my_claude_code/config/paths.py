@@ -83,6 +83,7 @@ MCP_MEDIA_CATALOGUE_CACHE_FILENAME = "mcp-media-catalogue.json"
 RC_SESSIONS_DB_FILENAME = "rc_sessions.db"
 RC_DEVICES_FILENAME = "rc_devices.json"
 RC_SESSION_SECRET_FILENAME = "rc_session_secret.key"
+RC_VAPID_FILENAME = "rc_vapid.json"
 RC_WORKTREES_DIRNAME = "rc_worktrees"
 RC_REPO_WORKTREES_DIRNAME = ".mcc-worktrees"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
@@ -917,6 +918,12 @@ def rc_session_secret_path() -> Path:
     """Return the auto-generated Remote Control HMAC signing secret path."""
 
     return config_dir_path() / RC_SESSION_SECRET_FILENAME
+
+
+def rc_vapid_path() -> Path:
+    """Return the auto-generated Remote Control VAPID P-256 keypair path."""
+
+    return config_dir_path() / RC_VAPID_FILENAME
 
 
 def rc_worktrees_dir_path() -> Path:

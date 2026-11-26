@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import os
 import secrets
 import shutil
@@ -20,7 +21,10 @@ from my_claude_code.application.remote_ports import (
     RemoteNotFoundError,
 )
 from my_claude_code.cli.claude_env import build_claude_proxy_env
-from my_claude_code.config.constants import RC_PERMISSION_MODE_VALUES
+from my_claude_code.config.constants import (
+    RC_PERMISSION_MODE_VALUES,
+    RC_REASONING_EFFORT_VALUES,
+)
 from my_claude_code.config.harnesses import (
     COMMANDCODE_API_KEY_ENV,
     DROID_API_KEY_ENV,
@@ -45,12 +49,14 @@ from .git_workspace import (
     detect_git_root,
     remove_session_worktree,
 )
+from .notifications import MessagingTargetProvider, NotificationDispatcher
 from .openclaw_driver import OpenClawGatewayDriver
 from .opencode_driver import OPENCODE_FAMILY_HARNESSES, OpenCodeFamilyDriver
 from .pi_driver import PiRpcDriver
 from .pty_bridge import PtySession
 from .qr import render_qr_svg
 from .store import RemoteStore
+from .telemetry import collect_session_telemetry
 from .tunnels import TunnelManager
 
 _ACTIVE_STATUSES = frozenset(
@@ -133,14 +139,41 @@ def _default_shell_argv() -> list[str]:
 class RemoteRuntimeHub:
     """Supervises Remote Control sessions, workspaces, devices, and tunnels."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        messaging_target_provider: MessagingTargetProvider | None = None,
+    ) -> None:
         self._settings = settings
         self._store = RemoteStore()
         self._tunnels = TunnelManager()
+        self._notifier = NotificationDispatcher(
+            self._store,
+            messaging_target_provider=messaging_target_provider,
+        )
         self._sessions: dict[str, _LiveSession] = {}
         self._event_subs: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
         self._ws_closers: dict[str, set[Callable[[], Any]]] = {}
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
+        self._last_telemetry_digest: dict[str, str] = {}
         self._lock = asyncio.Lock()
+
+    def set_messaging_target_provider(
+        self, provider: MessagingTargetProvider | None
+    ) -> None:
+        self._notifier.set_messaging_target_provider(provider)
+
+    def _spawn_bg(self, coro: Any) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            with contextlib.suppress(Exception):
+                coro.close()
+            return
+        task = loop.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     def current_settings(self) -> Settings:
         return self._settings if self._settings is not None else get_settings()
@@ -367,6 +400,47 @@ class RemoteRuntimeHub:
         for queue in list(self._event_subs.get(session_id, ())):
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(event)
+        if kind in {
+            "turn.completed",
+            "approval.requested",
+            "question.requested",
+            "session.error",
+            "session.exited",
+        }:
+            self._spawn_bg(self._post_emit(session_id, kind, dict(payload)))
+
+    async def _post_emit(
+        self, session_id: str, kind: str, payload: dict[str, Any]
+    ) -> None:
+        rec = self._store.get_session(session_id)
+        if rec is None:
+            return
+        telemetry: dict[str, Any] | None = None
+        if kind == "turn.completed":
+            telemetry = await asyncio.to_thread(collect_session_telemetry, rec)
+            self._last_telemetry_digest[session_id] = self._telemetry_digest(telemetry)
+            await self._emit(session_id, "session.telemetry", telemetry)
+        await self._notifier.dispatch_session_event(
+            rec,
+            kind,
+            payload,
+            self.current_settings(),
+            telemetry=telemetry,
+        )
+
+    @staticmethod
+    def _telemetry_digest(telemetry: Mapping[str, Any]) -> str:
+        stable = {k: v for k, v in telemetry.items() if k != "inflight"}
+        inflight_keys = [
+            (r.get("request_id"), r.get("phase"), r.get("attempt"))
+            for r in (telemetry.get("inflight") or [])
+            if isinstance(r, Mapping)
+        ]
+        return json.dumps(
+            {"stable": stable, "inflight": inflight_keys},
+            sort_keys=True,
+            default=str,
+        )
 
     def _build_structured_driver(
         self,
@@ -900,6 +974,14 @@ class RemoteRuntimeHub:
         env["MCC_PI_API_KEY"] = proxied_tok
         env["MCC_RC_SESSION_ID"] = session_id
         env["TERM"] = "xterm-256color"
+        existing_headers = env.get("ANTHROPIC_CUSTOM_HEADERS", "").strip()
+        session_hdr = f"x-mcc-session: {session_id}"
+        if session_hdr not in existing_headers:
+            env["ANTHROPIC_CUSTOM_HEADERS"] = (
+                f"{existing_headers}\n{session_hdr}"
+                if existing_headers
+                else session_hdr
+            )
         return env
 
     async def send_message(self, session_id: str, text: str) -> dict[str, Any]:
@@ -978,6 +1060,97 @@ class RemoteRuntimeHub:
         else:
             self._store.update_session(session_id, model=model.strip())
         return self.get_session(session_id)
+
+    async def get_session_telemetry(
+        self, session_id: str, *, emit_event: bool = False
+    ) -> dict[str, Any]:
+        self._require_enabled()
+        rec = self.get_session(session_id)
+        telemetry = await asyncio.to_thread(collect_session_telemetry, rec)
+        if emit_event:
+            digest = self._telemetry_digest(telemetry)
+            if self._last_telemetry_digest.get(session_id) != digest:
+                self._last_telemetry_digest[session_id] = digest
+                await self._emit(session_id, "session.telemetry", telemetry)
+        return telemetry
+
+    async def set_proxy_controls(
+        self,
+        session_id: str,
+        *,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        preferred_surface_info: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self._require_enabled()
+        self.get_session(session_id)
+        live = self._sessions.get(session_id)
+        updated_fields: dict[str, Any] = {}
+
+        if reasoning_effort is not None:
+            norm_effort = reasoning_effort.strip().lower()
+            if norm_effort not in RC_REASONING_EFFORT_VALUES:
+                raise RemoteControlError(
+                    f"Invalid reasoning_effort {reasoning_effort!r}; expected one of: "
+                    f"{', '.join(RC_REASONING_EFFORT_VALUES)}"
+                )
+            if live is not None and live.driver is not None:
+                setter = getattr(live.driver, "set_reasoning_effort", None)
+                if callable(setter):
+                    res = setter(norm_effort)
+                    if asyncio.iscoroutine(res):
+                        await res
+                else:
+                    self._store.update_session(session_id, reasoning_effort=norm_effort)
+            else:
+                self._store.update_session(session_id, reasoning_effort=norm_effort)
+            updated_fields["reasoning_effort"] = norm_effort
+
+        if model is not None and model.strip():
+            clean_model = model.strip()
+            if live is not None and live.driver is not None:
+                await live.driver.set_model(clean_model)
+            else:
+                self._store.update_session(session_id, model=clean_model)
+            updated_fields["model"] = clean_model
+
+        if preferred_surface_info is not None:
+            updated_fields["preferred_surface"] = dict(preferred_surface_info)
+
+        if updated_fields:
+            await self._emit(session_id, "session.controls_updated", updated_fields)
+        return self.get_session(session_id)
+
+    def vapid_public_key(self) -> dict[str, Any]:
+        self._require_enabled()
+        return self._notifier.vapid_public_key()
+
+    def subscribe_push(
+        self,
+        *,
+        endpoint: str,
+        p256dh: str,
+        auth: str,
+        device_id: str,
+    ) -> dict[str, Any]:
+        self._require_enabled()
+        try:
+            return self._notifier.subscribe_push(
+                endpoint=endpoint,
+                p256dh=p256dh,
+                auth=auth,
+                device_id=device_id,
+            )
+        except ValueError as exc:
+            raise RemoteControlError(str(exc)) from exc
+
+    def unsubscribe_push(self, endpoint: str) -> bool:
+        self._require_enabled()
+        return self._notifier.unsubscribe_push(endpoint)
+
+    async def send_test_push(self, device_id: str) -> dict[str, Any]:
+        self._require_enabled()
+        return await self._notifier.send_test_push(device_id)
 
     async def interrupt_session(self, session_id: str) -> dict[str, Any]:
         self._require_enabled()
@@ -1114,6 +1287,12 @@ class RemoteRuntimeHub:
             yield chunk
 
     async def close(self) -> None:
+        for bg in list(self._bg_tasks):
+            bg.cancel()
+        for bg in list(self._bg_tasks):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await bg
+        self._bg_tasks.clear()
         for session_id in list(self._sessions):
             live = self._sessions.pop(session_id, None)
             if live is None:

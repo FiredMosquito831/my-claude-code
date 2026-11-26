@@ -17,6 +17,11 @@
     pendingApprovals: [],
     streamingAssistantEl: null,
     streamingThinkingEl: null,
+    telemetry: null,
+    telemetryTimer: null,
+    catalog: null,
+    pushSubscribed: false,
+    swRegistration: null,
   };
 
   function el(id) {
@@ -78,10 +83,13 @@
     el("workspaceView").hidden = !state.authenticated;
     el("btnNewSessionOpen").hidden = !state.authenticated;
     el("btnLogout").hidden = !state.authenticated;
-    el("connDot").classList.toggle("is-online", state.authenticated);
+    el("btnPushToggle").hidden = !state.authenticated;
     if (!state.authenticated) {
+      el("btnTestPush").hidden = true;
+      stopTelemetryPolling();
       closeWebSockets();
     }
+    el("connDot").classList.toggle("is-online", state.authenticated);
   }
 
   function closeWebSockets() {
@@ -348,6 +356,15 @@
       state.streamingAssistantEl = null;
       state.streamingThinkingEl = null;
       refreshActiveMeta().catch(() => {});
+      loadTelemetry().catch(() => {});
+    } else if (kind === "session.telemetry") {
+      if (payload && (!state.activeSessionId || payload.session_id === state.activeSessionId)) {
+        state.telemetry = payload;
+        renderTelemetryStrip();
+        renderRecentRequests();
+      }
+    } else if (kind === "session.controls_updated") {
+      refreshActiveMeta().catch(() => {});
     } else if (kind === "session.mode_changed" || kind === "session.state" || kind === "session.exited") {
       if (payload.recommend_pty && state.activeSession && isStructuredTier(state.activeSession.driver_tier)) {
         addTimelineEntry("rc-alert rc-alert-warn", (node) => {
@@ -461,6 +478,7 @@
       ["Worktree", sess.worktree_path || "—"],
       ["Branch", sess.branch_name || "—"],
       ["Model", sess.model || "—"],
+      ["Reasoning Effort", sess.reasoning_effort || "—"],
       ["External ID", sess.external_session_id || "—"],
       ["Server URL", sess.server_url || "—"],
       ["Attach Command", sess.attach_hint || "—"],
@@ -578,10 +596,15 @@
 
     const data = await apiJson(`/rc/api/sessions/${sessionId}?since_seq=0`);
     state.activeSession = data.session;
+    state.telemetry = null;
     renderActiveSessionHeader();
     renderMetaTab();
+    renderTelemetryStrip();
+    populateQuickControls();
     (data.events || []).forEach(handleSessionEvent);
     connectEventSocket(sessionId);
+    loadTelemetry().catch(() => {});
+    startTelemetryPolling();
 
     if (!isStructuredTier(data.session.driver_tier)) {
       setActiveTab("terminal");
@@ -626,18 +649,30 @@
   }
 
   async function loadInitialWorkspace() {
-    const [sessResp, harnessResp, dirResp] = await Promise.all([
+    const [sessResp, harnessResp, dirResp, catalogResp] = await Promise.all([
       apiJson("/rc/api/sessions"),
       apiJson("/rc/api/harnesses"),
       apiJson("/rc/api/fs/dirs").catch(() => ({ entries: [] })),
+      apiJson("/rc/api/catalog").catch(() => null),
     ]);
     state.sessions = sessResp.sessions || [];
     state.harnesses = harnessResp.harnesses || [];
+    if (catalogResp) {
+      state.catalog = catalogResp;
+      populateQuickControls();
+    }
     renderSessionList();
     populateNewSessionDialog(dirResp);
-    if (state.sessions.length && !state.activeSessionId) {
+    const params = new URLSearchParams(window.location.search);
+    const requestedSession = params.get("session");
+    if (requestedSession && state.sessions.some((s) => s.id === requestedSession)) {
+      if (state.activeSessionId !== requestedSession) {
+        await selectSession(requestedSession);
+      }
+    } else if (state.sessions.length && !state.activeSessionId) {
       await selectSession(state.sessions[0].id);
     }
+    refreshPushUi().catch(() => {});
   }
 
   function populateNewSessionDialog(dirResp) {
@@ -784,6 +819,420 @@
     });
   }
 
+  function formatUsd(val) {
+    const num = Number(val || 0);
+    if (!Number.isFinite(num) || num <= 0) return "$0.0000";
+    return `$${num.toFixed(4)}`;
+  }
+
+  function formatCompactInt(val) {
+    const num = Number(val || 0);
+    if (!Number.isFinite(num)) return "0";
+    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+    if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
+    return String(Math.round(num));
+  }
+
+  function renderTelemetryStrip() {
+    const strip = el("telemetryStrip");
+    if (!strip) return;
+    const tel = state.telemetry;
+    if (!state.activeSessionId) {
+      strip.hidden = true;
+      return;
+    }
+    strip.hidden = false;
+    const inflightEl = el("telInflight");
+    const costEl = el("telCost");
+    const tokensEl = el("telTokens");
+    const ttftEl = el("telTtft");
+    const endpointEl = el("telEndpoint");
+    const transEl = el("telTranslation");
+
+    if (!tel) {
+      inflightEl.hidden = true;
+      costEl.textContent = "Cost: $0.0000";
+      tokensEl.textContent = "Tokens: 0 in / 0 out";
+      ttftEl.textContent = "TTFT: —";
+      endpointEl.textContent = "Route: —";
+      transEl.hidden = true;
+      return;
+    }
+
+    const inflight = Array.isArray(tel.inflight) ? tel.inflight : [];
+    if (inflight.length > 0) {
+      const active = inflight[0];
+      const phase = active.phase || "streaming";
+      const suffix = inflight.length > 1 ? ` (+${inflight.length - 1})` : "";
+      inflightEl.hidden = false;
+      inflightEl.textContent = `Live: ${phase}${suffix}`;
+    } else {
+      inflightEl.hidden = true;
+    }
+
+    const reported = Number(tel.reported_cost_usd || 0);
+    const estimated = Number(tel.estimated_cost_usd || 0);
+    if (reported > 0 && estimated > 0) {
+      costEl.textContent = `Cost: ${formatUsd(reported)} rep + ${formatUsd(estimated)} est`;
+    } else if (reported > 0) {
+      costEl.textContent = `Cost: ${formatUsd(reported)} (reported)`;
+    } else if (estimated > 0) {
+      costEl.textContent = `Cost: ${formatUsd(estimated)} (estimated)`;
+    } else {
+      costEl.textContent = "Cost: $0.0000";
+    }
+
+    const cachedPart = tel.cached_tokens
+      ? ` · ${formatCompactInt(tel.cached_tokens)} cached`
+      : "";
+    tokensEl.textContent = `Tokens: ${formatCompactInt(tel.input_tokens)} in / ${formatCompactInt(tel.output_tokens)} out${cachedPart}`;
+
+    const last = tel.last_request || null;
+    if (last && last.ttft_ms != null) {
+      ttftEl.textContent = `TTFT: ${Math.round(Number(last.ttft_ms))}ms`;
+    } else {
+      ttftEl.textContent = "TTFT: —";
+    }
+
+    if (last) {
+      const modelName = last.model || "—";
+      const providerName = last.provider_id || "—";
+      const surfaceName = last.provider_endpoint || "";
+      endpointEl.textContent = surfaceName
+        ? `Route: ${providerName} · ${modelName} (${surfaceName})`
+        : `Route: ${providerName} · ${modelName}`;
+      if (last.translation_label) {
+        transEl.hidden = false;
+        transEl.textContent = last.translation_label;
+      } else {
+        transEl.hidden = true;
+      }
+    } else {
+      endpointEl.textContent =
+        state.activeSession && state.activeSession.model
+          ? `Route: ${state.activeSession.model}`
+          : "Route: —";
+      transEl.hidden = true;
+    }
+  }
+
+  function renderRecentRequests() {
+    const list = el("telRecentList");
+    if (!list) return;
+    list.replaceChildren();
+    const recent =
+      state.telemetry && Array.isArray(state.telemetry.recent_requests)
+        ? state.telemetry.recent_requests
+        : [];
+    if (!recent.length) {
+      const empty = document.createElement("p");
+      empty.className = "rc-muted";
+      empty.textContent = "No matched proxy requests yet.";
+      list.appendChild(empty);
+      return;
+    }
+    recent.forEach((req) => {
+      const row = document.createElement("div");
+      row.className = "rc-recent-item";
+      const left = document.createElement("span");
+      const trans = req.translation_label ? ` [${req.translation_label}]` : "";
+      left.textContent = `${req.provider_id || "?"} · ${req.model || "?"}${trans}`;
+      const right = document.createElement("span");
+      const costSrc = req.cost_source === "provider" ? "rep" : "est";
+      const costVal = req.cost_usd != null ? formatUsd(req.cost_usd) : "$0.0000";
+      right.textContent = `${req.status || "ok"} · ${costVal} (${costSrc}) · ${req.tokens_in || 0}/${req.tokens_out || 0}`;
+      row.appendChild(left);
+      row.appendChild(right);
+      list.appendChild(row);
+    });
+  }
+
+  async function loadTelemetry() {
+    if (!state.authenticated || !state.activeSessionId) return;
+    try {
+      const data = await apiJson(`/rc/api/sessions/${state.activeSessionId}/telemetry`);
+      state.telemetry = data;
+      renderTelemetryStrip();
+      renderRecentRequests();
+    } catch (_err) {
+      // Ignore transient telemetry errors
+    }
+  }
+
+  function stopTelemetryPolling() {
+    if (state.telemetryTimer) {
+      clearInterval(state.telemetryTimer);
+      state.telemetryTimer = null;
+    }
+  }
+
+  function startTelemetryPolling() {
+    stopTelemetryPolling();
+    if (!state.authenticated || !state.activeSessionId || document.hidden) return;
+    state.telemetryTimer = setInterval(() => {
+      if (!state.authenticated || !state.activeSessionId || document.hidden) return;
+      loadTelemetry().catch(() => {});
+    }, 5000);
+  }
+
+  function populateQuickControls() {
+    const modelSelect = el("qcModelSelect");
+    const reasoningSelect = el("qcReasoningSelect");
+    const provSelect = el("qcSurfaceProvider");
+    const filterInput = el("qcModelSearch");
+    if (!modelSelect || !reasoningSelect || !provSelect) return;
+
+    const catalog = state.catalog || {
+      tiers: [],
+      models: [],
+      multi_door_providers: [],
+      reasoning_efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"],
+    };
+    const query = ((filterInput && filterInput.value) || "").trim().toLowerCase();
+
+    const prevModel =
+      (state.activeSession && state.activeSession.model) || modelSelect.value || "";
+    modelSelect.replaceChildren();
+    const keepOpt = document.createElement("option");
+    keepOpt.value = "";
+    keepOpt.textContent = prevModel
+      ? `Keep current (${prevModel})`
+      : "Default (MCC routing)";
+    modelSelect.appendChild(keepOpt);
+
+    (catalog.tiers || []).forEach((t) => {
+      const text = `${t.label || t.id} -> ${t.target || ""}`;
+      if (query && !text.toLowerCase().includes(query) && !t.id.toLowerCase().includes(query)) {
+        return;
+      }
+      const opt = document.createElement("option");
+      opt.value = t.id;
+      opt.textContent = `[tier] ${text}`;
+      modelSelect.appendChild(opt);
+    });
+
+    (catalog.models || []).forEach((m) => {
+      const ref = m.id || m.gateway_id || "";
+      if (!ref || (query && !ref.toLowerCase().includes(query))) return;
+      const opt = document.createElement("option");
+      opt.value = ref;
+      opt.textContent = m.display_name && m.display_name !== ref
+        ? `${ref} (${m.display_name})`
+        : ref;
+      modelSelect.appendChild(opt);
+    });
+
+    reasoningSelect.replaceChildren();
+    const defaultReason = document.createElement("option");
+    defaultReason.value = "";
+    defaultReason.textContent = "Default (harness/MCC)";
+    reasoningSelect.appendChild(defaultReason);
+    (catalog.reasoning_efforts || []).forEach((effort) => {
+      const opt = document.createElement("option");
+      opt.value = effort;
+      opt.textContent = effort;
+      reasoningSelect.appendChild(opt);
+    });
+    if (state.activeSession && state.activeSession.reasoning_effort) {
+      reasoningSelect.value = state.activeSession.reasoning_effort;
+    }
+
+    const prevKey = provSelect.value;
+    provSelect.replaceChildren();
+    const noneProv = document.createElement("option");
+    noneProv.value = "";
+    noneProv.textContent = "— No global endpoint change —";
+    provSelect.appendChild(noneProv);
+    (catalog.multi_door_providers || []).forEach((entry) => {
+      const opt = document.createElement("option");
+      opt.value = `provider::${entry.provider_id}`;
+      opt.textContent = `Provider: ${entry.provider_id} (${entry.preferred_surface || "default"})`;
+      provSelect.appendChild(opt);
+    });
+    (catalog.models || []).forEach((m) => {
+      if (!Array.isArray(m.offered_surfaces) || m.offered_surfaces.length < 2) return;
+      const opt = document.createElement("option");
+      opt.value = `model::${m.id}`;
+      opt.textContent = `Model: ${m.id} (${m.preferred_surface || "inherit"})`;
+      provSelect.appendChild(opt);
+    });
+    if (prevKey) {
+      provSelect.value = prevKey;
+    }
+    renderSurfaceSelect();
+  }
+
+  function renderSurfaceSelect() {
+    const provSelect = el("qcSurfaceProvider");
+    const surfaceSelect = el("qcSurfaceSelect");
+    if (!provSelect || !surfaceSelect) return;
+    surfaceSelect.replaceChildren();
+    const key = provSelect.value;
+    if (!key) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "Select a multi-door provider/model first";
+      surfaceSelect.appendChild(opt);
+      surfaceSelect.disabled = true;
+      return;
+    }
+    surfaceSelect.disabled = false;
+    const [scope, targetKey] = key.split("::");
+    const catalog = state.catalog || { multi_door_providers: [], models: [] };
+    let entry = null;
+    if (scope === "provider") {
+      entry = (catalog.multi_door_providers || []).find(
+        (item) => item.provider_id === targetKey,
+      );
+    } else {
+      entry = (catalog.models || []).find((item) => item.id === targetKey);
+    }
+    const surfaces = (entry && entry.offered_surfaces) || [];
+    if (scope === "model") {
+      const inheritOpt = document.createElement("option");
+      inheritOpt.value = "__inherit__";
+      inheritOpt.textContent = "__inherit__ (use provider default)";
+      surfaceSelect.appendChild(inheritOpt);
+    }
+    surfaces.forEach((surface) => {
+      const opt = document.createElement("option");
+      opt.value = surface;
+      opt.textContent = surface;
+      surfaceSelect.appendChild(opt);
+    });
+    if (entry && entry.preferred_surface) {
+      surfaceSelect.value = entry.preferred_surface;
+    }
+  }
+
+  async function applyQuickControls() {
+    if (!state.activeSessionId) return;
+    const modelSelect = el("qcModelSelect");
+    const modelSearch = el("qcModelSearch");
+    const reasoningSelect = el("qcReasoningSelect");
+    const provSelect = el("qcSurfaceProvider");
+    const surfaceSelect = el("qcSurfaceSelect");
+    const statusEl = el("qcStatus");
+
+    const body = {};
+    const selectedModel = (modelSelect && modelSelect.value) || "";
+    const typedModel = (modelSearch && modelSearch.value.trim()) || "";
+    if (selectedModel) {
+      body.model = selectedModel;
+    } else if (typedModel && !(modelSelect && modelSelect.options.length > 1)) {
+      body.model = typedModel;
+    }
+    if (reasoningSelect && reasoningSelect.value) {
+      body.reasoning_effort = reasoningSelect.value;
+    }
+    if (provSelect && provSelect.value && surfaceSelect && surfaceSelect.value) {
+      const [scope, targetKey] = provSelect.value.split("::");
+      body.preferred_surface_scope = scope;
+      body.preferred_surface_key = targetKey;
+      body.preferred_surface = surfaceSelect.value;
+    }
+
+    statusEl.textContent = "Applying...";
+    try {
+      const resp = await apiJson(`/rc/api/sessions/${state.activeSessionId}/proxy-controls`, {
+        method: "POST",
+        body,
+      });
+      if (resp && resp.session) {
+        state.activeSession = resp.session;
+      }
+      if (resp && resp.preferred_surface) {
+        const refreshedCatalog = await apiJson("/rc/api/catalog").catch(() => null);
+        if (refreshedCatalog) state.catalog = refreshedCatalog;
+      }
+      renderActiveSessionHeader();
+      renderMetaTab();
+      populateQuickControls();
+      statusEl.textContent = "Controls updated.";
+    } catch (err) {
+      statusEl.textContent = err.message || "Update failed.";
+    }
+  }
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; i += 1) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  async function refreshPushUi() {
+    const toggleBtn = el("btnPushToggle");
+    const testBtn = el("btnTestPush");
+    if (!toggleBtn || !testBtn) return;
+    const supported =
+      "serviceWorker" in navigator &&
+      "PushManager" in window &&
+      "Notification" in window;
+    if (!supported) {
+      toggleBtn.textContent = "Alerts: Unsupported";
+      testBtn.hidden = true;
+      return;
+    }
+    try {
+      const reg =
+        state.swRegistration || (await navigator.serviceWorker.getRegistration("/rc/"));
+      if (reg) state.swRegistration = reg;
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      state.pushSubscribed = Boolean(sub);
+      toggleBtn.textContent = state.pushSubscribed ? "Alerts: On" : "Alerts: Off";
+      testBtn.hidden = !state.pushSubscribed;
+    } catch (_err) {
+      toggleBtn.textContent = "Alerts: Off";
+      testBtn.hidden = true;
+    }
+  }
+
+  async function togglePushSubscription() {
+    const toggleBtn = el("btnPushToggle");
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      if (toggleBtn) toggleBtn.textContent = "Alerts: Unsupported";
+      return;
+    }
+    const reg =
+      state.swRegistration || (await navigator.serviceWorker.register("/rc/sw.js"));
+    state.swRegistration = reg;
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      await apiJson("/rc/api/push/subscribe", {
+        method: "DELETE",
+        body: { endpoint: existing.endpoint },
+      }).catch(() => {});
+      await existing.unsubscribe().catch(() => {});
+      await refreshPushUi();
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") {
+      if (toggleBtn) toggleBtn.textContent = "Alerts: Blocked";
+      return;
+    }
+    const keyResp = await apiJson("/rc/api/push/vapid-public-key");
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(keyResp.public_key),
+    });
+    const jsonSub = sub.toJSON();
+    await apiJson("/rc/api/push/subscribe", {
+      method: "POST",
+      body: {
+        endpoint: jsonSub.endpoint,
+        keys: jsonSub.keys || {},
+        session_id: state.activeSessionId || null,
+      },
+    });
+    await refreshPushUi();
+  }
+
   async function pairWithToken(token, label) {
     el("pairError").hidden = true;
     const data = await apiJson("/rc/api/pair", {
@@ -797,7 +1246,13 @@
 
   async function bootstrap() {
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/rc/sw.js").catch(() => {});
+      navigator.serviceWorker
+        .register("/rc/sw.js")
+        .then((reg) => {
+          state.swRegistration = reg;
+          refreshPushUi().catch(() => {});
+        })
+        .catch(() => {});
     }
     const params = new URLSearchParams(window.location.search);
     const pairToken = params.get("pair");
@@ -1024,6 +1479,55 @@
 
   el("btnRefreshDiff").addEventListener("click", () => {
     loadDiff().catch(() => {});
+  });
+
+  el("btnQuickControls").addEventListener("click", () => {
+    const drawer = el("quickControlsDrawer");
+    drawer.hidden = !drawer.hidden;
+    if (!drawer.hidden) {
+      el("qcStatus").textContent = "";
+      populateQuickControls();
+    }
+  });
+
+  el("btnCloseQuickControls").addEventListener("click", () => {
+    el("quickControlsDrawer").hidden = true;
+  });
+
+  el("qcModelSearch").addEventListener("input", () => {
+    populateQuickControls();
+  });
+
+  el("qcSurfaceProvider").addEventListener("change", () => {
+    renderSurfaceSelect();
+  });
+
+  el("btnApplyQuickControls").addEventListener("click", () => {
+    applyQuickControls().catch(() => {});
+  });
+
+  el("btnPushToggle").addEventListener("click", () => {
+    togglePushSubscription().catch(() => {});
+  });
+
+  el("btnTestPush").addEventListener("click", () => {
+    apiJson("/rc/api/push/test", {
+      method: "POST",
+      body: {
+        title: "MCC Remote Control",
+        body: "Test push notification from /rc",
+        session_id: state.activeSessionId || null,
+      },
+    }).catch(() => {});
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopTelemetryPolling();
+    } else if (state.authenticated && state.activeSessionId) {
+      loadTelemetry().catch(() => {});
+      startTelemetryPolling();
+    }
   });
 
   document.querySelectorAll(".rc-key").forEach((btn) => {

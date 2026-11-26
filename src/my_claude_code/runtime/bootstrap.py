@@ -71,6 +71,7 @@ def build_asgi_app(
         process_restart_callback=process_restart_callback,
         remote_hub=remote_hub,
     )
+    remote_hub.set_messaging_target_provider(runtime.rc_messaging_targets)
     services = ApiServices(
         requests=provider_manager,
         admin=runtime,

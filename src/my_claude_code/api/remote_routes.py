@@ -21,6 +21,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from my_claude_code.application.catalogue_snapshot import current_catalogue_records
 from my_claude_code.application.remote_ports import (
     RemoteConflictError,
     RemoteControlError,
@@ -30,8 +31,27 @@ from my_claude_code.application.remote_ports import (
     RemoteNotFoundError,
     RemoteSessionPort,
 )
+from my_claude_code.config.constants import RC_REASONING_EFFORT_VALUES
+from my_claude_code.config.model_overrides import current_model_overrides
+from my_claude_code.config.model_refs import (
+    configured_chat_model_refs,
+    parse_provider_type,
+)
+from my_claude_code.config.settings import get_settings
+from my_claude_code.core.tier_refs import (
+    GLOBAL_TIER_SETTINGS,
+    TIER_LABELS,
+    TIER_ORDER,
+    tier_ref,
+)
 
-from .admin_routes import require_loopback_admin
+from .admin_routes import commit_preferred_surface, require_loopback_admin
+from .model_admin import (
+    INHERIT_SENTINEL,
+    MODEL_SCOPE,
+    PROVIDER_SCOPE,
+    speakable_surfaces,
+)
 from .remote_auth import RemoteAuthError, RemoteAuthManager
 
 REMOTE_STATIC_DIR = Path(__file__).parent / "remote_static"
@@ -186,6 +206,28 @@ class ApprovalRequest(BaseModel):
 
 class ForkSessionRequest(BaseModel):
     title: str = Field(default="", max_length=160)
+
+
+class ProxyControlsRequest(BaseModel):
+    model: str | None = Field(default=None, max_length=160)
+    reasoning_effort: str | None = Field(default=None, max_length=32)
+    preferred_surface: str | None = Field(default=None, max_length=32)
+    preferred_surface_scope: str = Field(default=PROVIDER_SCOPE, max_length=16)
+    preferred_surface_key: str | None = Field(default=None, max_length=200)
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str = Field(min_length=1, max_length=512)
+    auth: str = Field(min_length=1, max_length=256)
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=2048)
+    keys: PushSubscriptionKeys
+
+
+class PushUnsubscribeRequest(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=2048)
 
 
 # ------------------------------------------------------- Admin RC endpoints --
@@ -644,6 +686,233 @@ async def rc_session_diff(request: Request, session_id: str) -> dict[str, Any]:
     remote, _device_id = _require_rc_read(request)
     try:
         return await remote.get_diff(session_id)
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.get("/rc/api/sessions/{session_id}/telemetry")
+async def rc_session_telemetry(request: Request, session_id: str) -> dict[str, Any]:
+    remote, _device_id = _require_rc_read(request)
+    try:
+        return await remote.get_session_telemetry(session_id, emit_event=True)
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.get("/rc/api/catalog")
+async def rc_catalog(request: Request) -> dict[str, Any]:
+    _remote, _device_id = _require_rc_read(request)
+    services = getattr(request.app.state, "services", None)
+    req_port = getattr(services, "requests", None) if services else None
+    settings = (
+        req_port.current_settings()
+        if req_port is not None and hasattr(req_port, "current_settings")
+        else get_settings()
+    )
+    overrides = current_model_overrides()
+    records = (
+        await current_catalogue_records(settings, req_port)
+        if req_port is not None
+        else {}
+    )
+
+    tiers: list[dict[str, Any]] = []
+    for tier in TIER_ORDER:
+        tref = tier_ref(tier)
+        gs = GLOBAL_TIER_SETTINGS[tier]
+        target = str(getattr(settings, gs.model_attr, "") or "").strip()
+        tiers.append(
+            {
+                "id": tref,
+                "label": f"{TIER_LABELS[tier]} ({tref})",
+                "target": target or settings.model,
+            }
+        )
+
+    models_out: list[dict[str, Any]] = []
+    seen_refs: set[str] = set()
+    multi_door_map: dict[str, dict[str, Any]] = {}
+
+    def _register_provider_doors(provider_id: str) -> list[str]:
+        if not provider_id:
+            return []
+        offered = [item.value for item in speakable_surfaces(provider_id)]
+        if len(offered) >= 2 and provider_id not in multi_door_map:
+            effective, scope, _mval, _pval = overrides.preferred_surface_detail(
+                provider_id, provider_id
+            )
+            multi_door_map[provider_id] = {
+                "provider_id": provider_id,
+                "offered_surfaces": offered,
+                "preferred_surface": effective or "",
+                "preferred_surface_scope": scope,
+            }
+        return offered
+
+    for record in records.values():
+        if record.force_no_thinking:
+            continue
+        ref = record.provider_model_ref
+        if ref in seen_refs:
+            continue
+        seen_refs.add(ref)
+        pid = record.provider_id
+        offered = _register_provider_doors(pid)
+        effective_surface, surface_scope, _mv, _pv = (
+            overrides.preferred_surface_detail(pid, ref)
+            if len(offered) >= 2
+            else (None, "", None, None)
+        )
+        models_out.append(
+            {
+                "id": ref,
+                "gateway_id": record.gateway_id,
+                "provider_id": pid,
+                "display_name": record.display_name,
+                "is_primary_route": record.is_primary_route,
+                "offered_surfaces": offered if len(offered) >= 2 else [],
+                "preferred_surface": effective_surface or "",
+                "preferred_surface_scope": surface_scope,
+            }
+        )
+
+    for cfg_ref in configured_chat_model_refs(settings):
+        if cfg_ref.model_ref in seen_refs:
+            continue
+        seen_refs.add(cfg_ref.model_ref)
+        pid = cfg_ref.provider_id
+        offered = _register_provider_doors(pid)
+        effective_surface, surface_scope, _mv, _pv = (
+            overrides.preferred_surface_detail(pid, cfg_ref.model_ref)
+            if len(offered) >= 2
+            else (None, "", None, None)
+        )
+        models_out.append(
+            {
+                "id": cfg_ref.model_ref,
+                "gateway_id": cfg_ref.model_ref,
+                "provider_id": pid,
+                "display_name": cfg_ref.model_ref,
+                "is_primary_route": cfg_ref.model_ref == settings.model,
+                "offered_surfaces": offered if len(offered) >= 2 else [],
+                "preferred_surface": effective_surface or "",
+                "preferred_surface_scope": surface_scope,
+            }
+        )
+
+    return {
+        "tiers": tiers,
+        "models": models_out,
+        "multi_door_providers": sorted(
+            multi_door_map.values(), key=lambda item: str(item["provider_id"])
+        ),
+        "reasoning_efforts": list(RC_REASONING_EFFORT_VALUES),
+        "default_model": settings.model,
+    }
+
+
+@remote_router.post("/rc/api/sessions/{session_id}/proxy-controls")
+async def rc_proxy_controls(
+    request: Request, session_id: str, body: ProxyControlsRequest
+) -> dict[str, Any]:
+    remote, _device_id = _require_rc_write(request)
+    pref_info: dict[str, Any] | None = None
+    if body.preferred_surface is not None:
+        scope = body.preferred_surface_scope.strip().lower()
+        raw_key = (body.preferred_surface_key or "").strip()
+        if not raw_key:
+            try:
+                sess = remote.get_session(session_id)
+            except RemoteControlError as exc:
+                raise _translate_remote_error(exc) from exc
+            candidate_model = (body.model or sess.get("model") or "").strip()
+            raw_key = (
+                candidate_model
+                if scope == MODEL_SCOPE and "/" in candidate_model
+                else (
+                    str(sess.get("provider_id") or "").strip()
+                    or parse_provider_type(candidate_model)
+                )
+            )
+        if not raw_key:
+            raise HTTPException(
+                status_code=400,
+                detail="preferred_surface_key is required when updating preferred wire endpoint",
+            )
+        clean_scope, clean_key, clean_surface = await asyncio.to_thread(
+            commit_preferred_surface,
+            scope=scope,
+            key=raw_key,
+            surface=body.preferred_surface,
+        )
+        pref_info = {
+            "scope": clean_scope,
+            "key": clean_key,
+            "surface": clean_surface or INHERIT_SENTINEL,
+            "global": True,
+        }
+    try:
+        session = await remote.set_proxy_controls(
+            session_id,
+            model=body.model,
+            reasoning_effort=body.reasoning_effort,
+            preferred_surface_info=pref_info,
+        )
+        return {"session": session, "preferred_surface": pref_info}
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.get("/rc/api/push/vapid-public-key")
+def rc_push_vapid_public_key(request: Request) -> dict[str, Any]:
+    remote, _device_id = _require_rc_read(request)
+    try:
+        return remote.vapid_public_key()
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.post("/rc/api/push/subscribe")
+def rc_push_subscribe(request: Request, body: PushSubscribeRequest) -> dict[str, Any]:
+    remote, device_id = _require_rc_write(request)
+    try:
+        sub = remote.subscribe_push(
+            endpoint=body.endpoint,
+            p256dh=body.keys.p256dh,
+            auth=body.keys.auth,
+            device_id=device_id,
+        )
+        return {"subscribed": True, "subscription": sub}
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.delete("/rc/api/push/subscribe")
+async def rc_push_unsubscribe(
+    request: Request,
+    endpoint: str | None = Query(default=None),
+) -> dict[str, Any]:
+    remote, _device_id = _require_rc_write(request)
+    target = (endpoint or "").strip()
+    if not target:
+        with contextlib.suppress(Exception):
+            raw = await request.json()
+            if isinstance(raw, Mapping) and isinstance(raw.get("endpoint"), str):
+                target = raw["endpoint"].strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="endpoint is required")
+    try:
+        removed = remote.unsubscribe_push(target)
+        return {"unsubscribed": removed}
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.post("/rc/api/push/test")
+async def rc_push_test(request: Request) -> dict[str, Any]:
+    remote, device_id = _require_rc_write(request)
+    try:
+        return await remote.send_test_push(device_id)
     except RemoteControlError as exc:
         raise _translate_remote_error(exc) from exc
 

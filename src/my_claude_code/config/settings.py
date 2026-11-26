@@ -221,6 +221,7 @@ from .constants import (
     RC_CLOUDFLARE_TUNNEL_TOKEN_DEFAULT,
     RC_ENABLED_DEFAULT,
     RC_MAX_SESSIONS_DEFAULT,
+    RC_MESSAGING_ALERTS_DEFAULT,
     RC_PERMISSION_MODE_DEFAULT,
     RC_PERMISSION_MODE_VALUES,
     RC_SESSION_SECRET_DEFAULT,
@@ -2598,6 +2599,9 @@ class Settings(BaseSettings):
     )
     rc_session_secret: str = Field(
         default=RC_SESSION_SECRET_DEFAULT, validation_alias="RC_SESSION_SECRET"
+    )
+    rc_messaging_alerts: bool = Field(
+        default=RC_MESSAGING_ALERTS_DEFAULT, validation_alias="RC_MESSAGING_ALERTS"
     )
 
     # ==================== Server ====================

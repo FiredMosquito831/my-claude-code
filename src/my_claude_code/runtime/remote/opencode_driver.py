@@ -230,6 +230,7 @@ class OpenCodeFamilyDriver:
         self._message_roles: dict[str, str] = {}
         self._emitted_tools: set[str] = set()
         self._completed_tools: set[str] = set()
+        self.reasoning_effort = ""
         self._closed = False
 
     @property
@@ -390,6 +391,8 @@ class OpenCodeFamilyDriver:
                 body["model"] = {"providerID": provider_id, "modelID": model_id}
             else:
                 body["model"] = {"providerID": "mcc", "modelID": self.model}
+        if self.reasoning_effort and self.reasoning_effort != "auto":
+            body["variant"] = self.reasoning_effort
 
         resp = await self._client.post(
             f"/session/{self.external_session_id}/prompt_async",
@@ -420,6 +423,10 @@ class OpenCodeFamilyDriver:
         self.model = model.strip()
         await self._on_state_update(model=self.model)
         await self._on_event("session.model_changed", {"model": self.model})
+
+    async def set_reasoning_effort(self, effort: str) -> None:
+        self.reasoning_effort = effort.strip().lower()
+        await self._on_state_update(reasoning_effort=self.reasoning_effort)
 
     async def set_permission_mode(self, mode: str) -> None:
         self.permission_mode = mode

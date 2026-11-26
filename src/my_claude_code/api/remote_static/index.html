@@ -28,6 +28,12 @@
           <span class="rc-brand-title">MCC Remote Control</span>
         </div>
         <div class="rc-topbar-actions">
+          <button id="btnPushToggle" class="rc-btn rc-btn-ghost" type="button" hidden>
+            Alerts: Off
+          </button>
+          <button id="btnTestPush" class="rc-btn rc-btn-ghost" type="button" hidden>
+            Test Alert
+          </button>
           <button id="btnNewSessionOpen" class="rc-btn rc-btn-primary" type="button" hidden>
             + New
           </button>
@@ -124,6 +130,9 @@
                   <option value="auto_edits">Auto Edits</option>
                   <option value="yolo">YOLO (Bypass)</option>
                 </select>
+                <button id="btnQuickControls" class="rc-btn rc-btn-ghost" type="button">
+                  Proxy Controls
+                </button>
                 <button id="btnSwitchTerminal" class="rc-btn rc-btn-ghost" type="button" hidden>
                   Open Interactive TUI (PTY)
                 </button>
@@ -135,6 +144,56 @@
                 </button>
               </div>
             </div>
+
+            <div id="telemetryStrip" class="rc-telemetry-strip" aria-live="polite" hidden>
+              <span id="telInflight" class="rc-telemetry-chip rc-telemetry-live" hidden></span>
+              <span id="telCost" class="rc-telemetry-chip">Cost: $0.0000</span>
+              <span id="telTokens" class="rc-telemetry-chip">Tokens: 0 in / 0 out</span>
+              <span id="telTtft" class="rc-telemetry-chip">TTFT: —</span>
+              <span id="telEndpoint" class="rc-telemetry-chip">Route: —</span>
+              <span id="telTranslation" class="rc-telemetry-chip rc-pill-info" hidden></span>
+            </div>
+
+            <section id="quickControlsDrawer" class="rc-quick-drawer" hidden>
+              <div class="rc-drawer-head">
+                <strong>MCC Proxy Quick Controls</strong>
+                <button id="btnCloseQuickControls" class="rc-btn rc-btn-ghost" type="button">
+                  Close
+                </button>
+              </div>
+              <div class="rc-drawer-grid">
+                <label class="rc-label">
+                  Session Model (this session)
+                  <input
+                    id="qcModelSearch"
+                    class="rc-input"
+                    type="text"
+                    placeholder="Filter or type tier/model..."
+                  />
+                  <select id="qcModelSelect" class="rc-select"></select>
+                </label>
+                <label class="rc-label">
+                  Reasoning Effort (this session)
+                  <select id="qcReasoningSelect" class="rc-select">
+                    <option value="">Default (harness/MCC)</option>
+                  </select>
+                </label>
+                <label class="rc-label">
+                  Provider/Model Preferred Wire Endpoint (MCC global)
+                  <select id="qcSurfaceProvider" class="rc-select"></select>
+                  <select id="qcSurfaceSelect" class="rc-select"></select>
+                  <span class="rc-muted rc-help-text">
+                    Applies globally across MCC for that provider/model; session model and effort stay scoped to this session.
+                  </span>
+                </label>
+              </div>
+              <div class="rc-drawer-actions">
+                <button id="btnApplyQuickControls" class="rc-btn rc-btn-primary" type="button">
+                  Apply Controls
+                </button>
+                <span id="qcStatus" class="rc-muted"></span>
+              </div>
+            </section>
 
             <nav class="rc-tabs" role="tablist">
               <button class="rc-tab is-active" type="button" data-tab="chat">
@@ -213,6 +272,10 @@
 
             <div id="tabInfo" class="rc-tab-pane" hidden>
               <dl id="sessionMetaList" class="rc-meta-list"></dl>
+              <div class="rc-telemetry-history">
+                <h3>Recent Proxy Requests</h3>
+                <div id="telRecentList" class="rc-recent-list"></div>
+              </div>
               <div class="rc-model-row">
                 <input
                   id="modelOverrideInput"
