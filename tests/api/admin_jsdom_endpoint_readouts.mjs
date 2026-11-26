@@ -83,9 +83,32 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
             offered: [
               { value: "chat_completions", label: "Chat Completions (/chat/completions)" },
               { value: "responses", label: "Responses (/responses)" },
+              { value: "messages", label: "Messages (/messages)" },
             ],
             preferred: "",
           },
+          default_ladder: [
+            {
+              family: "anthropic",
+              harness_label: "Harness requests Messages (/v1/messages)",
+              steps: [
+                { value: "messages", label: "Messages (/messages)", short_label: "Messages", translated: false, mode: "direct" },
+                { value: "responses", label: "Responses (/responses)", short_label: "Responses", translated: true, mode: "with translation" },
+                { value: "chat_completions", label: "Chat Completions (/chat/completions)", short_label: "Chat Completions", translated: true, mode: "with translation" },
+              ],
+              text: "Messages (direct) \u2192 Responses (with translation) \u2192 Chat Completions (with translation)",
+            },
+            {
+              family: "openai",
+              harness_label: "Harness requests Responses (/v1/responses)",
+              steps: [
+                { value: "responses", label: "Responses (/responses)", short_label: "Responses", translated: false, mode: "direct" },
+                { value: "chat_completions", label: "Chat Completions (/chat/completions)", short_label: "Chat Completions", translated: true, mode: "with translation" },
+                { value: "messages", label: "Messages (/messages)", short_label: "Messages", translated: true, mode: "with translation" },
+              ],
+              text: "Responses (direct) \u2192 Chat Completions (with translation) \u2192 Messages (with translation)",
+            },
+          ],
           face_text: "Speaks: Chat Completions, Responses, Messages · Publishes: /chat/completions, /responses",
         },
       },
@@ -191,6 +214,20 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
           ],
           preferred: "",
         },
+        default_ladder: [
+          {
+            family: "anthropic",
+            harness_label: "Harness requests Messages (/v1/messages)",
+            steps: [],
+            text: "Responses (with translation) \u2192 Chat Completions (with translation)",
+          },
+          {
+            family: "openai",
+            harness_label: "Harness requests Responses (/v1/responses)",
+            steps: [],
+            text: "Responses (direct) \u2192 Chat Completions (with translation)",
+          },
+        ],
         face_text: "Speaks: Chat Completions, Responses",
       },
     },
@@ -226,6 +263,7 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
               offered: [
                 { value: "chat_completions", label: "Chat Completions (/chat/completions)" },
                 { value: "responses", label: "Responses (/responses)" },
+                { value: "messages", label: "Messages (/messages)" },
               ],
               preferred: ccPreferred,
             },
@@ -402,6 +440,154 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
   };
   ROUTES["/admin/api/requests/latency"] = { enabled: false };
   ROUTES["/admin/api/requests/in-loop"] = { enabled: false, rows: [] };
+  const translatedReq = {
+    id: "req-tr-1",
+    ts_iso: "2026-11-26T00:05:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic",
+    harness: "claude",
+    provider: "commandcode",
+    requested_model: "claude-sonnet-4",
+    resolved_model: "commandcode/deepseek/deepseek-v4.1-flash",
+    status: "success",
+    tokens_in: 50,
+    tokens_out: 100,
+    duration_ms: 800,
+    endpoint_routing: {
+      harness_endpoint: {
+        value: "messages",
+        path: "/v1/messages",
+        label: "Messages (/v1/messages)",
+        short_label: "Messages",
+      },
+      provider_endpoint: {
+        value: "responses",
+        raw: "responses (registry)",
+        label: "Responses (/responses)",
+        full_label: "Responses (/responses) \u2014 registry",
+        short_label: "Responses",
+        source_note: "registry",
+      },
+      translated: true,
+      translation_label: "Messages (/v1/messages) \u2192 Responses (/responses) (translated)",
+      short_translation: "Messages \u2192 Responses (translated)",
+      attempt_routes: [
+        {
+          attempt: 0,
+          provider: "commandcode",
+          model_ref: "commandcode/deepseek/deepseek-v4.1-flash",
+          outcome: "failed",
+          wire_surface: "chat_completions (profile)",
+          translated: true,
+          translation_label: "Messages (/v1/messages) \u2192 Chat Completions (/chat/completions) (translated)",
+          short_translation: "Messages \u2192 Chat Completions (translated)",
+        },
+        {
+          attempt: 1,
+          provider: "commandcode",
+          model_ref: "commandcode/deepseek/deepseek-v4.1-flash",
+          outcome: "succeeded",
+          wire_surface: "responses (registry)",
+          translated: true,
+          translation_label: "Messages (/v1/messages) \u2192 Responses (/responses) (translated)",
+          short_translation: "Messages \u2192 Responses (translated)",
+        },
+      ],
+    },
+    route_attempts: [
+      {
+        attempt: 0,
+        provider: "commandcode",
+        model_ref: "commandcode/deepseek/deepseek-v4.1-flash",
+        outcome: "failed",
+        error_kind: "upstream_status",
+        error_message: "400",
+        params: { wire: { surface: "chat_completions (profile)" } },
+      },
+      {
+        attempt: 1,
+        provider: "commandcode",
+        model_ref: "commandcode/deepseek/deepseek-v4.1-flash",
+        outcome: "succeeded",
+        params: { wire: { surface: "responses (registry)" } },
+      },
+    ],
+  };
+  const directReq = {
+    id: "req-dir-1",
+    ts_iso: "2026-11-26T00:06:00Z",
+    endpoint: "/v1/messages",
+    protocol: "anthropic",
+    harness: "claude",
+    provider: "opencode_go",
+    requested_model: "claude-sonnet-4",
+    resolved_model: "opencode_go/hy4-flash-free",
+    status: "success",
+    tokens_in: 30,
+    tokens_out: 60,
+    duration_ms: 400,
+    endpoint_routing: {
+      harness_endpoint: {
+        value: "messages",
+        path: "/v1/messages",
+        label: "Messages (/v1/messages)",
+        short_label: "Messages",
+      },
+      provider_endpoint: {
+        value: "messages",
+        raw: "messages (learned)",
+        label: "Messages (/messages)",
+        full_label: "Messages (/messages) \u2014 learned",
+        short_label: "Messages",
+        source_note: "learned",
+      },
+      translated: false,
+      translation_label: "Messages (/v1/messages) \u2192 Messages (/messages) (direct passthrough, no translation)",
+      short_translation: "Messages (direct)",
+      attempt_routes: [
+        {
+          attempt: 0,
+          provider: "opencode_go",
+          model_ref: "opencode_go/hy4-flash-free",
+          outcome: "succeeded",
+          wire_surface: "messages (learned)",
+          translated: false,
+          translation_label: "Messages (/v1/messages) \u2192 Messages (/messages) (direct passthrough, no translation)",
+          short_translation: "Messages (direct)",
+        },
+      ],
+    },
+    route_attempts: [
+      {
+        attempt: 0,
+        provider: "opencode_go",
+        model_ref: "opencode_go/hy4-flash-free",
+        outcome: "succeeded",
+        params: { wire: { surface: "messages (learned)" } },
+      },
+    ],
+  };
+  const xssReq = {
+    id: "req-xss-1",
+    ts_iso: "2026-11-26T00:07:00Z",
+    endpoint: `/v1/messages?x=${xssToken}`,
+    protocol: "anthropic",
+    provider: "commandcode",
+    resolved_model: "commandcode/deepseek/deepseek-v4.1-flash",
+    status: "success",
+    endpoint_routing: {
+      harness_endpoint: { value: "messages", path: `/v1/messages?x=${xssToken}`, label: `Messages (${xssToken})`, short_label: "Messages" },
+      provider_endpoint: { value: "responses", raw: xssToken, label: "Responses (/responses)", full_label: `Responses \u2014 ${xssToken}`, short_label: "Responses", source_note: xssToken },
+      translated: true,
+      translation_label: `Messages (${xssToken}) \u2192 Responses`,
+      short_translation: `Messages \u2192 ${xssToken}`,
+      attempt_routes: [],
+    },
+    route_attempts: [],
+  };
+  ROUTES["/admin/api/requests/req-tr-1"] = translatedReq;
+  ROUTES["/admin/api/requests/req-dir-1"] = directReq;
+  ROUTES["/admin/api/requests/req-xss-1"] = xssReq;
   ROUTES["/admin/api/credentials/COMMANDCODE_API_KEY/keys"] = {
     count: 1,
     locked: false,
@@ -505,18 +691,20 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
       selectHasDataKey: Boolean(
         customBody.querySelector(".pv-preferred-surface")?.hasAttribute("data-key"),
       ),
+      ladderText: flat(customBody.querySelector(".pv-default-ladder")),
       deleteIsLast: customButtons[customButtons.length - 1] === "Delete",
       injectedImgs: customBody.querySelectorAll("img").length,
     };
     doc.getElementById("providerDetailClose").click();
     await wait(80);
 
-    // Open groq overlay -> endpoints panel, no selector.
+    // Open groq overlay -> endpoints panel, no selector, no ladder.
     groqCard.click();
     await wait(120);
     const groqModal = {
       panelText: flat(doc.querySelector("#providerDetailBody .pv-endpoints-panel")),
       selectCount: doc.querySelectorAll("#providerDetailBody .pv-preferred-surface").length,
+      ladderCount: doc.querySelectorAll("#providerDetailBody .pv-default-ladder").length,
     };
     doc.getElementById("providerDetailClose").click();
     await wait(80);
@@ -544,6 +732,8 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
 
     const modelsInitial = {
       ccRollup: flat(ccModelsNode.querySelector(".models-provider-endpoints")),
+      ccLadderText: flat(ccModelsNode.querySelector(".models-provider-surface .pv-default-ladder")),
+      ccLadderClass: ccModelsNode.querySelector(".models-provider-surface .pv-default-ladder")?.className || "",
       groqRollup: flat(groqModelsNode.querySelector(".models-provider-endpoints")),
       groqLastUsedChip: flat(groqModelRow.querySelector(".models-chip-endpoint")),
       groqReadout: flat(groqModelRow.querySelector(".models-endpoint-readout")),
@@ -561,6 +751,8 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
     const modalStatus = doc.querySelector("#providerDetailBody .pv-preferred-surface-status");
     const ccModalInitial = {
       panelText: flat(doc.querySelector("#providerDetailBody .pv-endpoints-panel")),
+      ladderText: flat(doc.querySelector("#providerDetailBody .pv-default-ladder")),
+      ladderClass: doc.querySelector("#providerDetailBody .pv-default-ladder")?.className || "",
       selectValue: modalSelect ? modalSelect.value : null,
       selectHasDataKey: modalSelect ? modalSelect.hasAttribute("data-key") : null,
     };
@@ -570,6 +762,8 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
     const ccModalAfterSave = {
       status: flat(modalStatus),
       selectValue: modalSelect.value,
+      ladderHead: flat(doc.querySelector("#providerDetailBody .pv-default-ladder-head")),
+      ladderClass: doc.querySelector("#providerDetailBody .pv-default-ladder")?.className || "",
     };
     doc.getElementById("providerDetailClose").click();
     await wait(80);
@@ -584,6 +778,11 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
       rollupText: flat(
         doc.querySelector(
           '.models-provider[data-provider="commandcode"] .models-provider-endpoints',
+        ),
+      ),
+      ladderHead: flat(
+        doc.querySelector(
+          '.models-provider[data-provider="commandcode"] .models-provider-surface .pv-default-ladder-head',
         ),
       ),
     };
@@ -604,6 +803,59 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
     await wait(120);
     const modalSyncedFromModels =
       doc.querySelector("#providerDetailBody .pv-preferred-surface")?.value ?? null;
+    doc.getElementById("providerDetailClose").click();
+    await wait(80);
+
+    // Verify Requests table translation pills, #reqDetailModal translation rows, chain badges, and XSS escaping.
+    window.eval(
+      `renderRequestsTable(${JSON.stringify([translatedReq, directReq, xssReq])});`,
+    );
+    const tableCells = Array.from(
+      doc.querySelectorAll("#reqTableBody td.req-col-endpoint"),
+    ).map((td) => ({
+      text: flat(td),
+      pillText: flat(td.querySelector(".req-table-translation")),
+      pillClass: td.querySelector(".req-table-translation")?.className || "",
+      injectedImgs: td.querySelectorAll("img").length,
+    }));
+
+    const readMetaPairs = () => {
+      const nodes = Array.from(doc.getElementById("reqDetailMeta").children);
+      const pairs = [];
+      for (let i = 0; i < nodes.length - 1; i += 2) {
+        pairs.push([flat(nodes[i]), flat(nodes[i + 1])]);
+      }
+      return pairs;
+    };
+
+    await window.eval('openRequestDetail("req-tr-1")');
+    await wait(80);
+    const translatedDetail = {
+      metaPairs: readMetaPairs(),
+      badgeClass: doc.querySelector("#reqDetailMeta .req-translation-badge")?.className || "",
+      badgeText: flat(doc.querySelector("#reqDetailMeta .req-translation-badge")),
+      chainTranslations: Array.from(
+        doc.querySelectorAll("#reqDetailChain .req-chain-translation"),
+      ).map((el) => ({ text: flat(el), className: el.className })),
+    };
+    window.eval("closeRequestDetail()");
+
+    await window.eval('openRequestDetail("req-dir-1")');
+    await wait(80);
+    const directDetail = {
+      metaPairs: readMetaPairs(),
+      badgeClass: doc.querySelector("#reqDetailMeta .req-translation-badge")?.className || "",
+      badgeText: flat(doc.querySelector("#reqDetailMeta .req-translation-badge")),
+    };
+    window.eval("closeRequestDetail()");
+
+    await window.eval('openRequestDetail("req-xss-1")');
+    await wait(80);
+    const xssDetail = {
+      injectedImgs: doc.getElementById("reqDetailMeta").querySelectorAll("img").length,
+      badgeText: flat(doc.querySelector("#reqDetailMeta .req-translation-badge")),
+    };
+    window.eval("closeRequestDetail()");
 
     return {
       fatal: null,
@@ -619,6 +871,10 @@ export function prepareEndpointReadoutsScenario({ window, ROUTES }) {
       ccModalAfterSave,
       syncedModels,
       modalSyncedFromModels,
+      tableCells,
+      translatedDetail,
+      directDetail,
+      xssDetail,
       posts,
     };
   }

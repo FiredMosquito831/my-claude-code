@@ -16044,6 +16044,8 @@ async function saveOverlayPreferredSurface(provider, surface, select, statusEl) 
       provider.endpoint_summary.surface_preference.preferred = surface;
     }
     syncOverlayPreferredPreferenceToState(provider.provider_id, surface);
+    const panel = select.closest(".pv-endpoints-panel");
+    if (panel) syncDefaultLadderPreview(panel, provider.endpoint_summary, surface);
     applyModelsData(nextModels);
     refreshProviderRow(provider.provider_id);
     statusEl.textContent = "Saved";
@@ -16054,6 +16056,52 @@ async function saveOverlayPreferredSurface(provider, surface, select, statusEl) 
     showMessage(error.message, "error");
   } finally {
     select.disabled = false;
+  }
+}
+
+function buildDefaultLadderPreview(summary, preferredSurface) {
+  const ladder = summary && Array.isArray(summary.default_ladder) ? summary.default_ladder : [];
+  if (!ladder.length) return null;
+  const wrap = document.createElement("div");
+  const isOverridden = Boolean(String(preferredSurface || "").trim());
+  wrap.className = `pv-default-ladder ${isOverridden ? "is-overridden" : "is-active"}`;
+
+  const head = document.createElement("div");
+  head.className = "pv-default-ladder-head";
+  head.textContent = isOverridden
+    ? `Default ladder (paused by ${surfaceShortLabel(preferredSurface)} preference)`
+    : "Default ladder (active for Auto)";
+  wrap.appendChild(head);
+
+  const list = document.createElement("ul");
+  list.className = "pv-default-ladder-list";
+  ladder.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const item = document.createElement("li");
+    item.className = "pv-default-ladder-item";
+    const harness = document.createElement("span");
+    harness.className = "pv-default-ladder-harness";
+    harness.textContent = `${entry.harness_label || entry.family || "Harness"}: `;
+    const steps = document.createElement("span");
+    steps.className = "pv-default-ladder-steps";
+    steps.textContent = entry.text || "";
+    item.append(harness, steps);
+    list.appendChild(item);
+  });
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function syncDefaultLadderPreview(container, summary, preferredSurface) {
+  if (!container) return;
+  const existing = container.querySelector(".pv-default-ladder");
+  const replacement = buildDefaultLadderPreview(summary, preferredSurface);
+  if (existing && replacement) {
+    existing.replaceWith(replacement);
+  } else if (existing) {
+    existing.remove();
+  } else if (replacement) {
+    container.appendChild(replacement);
   }
 }
 
@@ -16118,6 +16166,8 @@ function buildProviderEndpointsPanel(provider) {
     prefLabel.appendChild(select);
     prefRow.append(prefLabel, status);
     panel.appendChild(prefRow);
+    const ladderPreview = buildDefaultLadderPreview(summary, pref.preferred || "");
+    if (ladderPreview) panel.appendChild(ladderPreview);
   }
   return panel;
 }
@@ -37687,7 +37737,25 @@ function renderRequestsTable(rows) {
     timeCell.textContent = formatRequestTime(row);
     timeCell.title = "Open this request";
     tr.appendChild(timeCell);
-    addText(row.endpoint || "");
+    const endpointCell = document.createElement("td");
+    endpointCell.className = "req-col-endpoint";
+    const endpointPath = document.createElement("span");
+    endpointPath.className = "req-endpoint-path";
+    endpointPath.textContent = row.endpoint || "";
+    endpointCell.appendChild(endpointPath);
+    const rowRouting = row.endpoint_routing;
+    if (rowRouting && rowRouting.short_translation) {
+      const transPill = document.createElement("span");
+      transPill.className = `req-table-translation ${
+        rowRouting.translated ? "is-translated" : "is-direct"
+      }`;
+      transPill.textContent = rowRouting.short_translation;
+      endpointCell.appendChild(transPill);
+      if (rowRouting.translation_label) {
+        endpointCell.title = rowRouting.translation_label;
+      }
+    }
+    tr.appendChild(endpointCell);
     // Beside Endpoint: both answer "what came in", before the columns that
     // say what MCC did with it.
     tr.appendChild(buildHarnessCell(row));
@@ -39725,6 +39793,7 @@ async function openRequestDetail(requestId) {
   appendSuccessReasonDetail(byId("reqDetailMeta"), row);
   appendRequestCostDetail(byId("reqDetailMeta"), row);
   appendToolCatalogueDetail(byId("reqDetailMeta"), row);
+  appendEndpointRoutingDetail(byId("reqDetailMeta"), row);
   renderRequestRouteTrace(row);
   renderRequestImages(row);
   renderRequestDetailMedia(row);
@@ -39938,6 +40007,202 @@ function appendToolCatalogueDetail(meta, row) {
     dd.appendChild(details);
   }
   meta.append(dt, dd);
+}
+
+function inboundEndpointInfoClient(row) {
+  const rawEp = String((row && row.endpoint) || "").trim();
+  const rawProto = String((row && row.protocol) || "").trim();
+  const ep = rawEp.toLowerCase();
+  const proto = rawProto.toLowerCase();
+  if (ep.includes("/messages")) {
+    return { value: "messages", label: `Messages (${rawEp})`, short_label: "Messages" };
+  }
+  if (ep.includes("/responses")) {
+    return { value: "responses", label: `Responses (${rawEp})`, short_label: "Responses" };
+  }
+  if (ep.includes("/chat/completions")) {
+    return {
+      value: "chat_completions",
+      label: `Chat Completions (${rawEp})`,
+      short_label: "Chat Completions",
+    };
+  }
+  if (ep.includes("/v1beta") || ep.includes("generatecontent")) {
+    return {
+      value: "generate_content",
+      label: "Gemini (/v1beta generateContent)",
+      short_label: "Gemini",
+    };
+  }
+  if (proto === "anthropic" || proto === "anthropic_messages" || proto === "messages") {
+    const path = rawEp || "/v1/messages";
+    return { value: "messages", label: `Messages (${path})`, short_label: "Messages" };
+  }
+  if (proto === "openai_responses" || proto === "responses") {
+    const path = rawEp || "/v1/responses";
+    return { value: "responses", label: `Responses (${path})`, short_label: "Responses" };
+  }
+  if (
+    proto === "openai" ||
+    proto === "openai_chat" ||
+    proto === "openai_chat_completions" ||
+    proto === "chat_completions"
+  ) {
+    const path = rawEp || "/v1/chat/completions";
+    return {
+      value: "chat_completions",
+      label: `Chat Completions (${path})`,
+      short_label: "Chat Completions",
+    };
+  }
+  const fallback = rawEp || rawProto || "Unknown";
+  return { value: fallback.toLowerCase(), label: fallback, short_label: fallback };
+}
+
+function parseWireSurfaceClient(rawSurface) {
+  const cleaned = typeof rawSurface === "string" ? rawSurface.trim() : "";
+  if (!cleaned) return null;
+  const head = cleaned.split("(")[0].trim().split(/\s+/)[0].toLowerCase();
+  const parenStart = cleaned.indexOf("(");
+  const sourceNote =
+    parenStart !== -1 && cleaned.endsWith(")")
+      ? cleaned.slice(parenStart + 1, -1).trim()
+      : "";
+  const map = {
+    messages: ["messages", "Messages (/messages)", "Messages"],
+    "/messages": ["messages", "Messages (/messages)", "Messages"],
+    responses: ["responses", "Responses (/responses)", "Responses"],
+    "/responses": ["responses", "Responses (/responses)", "Responses"],
+    chat_completions: [
+      "chat_completions",
+      "Chat Completions (/chat/completions)",
+      "Chat Completions",
+    ],
+    "/chat/completions": [
+      "chat_completions",
+      "Chat Completions (/chat/completions)",
+      "Chat Completions",
+    ],
+    generate_content: ["generate_content", "Gemini (/v1beta generateContent)", "Gemini"],
+    gemini: ["generate_content", "Gemini (/v1beta generateContent)", "Gemini"],
+  };
+  const matched = map[head] || [head, head, head];
+  const fullLabel = sourceNote ? `${matched[1]} \u2014 ${sourceNote}` : matched[1];
+  return {
+    value: matched[0],
+    raw: cleaned,
+    label: matched[1],
+    full_label: fullLabel,
+    short_label: matched[2],
+    source_note: sourceNote,
+  };
+}
+
+function synthesizeAttemptTranslation(inbound, wireSurface) {
+  const outbound = parseWireSurfaceClient(wireSurface);
+  if (!outbound) return null;
+  const known = new Set([
+    "messages",
+    "responses",
+    "chat_completions",
+    "generate_content",
+    "v1internal",
+  ]);
+  const canCompare = known.has(inbound.value) && known.has(outbound.value);
+  const translated = canCompare ? inbound.value !== outbound.value : null;
+  const translationLabel = canCompare
+    ? translated
+      ? `${inbound.label} \u2192 ${outbound.label} (translated)`
+      : `${inbound.label} \u2192 ${outbound.label} (direct passthrough, no translation)`
+    : `${inbound.label} \u2192 ${outbound.label}`;
+  const shortTranslation = canCompare
+    ? translated
+      ? `${inbound.short_label} \u2192 ${outbound.short_label} (translated)`
+      : `${inbound.short_label} (direct)`
+    : `${inbound.short_label} \u2192 ${outbound.short_label}`;
+  return {
+    outbound,
+    translated,
+    translation_label: translationLabel,
+    short_translation: shortTranslation,
+  };
+}
+
+function resolveRowEndpointRouting(row) {
+  if (!row || typeof row !== "object") return null;
+  if (row.endpoint_routing && typeof row.endpoint_routing === "object") {
+    return row.endpoint_routing;
+  }
+  const attempts = Array.isArray(row.route_attempts) ? row.route_attempts : [];
+  const withSurface = attempts.filter(
+    (attempt) =>
+      attempt &&
+      attempt.params &&
+      attempt.params.wire &&
+      typeof attempt.params.wire.surface === "string" &&
+      attempt.params.wire.surface.trim(),
+  );
+  if (!withSurface.length) return null;
+  const winner =
+    withSurface.find(
+      (attempt) =>
+        attempt.outcome === "succeeded" &&
+        (!row.provider || attempt.provider === row.provider),
+    ) || withSurface[withSurface.length - 1];
+  const inbound = inboundEndpointInfoClient(row);
+  const synth = synthesizeAttemptTranslation(inbound, winner.params.wire.surface);
+  if (!synth) return null;
+  return {
+    harness_endpoint: inbound,
+    provider_endpoint: synth.outbound,
+    translated: synth.translated,
+    translation_label: synth.translation_label,
+    short_translation: synth.short_translation,
+  };
+}
+
+function appendEndpointRoutingDetail(meta, row) {
+  if (!meta) return;
+  const routing = resolveRowEndpointRouting(row);
+  if (!routing) return;
+
+  const appendPair = (labelText, nodeOrText) => {
+    const dt = document.createElement("dt");
+    dt.textContent = labelText;
+    const dd = document.createElement("dd");
+    if (typeof nodeOrText === "string") {
+      dd.textContent = nodeOrText;
+    } else {
+      dd.appendChild(nodeOrText);
+    }
+    meta.append(dt, dd);
+  };
+
+  if (routing.harness_endpoint && routing.harness_endpoint.label) {
+    appendPair("Harness endpoint", routing.harness_endpoint.label);
+  }
+  if (routing.provider_endpoint) {
+    const outLabel =
+      routing.provider_endpoint.full_label ||
+      routing.provider_endpoint.label ||
+      routing.provider_endpoint.raw ||
+      "";
+    if (outLabel) appendPair("Provider endpoint", outLabel);
+  } else {
+    appendPair("Provider endpoint", "Not recorded");
+  }
+  if (routing.translation_label) {
+    const badge = document.createElement("span");
+    badge.className = `req-translation-badge ${
+      routing.translated === true
+        ? "is-translated"
+        : routing.translated === false
+          ? "is-direct"
+          : "is-unknown"
+    }`;
+    badge.textContent = routing.translation_label;
+    appendPair("Protocol translation", badge);
+  }
 }
 
 /* The answer to "which requests carried this tool", drawn under the name list.
@@ -40988,7 +41253,12 @@ function renderRequestChain(row) {
 
   const list = document.createElement("ol");
   list.className = "req-chain-list";
-  attempts.forEach((attempt) => {
+  const attemptRoutes =
+    row.endpoint_routing && Array.isArray(row.endpoint_routing.attempt_routes)
+      ? row.endpoint_routing.attempt_routes
+      : [];
+  const inboundForChain = attemptRoutes.length ? null : inboundEndpointInfoClient(row);
+  attempts.forEach((attempt, index) => {
     const item = document.createElement("li");
     // The same third group the Model latency panel uses, read off the same
     // column: the attempt is stored as `failed`, but `interrupted` means the
@@ -41011,6 +41281,30 @@ function renderRequestChain(row) {
     model.textContent = attempt.model_ref || "—";
     model.title = attempt.model_ref || "";
     head.appendChild(model);
+
+    const rawAttemptSurface =
+      attempt && attempt.params && attempt.params.wire && attempt.params.wire.surface;
+    const matchedRoute =
+      attemptRoutes.find((entry) => entry && entry.attempt === attempt.attempt) ||
+      attemptRoutes[index] ||
+      null;
+    const routeBadgeInfo =
+      matchedRoute && matchedRoute.short_translation && (matchedRoute.wire_surface || rawAttemptSurface)
+        ? matchedRoute
+        : rawAttemptSurface && inboundForChain
+          ? synthesizeAttemptTranslation(inboundForChain, rawAttemptSurface)
+          : null;
+    if (routeBadgeInfo && routeBadgeInfo.short_translation) {
+      const routeSpan = document.createElement("span");
+      routeSpan.className = `req-chain-translation ${
+        routeBadgeInfo.translated ? "is-translated" : "is-direct"
+      }`;
+      routeSpan.textContent = routeBadgeInfo.short_translation;
+      if (routeBadgeInfo.translation_label) {
+        routeSpan.title = routeBadgeInfo.translation_label;
+      }
+      head.appendChild(routeSpan);
+    }
 
     if (isDescribeAttempt(attempt)) {
       const kind = document.createElement("span");
@@ -50153,6 +50447,7 @@ function buildProviderPreferredSurfaceEditor(provider) {
       .then(() => {
         status.textContent = "Saved";
         status.className = "models-status ok";
+        syncDefaultLadderPreview(wrap, provider.endpoint_summary, select.value);
       })
       .catch((error) => {
         status.textContent = error.message;
@@ -50174,6 +50469,11 @@ function buildProviderPreferredSurfaceEditor(provider) {
     "while keeping the fallback ladder; a model's own preference or pin wins. " +
     "Ignored per model if the model's host declarations do not include it.";
   wrap.appendChild(note);
+  const ladderPreview = buildDefaultLadderPreview(
+    provider.endpoint_summary,
+    spec.preferred || "",
+  );
+  if (ladderPreview) wrap.appendChild(ladderPreview);
   return wrap;
 }
 
@@ -50497,6 +50797,14 @@ function refreshProviderRow(providerId) {
     const prefSelect = node.querySelector(".models-provider-surface-select");
     if (prefSelect && provider.surface_preference && !prefSelect.disabled) {
       prefSelect.value = provider.surface_preference.preferred || "";
+    }
+    const surfaceWrap = node.querySelector(".models-provider-surface");
+    if (surfaceWrap && provider.endpoint_summary && provider.surface_preference) {
+      syncDefaultLadderPreview(
+        surfaceWrap,
+        provider.endpoint_summary,
+        provider.surface_preference.preferred || "",
+      );
     }
     const rollup = node.querySelector(".models-provider-endpoints");
     if (rollup) fillModelsProviderEndpointsRollup(rollup, provider);

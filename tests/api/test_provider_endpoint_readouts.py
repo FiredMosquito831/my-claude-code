@@ -549,3 +549,110 @@ def test_admin_routes_attach_endpoint_readouts_and_sync_preferred_surface(
     finally:
         save_model_overrides(ModelParameterOverrides())
         store.close()
+
+
+def test_default_ladder_preview_reflects_speakable_doors_and_client_family_order(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cc = provider_endpoint_summary("commandcode")
+    cc_ladder = {entry["family"]: entry for entry in cc["default_ladder"]}
+    assert list(cc_ladder) == ["anthropic", "openai"]
+    assert cc_ladder["anthropic"]["harness_label"] == (
+        "Harness requests Messages (/v1/messages)"
+    )
+    assert cc_ladder["anthropic"]["text"] == (
+        "Messages (direct) \u2192 Responses (with translation) \u2192 Chat Completions (with translation)"
+    )
+    assert [step["value"] for step in cc_ladder["anthropic"]["steps"]] == [
+        "messages",
+        "responses",
+        "chat_completions",
+    ]
+    assert [step["translated"] for step in cc_ladder["anthropic"]["steps"]] == [
+        False,
+        True,
+        True,
+    ]
+    assert cc_ladder["openai"]["harness_label"] == (
+        "Harness requests Responses (/v1/responses)"
+    )
+    assert cc_ladder["openai"]["text"] == (
+        "Responses (direct) \u2192 Chat Completions (with translation) \u2192 Messages (with translation)"
+    )
+
+    mistral = provider_endpoint_summary("mistral")
+    m_ladder = {entry["family"]: entry for entry in mistral["default_ladder"]}
+    assert m_ladder["anthropic"]["text"] == (
+        "Responses (with translation) \u2192 Chat Completions (with translation)"
+    )
+    assert m_ladder["openai"]["text"] == (
+        "Responses (direct) \u2192 Chat Completions (with translation)"
+    )
+
+    custom_msg = provider_endpoint_summary(
+        "custom_msg_house",
+        custom_surfaces=("chat_completions", "messages"),
+    )
+    cm_ladder = {entry["family"]: entry for entry in custom_msg["default_ladder"]}
+    assert cm_ladder["anthropic"]["text"] == (
+        "Messages (direct) \u2192 Chat Completions (with translation)"
+    )
+    assert cm_ladder["openai"]["text"] == (
+        "Chat Completions (with translation) \u2192 Messages (with translation)"
+    )
+
+    # Single-door providers never fabricate extra doors in default_ladder.
+    for single_id in ("anthropic", "groq", "chatgpt_oauth"):
+        assert provider_endpoint_summary(single_id)["default_ladder"] == []
+
+    # Verify HTTP endpoints expose default_ladder identically.
+    settings = Settings.model_validate(
+        {
+            "COMMANDCODE_API_KEY": "cc-" + "9" * 24,
+            "MODEL": "commandcode/deepseek/deepseek-v4.1-flash",
+        }
+    )
+    registry = ProviderRegistry(tmp_path / "custom_providers.json")
+    registry.add(
+        display_name="Dual House",
+        base_url="https://dual.example/v1",
+        api_keys=("sk-dual-9999",),
+        surfaces=("chat_completions", "responses"),
+    )
+    monkeypatch.setattr("my_claude_code.config.provider_registry._registry", registry)
+    app = create_test_app(settings)
+    app.dependency_overrides[admin_custom_routes.get_custom_provider_registry] = (
+        lambda: registry
+    )
+    provider_manager_for_app(app).cache_model_infos(
+        "commandcode",
+        (ProviderModelInfo("deepseek/deepseek-v4.1-flash"),),
+    )
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    cfg_cc = next(
+        p
+        for p in client.get("/admin/api/config").json()["provider_status"]
+        if p["provider_id"] == "commandcode"
+    )
+    assert cfg_cc["endpoint_summary"]["default_ladder"] == cc["default_ladder"]
+
+    cp_dual = next(
+        p
+        for p in client.get("/admin/api/custom-providers").json()["providers"]
+        if p["provider_id"] == "custom_dual_house"
+    )
+    assert [e["family"] for e in cp_dual["endpoint_summary"]["default_ladder"]] == [
+        "anthropic",
+        "openai",
+    ]
+    assert cp_dual["endpoint_summary"]["default_ladder"][1]["text"] == (
+        "Responses (direct) \u2192 Chat Completions (with translation)"
+    )
+
+    models_cc = next(
+        p
+        for p in client.get("/admin/api/model-admin").json()["providers"]
+        if p["provider_id"] == "commandcode"
+    )
+    assert models_cc["endpoint_summary"]["default_ladder"] == cc["default_ladder"]
