@@ -32,9 +32,10 @@ operator model overrides      ``model_overrides.json``'s own ``(mtime_ns,
                               ``context_length`` rung
 models.dev index              its ``(mtime_ns, size)`` -- a refreshed index
                               changes the ladder's answers with no publish
-OpenRouter live list,         both reach the records through a publish, which
-LiteLLM map                   rewrites this snapshot as it rewrites the
-                              catalogues
+OpenRouter live list          ``openrouter-models.json``'s ``(mtime_ns, size)``
+                              when ``MODEL_METADATA_OPENROUTER_LIVE`` is on
+LiteLLM map                   ``litellm-prices.json``'s ``(mtime_ns, size)`` when
+                              ``COST_SOURCE_LITELLM_ENABLED`` is on
 ============================  ===============================================
 
 Anything else -- a stale key, a different manager, an input that moved while a
@@ -73,7 +74,11 @@ from my_claude_code.application.catalogue_model import (
 )
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.harness_tiers import HarnessTiers, current_harness_tiers
-from my_claude_code.config.paths import model_overrides_path
+from my_claude_code.config.paths import (
+    litellm_cache_path,
+    model_overrides_path,
+    openrouter_live_cache_path,
+)
 from my_claude_code.config.settings import Settings
 
 #: One ``(harness id, tier)`` row of the operator's per-harness tier table, as
@@ -92,6 +97,8 @@ type CatalogueSnapshotKey = tuple[
     tuple[CatalogueTierRow, ...],  # the resolved harness-tier table
     tuple[str, int, int] | None,  # model_overrides.json: (path, mtime_ns, size)
     tuple[int, int] | None,  # models.dev index: (mtime_ns, size)
+    tuple[int, int] | None,  # openrouter-models.json: (mtime_ns, size)
+    tuple[int, int] | None,  # litellm-prices.json: (mtime_ns, size)
 ]
 
 
@@ -124,15 +131,18 @@ _REBUILD_LOCK = threading.Lock()
 def catalogue_snapshot_key(
     runtime: RequestRuntimePort, harness_tiers: HarnessTiers
 ) -> CatalogueSnapshotKey:
-    """Return the key the current inputs spell. Cheap: three stats and a walk."""
+    """Return the key the current inputs spell. Cheap: up to five stats and a walk."""
 
     inputs = runtime.catalogue_snapshot_inputs()
+    settings = runtime.current_settings()
     return (
         inputs.generation_id,
         inputs.model_cache_revision,
         _tier_rows(harness_tiers),
         _file_signature(model_overrides_path()),
         inputs.models_dev_generation,
+        _openrouter_live_signature(settings),
+        _litellm_signature(settings),
     )
 
 
@@ -196,12 +206,25 @@ def read_catalogue_snapshot(runtime: RequestRuntimePort) -> CatalogueSnapshot | 
     return snapshot
 
 
+async def _current_snapshot_or_records(
+    settings: Settings, runtime: RequestRuntimePort
+) -> CatalogueSnapshot | tuple[CatalogueModel, ...]:
+    """Return the current snapshot, or raw records if a race dropped the store."""
+
+    harness_tiers = current_harness_tiers()
+    key = catalogue_snapshot_key(runtime, harness_tiers)
+    snapshot = _SNAPSHOT
+    if snapshot is not None and snapshot.owner is runtime and snapshot.key == key:
+        return snapshot
+    return await asyncio.to_thread(_rebuild, settings, runtime, harness_tiers, key)
+
+
 async def current_catalogue_records(
     settings: Settings, runtime: RequestRuntimePort
 ) -> Mapping[str, CatalogueModel]:
     """Return the records for the current inputs, rebuilding off the loop.
 
-    A hit costs the key (three stats) and returns the index. A miss rebuilds
+    A hit costs the key (up to five stats) and returns the index. A miss rebuilds
     through ``asyncio.to_thread`` under the single-flight lock, so N concurrent
     misses produce one ladder walk and the event loop is never the thread that
     walks it.
@@ -213,18 +236,38 @@ async def current_catalogue_records(
     unknown, never a zero (IV.16) -- and the failure is logged.
     """
 
-    harness_tiers = current_harness_tiers()
-    key = catalogue_snapshot_key(runtime, harness_tiers)
-    snapshot = _SNAPSHOT
-    if snapshot is not None and snapshot.owner is runtime and snapshot.key == key:
-        return snapshot.by_gateway_id
     try:
-        return await asyncio.to_thread(_rebuild, settings, runtime, harness_tiers, key)
+        resolved = await _current_snapshot_or_records(settings, runtime)
     except Exception as exc:
         logger.warning(
             "Catalogue snapshot rebuild failed: exc_type={}", type(exc).__name__
         )
         return {}
+    if isinstance(resolved, CatalogueSnapshot):
+        return resolved.by_gateway_id
+    return records_by_gateway_id(resolved)
+
+
+async def current_catalogue_models(
+    settings: Settings, runtime: RequestRuntimePort
+) -> tuple[CatalogueModel, ...]:
+    """Return the ordered record tuple for the current inputs, off the loop.
+
+    Shares the single-flight ``asyncio.to_thread`` rebuild and snapshot cache
+    with :func:`current_catalogue_records`, so ``GET /v1beta/models`` and
+    ``GET /v1/models`` never walk the ladder twice or stall the event loop.
+    """
+
+    try:
+        resolved = await _current_snapshot_or_records(settings, runtime)
+    except Exception as exc:
+        logger.warning(
+            "Catalogue snapshot rebuild failed: exc_type={}", type(exc).__name__
+        )
+        return ()
+    if isinstance(resolved, CatalogueSnapshot):
+        return resolved.records
+    return resolved
 
 
 def reset_catalogue_snapshot() -> None:
@@ -239,7 +282,7 @@ def _rebuild(
     runtime: RequestRuntimePort,
     harness_tiers: HarnessTiers,
     key: CatalogueSnapshotKey,
-) -> Mapping[str, CatalogueModel]:
+) -> CatalogueSnapshot | tuple[CatalogueModel, ...]:
     """Walk the ladder once for every caller waiting on this key.
 
     Runs on a worker thread. The lock is taken *inside* the thread, so the
@@ -250,16 +293,16 @@ def _rebuild(
     with _REBUILD_LOCK:
         snapshot = _SNAPSHOT
         if snapshot is not None and snapshot.owner is runtime and snapshot.key == key:
-            return snapshot.by_gateway_id
+            return snapshot
         records = build_catalogue_models(settings, runtime, harness_tiers=harness_tiers)
         stored = store_catalogue_snapshot(runtime, harness_tiers, key, records)
         if stored is not None:
-            # The stored index, not a fresh one: the callers that queued behind
-            # this build must be handed the same mapping object the next request
-            # will read, or each of them would rebuild the derived index the API
-            # layer memoises against it.
-            return stored.by_gateway_id
-        return records_by_gateway_id(records)
+            # The stored snapshot, not a fresh index: callers that queued
+            # behind this build must be handed the same mapping object the next
+            # request will read, or each of them would rebuild the derived index
+            # the API layer memoises against it.
+            return stored
+        return records
 
 
 def _tier_rows(harness_tiers: HarnessTiers) -> tuple[CatalogueTierRow, ...]:
@@ -278,6 +321,32 @@ def _tier_rows(harness_tiers: HarnessTiers) -> tuple[CatalogueTierRow, ...]:
     return tuple(rows)
 
 
+def _stat_signature(path: Path) -> tuple[int, int] | None:
+    """One file's ``(mtime_ns, size)``, or ``None`` when it is absent."""
+
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _openrouter_live_signature(settings: Settings) -> tuple[int, int] | None:
+    """Return OpenRouter live's ``(mtime_ns, size)`` only while enabled."""
+
+    if not settings.model_metadata_openrouter_live:
+        return None
+    return _stat_signature(openrouter_live_cache_path())
+
+
+def _litellm_signature(settings: Settings) -> tuple[int, int] | None:
+    """Return LiteLLM's ``(mtime_ns, size)`` only while LiteLLM pricing is on."""
+
+    if not settings.cost_source_litellm_enabled:
+        return None
+    return _stat_signature(litellm_cache_path())
+
+
 def _file_signature(path: Path) -> tuple[str, int, int] | None:
     """One file's ``(path, mtime_ns, size)``, or ``None`` when it is absent.
 
@@ -286,8 +355,7 @@ def _file_signature(path: Path) -> tuple[str, int, int] | None:
     file that is edited on this machine is seen without a restart.
     """
 
-    try:
-        stat = path.stat()
-    except OSError:
+    signature = _stat_signature(path)
+    if signature is None:
         return None
-    return (str(path), stat.st_mtime_ns, stat.st_size)
+    return (str(path), signature[0], signature[1])

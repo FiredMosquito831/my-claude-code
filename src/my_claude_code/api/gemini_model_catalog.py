@@ -25,13 +25,46 @@ per model under its plain id, no ``claude-3-freecc-no-thinking/`` twin and no
 from both, being protocol names rather than routable refs.
 """
 
+from collections.abc import Iterable
 from typing import Any
 
-from my_claude_code.application.catalogue_model import build_catalogue_models
+from my_claude_code.application.catalogue_model import (
+    CatalogueModel,
+    build_catalogue_models,
+)
 from my_claude_code.application.catalogues.base import visible_entries
 from my_claude_code.application.ports import RequestRuntimePort
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.gemini_api import gemini_model_entry, gemini_models_payload
+
+
+def _gemini_entry(model: CatalogueModel) -> dict[str, Any]:
+    return gemini_model_entry(
+        model.gateway_id,
+        display_name=model.display_name,
+        input_token_limit=model.context_length,
+        output_token_limit=model.max_output_tokens,
+    )
+
+
+def build_gemini_models_payload_from_records(
+    records: Iterable[CatalogueModel],
+) -> dict[str, Any]:
+    """Return the ``ListModels`` body from pre-resolved catalogue records."""
+
+    models = [_gemini_entry(model) for model in visible_entries(records)]
+    return gemini_models_payload(models)
+
+
+def find_gemini_model_entry_from_records(
+    records: Iterable[CatalogueModel], model_id: str
+) -> dict[str, Any] | None:
+    """Return one model's ``Model`` resource from pre-resolved catalogue records."""
+
+    for model in visible_entries(records):
+        if model.gateway_id == model_id:
+            return _gemini_entry(model)
+    return None
 
 
 def build_gemini_models_payload(
@@ -39,16 +72,9 @@ def build_gemini_models_payload(
 ) -> dict[str, Any]:
     """Return the ``ListModels`` body for every model MCC can route."""
 
-    models = [
-        gemini_model_entry(
-            model.gateway_id,
-            display_name=model.display_name,
-            input_token_limit=model.context_length,
-            output_token_limit=model.max_output_tokens,
-        )
-        for model in visible_entries(build_catalogue_models(settings, runtime))
-    ]
-    return gemini_models_payload(models)
+    return build_gemini_models_payload_from_records(
+        build_catalogue_models(settings, runtime)
+    )
 
 
 def find_gemini_model_entry(
@@ -62,12 +88,6 @@ def find_gemini_model_entry(
     resolve for this ref", and an alias has no ref of its own.
     """
 
-    for model in visible_entries(build_catalogue_models(settings, runtime)):
-        if model.gateway_id == model_id:
-            return gemini_model_entry(
-                model.gateway_id,
-                display_name=model.display_name,
-                input_token_limit=model.context_length,
-                output_token_limit=model.max_output_tokens,
-            )
-    return None
+    return find_gemini_model_entry_from_records(
+        build_catalogue_models(settings, runtime), model_id
+    )

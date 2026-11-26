@@ -12,6 +12,7 @@ would bound staleness by a clock instead of by truth.
 import asyncio
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from my_claude_code.application import catalogue_snapshot
 from my_claude_code.application.catalogue_model import CatalogueModel
 from my_claude_code.application.catalogue_snapshot import (
     catalogue_snapshot_key,
+    current_catalogue_models,
     current_catalogue_records,
     read_catalogue_snapshot,
     reset_catalogue_snapshot,
@@ -38,8 +40,8 @@ from my_claude_code.runtime.provider_manager import ProviderRuntimeManager
 REF = "nvidia_nim/test-model"
 
 
-def _settings() -> Settings:
-    return Settings.model_validate({"MODEL": REF})
+def _settings(**overrides: object) -> Settings:
+    return Settings.model_validate({"MODEL": REF, **overrides})
 
 
 def _record(gateway_id: str = f"anthropic/{REF}") -> CatalogueModel:
@@ -57,10 +59,11 @@ def _manager(
     generation: int = 1,
     revision: int = 0,
     models_dev: tuple[int, int] | None = None,
+    settings: Settings | None = None,
 ) -> ProviderRuntimeManager:
     """A real manager whose three revision inputs this test can move."""
 
-    manager = ProviderRuntimeManager(_settings())
+    manager = ProviderRuntimeManager(settings or _settings())
     monkeypatch.setattr(
         manager,
         "catalogue_snapshot_inputs",
@@ -286,3 +289,97 @@ def test_reset_forgets_the_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_catalogue_snapshot()
 
     assert read_catalogue_snapshot(manager) is None
+
+
+def test_current_catalogue_models_shares_snapshot_and_runs_off_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(monkeypatch)
+    calls: list[int] = []
+    _spy_build(monkeypatch, calls)
+
+    async def _exercise() -> tuple[
+        tuple[CatalogueModel, ...], Mapping[str, CatalogueModel]
+    ]:
+        loop_thread = threading.get_ident()
+        models = await current_catalogue_models(_settings(), manager)
+        assert calls and calls[0] != loop_thread
+        models_hit = await current_catalogue_models(_settings(), manager)
+        records_hit = await current_catalogue_records(_settings(), manager)
+        assert models == models_hit
+        return models, records_hit
+
+    models, records_hit = asyncio.run(_exercise())
+    assert len(calls) == 1
+    assert [m.gateway_id for m in models] == [f"anthropic/{REF}"]
+    assert list(records_hit) == [f"anthropic/{REF}"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_model_misses_share_one_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _manager(monkeypatch)
+    calls: list[int] = []
+    _spy_build(monkeypatch, calls, delay=0.05)
+
+    results = await asyncio.gather(
+        *(current_catalogue_models(_settings(), manager) for _ in range(8))
+    )
+
+    assert len(calls) == 1
+    assert all(result == results[0] for result in results)
+
+
+def test_openrouter_live_file_change_invalidates_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "openrouter-models.json"
+    monkeypatch.setattr(catalogue_snapshot, "openrouter_live_cache_path", lambda: path)
+
+    enabled = _manager(
+        monkeypatch, settings=_settings(MODEL_METADATA_OPENROUTER_LIVE=True)
+    )
+    key = catalogue_snapshot_key(enabled, EMPTY_HARNESS_TIERS)
+    assert store_catalogue_snapshot(enabled, EMPTY_HARNESS_TIERS, key, (_record(),))
+    assert read_catalogue_snapshot(enabled) is not None
+
+    path.write_text('{"data": []}', encoding="utf-8")
+    assert read_catalogue_snapshot(enabled) is None
+
+    disabled = _manager(
+        monkeypatch, settings=_settings(MODEL_METADATA_OPENROUTER_LIVE=False)
+    )
+    disabled_key = catalogue_snapshot_key(disabled, EMPTY_HARNESS_TIERS)
+    assert store_catalogue_snapshot(
+        disabled, EMPTY_HARNESS_TIERS, disabled_key, (_record(),)
+    )
+    path.write_text('{"data": [{"id": "changed"}]}', encoding="utf-8")
+    assert read_catalogue_snapshot(disabled) is not None
+
+
+def test_litellm_file_change_invalidates_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "litellm-prices.json"
+    monkeypatch.setattr(catalogue_snapshot, "litellm_cache_path", lambda: path)
+
+    enabled = _manager(
+        monkeypatch, settings=_settings(COST_SOURCE_LITELLM_ENABLED=True)
+    )
+    key = catalogue_snapshot_key(enabled, EMPTY_HARNESS_TIERS)
+    assert store_catalogue_snapshot(enabled, EMPTY_HARNESS_TIERS, key, (_record(),))
+    assert read_catalogue_snapshot(enabled) is not None
+
+    path.write_text('{"sample": {}}', encoding="utf-8")
+    assert read_catalogue_snapshot(enabled) is None
+
+    disabled = _manager(
+        monkeypatch, settings=_settings(COST_SOURCE_LITELLM_ENABLED=False)
+    )
+    disabled_key = catalogue_snapshot_key(disabled, EMPTY_HARNESS_TIERS)
+    assert store_catalogue_snapshot(
+        disabled, EMPTY_HARNESS_TIERS, disabled_key, (_record(),)
+    )
+    path.write_text('{"sample": {"max_tokens": 1}}', encoding="utf-8")
+    assert read_catalogue_snapshot(disabled) is not None

@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 
+from my_claude_code.application.catalogue_snapshot import current_catalogue_models
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.application.ports import ProviderResolver, RequestRuntimeLease
 from my_claude_code.application.routing import ModelRouter
@@ -53,7 +54,10 @@ from .dependencies import (
     resolve_provider,
 )
 from .gemini_media_routes import serve_media_generate, serve_predict_long_running
-from .gemini_model_catalog import build_gemini_models_payload, find_gemini_model_entry
+from .gemini_model_catalog import (
+    build_gemini_models_payload_from_records,
+    find_gemini_model_entry_from_records,
+)
 from .handlers import GeminiHandler
 from .ports import ApiServices
 from .request_errors import ordinary_application_error_response
@@ -149,7 +153,8 @@ async def list_gemini_models(
     trace_event(
         stage="ingress", event="my_claude_code.api.gemini.models.list", source="api"
     )
-    return build_gemini_models_payload(settings, services.requests)
+    records = await current_catalogue_models(settings, services.requests)
+    return build_gemini_models_payload_from_records(records)
 
 
 @gemini_router.api_route(GEMINI_ENDPOINT_PREFIX, methods=["HEAD", "OPTIONS"])
@@ -242,7 +247,8 @@ async def describe_gemini_model(
     """Describe one model, the way ``GET /v1beta/models/{model}`` does."""
 
     model_id = strip_models_prefix(model_path)
-    entry = find_gemini_model_entry(settings, services.requests, model_id)
+    records = await current_catalogue_models(settings, services.requests)
+    entry = find_gemini_model_entry_from_records(records, model_id)
     if entry is None:
         return _not_found(f"Model not found: models/{model_id}")
     return entry
