@@ -8284,6 +8284,36 @@ class RequestLogStore:
         return out
 
     @staticmethod
+    def _fetch_attempt_surfaces(
+        conn: sqlite3.Connection, request_ids: Sequence[str]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return lightweight per-attempt wire surface metadata for a list page."""
+
+        ids = [str(request_id) for request_id in request_ids if request_id]
+        if not ids:
+            return {}
+        markers = ", ".join("?" * len(ids))
+        rows = conn.execute(
+            "SELECT request_id, attempt, provider, outcome,"
+            " CASE WHEN params LIKE '%\"wire\"%' AND json_valid(params)"
+            " THEN json_extract(params, '$.wire.surface') END AS wire_surface"
+            " FROM request_attempts"
+            f" WHERE request_id IN ({markers}) ORDER BY request_id, attempt",
+            ids,
+        ).fetchall()
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["request_id"]), []).append(
+                {
+                    "attempt": row["attempt"],
+                    "provider": row["provider"],
+                    "outcome": row["outcome"],
+                    "wire_surface": row["wire_surface"],
+                }
+            )
+        return grouped
+
+    @staticmethod
     def _fetch_ladder_rollup(
         conn: sqlite3.Connection, request_ids: list[str]
     ) -> dict[str, dict[str, Any]]:
@@ -9233,6 +9263,7 @@ class RequestLogStore:
         body_preview_chars: int | None = LIST_BODY_PREVIEW_CHARS,
         include_total: bool = True,
         include_exits: bool = False,
+        include_wire_surfaces: bool = False,
     ) -> tuple[list[dict[str, Any]], int | None, bool]:
         """Return ``(rows, total, has_more)``; ``total`` is ``None`` when skipped.
 
@@ -9328,6 +9359,12 @@ class RequestLogStore:
                 )
                 for row in rows:
                     row["exit"] = exits[str(row["id"])]
+            if include_wire_surfaces:
+                surfaces = self._fetch_attempt_surfaces(
+                    conn, [str(row["id"]) for row in raw_rows]
+                )
+                for row in rows:
+                    row["_attempt_surfaces"] = surfaces.get(str(row["id"]), [])
         if total is not None:
             has_more = offset + len(rows) < total
         return rows, total, has_more

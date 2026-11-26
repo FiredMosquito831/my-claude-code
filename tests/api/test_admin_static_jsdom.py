@@ -15676,6 +15676,8 @@ def test_jsdom_endpoint_readouts_cards_modals_and_models_sync(
     assert endpoint_readouts_ui["ccModalAfterSave"] == {
         "status": "Saved",
         "selectValue": "chat_completions",
+        "ladderHead": "Default ladder (paused by Chat Completions preference)",
+        "ladderClass": "pv-default-ladder is-overridden",
     }
     assert (
         endpoint_readouts_ui["syncedModels"]["providerSelectValue"]
@@ -15685,7 +15687,66 @@ def test_jsdom_endpoint_readouts_cards_modals_and_models_sync(
         "Preferred: Chat Completions"
         in endpoint_readouts_ui["syncedModels"]["rollupText"]
     )
+    assert endpoint_readouts_ui["syncedModels"]["ladderHead"] == (
+        "Default ladder (paused by Chat Completions preference)"
+    )
     assert endpoint_readouts_ui["modalSyncedFromModels"] == "responses"
+
+    # PR 15: Default ladder preview assertions (active vs paused, single-door absent, custom)
+    assert (
+        "Default ladder (active for Auto)"
+        in endpoint_readouts_ui["ccModalInitial"]["ladderText"]
+    )
+    assert (
+        "Messages (direct) \u2192 Responses (with translation) \u2192 Chat Completions (with translation)"
+        in endpoint_readouts_ui["ccModalInitial"]["ladderText"]
+    )
+    assert "is-active" in endpoint_readouts_ui["ccModalInitial"]["ladderClass"]
+    assert (
+        "Default ladder (active for Auto)"
+        in endpoint_readouts_ui["modelsInitial"]["ccLadderText"]
+    )
+    assert (
+        "Responses (direct) \u2192 Chat Completions (with translation)"
+        in endpoint_readouts_ui["customDualModal"]["ladderText"]
+    )
+    assert groq_modal["ladderCount"] == 0
+
+    # PR 15: Request translation table, detail modal, chain, and XSS assertions
+    table_cells = endpoint_readouts_ui["tableCells"]
+    assert table_cells[0]["pillText"] == "Messages \u2192 Responses (translated)"
+    assert "is-translated" in table_cells[0]["pillClass"]
+    assert table_cells[1]["pillText"] == "Messages (direct)"
+    assert "is-direct" in table_cells[1]["pillClass"]
+    assert table_cells[2]["injectedImgs"] == 0
+
+    tr_detail = endpoint_readouts_ui["translatedDetail"]
+    tr_meta = dict(tr_detail["metaPairs"])
+    assert tr_meta["Harness endpoint"] == "Messages (/v1/messages)"
+    assert tr_meta["Provider endpoint"] == "Responses (/responses) \u2014 registry"
+    assert tr_meta["Protocol translation"] == (
+        "Messages (/v1/messages) \u2192 Responses (/responses) (translated)"
+    )
+    assert "is-translated" in tr_detail["badgeClass"]
+    assert [c["text"] for c in tr_detail["chainTranslations"]] == [
+        "Messages \u2192 Chat Completions (translated)",
+        "Messages \u2192 Responses (translated)",
+    ]
+
+    dir_detail = endpoint_readouts_ui["directDetail"]
+    dir_meta = dict(dir_detail["metaPairs"])
+    assert dir_meta["Harness endpoint"] == "Messages (/v1/messages)"
+    assert dir_meta["Provider endpoint"] == "Messages (/messages) \u2014 learned"
+    assert dir_meta["Protocol translation"] == (
+        "Messages (/v1/messages) \u2192 Messages (/messages) (direct passthrough, no translation)"
+    )
+    assert "is-direct" in dir_detail["badgeClass"]
+
+    assert endpoint_readouts_ui["xssDetail"]["injectedImgs"] == 0
+    assert (
+        endpoint_readouts_ui["xssToken"]
+        in endpoint_readouts_ui["xssDetail"]["badgeText"]
+    )
 
     posts = endpoint_readouts_ui["posts"]
     assert [p["path"] for p in posts] == [

@@ -143,6 +143,7 @@ from my_claude_code.config.prompt_cache_lifetimes import (
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.reasoning import ReasoningPreference
 from my_claude_code.config.settings import Settings
+from my_claude_code.core.client_family import ClientFamily
 from my_claude_code.core.model_ids import ResolutionTier
 from my_claude_code.core.model_visibility import (
     MODEL_PATTERN_SEPARATOR,
@@ -164,6 +165,7 @@ from my_claude_code.providers.commandcode import (
     commandcode_uses_anthropic_messages,
 )
 from my_claude_code.providers.openai_chat import (
+    CLIENT_FAMILY_ORDER,
     cached_declared_http_endpoints,
     cached_provider_http_endpoints,
     catalogue_discovered_surfaces,
@@ -2529,7 +2531,361 @@ def provider_endpoint_summary(
         "can_speak": can_speak,
         "observed": observed,
         "surface_preference": surface_preference,
+        "default_ladder": _default_ladder_preview(offered_values),
         "face_text": face_text,
+    }
+
+
+_LADDER_FAMILIES: tuple[tuple[ClientFamily, str, ResponseSurface], ...] = (
+    (
+        ClientFamily.ANTHROPIC,
+        "Harness requests Messages (/v1/messages)",
+        ResponseSurface.MESSAGES,
+    ),
+    (
+        ClientFamily.OPENAI,
+        "Harness requests Responses (/v1/responses)",
+        ResponseSurface.RESPONSES,
+    ),
+)
+
+_KNOWN_ROUTING_SURFACES = frozenset(
+    {"messages", "responses", "chat_completions", "generate_content", "v1internal"}
+)
+
+
+def _default_ladder_preview(offered_values: Sequence[str]) -> list[dict[str, Any]]:
+    """Compute the active Auto fallback ladder per inbound family from offered doors."""
+
+    discovered: list[ResponseSurface] = []
+    for raw_val in offered_values:
+        try:
+            surface = ResponseSurface(raw_val)
+        except ValueError:
+            continue
+        if surface not in discovered:
+            discovered.append(surface)
+    if len(discovered) < 2:
+        return []
+
+    preview: list[dict[str, Any]] = []
+    for family, harness_label, direct_surface in _LADDER_FAMILIES:
+        preference = CLIENT_FAMILY_ORDER.get(family, ())
+        ordered = tuple(
+            sorted(
+                discovered,
+                key=lambda surface: (
+                    preference.index(surface)
+                    if surface in preference
+                    else len(preference),
+                    discovered.index(surface),
+                ),
+            )
+        )
+        steps: list[dict[str, Any]] = []
+        step_texts: list[str] = []
+        for surface in ordered:
+            translated = surface is not direct_surface
+            mode = "with translation" if translated else "direct"
+            short_label = SURFACE_SHORT_LABELS.get(surface, surface.value)
+            steps.append(
+                {
+                    "value": surface.value,
+                    "label": SURFACE_VALUE_LABELS.get(surface, surface.value),
+                    "short_label": short_label,
+                    "translated": translated,
+                    "mode": mode,
+                }
+            )
+            step_texts.append(f"{short_label} ({mode})")
+        preview.append(
+            {
+                "family": family.value,
+                "harness_label": harness_label,
+                "steps": steps,
+                "text": " \u2192 ".join(step_texts),
+            }
+        )
+    return preview
+
+
+def _inbound_endpoint_info(endpoint: Any, protocol: Any) -> dict[str, str]:
+    raw_ep = str(endpoint or "").strip()
+    raw_proto = str(protocol or "").strip()
+    ep = raw_ep.lower()
+    proto = raw_proto.lower()
+
+    if "/messages" in ep:
+        return {
+            "value": "messages",
+            "path": raw_ep,
+            "label": f"Messages ({raw_ep})",
+            "short_label": "Messages",
+        }
+    if "/responses" in ep:
+        return {
+            "value": "responses",
+            "path": raw_ep,
+            "label": f"Responses ({raw_ep})",
+            "short_label": "Responses",
+        }
+    if "/chat/completions" in ep:
+        return {
+            "value": "chat_completions",
+            "path": raw_ep,
+            "label": f"Chat Completions ({raw_ep})",
+            "short_label": "Chat Completions",
+        }
+    if "/v1beta" in ep or "generatecontent" in ep:
+        return {
+            "value": "generate_content",
+            "path": raw_ep,
+            "label": "Gemini (/v1beta generateContent)",
+            "short_label": "Gemini",
+        }
+    if proto in {"anthropic", "anthropic_messages", "messages"}:
+        path = raw_ep or "/v1/messages"
+        return {
+            "value": "messages",
+            "path": path,
+            "label": f"Messages ({path})",
+            "short_label": "Messages",
+        }
+    if proto in {"openai_responses", "responses"}:
+        path = raw_ep or "/v1/responses"
+        return {
+            "value": "responses",
+            "path": path,
+            "label": f"Responses ({path})",
+            "short_label": "Responses",
+        }
+    if proto in {
+        "openai",
+        "openai_chat",
+        "openai_chat_completions",
+        "chat_completions",
+    }:
+        path = raw_ep or "/v1/chat/completions"
+        return {
+            "value": "chat_completions",
+            "path": path,
+            "label": f"Chat Completions ({path})",
+            "short_label": "Chat Completions",
+        }
+    if proto in {"gemini", "google_gemini", "generate_content"}:
+        return {
+            "value": "generate_content",
+            "path": raw_ep or "/v1beta",
+            "label": "Gemini (/v1beta generateContent)",
+            "short_label": "Gemini",
+        }
+    fallback = raw_ep or raw_proto or "Unknown"
+    return {
+        "value": fallback.lower(),
+        "path": raw_ep,
+        "label": fallback,
+        "short_label": fallback,
+    }
+
+
+def _parse_wire_surface_info(
+    raw_surface: Any, provider_id: str | None = None
+) -> dict[str, str] | None:
+    cleaned = str(raw_surface or "").strip() if isinstance(raw_surface, str) else ""
+    pid = str(provider_id or "").strip()
+    if cleaned:
+        head = cleaned.split("(", 1)[0].strip().split()[0].lower()
+        source_note = ""
+        if "(" in cleaned and cleaned.endswith(")"):
+            source_note = cleaned.split("(", 1)[1][:-1].strip()
+        value_map = {
+            "messages": "messages",
+            "/messages": "messages",
+            "responses": "responses",
+            "/responses": "responses",
+            "/codex/responses": "responses",
+            "chat_completions": "chat_completions",
+            "/chat/completions": "chat_completions",
+            "generate_content": "generate_content",
+            "gemini": "generate_content",
+            "v1internal": "v1internal",
+        }
+        value = value_map.get(head, head)
+        if pid in {"chatgpt_oauth", "openai"} and value == "responses":
+            base_label = "Responses (/codex/responses)"
+        elif value == "generate_content":
+            base_label = "Gemini (/v1beta generateContent)"
+        else:
+            base_label = _ENDPOINT_DISPLAY_LABELS.get(value, value)
+        short_label = (
+            "Gemini" if value == "generate_content" else _short_endpoint_label(value)
+        )
+        full_label = f"{base_label} \u2014 {source_note}" if source_note else base_label
+        return {
+            "value": value,
+            "raw": cleaned,
+            "label": base_label,
+            "full_label": full_label,
+            "short_label": short_label,
+            "source_note": source_note,
+        }
+    if pid:
+        entries = _can_speak_entries_for_provider(pid)
+        if len(entries) == 1:
+            sole = entries[0]
+            value = sole["value"]
+            base_label = sole["label"]
+            short_label = _short_endpoint_label(value)
+            return {
+                "value": value,
+                "raw": value,
+                "label": base_label,
+                "full_label": f"{base_label} \u2014 single-door",
+                "short_label": short_label,
+                "source_note": "single-door",
+            }
+    return None
+
+
+def _translation_summary(
+    inbound: Mapping[str, str], outbound: Mapping[str, str] | None
+) -> dict[str, Any]:
+    if outbound is None:
+        return {
+            "translated": None,
+            "translation_label": "",
+            "short_translation": "",
+        }
+    in_val = inbound.get("value", "")
+    out_val = outbound.get("value", "")
+    if in_val in _KNOWN_ROUTING_SURFACES and out_val in _KNOWN_ROUTING_SURFACES:
+        translated = in_val != out_val
+        if translated:
+            return {
+                "translated": True,
+                "translation_label": (
+                    f"{inbound['label']} \u2192 {outbound['label']} (translated)"
+                ),
+                "short_translation": (
+                    f"{inbound['short_label']} \u2192 {outbound['short_label']} (translated)"
+                ),
+            }
+        return {
+            "translated": False,
+            "translation_label": (
+                f"{inbound['label']} \u2192 {outbound['label']} "
+                "(direct passthrough, no translation)"
+            ),
+            "short_translation": f"{inbound['short_label']} (direct)",
+        }
+    return {
+        "translated": None,
+        "translation_label": f"{inbound['label']} \u2192 {outbound['label']}",
+        "short_translation": f"{inbound['short_label']} \u2192 {outbound['short_label']}",
+    }
+
+
+def _extract_attempt_wire_surface(attempt: Mapping[str, Any]) -> str | None:
+    direct = attempt.get("wire_surface")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    params = attempt.get("params")
+    if isinstance(params, Mapping):
+        wire = params.get("wire")
+        if isinstance(wire, Mapping):
+            surface = wire.get("surface")
+            if isinstance(surface, str) and surface.strip():
+                return surface.strip()
+    return None
+
+
+def request_endpoint_routing(
+    row: Mapping[str, Any],
+    *,
+    attempt_surfaces: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Derive harness endpoint, outbound provider endpoint, and translation status."""
+
+    inbound = _inbound_endpoint_info(row.get("endpoint"), row.get("protocol"))
+    row_provider = str(row.get("provider") or "").strip()
+    raw_attempts = row.get("route_attempts")
+    attempts: list[Mapping[str, Any]] = (
+        [item for item in raw_attempts if isinstance(item, Mapping)]
+        if isinstance(raw_attempts, Sequence)
+        and not isinstance(raw_attempts, (str, bytes))
+        else []
+    )
+    if not attempts and attempt_surfaces:
+        attempts = [item for item in attempt_surfaces if isinstance(item, Mapping)]
+
+    attempt_routes: list[dict[str, Any]] = []
+    for item in attempts:
+        att_provider = str(item.get("provider") or row_provider).strip()
+        att_outcome = str(item.get("outcome") or "").strip()
+        raw_ws = _extract_attempt_wire_surface(item)
+        att_out = (
+            _parse_wire_surface_info(raw_ws, att_provider)
+            if (raw_ws or att_outcome != "skipped")
+            else None
+        )
+        trans = _translation_summary(inbound, att_out)
+        attempt_routes.append(
+            {
+                "attempt": item.get("attempt"),
+                "provider": att_provider,
+                "model_ref": str(item.get("model_ref") or ""),
+                "outcome": att_outcome,
+                "wire_surface": raw_ws or (att_out["value"] if att_out else ""),
+                "provider_endpoint": att_out,
+                "translated": trans["translated"],
+                "translation_label": trans["translation_label"],
+                "short_translation": trans["short_translation"],
+            }
+        )
+
+    winner: Mapping[str, Any] | None = None
+    for item in attempts:
+        att_provider = str(item.get("provider") or "").strip()
+        if item.get("outcome") == "succeeded" and (
+            not row_provider or att_provider == row_provider
+        ):
+            winner = item
+    if winner is None:
+        for item in reversed(attempts):
+            if item.get("outcome") != "skipped" and _extract_attempt_wire_surface(item):
+                winner = item
+                break
+    if winner is None:
+        route_attempt = row.get("route_attempt")
+        if isinstance(route_attempt, int):
+            winner = next(
+                (item for item in attempts if item.get("attempt") == route_attempt),
+                None,
+            )
+    if winner is None:
+        for item in reversed(attempts):
+            if item.get("outcome") != "skipped":
+                winner = item
+                break
+
+    winner_raw_ws = (
+        _extract_attempt_wire_surface(winner) if winner is not None else None
+    )
+    winner_provider = (
+        str(winner.get("provider") or row_provider).strip()
+        if winner is not None
+        else row_provider
+    )
+    outbound = _parse_wire_surface_info(winner_raw_ws, winner_provider)
+    top_trans = _translation_summary(inbound, outbound)
+
+    return {
+        "harness_endpoint": inbound,
+        "provider_endpoint": outbound,
+        "translated": top_trans["translated"],
+        "translation_label": top_trans["translation_label"],
+        "short_translation": top_trans["short_translation"],
+        "attempt_routes": attempt_routes,
     }
 
 

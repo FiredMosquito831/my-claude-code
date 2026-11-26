@@ -54,6 +54,7 @@ from my_claude_code.api.model_admin import (
     prompt_cache_write_1h_prices,
     provider_endpoint_summary,
     render_patterns,
+    request_endpoint_routing,
     speakable_surfaces,
     visibility_payload,
     with_override_row,
@@ -4760,6 +4761,7 @@ async def list_request_log(
                 **filters,
                 include_total=include_total,
                 include_exits=True,
+                include_wire_surfaces=True,
                 matched=matched,
             )
 
@@ -4805,6 +4807,12 @@ async def list_request_log(
             # went out through and every exit it tried -- for the table's Exit
             # column. Added beside every existing key, never instead of one.
             include_exits=True,
+            include_wire_surfaces=True,
+        )
+    for row in rows:
+        attempt_surfaces = row.pop("_attempt_surfaces", None)
+        row["endpoint_routing"] = request_endpoint_routing(
+            row, attempt_surfaces=attempt_surfaces
         )
     return {
         "enabled": True,
@@ -6097,6 +6105,7 @@ async def get_request_log_entry(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Request log entry not found")
+    row["endpoint_routing"] = request_endpoint_routing(row)
     return row
 
 

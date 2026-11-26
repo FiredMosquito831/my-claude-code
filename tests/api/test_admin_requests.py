@@ -1,5 +1,6 @@
 """Admin API tests for the request log endpoints."""
 
+import json
 import re
 import sqlite3
 import time
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from my_claude_code.api.model_admin import request_endpoint_routing
 from my_claude_code.core.reasoning import ReasoningAdaptationKind
 from my_claude_code.core.request_log import (
     RequestRecord,
@@ -965,3 +967,228 @@ def test_latency_endpoint_is_not_swallowed_by_the_detail_route(
     response = client.get("/admin/api/requests/latency")
     assert response.status_code == 200
     assert "rows" in response.json()
+
+
+def test_request_endpoint_routing_detail_and_list_routes(client, tmp_path) -> None:
+    """Requests list and detail return harness endpoint, provider endpoint, and translation."""
+
+    store = get_request_log_store(tmp_path / "requests.db")
+    assert store is not None
+    base = time.time()
+
+    # 1. Translated request: /v1/messages -> failed chat_completions, succeeded responses (registry)
+    store.enqueue(
+        RequestRecord(
+            id="req-translated",
+            endpoint="/v1/messages",
+            protocol="anthropic",
+            provider="commandcode",
+            resolved_model="commandcode/deepseek/deepseek-v4.1-flash",
+            ts_epoch=base + 1,
+            status="success",
+            route_attempt=1,
+            input_text="hello translated",
+            output_text="ok",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="commandcode",
+                    model_ref="commandcode/deepseek/deepseek-v4.1-flash",
+                    outcome=RouteAttemptOutcome.FAILED,
+                    params={"wire": {"surface": "chat_completions (profile)"}},
+                    error_kind="upstream_status",
+                    error_message="400",
+                ),
+                RouteAttempt(
+                    attempt=1,
+                    provider="commandcode",
+                    model_ref="commandcode/deepseek/deepseek-v4.1-flash",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    params={"wire": {"surface": "responses (registry)"}},
+                ),
+            ),
+        )
+    )
+
+    # 2. Direct passthrough request: /v1/messages -> messages (learned)
+    store.enqueue(
+        RequestRecord(
+            id="req-direct",
+            endpoint="/v1/messages",
+            protocol="anthropic",
+            provider="opencode_go",
+            resolved_model="opencode_go/hy4-flash-free",
+            ts_epoch=base + 2,
+            status="success",
+            route_attempt=0,
+            input_text="hello direct",
+            output_text="ok",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="opencode_go",
+                    model_ref="opencode_go/hy4-flash-free",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    params={"wire": {"surface": "messages (learned)"}},
+                ),
+            ),
+        )
+    )
+
+    # 3. Single-door legacy attempt without wire.surface -> single-door fallback
+    store.enqueue(
+        RequestRecord(
+            id="req-single-door",
+            endpoint="/v1/messages",
+            protocol="anthropic",
+            provider="groq",
+            resolved_model="groq/llama-3.3-70b",
+            ts_epoch=base + 3,
+            status="success",
+            route_attempt=0,
+            input_text="hello single",
+            output_text="ok",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="groq",
+                    model_ref="groq/llama-3.3-70b",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    params={"wire": {"max_tokens": 1024}},
+                ),
+            ),
+        )
+    )
+
+    # 4. Multi-door legacy attempt without wire.surface -> honest unknown (None)
+    store.enqueue(
+        RequestRecord(
+            id="req-multi-unlabeled",
+            endpoint="/v1/messages",
+            protocol="anthropic",
+            provider="commandcode",
+            resolved_model="commandcode/deepseek/deepseek-v4.1-flash",
+            ts_epoch=base + 4,
+            status="success",
+            route_attempt=0,
+            input_text="hello unlabeled",
+            output_text="ok",
+            attempts=(
+                RouteAttempt(
+                    attempt=0,
+                    provider="commandcode",
+                    model_ref="commandcode/deepseek/deepseek-v4.1-flash",
+                    outcome=RouteAttemptOutcome.SUCCEEDED,
+                    params={"wire": {"max_tokens": 1024}},
+                ),
+            ),
+        )
+    )
+    store.close()
+
+    detail_t = client.get("/admin/api/requests/req-translated").json()
+    rt_t = detail_t["endpoint_routing"]
+    assert rt_t["harness_endpoint"] == {
+        "value": "messages",
+        "path": "/v1/messages",
+        "label": "Messages (/v1/messages)",
+        "short_label": "Messages",
+    }
+    assert rt_t["provider_endpoint"]["value"] == "responses"
+    assert rt_t["provider_endpoint"]["label"] == "Responses (/responses)"
+    assert rt_t["provider_endpoint"]["source_note"] == "registry"
+    assert rt_t["translated"] is True
+    assert rt_t["translation_label"] == (
+        "Messages (/v1/messages) \u2192 Responses (/responses) (translated)"
+    )
+    assert rt_t["short_translation"] == "Messages \u2192 Responses (translated)"
+    assert len(rt_t["attempt_routes"]) == 2
+    assert rt_t["attempt_routes"][0]["short_translation"] == (
+        "Messages \u2192 Chat Completions (translated)"
+    )
+    assert rt_t["attempt_routes"][1]["short_translation"] == (
+        "Messages \u2192 Responses (translated)"
+    )
+
+    detail_d = client.get("/admin/api/requests/req-direct").json()
+    rt_d = detail_d["endpoint_routing"]
+    assert rt_d["provider_endpoint"]["value"] == "messages"
+    assert rt_d["provider_endpoint"]["source_note"] == "learned"
+    assert rt_d["translated"] is False
+    assert rt_d["translation_label"] == (
+        "Messages (/v1/messages) \u2192 Messages (/messages) (direct passthrough, no translation)"
+    )
+    assert rt_d["short_translation"] == "Messages (direct)"
+
+    detail_s = client.get("/admin/api/requests/req-single-door").json()
+    assert detail_s["endpoint_routing"]["provider_endpoint"]["value"] == (
+        "chat_completions"
+    )
+    assert detail_s["endpoint_routing"]["provider_endpoint"]["source_note"] == (
+        "single-door"
+    )
+    assert detail_s["endpoint_routing"]["translated"] is True
+
+    detail_u = client.get("/admin/api/requests/req-multi-unlabeled").json()
+    assert detail_u["endpoint_routing"]["provider_endpoint"] is None
+    assert detail_u["endpoint_routing"]["translated"] is None
+    assert detail_u["endpoint_routing"]["translation_label"] == ""
+
+    listing = client.get("/admin/api/requests").json()
+    by_id = {row["id"]: row for row in listing["rows"]}
+    assert by_id["req-translated"]["endpoint_routing"]["short_translation"] == (
+        "Messages \u2192 Responses (translated)"
+    )
+    assert by_id["req-direct"]["endpoint_routing"]["short_translation"] == (
+        "Messages (direct)"
+    )
+    assert by_id["req-single-door"]["endpoint_routing"]["translated"] is True
+    assert by_id["req-multi-unlabeled"]["endpoint_routing"]["provider_endpoint"] is None
+
+    # Search listing (?q=...) path also enriches endpoint_routing cleanly.
+    searched = client.get(
+        "/admin/api/requests", params={"q": "hello translated"}
+    ).json()
+    assert len(searched["rows"]) == 1
+    assert searched["rows"][0]["endpoint_routing"]["translated"] is True
+
+    # Gemini /v1beta direct & translated cases via pure helper.
+    gemini_direct = request_endpoint_routing(
+        {
+            "endpoint": "/v1beta/models/gemini-2.5-flash:streamGenerateContent",
+            "protocol": "gemini",
+            "provider": "gemini",
+            "route_attempts": [
+                {
+                    "attempt": 0,
+                    "provider": "gemini",
+                    "outcome": "succeeded",
+                    "params": {"wire": {"surface": "generate_content"}},
+                }
+            ],
+        }
+    )
+    assert gemini_direct["harness_endpoint"]["value"] == "generate_content"
+    assert gemini_direct["translated"] is False
+    assert gemini_direct["short_translation"] == "Gemini (direct)"
+
+    gemini_translated = request_endpoint_routing(
+        {
+            "endpoint": "/v1beta/models/gemini-2.5-flash:generateContent",
+            "protocol": "gemini",
+            "provider": "groq",
+            "route_attempts": [
+                {
+                    "attempt": 0,
+                    "provider": "groq",
+                    "outcome": "succeeded",
+                    "params": {"wire": {"surface": "chat_completions"}},
+                }
+            ],
+        }
+    )
+    assert gemini_translated["translated"] is True
+    assert gemini_translated["short_translation"] == (
+        "Gemini \u2192 Chat Completions (translated)"
+    )
+    assert json.dumps(rt_t)  # JSON-serializable
