@@ -411,3 +411,32 @@ def test_the_two_converters_never_disagree(item: dict[str, Any]) -> None:
         ]
     )
     assert _tool_blocks(streamed)[0][0] == responses_tool_call_to_anthropic(item)["id"]
+
+
+@pytest.mark.parametrize(
+    ("delta_parts", "done_args", "expected_input"),
+    [
+        (['{"a":', "1}"], '{"a": 1}', {"a": 1}),
+        (['{"a": 1}'], '{"a":1}', {"a": 1}),
+        (['{"a":'], '{"a":1}', {"a": 1}),
+    ],
+    ids=["compact-then-pretty", "pretty-then-compact", "prefix-completion"],
+)
+def test_output_item_done_checks_prefix_before_slicing_arguments(
+    delta_parts: list[str], done_args: str, expected_input: dict[str, Any]
+) -> None:
+    item = {"type": "function_call", "id": "fc_fmt", "call_id": "call_fmt", "name": "f"}
+    frames: list[dict[str, Any]] = [
+        {"type": "response.output_item.added", "item": item},
+        *(
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_fmt",
+                "delta": part,
+            }
+            for part in delta_parts
+        ),
+        {"type": "response.output_item.done", "item": {**item, "arguments": done_args}},
+        _COMPLETED,
+    ]
+    assert _tool_blocks(_convert(frames)) == [("call_fmt", "f", expected_input)]

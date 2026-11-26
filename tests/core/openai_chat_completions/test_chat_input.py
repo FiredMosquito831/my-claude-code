@@ -468,3 +468,94 @@ def test_malformed_chat_web_search_raises_schema_on_error(bad_kwargs: dict) -> N
             allow_web_search=True,
         )
     assert "Expected Chat Completions web search" in str(excinfo.value)
+
+
+def test_empty_assistant_message_with_empty_reasoning_content_is_skipped() -> None:
+    payload = _convert(
+        _minimal(
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "", "reasoning_content": ""},
+                {"role": "assistant", "content": "visible", "reasoning_content": ""},
+                {"role": "user", "content": "next"},
+            ]
+        )
+    )
+    assert payload["messages"] == [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "visible"}],
+            "reasoning_content": "",
+        },
+        {"role": "user", "content": "next"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    ["file:///etc/passwd", "javascript:alert(1)", "ftp://example.test/a.png"],
+)
+def test_image_url_rejects_non_http_non_data_schemes(bad_url: str) -> None:
+    with pytest.raises(ChatCompletionsConversionError) as excinfo:
+        _convert(
+            _minimal(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": bad_url}}
+                        ],
+                    }
+                ]
+            )
+        )
+    assert excinfo.value.param == "messages"
+    assert "http(s) URL" in str(excinfo.value)
+
+
+def test_file_block_supports_http_file_url_and_rejects_invalid_scheme() -> None:
+    payload = _convert(
+        _minimal(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "file",
+                            "file": {
+                                "file_url": "https://example.test/report.pdf",
+                                "filename": "report.pdf",
+                            },
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+    assert payload["messages"][0]["content"] == [
+        {
+            "type": "document",
+            "source": {"type": "url", "url": "https://example.test/report.pdf"},
+            "title": "report.pdf",
+        }
+    ]
+
+    with pytest.raises(ChatCompletionsConversionError) as excinfo:
+        _convert(
+            _minimal(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "file",
+                                "file": {"file_url": "file:///tmp/report.pdf"},
+                            }
+                        ],
+                    }
+                ]
+            )
+        )
+    assert excinfo.value.param == "messages"
+    assert "http(s) URL" in str(excinfo.value)

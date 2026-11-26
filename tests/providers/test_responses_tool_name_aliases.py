@@ -492,3 +492,45 @@ def test_h_one_tool_has_one_alias_on_both_surfaces() -> None:
     assert [t["function"]["name"] for t in chat["tools"]] == [
         t["name"] for t in responses["tools"]
     ]
+
+
+def test_aliased_namespaced_tool_does_not_double_prefix_namespace() -> None:
+    ns_tool = "my_ns__" + "very_long_tool_name_" * 3 + "end"
+    codec = OpenAIToolNameCodec.from_names([ns_tool], max_length=64)
+    alias = codec.encode(ns_tool)
+    assert alias != ns_tool
+
+    ledger = AnthropicStreamLedger("msg_ns", "m", input_tokens=0)
+    converter = ResponsesStreamConverter(ledger, tool_names=codec)
+    events = [ledger.message_start()]
+    for frame in (
+        {"type": "response.created", "response": {"id": "resp_ns"}},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "namespace": "my_ns",
+                "name": alias,
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_2",
+                "call_id": "call_2",
+                "namespace": "my_ns",
+                "name": "my_ns__short",
+                "arguments": "",
+            },
+        },
+        {"type": "response.completed", "response": {"status": "completed"}},
+    ):
+        events.extend(converter.feed(frame))
+    events.extend(converter.finish())
+    assert _tool_use_names(events) == [ns_tool, "my_ns__short"]

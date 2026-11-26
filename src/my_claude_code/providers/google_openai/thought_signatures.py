@@ -92,6 +92,11 @@ def _set_tool_call_thought_signature(tool_call: dict[str, Any], signature: str) 
     google["thought_signature"] = signature
 
 
+_STANDARD_USER_MEDIA_PART_TYPES = frozenset(
+    {"image_url", "input_image", "input_audio", "file"}
+)
+
+
 def _message_has_standard_user_content(message: dict[str, Any]) -> bool:
     if message.get("role") != "user":
         return False
@@ -101,8 +106,10 @@ def _message_has_standard_user_content(message: dict[str, Any]) -> bool:
     if isinstance(content, list):
         return any(
             isinstance(part, dict)
-            and isinstance(part.get("text"), str)
-            and bool(part["text"].strip())
+            and (
+                part.get("type") in _STANDARD_USER_MEDIA_PART_TYPES
+                or (isinstance(part.get("text"), str) and bool(part["text"].strip()))
+            )
             for part in content
         )
     return False
