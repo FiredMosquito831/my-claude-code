@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from my_claude_code.config.paths import reset_config_dir_cache
 from my_claude_code.runtime.remote.opencode_driver import (
     OpenCodeFamilyDriver,
@@ -75,6 +77,7 @@ def test_opencode_argv_attach_hints_and_env_isolation(
     assert env["MCC_OPENCODE_BASE_URL"] == "http://127.0.0.1:18568/v1"
 
 
+@pytest.mark.spawns_process
 def test_opencode_driver_sse_permissions_modes_questions_abort_fork(
     monkeypatch, tmp_path: Path
 ) -> None:

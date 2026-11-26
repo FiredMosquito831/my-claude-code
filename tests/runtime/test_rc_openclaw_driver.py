@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from my_claude_code.config.paths import reset_config_dir_cache
 from my_claude_code.runtime.remote.openclaw_driver import (
     OpenClawGatewayDriver,
@@ -47,6 +49,7 @@ def test_openclaw_argv_and_env() -> None:
     assert env["MCC_RC_SESSION_ID"] == "rc_oclaw"
 
 
+@pytest.mark.spawns_process
 def test_openclaw_driver_ws_handshake_chat_approvals_and_abort(
     monkeypatch, tmp_path: Path
 ) -> None:

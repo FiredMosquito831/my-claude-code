@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from my_claude_code.config.paths import reset_config_dir_cache
 from my_claude_code.runtime.remote.codex_driver import (
     CodexAppServerDriver,
@@ -56,6 +58,7 @@ def test_codex_argv_and_env(monkeypatch, tmp_path: Path) -> None:
     assert env["MCC_RC_SESSION_ID"] == "rc_cdx"
 
 
+@pytest.mark.spawns_process
 def test_codex_driver_jsonrpc_approvals_modes_questions_and_interrupt(
     monkeypatch, tmp_path: Path
 ) -> None:
