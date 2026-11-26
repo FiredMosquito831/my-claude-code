@@ -132,6 +132,7 @@ from .proxy_feed_timer import ProxyFeedTimer
 from .proxy_order import ProxyOrderTimer
 from .proxy_runners import ProxyRunnerSupervisor
 from .proxy_source_timer import ProxySourceTimer
+from .remote.hub import RemoteRuntimeHub
 from .stall_watchdog import StallWatchdog
 
 RestartCallback = Callable[[], Awaitable[None] | None]
@@ -313,11 +314,13 @@ class ApplicationRuntime:
         transcriber: Transcriber | None,
         restart_callback: RestartCallback | None = None,
         process_restart_callback: RestartCallback | None = None,
+        remote_hub: RemoteRuntimeHub | None = None,
     ) -> None:
         self.provider_manager = provider_manager
         self._transcriber = transcriber
         self._restart_callback = restart_callback
         self._process_restart_callback = process_restart_callback
+        self._remote_hub = remote_hub
         self._config_lock = asyncio.Lock()
         self._pending_fields: list[str] = []
         self._messaging_runtime: MessagingRuntime | None = None
@@ -721,6 +724,8 @@ class ApplicationRuntime:
 
         retune_request_log_store(current)
         retune_shared_store(current)
+        if self._remote_hub is not None:
+            self._remote_hub.update_settings(current)
         set_third_party_verbosity(bool(current.log_raw_api_payloads))
         if changed(
             "log_raw_sse_events",
@@ -1667,6 +1672,12 @@ class ApplicationRuntime:
             _flush_request_log(),
             log_verbose_errors=self.settings.log_api_error_tracebacks,
         )
+        if self._remote_hub is not None:
+            await best_effort(
+                "remote_hub.close",
+                self._remote_hub.close(),
+                log_verbose_errors=self.settings.log_api_error_tracebacks,
+            )
         if not await self._cleanup_messaging():
             return False
         if not await self._cleanup_transcriber():

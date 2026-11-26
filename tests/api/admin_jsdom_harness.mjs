@@ -4918,6 +4918,13 @@ if (process.env.MCC_JSDOM_SCENARIO === "inbound_protocol_switch") {
   );
   scenario = prepareInboundProtocolSwitchScenario({ window, ROUTES });
 }
+/* MCC_JSDOM_SCENARIO=remote_control (v8.53.0, PR 16): Remote Control (/rc) view. */
+if (process.env.MCC_JSDOM_SCENARIO === "remote_control") {
+  const { prepareRemoteControlScenario } = await import(
+    "./admin_jsdom_remote_control.mjs"
+  );
+  scenario = prepareRemoteControlScenario({ window, ROUTES });
+}
 /* MCC_JSDOM_SCENARIO=ux_views (7.122.3): every view's DOM digests, for the
    base-tree equality of the UX pass -- the same scenario runs on the base
    tree and here (admin_jsdom_ux_views.mjs). */

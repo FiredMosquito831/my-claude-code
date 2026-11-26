@@ -80,6 +80,11 @@ MCP_MEDIA_CLAUDE_CONFIG_FILENAME = "mcp-claude.json"
 MCP_MEDIA_OUTPUT_DIRNAME = "mcp-media"
 MCP_MEDIA_CACHE_DIRNAME = "cache"
 MCP_MEDIA_CATALOGUE_CACHE_FILENAME = "mcp-media-catalogue.json"
+RC_SESSIONS_DB_FILENAME = "rc_sessions.db"
+RC_DEVICES_FILENAME = "rc_devices.json"
+RC_SESSION_SECRET_FILENAME = "rc_session_secret.key"
+RC_WORKTREES_DIRNAME = "rc_worktrees"
+RC_REPO_WORKTREES_DIRNAME = ".mcc-worktrees"
 WSL_OSRELEASE_PATH = "/proc/sys/kernel/osrelease"
 WSL_WINDOWS_USERS_DIR = "/mnt/c/Users"
 MACOS_MANAGED_SETTINGS_PATH = (
@@ -894,3 +899,27 @@ def claude_managed_settings_paths() -> list[Path]:
         pass
 
     return paths
+
+
+def rc_sessions_db_path() -> Path:
+    """Return the persistent Remote Control SQLite database path."""
+
+    return config_dir_path() / RC_SESSIONS_DB_FILENAME
+
+
+def rc_devices_path() -> Path:
+    """Return the persistent Remote Control paired-devices registry path."""
+
+    return config_dir_path() / RC_DEVICES_FILENAME
+
+
+def rc_session_secret_path() -> Path:
+    """Return the auto-generated Remote Control HMAC signing secret path."""
+
+    return config_dir_path() / RC_SESSION_SECRET_FILENAME
+
+
+def rc_worktrees_dir_path() -> Path:
+    """Return the fallback Remote Control git worktree parent directory."""
+
+    return config_dir_path() / RC_WORKTREES_DIRNAME

@@ -23,6 +23,7 @@ from .asgi import RuntimeASGIApp
 from .harness_catalogues import HarnessCatalogueFanoutPublisher
 from .listener_guard import ListeningSocket
 from .provider_manager import ProviderRuntimeManager
+from .remote.hub import RemoteRuntimeHub
 from .windows_accept import install_keep_accepting
 
 
@@ -62,17 +63,20 @@ def build_asgi_app(
         settings,
         model_catalog_publisher=HarnessCatalogueFanoutPublisher(),
     )
+    remote_hub = RemoteRuntimeHub(settings)
     runtime = ApplicationRuntime(
         provider_manager,
         transcriber=_create_transcriber(settings),
         restart_callback=restart_callback,
         process_restart_callback=process_restart_callback,
+        remote_hub=remote_hub,
     )
     services = ApiServices(
         requests=provider_manager,
         admin=runtime,
         tasks=runtime,
         media=MEDIA_REGISTRY,
+        remote=remote_hub,
     )
     return RuntimeASGIApp(
         create_app(services),

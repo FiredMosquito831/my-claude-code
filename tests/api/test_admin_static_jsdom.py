@@ -15486,7 +15486,8 @@ SECTION_NAVIGATOR_VIEWS = frozenset(
 #:
 #:   8.3.0 USAGE PR 1 -> the `usage` page (tests/api/test_admin_usage_page_jsdom.py,
 #:                      base tree bb85fe79 = v8.2.0)
-VIEWS_ADDED_AFTER_BASELINES = frozenset({"usage"})
+#:   8.53.0 RC-PR1     -> the `remote_control` page
+VIEWS_ADDED_AFTER_BASELINES = frozenset({"usage", "remote_control"})
 
 
 @pytest.fixture(scope="module")
@@ -15871,3 +15872,26 @@ def test_jsdom_inbound_protocol_selector_and_xss(
         "harness": "opencode",
         "protocol": "",
     }
+
+
+@pytest.fixture(scope="module")
+def remote_control_ui() -> dict:
+    return _run(MCC_JSDOM_SCENARIO="remote_control")
+
+
+def test_jsdom_remote_control_page(remote_control_ui: dict) -> None:
+    assert remote_control_ui["fatal"] is None
+    assert remote_control_ui.get("scenarioError") is None
+    assert remote_control_ui["scriptErrors"] == []
+    assert remote_control_ui["consoleErrors"] == []
+    assert remote_control_ui["viewVisible"] is True
+    assert remote_control_ui["tunnelCardCount"] == 4
+    assert remote_control_ui["hasQrDataUri"] is True
+    assert "pair=tok_test" in remote_control_ui["pairUrlText"]
+    assert remote_control_ui["xssFlag"] == ""
+    assert remote_control_ui["xssImgs"] == 0
+    assert "No paired remote devices" in remote_control_ui["afterRevokeText"]
+    assert remote_control_ui["posts"] == [
+        "/admin/api/rc/pair-token",
+        "/admin/api/rc/devices/dev_abc123/revoke",
+    ]

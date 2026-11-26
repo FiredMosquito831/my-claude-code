@@ -161,7 +161,7 @@ def test_the_round_trip_is_not_vacuous(shell) -> None:
     """The digest must have had a page to digest, and the design must have run."""
 
     before = shell["roundTrip"]["before"]
-    assert len(before["views"]) == 16
+    assert len(before["views"]) == 17
     assert len(before["chrome"]) > 0  # the action bar and banners live out here
     assert before["htmlAttrs"], "no <html> attributes were captured at all"
     # ...and the switch really did happen: the running shell is Hybrid's.
@@ -199,8 +199,8 @@ def test_the_rail_is_numbered_and_grouped_in_the_products_own_order(shell) -> No
     # Sixteen links, one of which (InferHub) has no marketplace key in this
     # fixture and is therefore hidden — the number counts what is VISIBLE, so
     # 01…15 over 16 links is the correct reading, not a defect.
-    assert hybrid["numbers"] == [f"{index:02d}" for index in range(1, 16)]
-    assert hybrid["sectionNavButtons"] == 16
+    assert hybrid["numbers"] == [f"{index:02d}" for index in range(1, 17)]
+    assert hybrid["sectionNavButtons"] == 17
     order = hybrid["groupOrder"]
     # Every heading sits directly before the page it opens, and the pages are
     # the product's order: get_started … docs, with no page moved.
@@ -212,6 +212,7 @@ def test_the_rail_is_numbered_and_grouped_in_the_products_own_order(shell) -> No
         "marketplaces",
         "claude",
         "coding_agents",
+        "remote_control",
         "model_config",
         "models",
         "messaging",
@@ -258,6 +259,7 @@ def test_the_section_navigator_is_the_products_and_is_neither_hidden_nor_duplica
         "optimizer",
         "providers",
         "proxying",
+        "remote_control",
         "requests",
         # 8.7.0: the Usage page joins the table. Its strip names the elements
         # every layout shares (the page root, the refresh picker and Refresh
@@ -290,7 +292,7 @@ def test_the_palette_is_a_dialog_over_pages_sections_and_settings(shell) -> None
     assert palette["modal"] == "true"
     assert palette["labelled"] == "Command palette"
     # It opens on the pages — one per page, which is the whole rail.
-    assert palette["itemsOnOpen"] == 16
+    assert palette["itemsOnOpen"] == 17
     assert set(palette["hintsOnOpen"]) == {"page"}
     assert palette["expandedOnButton"] == "true"
 
@@ -350,7 +352,7 @@ def test_a_burst_of_switches_ends_with_exactly_one_shell(shell) -> None:
     assert burst["state"]["running"]["id"] == "hybrid"
     assert burst["mastheads"] == 1
     assert burst["shellNodes"] == 1
-    assert burst["numbers"] == 15
+    assert burst["numbers"] == 16
     assert burst["groups"] == 5
     assert burst["palettes"] == 0
     assert burst["versionIndicators"] == 1

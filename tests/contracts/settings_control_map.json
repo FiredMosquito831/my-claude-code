@@ -1728,6 +1728,50 @@
       "control": "field-RATE_LIMIT_ROUTES_AROUND_MODEL",
       "page": "limits"
     },
+    "RC_ALLOWED_DIRS": {
+      "control": "field-RC_ALLOWED_DIRS",
+      "page": "remote_control"
+    },
+    "RC_CLOUDFLARE_BINARY": {
+      "control": "field-RC_CLOUDFLARE_BINARY",
+      "page": "remote_control"
+    },
+    "RC_CLOUDFLARE_PUBLIC_HOSTNAME": {
+      "control": "field-RC_CLOUDFLARE_PUBLIC_HOSTNAME",
+      "page": "remote_control"
+    },
+    "RC_CLOUDFLARE_TUNNEL_TOKEN": {
+      "control": "field-RC_CLOUDFLARE_TUNNEL_TOKEN",
+      "page": "remote_control"
+    },
+    "RC_ENABLED": {
+      "control": "field-RC_ENABLED",
+      "page": "remote_control"
+    },
+    "RC_MAX_SESSIONS": {
+      "control": "field-RC_MAX_SESSIONS",
+      "page": "remote_control"
+    },
+    "RC_PERMISSION_MODE": {
+      "control": "field-RC_PERMISSION_MODE",
+      "page": "remote_control"
+    },
+    "RC_SESSION_SECRET": {
+      "control": "field-RC_SESSION_SECRET",
+      "page": "remote_control"
+    },
+    "RC_TAILSCALE_BINARY": {
+      "control": "field-RC_TAILSCALE_BINARY",
+      "page": "remote_control"
+    },
+    "RC_TAILSCALE_HOSTNAME": {
+      "control": "field-RC_TAILSCALE_HOSTNAME",
+      "page": "remote_control"
+    },
+    "RC_TUNNEL_MODE": {
+      "control": "field-RC_TUNNEL_MODE",
+      "page": "remote_control"
+    },
     "REASONING_ANSWER_FLOOR_MAX": {
       "control": "field-REASONING_ANSWER_FLOOR_MAX",
       "page": "limits"

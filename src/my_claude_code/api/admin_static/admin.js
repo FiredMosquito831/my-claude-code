@@ -270,6 +270,13 @@ const VIEW_GROUPS = [
     containerId: "codingAgentsSettings",
   },
   {
+    id: "remote_control",
+    label: "Remote Control",
+    title: "Remote Control",
+    sections: ["remote_control"],
+    containerId: "remoteControlSections",
+  },
+  {
     id: "model_config",
     label: "Model Config",
     title: "Model Config",
@@ -1109,6 +1116,10 @@ function setActiveView(viewId, { scroll = false } = {}) {
     // 7.102.0: the Install buttons. Its own request: it runs each installed
     // CLI's --version once (cached), so it is asked only on this page.
     loadAgentInstalls().catch((error) => showMessage(error.message, "error"));
+  }
+
+  if (activeView.id === "remote_control") {
+    loadRemoteControlView().catch((error) => showMessage(error.message, "error"));
   }
 
   if (activeView.id === "docs") {
@@ -51613,6 +51624,7 @@ initCodingAgentsFilter();
 function initDashboardChrome() {
   initSidebarFold();
   initSectionJumpBars();
+  initRemoteControlPanel();
   // Links that name a view instead of a URL (the Analytics empty state, the
   // cross-links this pass adds) go through the one deep-link helper.
   document.addEventListener("click", (event) => {
@@ -51745,6 +51757,13 @@ const SECTION_NAVIGATOR = {
     ["Media server", "#mcpMediaServerCard"],
     ["Desktop apps", "#desktopAppsHeading"],
     ["Settings", "#codingAgentsSettings"],
+  ],
+  remote_control: [
+    ["Status", "#rcStatusPanel"],
+    ["Pairing", "#rcPairingPanel"],
+    ["Devices", "#rcDevicesPanel"],
+    ["Sessions", "#rcSessionsPanel"],
+    ["Settings", "#remoteControlSections"],
   ],
   model_config: [
     ["Routing", "#section-models"],
@@ -52178,3 +52197,280 @@ function initRouteRails() {
 }
 
 initRouteRails();
+
+/* ----------------------------------------------------------- remote control
+   8.53.0: #view-remote_control control plane (status, tunnels, pairing QR,
+   paired devices, active sessions). All DOM updates use textContent + element
+   creation; the QR SVG is rendered in an <img> data URI to keep innerHTML out. */
+function makeRcPill(text, tone) {
+  const pill = document.createElement("span");
+  pill.className = `status-pill ${tone || "neutral"}`;
+  pill.textContent = text;
+  return pill;
+}
+
+function renderRcStatus(statusPayload) {
+  const summary = byId("rcStatusSummary");
+  const cards = byId("rcTunnelCards");
+  if (!summary || !cards) return;
+  summary.replaceChildren();
+  cards.replaceChildren();
+
+  summary.append(
+    makeRcPill(
+      statusPayload.enabled ? "/rc enabled" : "/rc disabled",
+      statusPayload.enabled ? "ok" : "warn",
+    ),
+    makeRcPill(`Default mode: ${statusPayload.permission_mode || "ask"}`, "neutral"),
+    makeRcPill(
+      `Sessions: ${statusPayload.active_sessions || 0} / ${statusPayload.max_sessions || 8}`,
+      "neutral",
+    ),
+    makeRcPill(`Devices: ${statusPayload.device_count || 0}`, "neutral"),
+  );
+
+  const tunnels = statusPayload.tunnels || {};
+  const ts = tunnels.tailscale || {};
+  const cf = tunnels.cloudflare || {};
+
+  const buildTunnelCard = (title, statusText, tone, detailText, actionLabel, actionMode) => {
+    const card = document.createElement("div");
+    card.className = "rc-tunnel-card";
+    const head = document.createElement("div");
+    head.className = "rc-tunnel-card-head";
+    const h4 = document.createElement("strong");
+    h4.textContent = title;
+    head.append(h4, makeRcPill(statusText, tone));
+    card.appendChild(head);
+    const desc = document.createElement("p");
+    desc.className = "field-description";
+    desc.textContent = detailText;
+    card.appendChild(desc);
+    if (actionMode) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "secondary-button";
+      btn.textContent = actionLabel;
+      btn.addEventListener("click", async () => {
+        try {
+          await api("/admin/api/rc/tunnel/start", {
+            method: "POST",
+            body: JSON.stringify({ mode: actionMode }),
+          });
+          await loadRemoteControlView();
+          showMessage(`Tunnel updated (${actionMode}).`, "ok");
+        } catch (err) {
+          showMessage(err.message, "error");
+        }
+      });
+      card.appendChild(btn);
+    }
+    return card;
+  };
+
+  cards.appendChild(
+    buildTunnelCard(
+      "Local Loopback",
+      "Ready",
+      "ok",
+      tunnels.local_url || "/rc",
+      null,
+      null,
+    ),
+  );
+  cards.appendChild(
+    buildTunnelCard(
+      "Tailscale Serve",
+      ts.serve_active ? "Active" : ts.running ? "Ready" : ts.installed ? "Idle" : "Missing",
+      ts.serve_active ? "ok" : ts.running ? "neutral" : "warn",
+      ts.serve_url || ts.error || ts.bind_warning || "HTTPS serve over Tailscale MagicDNS",
+      "Start Tailscale Serve",
+      "tailscale_serve",
+    ),
+  );
+  cards.appendChild(
+    buildTunnelCard(
+      "Tailnet Direct",
+      ts.running ? "Ready" : ts.installed ? "Stopped" : "Missing",
+      ts.running ? "neutral" : "warn",
+      ts.local_url || ts.bind_warning || "Direct tailnet IP access",
+      "Use Tailnet Direct",
+      "tailscale_local",
+    ),
+  );
+  cards.appendChild(
+    buildTunnelCard(
+      "Cloudflare Tunnel",
+      cf.running ? "Active" : cf.installed ? "Idle" : "Not installed",
+      cf.running ? "ok" : "warn",
+      cf.public_url || cf.error || cf.install_hint || "Expose only /rc via cloudflared",
+      "Start Cloudflare Tunnel",
+      "cloudflare",
+    ),
+  );
+
+  const openLink = byId("rcOpenLocalLink");
+  if (openLink && tunnels.local_url) {
+    openLink.href = tunnels.local_url;
+  }
+}
+
+function renderRcDevices(devicesPayload) {
+  const list = byId("rcDevicesList");
+  if (!list) return;
+  list.replaceChildren();
+  const devices = Array.isArray(devicesPayload.devices) ? devicesPayload.devices : [];
+  if (!devices.length) {
+    const empty = document.createElement("p");
+    empty.className = "field-description";
+    empty.textContent = "No paired remote devices.";
+    list.appendChild(empty);
+    return;
+  }
+  devices.forEach((dev) => {
+    const row = document.createElement("div");
+    row.className = "rc-admin-row";
+    const info = document.createElement("div");
+    info.className = "rc-admin-row-info";
+    const title = document.createElement("strong");
+    title.textContent = dev.label || dev.device_id;
+    const meta = document.createElement("span");
+    meta.className = "field-description";
+    meta.textContent = `${dev.device_id} · ${dev.last_ip || "unknown"}`;
+    info.append(title, meta);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary-button danger";
+    btn.textContent = "Revoke";
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/admin/api/rc/devices/${encodeURIComponent(dev.device_id)}/revoke`, {
+          method: "POST",
+        });
+        await loadRemoteControlView();
+        showMessage("Device revoked.", "ok");
+      } catch (err) {
+        showMessage(err.message, "error");
+      }
+    });
+    row.append(info, btn);
+    list.appendChild(row);
+  });
+}
+
+function renderRcSessions(sessionsPayload) {
+  const list = byId("rcSessionsList");
+  if (!list) return;
+  list.replaceChildren();
+  const sessions = Array.isArray(sessionsPayload.sessions) ? sessionsPayload.sessions : [];
+  if (!sessions.length) {
+    const empty = document.createElement("p");
+    empty.className = "field-description";
+    empty.textContent = "No Remote Control sessions recorded yet.";
+    list.appendChild(empty);
+    return;
+  }
+  sessions.forEach((sess) => {
+    const row = document.createElement("div");
+    row.className = "rc-admin-row";
+    const info = document.createElement("div");
+    info.className = "rc-admin-row-info";
+    const title = document.createElement("strong");
+    title.textContent = `${sess.title || sess.id} (${sess.status})`;
+    const meta = document.createElement("span");
+    meta.className = "field-description";
+    meta.textContent = `${sess.harness} · ${sess.permission_mode} · ${sess.cwd}`;
+    info.append(title, meta);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary-button danger";
+    btn.textContent = "Stop";
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/admin/api/rc/sessions/${encodeURIComponent(sess.id)}/stop`, {
+          method: "POST",
+        });
+        await loadRemoteControlView();
+      } catch (err) {
+        showMessage(err.message, "error");
+      }
+    });
+    row.append(info, btn);
+    list.appendChild(row);
+  });
+}
+
+async function loadRemoteControlView() {
+  const [statusPayload, devicesPayload, sessionsPayload] = await Promise.all([
+    api("/admin/api/rc/status"),
+    api("/admin/api/rc/devices"),
+    api("/admin/api/rc/sessions"),
+  ]);
+  renderRcStatus(statusPayload);
+  renderRcDevices(devicesPayload);
+  renderRcSessions(sessionsPayload);
+}
+
+function initRemoteControlPanel() {
+  const refreshBtn = byId("rcRefreshStatusBtn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      loadRemoteControlView().catch((err) => showMessage(err.message, "error"));
+    });
+  }
+  const stopTunnelBtn = byId("rcStopTunnelBtn");
+  if (stopTunnelBtn) {
+    stopTunnelBtn.addEventListener("click", async () => {
+      try {
+        await api("/admin/api/rc/tunnel/stop", { method: "POST" });
+        await loadRemoteControlView();
+        showMessage("Tunnel stopped.", "ok");
+      } catch (err) {
+        showMessage(err.message, "error");
+      }
+    });
+  }
+  const genPairBtn = byId("rcGeneratePairBtn");
+  if (genPairBtn) {
+    genPairBtn.addEventListener("click", async () => {
+      try {
+        const pair = await api("/admin/api/rc/pair-token", {
+          method: "POST",
+          body: JSON.stringify({ label: "Mobile Device" }),
+        });
+        const img = byId("rcPairQrImg");
+        const urlEl = byId("rcPairUrlText");
+        const wrap = byId("rcPairResult");
+        if (img && pair.qr_svg) {
+          img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(pair.qr_svg)}`;
+        }
+        if (urlEl) urlEl.textContent = pair.pair_url || "";
+        if (wrap) wrap.hidden = false;
+      } catch (err) {
+        showMessage(err.message, "error");
+      }
+    });
+  }
+  const copyBtn = byId("rcCopyPairUrlBtn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async () => {
+      const urlText = byId("rcPairUrlText")?.textContent || "";
+      if (urlText && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(urlText).catch(() => {});
+        showMessage("Pairing URL copied.", "ok");
+      }
+    });
+  }
+  const revokeAllBtn = byId("rcRevokeAllBtn");
+  if (revokeAllBtn) {
+    revokeAllBtn.addEventListener("click", async () => {
+      try {
+        await api("/admin/api/rc/devices/revoke-all", { method: "POST" });
+        await loadRemoteControlView();
+        showMessage("All paired devices revoked.", "ok");
+      } catch (err) {
+        showMessage(err.message, "error");
+      }
+    });
+  }
+}

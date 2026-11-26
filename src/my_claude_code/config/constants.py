@@ -1650,3 +1650,24 @@ SDK_HARNESS_IDS: tuple[str, ...] = (
     "ai_sdk",
 )
 SELECTABLE_SDK_HARNESS_IDS: frozenset[str] = frozenset(SDK_HARNESS_IDS)
+
+# Remote Control (/rc) defaults. Opt-in OFF by default so existing installs keep
+# identical startup, routing, and Admin UI behaviour until explicitly enabled.
+RC_ENABLED_DEFAULT = False
+RC_PERMISSION_MODE_VALUES: tuple[str, ...] = ("ask", "auto_edits", "yolo")
+RC_PERMISSION_MODE_DEFAULT = "ask"
+RC_ALLOWED_DIRS_DEFAULT = ""
+RC_MAX_SESSIONS_DEFAULT = 12
+RC_TUNNEL_MODE_VALUES: tuple[str, ...] = (
+    "off",
+    "tailscale_serve",
+    "tailscale_local",
+    "cloudflare",
+)
+RC_TUNNEL_MODE_DEFAULT = "off"
+RC_TAILSCALE_BINARY_DEFAULT = ""
+RC_TAILSCALE_HOSTNAME_DEFAULT = ""
+RC_CLOUDFLARE_BINARY_DEFAULT = ""
+RC_CLOUDFLARE_TUNNEL_TOKEN_DEFAULT = ""
+RC_CLOUDFLARE_PUBLIC_HOSTNAME_DEFAULT = ""
+RC_SESSION_SECRET_DEFAULT = ""

@@ -289,6 +289,14 @@ SECTIONS: tuple[ConfigSectionSpec, ...] = (
         "server nowhere.",
     ),
     ConfigSectionSpec(
+        "remote_control",
+        "Remote Control",
+        "Browser-native mobile and desktop session hub (/rc), pairing "
+        "authentication, workspace root allowlist, and Tailscale / Cloudflare "
+        "Tunnel configuration. Off by default; /admin remains strictly "
+        "physical-loopback-only regardless of tunnel mode.",
+    ),
+    ConfigSectionSpec(
         "appearance",
         "Dashboard appearance",
         "What this dashboard looks like: the design, the colour theme and its "
@@ -4856,6 +4864,176 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
             "exist, mcc-desktop logs a warning and falls back to the search "
             "instead of failing to open a window. Applies the next time "
             "mcc-desktop starts, not to a window already open."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_ENABLED",
+        "Enable Remote Control (/rc)",
+        "remote_control",
+        "boolean",
+        settings_attr="rc_enabled",
+        default="false",
+        affects_providers=False,
+        description=(
+            "Master switch for the /rc mobile PWA, pairing exchange, session "
+            "hub, and remote WebSockets. Off by default so existing installs "
+            "expose no remote endpoints until explicitly enabled."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_PERMISSION_MODE",
+        "Default permission mode",
+        "remote_control",
+        "select",
+        settings_attr="rc_permission_mode",
+        default="ask",
+        options=(
+            ConfigOptionSpec("ask", "Ask before tool execution"),
+            ConfigOptionSpec("auto_edits", "Auto-approve edits, ask on shell/external"),
+            ConfigOptionSpec(
+                "yolo", "YOLO — bypass all tool approval prompts (high risk)"
+            ),
+        ),
+        affects_providers=False,
+        description=(
+            "Permission mode ceiling and default for new Remote Control sessions. "
+            "ask requires approval on tools; auto_edits approves file edits while "
+            "prompting for shell/external tools; yolo skips all tool approval "
+            "prompts (high risk — never default, opt in deliberately)."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_ALLOWED_DIRS",
+        "Allowed workspace directories",
+        "remote_control",
+        "text",
+        settings_attr="rc_allowed_dirs",
+        default="",
+        affects_providers=False,
+        description=(
+            "Comma- or path-separator-delimited root directories permitted for "
+            "new Remote Control sessions and the mobile directory picker. Empty "
+            "disables arbitrary path selection (fail-closed) or restricts to the "
+            "configured roots with symlink-safe Path.resolve() containment."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_MAX_SESSIONS",
+        "Max concurrent sessions",
+        "remote_control",
+        "number",
+        settings_attr="rc_max_sessions",
+        default="12",
+        affects_providers=False,
+        description=(
+            "Maximum number of concurrent active Remote Control sessions "
+            "supervised by this server at one time (1 to 64)."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_TUNNEL_MODE",
+        "Remote tunnel mode",
+        "remote_control",
+        "select",
+        settings_attr="rc_tunnel_mode",
+        default="off",
+        options=(
+            ConfigOptionSpec("off", "Off (local / manual reverse proxy)"),
+            ConfigOptionSpec("tailscale_serve", "Tailscale Serve (Tailnet HTTPS)"),
+            ConfigOptionSpec("tailscale_local", "Tailscale Local Network (Tailnet IP)"),
+            ConfigOptionSpec("cloudflare", "Cloudflare Tunnel (cloudflared)"),
+        ),
+        affects_providers=False,
+        description=(
+            "Preferred remote access transport for /rc pairing URLs: off, "
+            "tailscale_serve (tailnet HTTPS proxy), tailscale_local (direct "
+            "Tailnet IP URL), or cloudflare (cloudflared quick or named tunnel)."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_TAILSCALE_BINARY",
+        "Tailscale CLI path",
+        "remote_control",
+        "text",
+        settings_attr="rc_tailscale_binary",
+        default="",
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Optional explicit path to the tailscale executable. Leave blank to "
+            "auto-detect on PATH and standard OS installation locations."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_TAILSCALE_HOSTNAME",
+        "Tailscale hostname override",
+        "remote_control",
+        "text",
+        settings_attr="rc_tailscale_hostname",
+        default="",
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Optional override for the Tailnet DNS name or IP shown in Remote "
+            "Control pairing URLs. Leave blank to auto-detect from tailscale status."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_CLOUDFLARE_BINARY",
+        "Cloudflared CLI path",
+        "remote_control",
+        "text",
+        settings_attr="rc_cloudflare_binary",
+        default="",
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Optional explicit path to the cloudflared executable. Leave blank "
+            "to auto-detect on PATH when using Cloudflare Tunnel mode."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_CLOUDFLARE_TUNNEL_TOKEN",
+        "Cloudflare Named Tunnel token",
+        "remote_control",
+        "secret",
+        settings_attr="rc_cloudflare_tunnel_token",
+        default="",
+        secret=True,
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Optional Cloudflare Zero Trust Named Tunnel token. Leave blank in "
+            "cloudflare mode to start an ephemeral quick trycloudflare.com tunnel."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_CLOUDFLARE_PUBLIC_HOSTNAME",
+        "Cloudflare public hostname",
+        "remote_control",
+        "text",
+        settings_attr="rc_cloudflare_public_hostname",
+        default="",
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "Public HTTPS URL or hostname mapped to your Cloudflare Named "
+            "Tunnel (for example https://rc.example.com) for QR pairing links."
+        ),
+    ),
+    ConfigFieldSpec(
+        "RC_SESSION_SECRET",
+        "Device cookie signing secret",
+        "remote_control",
+        "secret",
+        settings_attr="rc_session_secret",
+        default="",
+        secret=True,
+        advanced=True,
+        affects_providers=False,
+        description=(
+            "HMAC-SHA256 signing key for Remote Control HttpOnly device cookies. "
+            "Leave blank to auto-generate and persist a key under ~/.mcc."
         ),
     ),
 )
