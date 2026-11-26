@@ -1,0 +1,9 @@
+{
+  "name": "MCC Remote Control",
+  "short_name": "MCC RC",
+  "start_url": "/rc",
+  "scope": "/rc",
+  "display": "standalone",
+  "background_color": "#0b1120",
+  "theme_color": "#0b1120"
+}

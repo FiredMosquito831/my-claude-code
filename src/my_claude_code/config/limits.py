@@ -379,6 +379,7 @@ LIMIT_RANGES: dict[str, LimitRange] = {
     "web_search_tool_loop_max_steps": LimitRange(
         1, 25, "bounds multi-door web search tool loop steps"
     ),
+    "rc_max_sessions": LimitRange(1, 64, "1 session minimum; 64 maximum"),
 }
 
 

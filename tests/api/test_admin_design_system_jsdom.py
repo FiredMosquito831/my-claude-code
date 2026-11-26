@@ -51,6 +51,7 @@ EXPECTED_NAVIGATOR = {
     "marketplaces": 6,
     "claude": 3,
     "coding_agents": 5,
+    "remote_control": 5,
     "model_config": 4,
     "models": 3,
     "requests": 10,
@@ -290,7 +291,7 @@ def test_with_both_features_off_every_view_is_the_base_tree(
     # view the baseline names is still compared below, unchanged, which is the
     # claim that matters; the addition is declared here by name and proved in
     # tests/api/test_admin_usage_page_jsdom.py against its own base tree.
-    assert set(mine) - set(base) == {"usage"}
+    assert set(mine) - set(base) == {"usage", "remote_control"}
     assert set(base) - set(mine) == set()
     # The claim this test exists to make: nothing moved that this release did
     # not declare. `DECLARED_MOVES` is a CEILING, not an equality -- a declared
@@ -344,7 +345,9 @@ def test_the_two_features_change_exactly_the_declared_views(design_system) -> No
     off = design_system["feature_off_views"]
     on = design_system["views"]
     moved = sorted(view for view in off if off[view]["sha256"] != on[view]["sha256"])
-    declared = sorted(set(EXPECTED_NAVIGATOR) | {"get_started", "usage"})
+    declared = sorted(
+        set(EXPECTED_NAVIGATOR) | {"get_started", "usage", "remote_control"}
+    )
     assert sorted(set(moved) - set(declared)) == [], (
         "the two new features changed a view outside the declared set: "
         f"{sorted(set(moved) - set(declared))}"

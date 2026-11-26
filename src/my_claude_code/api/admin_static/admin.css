@@ -15908,3 +15908,113 @@ audio.req-media-preview {
   .usage-picker-label { white-space: normal; }
   .usage-error-detail { padding: 10px; }
 }
+
+/* Remote Control (/rc) Admin View */
+.rc-admin-panel {
+  margin-bottom: var(--space-4);
+}
+
+.rc-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.rc-admin-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.rc-tunnel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+
+.rc-tunnel-card {
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rc-tunnel-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.rc-pair-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.rc-qr-frame {
+  background: #ffffff;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  width: 216px;
+  height: 216px;
+  display: grid;
+  place-items: center;
+}
+
+.rc-qr-frame img {
+  width: 200px;
+  height: 200px;
+  display: block;
+}
+
+.rc-pair-meta {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rc-code-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--input);
+  color: var(--text);
+  word-break: break-all;
+}
+
+.rc-admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rc-admin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+
+.rc-admin-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+

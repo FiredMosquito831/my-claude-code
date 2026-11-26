@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b1120" />
+    <title>MCC Remote Control</title>
+    <link rel="manifest" href="/rc/manifest.webmanifest" />
+    <link rel="stylesheet" href="/rc/assets/vendor/xterm.css" />
+    <link rel="stylesheet" href="/rc/assets/remote.css" />
+  </head>
+  <body>
+    <div id="app" class="rc-shell">
+      <header class="rc-topbar">
+        <button
+          id="btnToggleSidebar"
+          class="rc-icon-btn rc-mobile-only"
+          type="button"
+          aria-label="Sessions"
+        >
+          ☰
+        </button>
+        <div class="rc-brand">
+          <span class="rc-brand-dot" id="connDot"></span>
+          <span class="rc-brand-title">MCC Remote Control</span>
+        </div>
+        <div class="rc-topbar-actions">
+          <button id="btnNewSessionOpen" class="rc-btn rc-btn-primary" type="button" hidden>
+            + New
+          </button>
+          <button id="btnLogout" class="rc-btn rc-btn-ghost" type="button" hidden>
+            Unpair
+          </button>
+        </div>
+      </header>
+
+      <main id="pairView" class="rc-pair-view">
+        <section class="rc-card rc-pair-card">
+          <h1>Pair This Device</h1>
+          <p class="rc-muted">
+            Scan the QR code from the local MCC Admin Dashboard or paste your
+            60-second single-use pairing token below.
+          </p>
+          <form id="pairForm" class="rc-stack">
+            <label class="rc-label">
+              Pairing Token
+              <input
+                id="pairTokenInput"
+                class="rc-input"
+                type="password"
+                autocomplete="one-time-code"
+                placeholder="Paste pairing token"
+                required
+              />
+            </label>
+            <label class="rc-label">
+              Device Label
+              <input
+                id="pairLabelInput"
+                class="rc-input"
+                type="text"
+                maxlength="80"
+                placeholder="e.g. Pixel 9 Pro"
+              />
+            </label>
+            <button id="pairSubmitBtn" class="rc-btn rc-btn-primary" type="submit">
+              Connect Device
+            </button>
+          </form>
+          <div id="pairError" class="rc-alert rc-alert-error" hidden></div>
+        </section>
+      </main>
+
+      <div id="workspaceView" class="rc-workspace" hidden>
+        <aside id="sessionSidebar" class="rc-sidebar">
+          <div class="rc-sidebar-head">
+            <h2>Sessions</h2>
+            <button id="btnRefreshSessions" class="rc-btn rc-btn-ghost" type="button">
+              Refresh
+            </button>
+          </div>
+          <div id="sessionList" class="rc-session-list"></div>
+        </aside>
+
+        <section class="rc-main">
+          <div id="emptyState" class="rc-empty-state">
+            <h2>Select or start a coding session</h2>
+            <p class="rc-muted">
+              Launch Claude Code in structured bidirectional mode, or open any
+              available coding agent / terminal in a real interactive PTY.
+            </p>
+            <button id="btnEmptyNewSession" class="rc-btn rc-btn-primary" type="button">
+              + Start Remote Session
+            </button>
+          </div>
+
+          <div id="sessionDetail" class="rc-detail" hidden>
+            <div class="rc-session-header">
+              <div class="rc-session-title-wrap">
+                <h2 id="activeTitle">—</h2>
+                <div class="rc-badges">
+                  <span id="activeStatusBadge" class="rc-pill">—</span>
+                  <span id="activeTierBadge" class="rc-pill">—</span>
+                  <span id="activeBranchBadge" class="rc-pill" hidden></span>
+                </div>
+              </div>
+              <div class="rc-session-controls">
+                <select
+                  id="activeModeSelect"
+                  class="rc-select"
+                  aria-label="Permission mode"
+                >
+                  <option value="ask">Ask</option>
+                  <option value="auto_edits">Auto Edits</option>
+                  <option value="yolo">YOLO (Bypass)</option>
+                </select>
+                <button id="btnForkSession" class="rc-btn rc-btn-ghost" type="button">
+                  Fork
+                </button>
+                <button id="btnStopSession" class="rc-btn rc-btn-danger" type="button">
+                  Stop
+                </button>
+              </div>
+            </div>
+
+            <nav class="rc-tabs" role="tablist">
+              <button class="rc-tab is-active" type="button" data-tab="chat">
+                Chat
+              </button>
+              <button class="rc-tab" type="button" data-tab="terminal">
+                Terminal
+              </button>
+              <button class="rc-tab" type="button" data-tab="changes">
+                Changes
+              </button>
+              <button class="rc-tab" type="button" data-tab="info">
+                Info
+              </button>
+            </nav>
+
+            <div id="tabChat" class="rc-tab-pane is-active">
+              <div id="approvalBanner" class="rc-approval-banner" hidden></div>
+              <div id="timeline" class="rc-timeline"></div>
+              <form id="composerForm" class="rc-composer">
+                <textarea
+                  id="composerInput"
+                  class="rc-textarea"
+                  rows="2"
+                  placeholder="Send prompt or follow-up instruction..."
+                ></textarea>
+                <div class="rc-composer-actions">
+                  <button
+                    id="btnInterrupt"
+                    class="rc-btn rc-btn-warn"
+                    type="button"
+                  >
+                    Interrupt
+                  </button>
+                  <button
+                    id="btnSendMessage"
+                    class="rc-btn rc-btn-primary"
+                    type="submit"
+                  >
+                    Send
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div id="tabTerminal" class="rc-tab-pane" hidden>
+              <div id="ptyContainer" class="rc-pty-box"></div>
+              <div class="rc-keybar" aria-label="Terminal keys">
+                <button class="rc-key" type="button" data-key="\u001b">Esc</button>
+                <button class="rc-key" type="button" data-key="\t">Tab</button>
+                <button class="rc-key" type="button" data-key="\u0003">Ctrl+C</button>
+                <button class="rc-key" type="button" data-key="\u001b[A">↑</button>
+                <button class="rc-key" type="button" data-key="\u001b[B">↓</button>
+                <button class="rc-key" type="button" data-key="\r">Enter</button>
+              </div>
+            </div>
+
+            <div id="tabChanges" class="rc-tab-pane" hidden>
+              <div class="rc-changes-head">
+                <span id="diffSummary" class="rc-muted">No diff loaded.</span>
+                <button id="btnRefreshDiff" class="rc-btn rc-btn-ghost" type="button">
+                  Refresh Diff
+                </button>
+              </div>
+              <pre id="diffStatusPre" class="rc-pre"></pre>
+              <pre id="diffPatchPre" class="rc-pre"></pre>
+            </div>
+
+            <div id="tabInfo" class="rc-tab-pane" hidden>
+              <dl id="sessionMetaList" class="rc-meta-list"></dl>
+              <div class="rc-model-row">
+                <input
+                  id="modelOverrideInput"
+                  class="rc-input"
+                  type="text"
+                  placeholder="Switch model ref (e.g. sonnet)"
+                />
+                <button id="btnSetModel" class="rc-btn rc-btn-ghost" type="button">
+                  Set Model
+                </button>
+              </div>
+              <div class="rc-danger-zone">
+                <button id="btnDeleteSession" class="rc-btn rc-btn-danger" type="button">
+                  Remove Session Record
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <dialog id="newSessionDialog" class="rc-dialog">
+        <form id="newSessionForm" class="rc-stack">
+          <div class="rc-dialog-head">
+            <h2>Start Remote Session</h2>
+            <button id="btnCloseDialog" class="rc-btn rc-btn-ghost" type="button">
+              Close
+            </button>
+          </div>
+
+          <label class="rc-label">
+            Agent / Runtime
+            <select id="newHarnessSelect" class="rc-select"></select>
+          </label>
+
+          <label class="rc-label">
+            Workspace Directory (inside RC_ALLOWED_DIRS)
+            <div class="rc-dir-row">
+              <input
+                id="newCwdInput"
+                class="rc-input"
+                type="text"
+                placeholder="Select directory below"
+                required
+              />
+              <button id="btnBrowseDirs" class="rc-btn rc-btn-ghost" type="button">
+                Browse
+              </button>
+            </div>
+            <div id="dirBrowserList" class="rc-dir-list" hidden></div>
+          </label>
+
+          <label class="rc-label">
+            Permission Mode
+            <select id="newModeSelect" class="rc-select">
+              <option value="ask">Ask before tools (recommended)</option>
+              <option value="auto_edits">Auto-approve file edits</option>
+              <option value="yolo">YOLO (bypass all permissions)</option>
+            </select>
+          </label>
+          <div id="yoloWarning" class="rc-alert rc-alert-warn" hidden>
+            Warning: YOLO mode allows tools and shell commands to execute without
+            manual confirmation.
+          </div>
+
+          <label class="rc-check">
+            <input id="newWorktreeCheck" type="checkbox" />
+            <span>Isolate changes in a dedicated Git worktree branch</span>
+          </label>
+
+          <label class="rc-label">
+            Model (optional)
+            <input
+              id="newModelInput"
+              class="rc-input"
+              type="text"
+              placeholder="Leave blank for MCC default"
+            />
+          </label>
+
+          <label class="rc-label">
+            Initial Prompt (optional)
+            <textarea
+              id="newPromptInput"
+              class="rc-textarea"
+              rows="3"
+              placeholder="What should this session work on?"
+            ></textarea>
+          </label>
+
+          <div id="newSessionError" class="rc-alert rc-alert-error" hidden></div>
+
+          <div class="rc-dialog-actions">
+            <button id="btnCreateSession" class="rc-btn rc-btn-primary" type="submit">
+              Launch Session
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </div>
+
+    <script src="/rc/assets/vendor/xterm.js"></script>
+    <script src="/rc/assets/vendor/addon-fit.js"></script>
+    <script src="/rc/assets/remote.js"></script>
+  </body>
+</html>

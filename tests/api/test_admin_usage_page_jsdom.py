@@ -654,8 +654,8 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
     #: view with Logical Searches (Routes), chain filters, and failed-try columns.
     DECLARED_MOVES = {"guide", "requests", "usage", "providers", "claude", "web_search"}
 
-    # No view is new and none was removed: 8.3.0 already had the page.
-    assert sorted(set(mine) - set(base)) == []
+    # 8.53.0 adds `remote_control`; no pre-existing view was removed.
+    assert sorted(set(mine) - set(base)) == ["remote_control"]
     assert sorted(set(base) - set(mine)) == []
 
     # The claim this test exists to make: nothing moved that this release did
@@ -719,7 +719,8 @@ def test_the_navigation_is_unchanged(usage_views) -> None:
     baseline = json.loads(BASE_BASELINE.read_text(encoding="utf-8"))
     base_nav = baseline["nav"]
     mine_nav = [entry["view"] for entry in usage_views["navLabels"]]
-    assert mine_nav == list(base_nav)
+    assert [v for v in mine_nav if v != "remote_control"] == list(base_nav)
+    assert "remote_control" in mine_nav
     # Named rather than implied: the Usage entry still sits immediately before
     # Analytics, which is what 8.3.0 promised about this page's position.
     assert mine_nav.index("usage") + 1 == mine_nav.index("requests")

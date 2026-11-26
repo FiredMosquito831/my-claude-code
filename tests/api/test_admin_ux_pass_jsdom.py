@@ -102,7 +102,7 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     mine = {
         name: entry["sha256Normalised"] for name, entry in ux_views["views"].items()
     }
-    assert set(mine) - set(base) == {"usage"}
+    assert set(mine) - set(base) == {"usage", "remote_control"}
     assert set(base) - set(mine) == set()
     moved = sorted(name for name, digest in base.items() if mine[name] != digest)
     # The claim this test exists to make: nothing moved that this pass did not

@@ -1304,6 +1304,117 @@
               aria-label="Coding agents settings"></div>
           </section>
 
+          <section id="view-remote_control" class="admin-view" data-view="remote_control" hidden>
+            <div class="section-intro">
+              <h2>Remote Control (/rc)</h2>
+              <p>
+                Pair a phone or remote browser over Tailscale or Cloudflare
+                Tunnel to drive Claude Code and local interactive CLI sessions
+                from <code>/rc</code>. The Admin Dashboard remains strictly
+                loopback-only.
+              </p>
+            </div>
+
+            <div class="panel rc-admin-panel" id="rcStatusPanel">
+              <div class="panel-head">
+                <div>
+                  <h3>Status &amp; Tunnels</h3>
+                  <p class="field-description">
+                    Inspect local access, Tailscale Serve / Tailnet status, and
+                    Cloudflare Tunnel availability without exposing
+                    <code>/admin</code>.
+                  </p>
+                </div>
+                <div class="rc-admin-actions">
+                  <button type="button" class="secondary-button" id="rcRefreshStatusBtn">
+                    Refresh
+                  </button>
+                  <button type="button" class="secondary-button" id="rcStopTunnelBtn">
+                    Stop tunnel
+                  </button>
+                </div>
+              </div>
+              <div id="rcStatusSummary" class="rc-admin-summary"></div>
+              <div id="rcTunnelCards" class="rc-tunnel-grid"></div>
+            </div>
+
+            <div class="panel rc-admin-panel" id="rcPairingPanel">
+              <div class="panel-head">
+                <div>
+                  <h3>Pair New Device</h3>
+                  <p class="field-description">
+                    Generate a 60-second single-use pairing token and QR code
+                    pointing at your active Remote Control URL.
+                  </p>
+                </div>
+                <div class="rc-admin-actions">
+                  <button type="button" class="primary-button" id="rcGeneratePairBtn">
+                    Generate pairing QR
+                  </button>
+                </div>
+              </div>
+              <div id="rcPairResult" class="rc-pair-result" hidden>
+                <div class="rc-qr-frame">
+                  <img id="rcPairQrImg" alt="Remote Control Pairing QR Code" />
+                </div>
+                <div class="rc-pair-meta">
+                  <p class="field-description">
+                    Single-use token (expires in 60 seconds):
+                  </p>
+                  <code id="rcPairUrlText" class="rc-code-chip"></code>
+                  <div class="rc-admin-actions">
+                    <button type="button" class="secondary-button" id="rcCopyPairUrlBtn">
+                      Copy URL
+                    </button>
+                    <a
+                      id="rcOpenLocalLink"
+                      class="secondary-button"
+                      href="/rc"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open /rc
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel rc-admin-panel" id="rcDevicesPanel">
+              <div class="panel-head">
+                <div>
+                  <h3>Paired Devices</h3>
+                  <p class="field-description">
+                    Revoking a device invalidates its session cookie immediately
+                    and terminates any live WebSockets.
+                  </p>
+                </div>
+                <div class="rc-admin-actions">
+                  <button type="button" class="secondary-button danger" id="rcRevokeAllBtn">
+                    Revoke all devices
+                  </button>
+                </div>
+              </div>
+              <div id="rcDevicesList" class="rc-admin-list"></div>
+            </div>
+
+            <div class="panel rc-admin-panel" id="rcSessionsPanel">
+              <div class="panel-head">
+                <div>
+                  <h3>Active &amp; Recent Sessions</h3>
+                  <p class="field-description">
+                    Sessions started from <code>/rc</code>, including permission
+                    mode, driver tier, and PID.
+                  </p>
+                </div>
+              </div>
+              <div id="rcSessionsList" class="rc-admin-list"></div>
+            </div>
+
+            <div id="remoteControlSections" class="form-sections"
+              aria-label="Remote Control settings"></div>
+          </section>
+
           <section id="view-model_config" class="admin-view" data-view="model_config" hidden>
             <!-- One live region for the whole page: what a drag just did to a
                  rail, and what a Pause click just wrote. Two competing polite

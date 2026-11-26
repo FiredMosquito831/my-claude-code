@@ -59,6 +59,7 @@ from .model_door_errors import (
 )
 from .ports import ApiServices
 from .rejected_request_log import describe_rejected_request, rejected_request_tracker
+from .remote_routes import admin_rc_router, remote_router
 from .request_errors import ordinary_application_error_response
 from .request_ids import (
     RequestCorrelationMiddleware,
@@ -184,6 +185,8 @@ def create_app(services: ApiServices) -> FastAPI:
     app.include_router(admin_export_router)
     app.include_router(admin_media_router)
     app.include_router(admin_mcp_media_router)
+    app.include_router(admin_rc_router)
+    app.include_router(remote_router)
     app.include_router(gemini_router)
     app.include_router(gemini_media_router)
     app.include_router(media_router)

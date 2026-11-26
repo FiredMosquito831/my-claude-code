@@ -627,8 +627,30 @@ def _origin_is_local(origin: str | None) -> bool:
     return _is_loopback_host(parsed.hostname)
 
 
+_PROXY_FORWARDING_HEADERS: tuple[str, ...] = (
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "true-client-ip",
+    "tailscale-user-login",
+    "tailscale-user-name",
+    "cf-connecting-ip",
+    "cf-ray",
+    "via",
+)
+
+
 def require_loopback_admin(request: Request) -> None:
-    """Allow admin access only from the local machine."""
+    """Allow admin access only from the physical local machine (never proxied)."""
+
+    for header in _PROXY_FORWARDING_HEADERS:
+        if header in request.headers:
+            raise HTTPException(
+                status_code=403,
+                detail="Admin UI is local-only and rejects proxied requests",
+            )
 
     client_host = request.client.host if request.client else None
     if not _is_loopback_host(client_host):

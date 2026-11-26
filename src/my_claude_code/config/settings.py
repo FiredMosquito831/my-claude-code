@@ -215,6 +215,19 @@ from .constants import (
     RATE_LIMIT_COOLDOWN_MODE_NAMES,
     RATE_LIMIT_COOLDOWN_SECONDS_DEFAULT,
     RATE_LIMIT_ROUTES_AROUND_MODEL_DEFAULT,
+    RC_ALLOWED_DIRS_DEFAULT,
+    RC_CLOUDFLARE_BINARY_DEFAULT,
+    RC_CLOUDFLARE_PUBLIC_HOSTNAME_DEFAULT,
+    RC_CLOUDFLARE_TUNNEL_TOKEN_DEFAULT,
+    RC_ENABLED_DEFAULT,
+    RC_MAX_SESSIONS_DEFAULT,
+    RC_PERMISSION_MODE_DEFAULT,
+    RC_PERMISSION_MODE_VALUES,
+    RC_SESSION_SECRET_DEFAULT,
+    RC_TAILSCALE_BINARY_DEFAULT,
+    RC_TAILSCALE_HOSTNAME_DEFAULT,
+    RC_TUNNEL_MODE_DEFAULT,
+    RC_TUNNEL_MODE_VALUES,
     REASONING_ADAPTIVE_CHOICES,
     REASONING_ADAPTIVE_DEFAULT,
     REASONING_ANSWER_FLOOR_MAX,
@@ -2552,6 +2565,41 @@ class Settings(BaseSettings):
         default=None, validation_alias="MAX_MESSAGE_LOG_ENTRIES_PER_CHAT"
     )
 
+    # ==================== Remote Control (/rc) ====================
+    rc_enabled: bool = Field(default=RC_ENABLED_DEFAULT, validation_alias="RC_ENABLED")
+    rc_permission_mode: str = Field(
+        default=RC_PERMISSION_MODE_DEFAULT, validation_alias="RC_PERMISSION_MODE"
+    )
+    rc_allowed_dirs: str = Field(
+        default=RC_ALLOWED_DIRS_DEFAULT, validation_alias="RC_ALLOWED_DIRS"
+    )
+    rc_max_sessions: int = Field(
+        default=RC_MAX_SESSIONS_DEFAULT, validation_alias="RC_MAX_SESSIONS"
+    )
+    rc_tunnel_mode: str = Field(
+        default=RC_TUNNEL_MODE_DEFAULT, validation_alias="RC_TUNNEL_MODE"
+    )
+    rc_tailscale_binary: str = Field(
+        default=RC_TAILSCALE_BINARY_DEFAULT, validation_alias="RC_TAILSCALE_BINARY"
+    )
+    rc_tailscale_hostname: str = Field(
+        default=RC_TAILSCALE_HOSTNAME_DEFAULT, validation_alias="RC_TAILSCALE_HOSTNAME"
+    )
+    rc_cloudflare_binary: str = Field(
+        default=RC_CLOUDFLARE_BINARY_DEFAULT, validation_alias="RC_CLOUDFLARE_BINARY"
+    )
+    rc_cloudflare_tunnel_token: str = Field(
+        default=RC_CLOUDFLARE_TUNNEL_TOKEN_DEFAULT,
+        validation_alias="RC_CLOUDFLARE_TUNNEL_TOKEN",
+    )
+    rc_cloudflare_public_hostname: str = Field(
+        default=RC_CLOUDFLARE_PUBLIC_HOSTNAME_DEFAULT,
+        validation_alias="RC_CLOUDFLARE_PUBLIC_HOSTNAME",
+    )
+    rc_session_secret: str = Field(
+        default=RC_SESSION_SECRET_DEFAULT, validation_alias="RC_SESSION_SECRET"
+    )
+
     # ==================== Server ====================
     # Loopback by default since 6.65.0: the shipped configuration must be
     # safe on a network the machine did not choose. Exposing the proxy is
@@ -3343,6 +3391,34 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"Unknown trim mode: {v!r}. Known modes: "
                 f"{', '.join(sorted(TRIM_MODE_NAMES))}"
+            )
+        return mode
+
+    @field_validator("rc_permission_mode")
+    @classmethod
+    def validate_rc_permission_mode(cls, v: str) -> str:
+        """Validate Remote Control permission mode (ask, auto_edits, or yolo)."""
+        mode = str(v).strip().lower()
+        if not mode:
+            return RC_PERMISSION_MODE_DEFAULT
+        if mode not in RC_PERMISSION_MODE_VALUES:
+            raise ValueError(
+                f"Unknown RC_PERMISSION_MODE: {v!r}. Known modes: "
+                f"{', '.join(RC_PERMISSION_MODE_VALUES)}"
+            )
+        return mode
+
+    @field_validator("rc_tunnel_mode")
+    @classmethod
+    def validate_rc_tunnel_mode(cls, v: str) -> str:
+        """Validate Remote Control tunnel mode."""
+        mode = str(v).strip().lower()
+        if not mode:
+            return RC_TUNNEL_MODE_DEFAULT
+        if mode not in RC_TUNNEL_MODE_VALUES:
+            raise ValueError(
+                f"Unknown RC_TUNNEL_MODE: {v!r}. Known modes: "
+                f"{', '.join(RC_TUNNEL_MODE_VALUES)}"
             )
         return mode
 
