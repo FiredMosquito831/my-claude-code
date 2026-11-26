@@ -8,7 +8,7 @@ import secrets
 import shutil
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,9 +16,13 @@ from loguru import logger
 
 from my_claude_code.cli.claude_env import CLAUDE_BINARY_NAME, build_claude_proxy_env
 
+from .drivers import (
+    AUTO_EDIT_TOOL_NAMES,
+    ApprovalCreateCallback,
+    EventEmitCallback,
+    StateUpdateCallback,
+)
 from .pty_bridge import win_exec_argv
-
-AUTO_EDIT_TOOL_NAMES = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 
 _PERMISSION_MODE_FLAGS: dict[str, list[str]] = {
     "ask": ["--permission-mode", "default"],
@@ -90,15 +94,10 @@ class PendingClaudeRequest:
     )
 
 
-EventEmitCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
-ApprovalCreateCallback = Callable[
-    [str, str, str, dict[str, Any]], Awaitable[dict[str, Any]]
-]
-StateUpdateCallback = Callable[..., Awaitable[None]]
-
-
 class ClaudeBidirectionalDriver:
     """Supervises one persistent ``claude -p --input-format stream-json`` process."""
+
+    driver_tier: str = "tier_1b_claude"
 
     def __init__(
         self,
@@ -123,7 +122,7 @@ class ClaudeBidirectionalDriver:
         self.permission_mode = permission_mode
         self.model = model
         self.external_session_id = external_session_id or ""
-        self.fork_session = fork_session
+        self.fork_session_on_start = fork_session
         self.claude_bin = resolve_claude_binary(claude_bin)
         self._on_event = on_event
         self._on_approval_create = on_approval_create
@@ -149,7 +148,7 @@ class ClaudeBidirectionalDriver:
             permission_mode=self.permission_mode,
             model=self.model,
             external_session_id=self.external_session_id or None,
-            fork_session=self.fork_session,
+            fork_session=self.fork_session_on_start,
         )
         env = build_claude_proxy_env(
             proxy_root_url=self.proxy_root_url,
@@ -217,6 +216,11 @@ class ClaudeBidirectionalDriver:
             }
         )
         await self._on_event("turn.aborted", {"reason": "operator_interrupt"})
+
+    async def fork_session(self, *, title: str = "") -> dict[str, Any] | None:
+        """Claude Code forks via CLI flags on a new process supervised by the hub."""
+        del title
+        return None
 
     async def set_model(self, model: str) -> None:
         self.model = model.strip()

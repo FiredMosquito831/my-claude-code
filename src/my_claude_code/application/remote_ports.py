@@ -68,6 +68,10 @@ class RemoteSessionPort(Protocol):
 
     def list_harnesses(self) -> list[dict[str, Any]]: ...
 
+    def list_discovered_sessions(
+        self, *, harness: str | None = None
+    ) -> list[dict[str, Any]]: ...
+
     def list_sessions(self) -> list[dict[str, Any]]: ...
 
     def get_session(self, session_id: str) -> dict[str, Any]: ...
@@ -89,8 +93,28 @@ class RemoteSessionPort(Protocol):
         driver_mode: str = "auto",
         external_session_id: str | None = None,
         fork_session: bool = False,
+        server_url: str | None = None,
         cols: int = 120,
         rows: int = 36,
+    ) -> dict[str, Any]: ...
+
+    async def import_session(
+        self,
+        *,
+        external_session_id: str,
+        harness: str,
+        cwd: str,
+        title: str = "",
+        permission_mode: str | None = None,
+        model: str | None = None,
+        fork_session: bool = False,
+        create_worktree: bool = False,
+        driver_mode: str = "auto",
+        server_url: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def ensure_pty(
+        self, session_id: str, *, cols: int = 120, rows: int = 36
     ) -> dict[str, Any]: ...
 
     async def send_message(self, session_id: str, text: str) -> dict[str, Any]: ...

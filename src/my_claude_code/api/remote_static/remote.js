@@ -124,6 +124,25 @@
     return node;
   }
 
+  function isStructuredTier(tier) {
+    return Boolean(tier && tier !== "tier_3_pty");
+  }
+
+  function tierBadgeLabel(tier) {
+    switch (tier) {
+      case "tier_1b_claude":
+        return "Tier 1B · Claude";
+      case "tier_1a_opencode":
+        return "Tier 1A · OpenCode";
+      case "tier_1a_codex":
+        return "Tier 1A · Codex";
+      case "tier_1a_openclaw":
+        return "Tier 1A · OpenClaw";
+      default:
+        return "Tier 3 · PTY";
+    }
+  }
+
   function renderApprovalBanner() {
     const banner = el("approvalBanner");
     banner.replaceChildren();
@@ -135,7 +154,7 @@
     const item = state.pendingApprovals[0];
     const title = document.createElement("strong");
     title.textContent = item.isQuestion
-      ? "Claude asks a question"
+      ? "Agent asks a question"
       : `Approve tool: ${item.tool_name || "tool"}`;
     banner.appendChild(title);
 
@@ -292,6 +311,14 @@
         (x) => x.approval_id !== payload.approval_id,
       );
       renderApprovalBanner();
+    } else if (kind === "approval.auto_approved") {
+      addTimelineEntry("rc-msg-tool", (node) => {
+        node.textContent = `Auto-approved (${payload.mode || "policy"}): ${payload.tool_name || "tool"}`;
+      });
+    } else if (kind === "tool.output") {
+      addTimelineEntry("rc-msg-tool", (node) => {
+        node.textContent = String(payload.delta || "");
+      });
     } else if (kind === "turn.completed") {
       state.streamingAssistantEl = null;
       state.streamingThinkingEl = null;
@@ -354,8 +381,7 @@
     el("sessionDetail").hidden = false;
     el("activeTitle").textContent = sess.title || sess.id;
     el("activeStatusBadge").textContent = sess.status;
-    el("activeTierBadge").textContent =
-      sess.driver_tier === "tier_1b_claude" ? "Structured" : "PTY";
+    el("activeTierBadge").textContent = tierBadgeLabel(sess.driver_tier);
     el("activeModeSelect").value = sess.permission_mode || "ask";
     const branchBadge = el("activeBranchBadge");
     if (sess.branch_name) {
@@ -364,6 +390,14 @@
     } else {
       branchBadge.hidden = true;
     }
+    const attachBadge = el("activeAttachBadge");
+    if (sess.attach_hint || sess.server_url) {
+      attachBadge.hidden = false;
+      attachBadge.textContent = sess.attach_hint || sess.server_url;
+    } else {
+      attachBadge.hidden = true;
+    }
+    el("btnSwitchTerminal").hidden = !isStructuredTier(sess.driver_tier);
     el("btnForkSession").hidden = !sess.external_session_id;
   }
 
@@ -381,7 +415,9 @@
       ["Worktree", sess.worktree_path || "—"],
       ["Branch", sess.branch_name || "—"],
       ["Model", sess.model || "—"],
-      ["Claude ID", sess.external_session_id || "—"],
+      ["External ID", sess.external_session_id || "—"],
+      ["Server URL", sess.server_url || "—"],
+      ["Attach Command", sess.attach_hint || "—"],
       ["PID", sess.pid != null ? String(sess.pid) : "—"],
     ].forEach(([label, val]) => {
       const dt = document.createElement("dt");
@@ -501,12 +537,10 @@
     (data.events || []).forEach(handleSessionEvent);
     connectEventSocket(sessionId);
 
-    if (state.activeTab === "terminal" || data.session.driver_tier !== "tier_1b_claude") {
-      if (data.session.driver_tier !== "tier_1b_claude") {
-        setActiveTab("terminal");
-      } else {
-        ensureTerminalMounted(sessionId);
-      }
+    if (!isStructuredTier(data.session.driver_tier)) {
+      setActiveTab("terminal");
+    } else if (state.activeTab === "terminal") {
+      setActiveTab("chat");
     }
   }
 
@@ -520,7 +554,16 @@
     el("tabChanges").hidden = name !== "changes";
     el("tabInfo").hidden = name !== "info";
     if (name === "terminal" && state.activeSessionId) {
-      ensureTerminalMounted(state.activeSessionId);
+      if (state.activeSession && isStructuredTier(state.activeSession.driver_tier)) {
+        apiJson(`/rc/api/sessions/${state.activeSessionId}/terminal`, {
+          method: "POST",
+          body: { cols: 120, rows: 36 },
+        })
+          .then(() => ensureTerminalMounted(state.activeSessionId))
+          .catch(() => {});
+      } else {
+        ensureTerminalMounted(state.activeSessionId);
+      }
     } else if (name === "changes" && state.activeSessionId) {
       loadDiff().catch(() => {});
     }
@@ -557,7 +600,7 @@
     state.harnesses.forEach((h) => {
       const opt = document.createElement("option");
       opt.value = h.id;
-      const tierLabel = h.driver_tier === "tier_1b_claude" ? "Structured" : "PTY";
+      const tierLabel = isStructuredTier(h.driver_tier) ? "Structured" : "PTY";
       const installed = h.installed ? "" : " (not found)";
       opt.textContent = `${h.label} [${tierLabel}]${installed}`;
       select.appendChild(opt);
@@ -566,6 +609,114 @@
     if (entries.length && !el("newCwdInput").value) {
       el("newCwdInput").value = entries[0].path;
     }
+  }
+
+  function setModalTab(tabName) {
+    const isDiscover = tabName === "discover";
+    el("btnModalTabNew").classList.toggle("is-active", !isDiscover);
+    el("btnModalTabDiscover").classList.toggle("is-active", isDiscover);
+    el("newSessionForm").hidden = isDiscover;
+    el("discoveredPane").hidden = !isDiscover;
+    if (isDiscover) {
+      loadDiscoveredSessions().catch((err) => {
+        el("discoveredError").hidden = false;
+        el("discoveredError").textContent = err.message;
+      });
+    }
+  }
+
+  async function importDiscoveredSession(item, forkFlag) {
+    el("discoveredError").hidden = true;
+    try {
+      const resp = await apiJson("/rc/api/sessions/import", {
+        method: "POST",
+        body: {
+          external_session_id: item.external_session_id,
+          harness: item.source_harness,
+          cwd: item.cwd,
+          title: item.title || "",
+          permission_mode: el("discoverModeSelect").value,
+          model: item.model || null,
+          fork_session: Boolean(forkFlag),
+          server_url: item.server_url || null,
+        },
+      });
+      el("newSessionDialog").close();
+      await loadInitialWorkspace();
+      if (resp.session && resp.session.id) {
+        await selectSession(resp.session.id);
+      }
+    } catch (err) {
+      el("discoveredError").hidden = false;
+      el("discoveredError").textContent = err.message;
+    }
+  }
+
+  async function loadDiscoveredSessions() {
+    el("discoveredError").hidden = true;
+    const filter = el("discoverHarnessFilter").value;
+    const query = filter ? `?harness=${encodeURIComponent(filter)}` : "";
+    const data = await apiJson(`/rc/api/discovered-sessions${query}`);
+    const list = el("discoveredList");
+    list.replaceChildren();
+    const sessions = data.sessions || [];
+    if (!sessions.length) {
+      const empty = document.createElement("p");
+      empty.className = "rc-muted";
+      empty.textContent = "No local sessions discovered for this filter.";
+      list.appendChild(empty);
+      return;
+    }
+    sessions.forEach((item) => {
+      const card = document.createElement("div");
+      card.className = "rc-discover-item";
+
+      const head = document.createElement("div");
+      head.className = "rc-discover-head";
+      const title = document.createElement("strong");
+      title.textContent = item.title || item.external_session_id;
+      const badge = document.createElement("span");
+      badge.className = "rc-pill";
+      badge.textContent = item.source_harness;
+      head.appendChild(title);
+      head.appendChild(badge);
+      card.appendChild(head);
+
+      const meta = document.createElement("div");
+      meta.className = "rc-discover-meta";
+      const when = item.updated_at
+        ? new Date(Number(item.updated_at) * 1000).toLocaleString()
+        : "unknown time";
+      meta.textContent = `${item.cwd || "(no workspace)"} · ${when}${item.model ? ` · ${item.model}` : ""}`;
+      card.appendChild(meta);
+
+      const actions = document.createElement("div");
+      actions.className = "rc-discover-actions";
+      if (!item.within_allowed_dirs) {
+        const warn = document.createElement("span");
+        warn.className = "rc-pill rc-pill-warn";
+        warn.textContent = "Outside RC_ALLOWED_DIRS";
+        actions.appendChild(warn);
+      }
+      const resumeBtn = document.createElement("button");
+      resumeBtn.type = "button";
+      resumeBtn.className = "rc-btn rc-btn-primary";
+      resumeBtn.textContent = "Resume";
+      resumeBtn.disabled = !item.within_allowed_dirs;
+      resumeBtn.addEventListener("click", () => importDiscoveredSession(item, false));
+
+      const forkBtn = document.createElement("button");
+      forkBtn.type = "button";
+      forkBtn.className = "rc-btn rc-btn-ghost";
+      forkBtn.textContent = "Fork";
+      forkBtn.disabled = !item.within_allowed_dirs;
+      forkBtn.addEventListener("click", () => importDiscoveredSession(item, true));
+
+      actions.appendChild(resumeBtn);
+      actions.appendChild(forkBtn);
+      card.appendChild(actions);
+      list.appendChild(card);
+    });
   }
 
   async function browseDirs(path) {
@@ -658,8 +809,34 @@
   [el("btnNewSessionOpen"), el("btnEmptyNewSession")].forEach((btn) => {
     btn.addEventListener("click", () => {
       el("newSessionError").hidden = true;
+      setModalTab("new");
       el("newSessionDialog").showModal();
     });
+  });
+
+  el("btnEmptyDiscoverSession").addEventListener("click", () => {
+    el("newSessionError").hidden = true;
+    setModalTab("discover");
+    el("newSessionDialog").showModal();
+  });
+
+  el("btnModalTabNew").addEventListener("click", () => setModalTab("new"));
+  el("btnModalTabDiscover").addEventListener("click", () => setModalTab("discover"));
+  el("btnRefreshDiscovered").addEventListener("click", () => {
+    loadDiscoveredSessions().catch((err) => {
+      el("discoveredError").hidden = false;
+      el("discoveredError").textContent = err.message;
+    });
+  });
+  el("discoverHarnessFilter").addEventListener("change", () => {
+    loadDiscoveredSessions().catch((err) => {
+      el("discoveredError").hidden = false;
+      el("discoveredError").textContent = err.message;
+    });
+  });
+
+  el("btnSwitchTerminal").addEventListener("click", () => {
+    setActiveTab("terminal");
   });
 
   el("btnCloseDialog").addEventListener("click", () => {

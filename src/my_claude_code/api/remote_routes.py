@@ -141,6 +141,25 @@ class CreateSessionRequest(BaseModel):
     driver_mode: str = Field(default="auto", max_length=32)
     external_session_id: str | None = Field(default=None, max_length=256)
     fork_session: bool = False
+    server_url: str | None = Field(default=None, max_length=512)
+    cols: int = Field(default=120, ge=20, le=500)
+    rows: int = Field(default=36, ge=5, le=200)
+
+
+class ImportSessionRequest(BaseModel):
+    external_session_id: str = Field(min_length=1, max_length=256)
+    harness: str = Field(min_length=1, max_length=64)
+    cwd: str = Field(default="", max_length=1024)
+    title: str = Field(default="", max_length=160)
+    permission_mode: str | None = Field(default=None, max_length=32)
+    model: str | None = Field(default=None, max_length=160)
+    fork_session: bool = False
+    create_worktree: bool = False
+    driver_mode: str = Field(default="auto", max_length=32)
+    server_url: str | None = Field(default=None, max_length=512)
+
+
+class TerminalAttachRequest(BaseModel):
     cols: int = Field(default=120, ge=20, le=500)
     rows: int = Field(default=36, ge=5, le=200)
 
@@ -421,6 +440,40 @@ def rc_harnesses(request: Request) -> dict[str, Any]:
     return {"harnesses": remote.list_harnesses()}
 
 
+@remote_router.get("/rc/api/discovered-sessions")
+def rc_discovered_sessions(
+    request: Request, harness: str | None = Query(default=None)
+) -> dict[str, Any]:
+    remote, _device_id = _require_rc_read(request)
+    try:
+        return {"sessions": remote.list_discovered_sessions(harness=harness)}
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.post("/rc/api/sessions/import")
+async def rc_import_session(
+    request: Request, body: ImportSessionRequest
+) -> dict[str, Any]:
+    remote, _device_id = _require_rc_write(request)
+    try:
+        session = await remote.import_session(
+            external_session_id=body.external_session_id,
+            harness=body.harness,
+            cwd=body.cwd,
+            title=body.title,
+            permission_mode=body.permission_mode,
+            model=body.model,
+            fork_session=body.fork_session,
+            create_worktree=body.create_worktree,
+            driver_mode=body.driver_mode,
+            server_url=body.server_url,
+        )
+        return {"session": session}
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
 @remote_router.get("/rc/api/fs/dirs")
 def rc_fs_dirs(
     request: Request, path: str | None = Query(default=None)
@@ -455,9 +508,26 @@ async def rc_create_session(
             driver_mode=body.driver_mode,
             external_session_id=body.external_session_id,
             fork_session=body.fork_session,
+            server_url=body.server_url,
             cols=body.cols,
             rows=body.rows,
         )
+        return {"session": session}
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+
+
+@remote_router.post("/rc/api/sessions/{session_id}/terminal")
+async def rc_ensure_terminal(
+    request: Request,
+    session_id: str,
+    body: TerminalAttachRequest | None = None,
+) -> dict[str, Any]:
+    remote, _device_id = _require_rc_write(request)
+    cols = body.cols if body is not None else 120
+    rows = body.rows if body is not None else 36
+    try:
+        session = await remote.ensure_pty(session_id, cols=cols, rows=rows)
         return {"session": session}
     except RemoteControlError as exc:
         raise _translate_remote_error(exc) from exc

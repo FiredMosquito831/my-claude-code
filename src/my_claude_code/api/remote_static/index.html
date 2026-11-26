@@ -89,12 +89,18 @@
           <div id="emptyState" class="rc-empty-state">
             <h2>Select or start a coding session</h2>
             <p class="rc-muted">
-              Launch Claude Code in structured bidirectional mode, or open any
-              available coding agent / terminal in a real interactive PTY.
+              Launch Claude Code, OpenCode, Codex, or OpenClaw in structured
+              bidirectional mode, attach to existing local sessions, or open any
+              agent in a real interactive PTY.
             </p>
-            <button id="btnEmptyNewSession" class="rc-btn rc-btn-primary" type="button">
-              + Start Remote Session
-            </button>
+            <div class="rc-empty-actions">
+              <button id="btnEmptyNewSession" class="rc-btn rc-btn-primary" type="button">
+                + Start Remote Session
+              </button>
+              <button id="btnEmptyDiscoverSession" class="rc-btn rc-btn-ghost" type="button">
+                Attach Existing / Discovered
+              </button>
+            </div>
           </div>
 
           <div id="sessionDetail" class="rc-detail" hidden>
@@ -105,6 +111,7 @@
                   <span id="activeStatusBadge" class="rc-pill">—</span>
                   <span id="activeTierBadge" class="rc-pill">—</span>
                   <span id="activeBranchBadge" class="rc-pill" hidden></span>
+                  <span id="activeAttachBadge" class="rc-pill rc-pill-info" hidden></span>
                 </div>
               </div>
               <div class="rc-session-controls">
@@ -117,6 +124,9 @@
                   <option value="auto_edits">Auto Edits</option>
                   <option value="yolo">YOLO (Bypass)</option>
                 </select>
+                <button id="btnSwitchTerminal" class="rc-btn rc-btn-ghost" type="button" hidden>
+                  Switch to Terminal
+                </button>
                 <button id="btnForkSession" class="rc-btn rc-btn-ghost" type="button">
                   Fork
                 </button>
@@ -217,82 +227,128 @@
       </div>
 
       <dialog id="newSessionDialog" class="rc-dialog">
-        <form id="newSessionForm" class="rc-stack">
+        <div class="rc-stack">
           <div class="rc-dialog-head">
-            <h2>Start Remote Session</h2>
+            <h2>Remote Session</h2>
             <button id="btnCloseDialog" class="rc-btn rc-btn-ghost" type="button">
               Close
             </button>
           </div>
 
-          <label class="rc-label">
-            Agent / Runtime
-            <select id="newHarnessSelect" class="rc-select"></select>
-          </label>
-
-          <label class="rc-label">
-            Workspace Directory (inside RC_ALLOWED_DIRS)
-            <div class="rc-dir-row">
-              <input
-                id="newCwdInput"
-                class="rc-input"
-                type="text"
-                placeholder="Select directory below"
-                required
-              />
-              <button id="btnBrowseDirs" class="rc-btn rc-btn-ghost" type="button">
-                Browse
-              </button>
-            </div>
-            <div id="dirBrowserList" class="rc-dir-list" hidden></div>
-          </label>
-
-          <label class="rc-label">
-            Permission Mode
-            <select id="newModeSelect" class="rc-select">
-              <option value="ask">Ask before tools (recommended)</option>
-              <option value="auto_edits">Auto-approve file edits</option>
-              <option value="yolo">YOLO (bypass all permissions)</option>
-            </select>
-          </label>
-          <div id="yoloWarning" class="rc-alert rc-alert-warn" hidden>
-            Warning: YOLO mode allows tools and shell commands to execute without
-            manual confirmation.
-          </div>
-
-          <label class="rc-check">
-            <input id="newWorktreeCheck" type="checkbox" />
-            <span>Isolate changes in a dedicated Git worktree branch</span>
-          </label>
-
-          <label class="rc-label">
-            Model (optional)
-            <input
-              id="newModelInput"
-              class="rc-input"
-              type="text"
-              placeholder="Leave blank for MCC default"
-            />
-          </label>
-
-          <label class="rc-label">
-            Initial Prompt (optional)
-            <textarea
-              id="newPromptInput"
-              class="rc-textarea"
-              rows="3"
-              placeholder="What should this session work on?"
-            ></textarea>
-          </label>
-
-          <div id="newSessionError" class="rc-alert rc-alert-error" hidden></div>
-
-          <div class="rc-dialog-actions">
-            <button id="btnCreateSession" class="rc-btn rc-btn-primary" type="submit">
-              Launch Session
+          <div class="rc-modal-tabs" role="tablist">
+            <button
+              id="btnModalTabNew"
+              class="rc-modal-tab is-active"
+              type="button"
+              data-modal-tab="new"
+            >
+              New Session
+            </button>
+            <button
+              id="btnModalTabDiscover"
+              class="rc-modal-tab"
+              type="button"
+              data-modal-tab="discover"
+            >
+              Attach Existing / Discovered
             </button>
           </div>
-        </form>
+
+          <form id="newSessionForm" class="rc-stack">
+            <label class="rc-label">
+              Agent / Runtime
+              <select id="newHarnessSelect" class="rc-select"></select>
+            </label>
+
+            <label class="rc-label">
+              Workspace Directory (inside RC_ALLOWED_DIRS)
+              <div class="rc-dir-row">
+                <input
+                  id="newCwdInput"
+                  class="rc-input"
+                  type="text"
+                  placeholder="Select directory below"
+                  required
+                />
+                <button id="btnBrowseDirs" class="rc-btn rc-btn-ghost" type="button">
+                  Browse
+                </button>
+              </div>
+              <div id="dirBrowserList" class="rc-dir-list" hidden></div>
+            </label>
+
+            <label class="rc-label">
+              Permission Mode
+              <select id="newModeSelect" class="rc-select">
+                <option value="ask">Ask before tools (recommended)</option>
+                <option value="auto_edits">Auto-approve file edits</option>
+                <option value="yolo">YOLO (bypass all permissions)</option>
+              </select>
+            </label>
+            <div id="yoloWarning" class="rc-alert rc-alert-warn" hidden>
+              Warning: YOLO mode allows tools and shell commands to execute without
+              manual confirmation.
+            </div>
+
+            <label class="rc-check">
+              <input id="newWorktreeCheck" type="checkbox" />
+              <span>Isolate changes in a dedicated Git worktree branch</span>
+            </label>
+
+            <label class="rc-label">
+              Model (optional)
+              <input
+                id="newModelInput"
+                class="rc-input"
+                type="text"
+                placeholder="Leave blank for MCC default"
+              />
+            </label>
+
+            <label class="rc-label">
+              Initial Prompt (optional)
+              <textarea
+                id="newPromptInput"
+                class="rc-textarea"
+                rows="3"
+                placeholder="What should this session work on?"
+              ></textarea>
+            </label>
+
+            <div id="newSessionError" class="rc-alert rc-alert-error" hidden></div>
+
+            <div class="rc-dialog-actions">
+              <button id="btnCreateSession" class="rc-btn rc-btn-primary" type="submit">
+                Launch Session
+              </button>
+            </div>
+          </form>
+
+          <div id="discoveredPane" class="rc-stack" hidden>
+            <div class="rc-dir-row">
+              <select id="discoverHarnessFilter" class="rc-select" aria-label="Filter harness">
+                <option value="">All harnesses</option>
+                <option value="claude">Claude Code</option>
+                <option value="opencode">OpenCode</option>
+                <option value="opencode2">OpenCode 2</option>
+                <option value="kilo">Kilo CLI</option>
+                <option value="codex">Codex CLI</option>
+                <option value="openclaw">OpenClaw</option>
+                <option value="hermes">Hermes</option>
+              </select>
+              <select id="discoverModeSelect" class="rc-select" aria-label="Import permission mode">
+                <option value="ask">Ask</option>
+                <option value="auto_edits">Auto Edits</option>
+                <option value="yolo">YOLO</option>
+              </select>
+              <button id="btnRefreshDiscovered" class="rc-btn rc-btn-ghost" type="button">
+                Scan
+              </button>
+            </div>
+            <div id="discoveredError" class="rc-alert rc-alert-error" hidden></div>
+            <div id="discoveredList" class="rc-discover-list"></div>
+          </div>
+        </div>
       </dialog>
     </div>
 

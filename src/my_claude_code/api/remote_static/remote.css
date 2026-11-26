@@ -521,12 +521,174 @@ body {
   font-size: 13px;
 }
 
+.rc-pill-info {
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #bae6fd;
+}
+
+.rc-pill-warn {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+.rc-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.rc-modal-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--rc-border);
+  padding-bottom: 8px;
+}
+
+.rc-modal-tab {
+  border: 1px solid var(--rc-border);
+  border-radius: 10px;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--rc-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rc-modal-tab.is-active {
+  background: var(--rc-card);
+  color: var(--rc-text);
+  border-color: var(--rc-accent);
+  font-weight: 600;
+}
+
+.rc-discover-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rc-discover-item {
+  border: 1px solid var(--rc-border);
+  border-radius: 12px;
+  background: #090e1a;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rc-discover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rc-discover-meta {
+  font-size: 12px;
+  color: var(--rc-muted);
+  font-family: var(--rc-mono);
+  word-break: break-all;
+}
+
+.rc-discover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .rc-mobile-only {
   display: none;
 }
 
 @media (max-width: 780px) {
-  .rc-mobile-only {
+  .rc-pill-info {
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #bae6fd;
+}
+
+.rc-pill-warn {
+  border-color: rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+.rc-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.rc-modal-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--rc-border);
+  padding-bottom: 8px;
+}
+
+.rc-modal-tab {
+  border: 1px solid var(--rc-border);
+  border-radius: 10px;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--rc-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rc-modal-tab.is-active {
+  background: var(--rc-card);
+  color: var(--rc-text);
+  border-color: var(--rc-accent);
+  font-weight: 600;
+}
+
+.rc-discover-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rc-discover-item {
+  border: 1px solid var(--rc-border);
+  border-radius: 12px;
+  background: #090e1a;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rc-discover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rc-discover-meta {
+  font-size: 12px;
+  color: var(--rc-muted);
+  font-family: var(--rc-mono);
+  word-break: break-all;
+}
+
+.rc-discover-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.rc-mobile-only {
     display: inline-flex;
   }
   .rc-workspace {
