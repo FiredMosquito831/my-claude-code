@@ -164,6 +164,22 @@ class CreateSessionRequest(BaseModel):
     server_url: str | None = Field(default=None, max_length=512)
     cols: int = Field(default=120, ge=20, le=500)
     rows: int = Field(default=36, ge=5, le=200)
+    detached: bool = True
+
+
+class RegisterSidecarRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+    harness: str = Field(min_length=1, max_length=64)
+    cwd: str = Field(min_length=1, max_length=1024)
+    host: str = Field(default="127.0.0.1", min_length=1, max_length=64)
+    port: int = Field(ge=1, le=65535)
+    secret: str = Field(min_length=16, max_length=512)
+    pid: int | None = None
+    sidecar_pid: int | None = None
+    title: str = Field(default="", max_length=160)
+    permission_mode: str | None = Field(default=None, max_length=32)
+    model: str | None = Field(default=None, max_length=160)
+    origin: str = Field(default="cli_rc", max_length=32)
 
 
 class ImportSessionRequest(BaseModel):
@@ -323,6 +339,48 @@ async def admin_rc_stop_session(request: Request, session_id: str) -> dict[str, 
         return await remote.stop_session(session_id)
     except RemoteControlError as exc:
         raise _translate_remote_error(exc) from exc
+
+
+@admin_rc_router.get("/sidecars")
+def admin_rc_list_sidecars(request: Request) -> dict[str, Any]:
+    remote = _remote_port(request)
+    sidecars = remote.list_sidecars()
+    return {"count": len(sidecars), "sidecars": sidecars}
+
+
+@admin_rc_router.post("/sidecars/register")
+async def admin_rc_register_sidecar(
+    request: Request, body: RegisterSidecarRequest
+) -> dict[str, Any]:
+    remote = _remote_port(request)
+    try:
+        session = await remote.register_external_sidecar(
+            session_id=body.session_id,
+            harness=body.harness,
+            cwd=body.cwd,
+            host=body.host,
+            port=body.port,
+            secret=body.secret,
+            pid=body.pid,
+            sidecar_pid=body.sidecar_pid,
+            title=body.title,
+            permission_mode=body.permission_mode,
+            model=body.model,
+            origin=body.origin,
+        )
+    except RemoteControlError as exc:
+        raise _translate_remote_error(exc) from exc
+    tunnels = await remote.inspect_tunnels()
+    base_url = str(tunnels.get("recommended_url") or tunnels.get("local_url") or "/rc")
+    local_base = str(tunnels.get("local_url") or "/rc")
+    encoded_sid = quote(str(session["id"]), safe="")
+    sep_rec = "&" if "?" in base_url else "?"
+    sep_loc = "&" if "?" in local_base else "?"
+    return {
+        "session": session,
+        "rc_url": f"{base_url}{sep_rec}session={encoded_sid}",
+        "local_rc_url": f"{local_base}{sep_loc}session={encoded_sid}",
+    }
 
 
 # ----------------------------------------------------------- /rc PWA static --
@@ -553,6 +611,7 @@ async def rc_create_session(
             server_url=body.server_url,
             cols=body.cols,
             rows=body.rows,
+            detached=body.detached,
         )
         return {"session": session}
     except RemoteControlError as exc:

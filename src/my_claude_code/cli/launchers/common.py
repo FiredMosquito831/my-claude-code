@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -24,6 +25,23 @@ PROXY_PREFLIGHT_PATH = "/health"
 PROXY_PREFLIGHT_TIMEOUT_SECONDS = 1.5
 INBOUND_PROTOCOL_FLAG = "--inbound-protocol"
 INBOUND_PROTOCOL_ENV = "MCC_INBOUND_PROTOCOL"
+RC_FLAG = "--rc"
+
+
+def strip_rc_flag(argv: Sequence[str]) -> tuple[bool, list[str]]:
+    """Extract ``--rc`` strictly before any bare ``--`` separator."""
+
+    args = list(argv)
+    try:
+        separator_index = args.index("--")
+    except ValueError:
+        separator_index = len(args)
+
+    leading = args[:separator_index]
+    trailing = args[separator_index:]
+    rc_enabled = RC_FLAG in leading
+    clean = [arg for arg in leading if arg != RC_FLAG] + trailing
+    return rc_enabled, clean
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +255,31 @@ def preflight_proxy(proxy_root_url: str) -> str | None:
     return preflight_result(proxy_root_url).error
 
 
+class RcLaunchKwargs(TypedDict, total=False):
+    """Optional keyword arguments enabling ``--rc`` dual-sync on a launcher."""
+
+    rc_enabled: bool
+    rc_harness_id: str
+    rc_proxy_root_url: str
+
+
+def rc_launch_kwargs(
+    rc_enabled: bool,
+    *,
+    harness_id: str,
+    proxy_root_url: str,
+) -> RcLaunchKwargs:
+    """Return ``run_client_process`` RC kwargs only when ``--rc`` was requested."""
+
+    if not rc_enabled:
+        return {}
+    return {
+        "rc_enabled": True,
+        "rc_harness_id": harness_id,
+        "rc_proxy_root_url": proxy_root_url,
+    }
+
+
 def resolve_client_binary(
     *,
     binary_name: str,
@@ -263,8 +306,27 @@ def run_client_process(
     binary_name: str,
     display_name: str,
     install_hint: str,
+    rc_enabled: bool = False,
+    rc_harness_id: str | None = None,
+    rc_cwd: str | None = None,
+    rc_proxy_root_url: str | None = None,
 ) -> None:
     """Run a client CLI command and mirror its exit code."""
+
+    if rc_enabled:
+        from .rc_common import run_rc_dual_sync_process
+
+        run_rc_dual_sync_process(
+            command=command,
+            env=env,
+            binary_name=binary_name,
+            display_name=display_name,
+            install_hint=install_hint,
+            harness_id=rc_harness_id or "terminal",
+            cwd=rc_cwd,
+            proxy_root_url=rc_proxy_root_url,
+        )
+        return
 
     process: subprocess.Popen[bytes] | None = None
     try:

@@ -68,9 +68,11 @@ from my_claude_code.config.settings import get_settings
 
 from .common import (
     preflight_proxy,
+    rc_launch_kwargs,
     resolve_launch_inbound_protocol,
     run_client_process,
     strip_inbound_protocol_flag,
+    strip_rc_flag,
 )
 
 HARNESS_ID = "openclaw"
@@ -93,7 +95,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
     """Launch OpenClaw with MCC declared in its openclaw.json."""
 
     spec = spec_for(HARNESS_ID)
-    args = list(sys.argv[1:] if argv is None else argv)
+    rc_enabled, args = strip_rc_flag(list(sys.argv[1:] if argv is None else argv))
 
     if DISCONNECT_FLAG in args:
         raise SystemExit(disconnect(spec, UndoMode.KEYS_ONLY))
@@ -144,6 +146,9 @@ def launch(argv: Sequence[str] | None = None) -> None:
         binary_name=spec.binary,
         display_name=spec.display_name,
         install_hint=spec.install_hint,
+        **rc_launch_kwargs(
+            rc_enabled, harness_id=spec.id, proxy_root_url=proxy_root_url
+        ),
     )
 
 

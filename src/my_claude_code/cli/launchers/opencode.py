@@ -55,9 +55,11 @@ from my_claude_code.config.settings import get_settings
 
 from .common import (
     preflight_proxy,
+    rc_launch_kwargs,
     resolve_launch_inbound_protocol,
     run_client_process,
     strip_inbound_protocol_flag,
+    strip_rc_flag,
 )
 
 #: Variables MCC owns in the launched environment. Stripped before they are
@@ -86,7 +88,7 @@ def launch_kilo(argv: Sequence[str] | None = None) -> None:
 
 def _launch(harness_id: str, argv: Sequence[str] | None) -> None:
     spec = spec_for(harness_id)
-    args = list(sys.argv[1:] if argv is None else argv)
+    rc_enabled, args = strip_rc_flag(list(sys.argv[1:] if argv is None else argv))
     flag_override, clean_args = strip_inbound_protocol_flag(spec, args)
     binary_path = resolve_harness_binary(spec)
 
@@ -128,6 +130,9 @@ def _launch(harness_id: str, argv: Sequence[str] | None) -> None:
         binary_name=spec.binary,
         display_name=spec.display_name,
         install_hint=spec.install_hint,
+        **rc_launch_kwargs(
+            rc_enabled, harness_id=spec.id, proxy_root_url=proxy_root_url
+        ),
     )
 
 

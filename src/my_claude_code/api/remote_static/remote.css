@@ -533,6 +533,18 @@ body {
   color: #fde68a;
 }
 
+.rc-pill-sync {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.14);
+  color: #a7f3d0;
+}
+
+.rc-pill-reconnect {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.14);
+  color: #bae6fd;
+}
+
 .rc-empty-actions {
   display: flex;
   flex-wrap: wrap;

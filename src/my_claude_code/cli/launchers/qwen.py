@@ -77,7 +77,7 @@ from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
-from .common import preflight_proxy, run_client_process
+from .common import preflight_proxy, rc_launch_kwargs, run_client_process, strip_rc_flag
 
 HARNESS_ID = "qwen_code"
 
@@ -108,7 +108,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
     """Launch Qwen Code with an MCC-owned settings document."""
 
     spec = spec_for(HARNESS_ID)
-    args = list(sys.argv[1:] if argv is None else argv)
+    rc_enabled, args = strip_rc_flag(list(sys.argv[1:] if argv is None else argv))
     binary_path = resolve_harness_binary(spec)
 
     if is_passthrough(spec, args):
@@ -147,6 +147,9 @@ def launch(argv: Sequence[str] | None = None) -> None:
         binary_name=spec.binary,
         display_name=spec.display_name,
         install_hint=spec.install_hint,
+        **rc_launch_kwargs(
+            rc_enabled, harness_id=spec.id, proxy_root_url=proxy_root_url
+        ),
     )
 
 

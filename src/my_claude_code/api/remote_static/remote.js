@@ -365,6 +365,21 @@
       }
     } else if (kind === "session.controls_updated") {
       refreshActiveMeta().catch(() => {});
+    } else if (kind === "session.reconnected") {
+      const pill = el("activeReconnectPill");
+      if (pill) {
+        pill.hidden = false;
+        pill.textContent = "Surviving Restart · Reconnected";
+      }
+      addTimelineEntry("rc-alert rc-alert-info", (node) => {
+        node.textContent = String(
+          payload.message || "Surviving Restart · Reconnected",
+        );
+      });
+      refreshActiveMeta().catch(() => {});
+      if (state.activeTab === "terminal" && state.activeSessionId) {
+        ensureTerminalMounted(state.activeSessionId);
+      }
     } else if (kind === "session.mode_changed" || kind === "session.state" || kind === "session.exited") {
       if (payload.recommend_pty && state.activeSession && isStructuredTier(state.activeSession.driver_tier)) {
         addTimelineEntry("rc-alert rc-alert-warn", (node) => {
@@ -422,7 +437,8 @@
       title.textContent = sess.title || sess.id;
       const sub = document.createElement("div");
       sub.className = "rc-session-item-sub";
-      sub.textContent = `${sess.harness} · ${sess.status} · ${sess.permission_mode}`;
+      const originSuffix = sess.origin === "cli_rc" ? " · Live CLI · Dual-Sync" : "";
+      sub.textContent = `${sess.harness} · ${sess.status} · ${sess.permission_mode}${originSuffix}`;
       btn.appendChild(title);
       btn.appendChild(sub);
       btn.addEventListener("click", () => {
@@ -456,6 +472,15 @@
     } else {
       attachBadge.hidden = true;
     }
+    const originBadge = el("activeOriginBadge");
+    if (originBadge) {
+      if (sess.origin === "cli_rc") {
+        originBadge.hidden = false;
+        originBadge.textContent = "Live CLI · Dual-Sync";
+      } else {
+        originBadge.hidden = true;
+      }
+    }
     el("btnSwitchTerminal").hidden = !isStructuredTier(sess.driver_tier);
     const tabSwitchBar = el("terminalSwitchBar");
     if (tabSwitchBar) {
@@ -472,6 +497,7 @@
     [
       ["Session ID", sess.id],
       ["Harness", sess.harness],
+      ["Origin", sess.origin === "cli_rc" ? "Live CLI · Dual-Sync" : (sess.origin || "rc_server")],
       ["Driver", sess.driver_tier],
       ["Status", sess.status],
       ["CWD", sess.cwd],
@@ -498,6 +524,38 @@
     return `${proto}//${window.location.host}${path}`;
   }
 
+  function scheduleSocketReconnect(sessionId) {
+    if (state.reconnectTimer) return;
+    const pill = el("activeReconnectPill");
+    if (pill) {
+      pill.hidden = false;
+      pill.textContent = "Reconnecting...";
+    }
+    const attempt = async () => {
+      state.reconnectTimer = null;
+      if (!state.authenticated || state.activeSessionId !== sessionId) return;
+      try {
+        const res = await fetch("/health", { cache: "no-store" });
+        if (!res.ok) throw new Error("unhealthy");
+      } catch (_err) {
+        state.reconnectTimer = setTimeout(attempt, 1500);
+        return;
+      }
+      if (!state.authenticated || state.activeSessionId !== sessionId) return;
+      const activePill = el("activeReconnectPill");
+      if (activePill) {
+        activePill.hidden = false;
+        activePill.textContent = "Surviving Restart · Reconnected";
+      }
+      refreshActiveMeta().catch(() => {});
+      connectEventSocket(sessionId);
+      if (state.activeTab === "terminal") {
+        ensureTerminalMounted(sessionId);
+      }
+    };
+    state.reconnectTimer = setTimeout(attempt, 1500);
+  }
+
   function connectEventSocket(sessionId) {
     if (state.wsEvents) state.wsEvents.close();
     const sock = new WebSocket(
@@ -514,11 +572,7 @@
     });
     sock.addEventListener("close", (ev) => {
       if (state.authenticated && state.activeSessionId === sessionId && ev.code !== 1008) {
-        setTimeout(() => {
-          if (state.authenticated && state.activeSessionId === sessionId) {
-            connectEventSocket(sessionId);
-          }
-        }, 1500);
+        scheduleSocketReconnect(sessionId);
       }
     });
     state.wsEvents = sock;
@@ -567,6 +621,16 @@
         state.term.write(new Uint8Array(msg.data));
       } else {
         state.term.write(String(msg.data || ""));
+      }
+    });
+    ptySock.addEventListener("close", (ev) => {
+      if (
+        state.authenticated &&
+        state.activeSessionId === sessionId &&
+        state.activeTab === "terminal" &&
+        ev.code !== 1008
+      ) {
+        scheduleSocketReconnect(sessionId);
       }
     });
     state.wsPty = ptySock;

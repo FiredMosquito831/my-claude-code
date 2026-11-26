@@ -15,7 +15,7 @@ from my_claude_code.config.proxy_auth import proxy_auth_token
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
-from .common import preflight_proxy, run_client_process
+from .common import preflight_proxy, rc_launch_kwargs, run_client_process, strip_rc_flag
 
 HARNESS_ID = "pi"
 _API_KEY_ENV = "MCC_PI_API_KEY"
@@ -28,7 +28,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
     """Launch Pi with a process-local Free Claude Code provider."""
 
     spec = spec_for(HARNESS_ID)
-    args = list(sys.argv[1:] if argv is None else argv)
+    rc_enabled, args = strip_rc_flag(list(sys.argv[1:] if argv is None else argv))
     hint = pi_install_hint()
     binary_path = resolve_harness_binary(spec)
     if not pi_binary_is_compatible(binary_path):
@@ -81,6 +81,9 @@ def launch(argv: Sequence[str] | None = None) -> None:
         binary_name=spec.binary,
         display_name=spec.display_name,
         install_hint=hint,
+        **rc_launch_kwargs(
+            rc_enabled, harness_id=spec.id, proxy_root_url=proxy_root_url
+        ),
     )
 
 

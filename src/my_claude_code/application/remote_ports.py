@@ -96,7 +96,27 @@ class RemoteSessionPort(Protocol):
         server_url: str | None = None,
         cols: int = 120,
         rows: int = 36,
+        detached: bool = True,
     ) -> dict[str, Any]: ...
+
+    async def register_external_sidecar(
+        self,
+        *,
+        session_id: str,
+        harness: str,
+        cwd: str,
+        host: str,
+        port: int,
+        secret: str,
+        pid: int | None = None,
+        sidecar_pid: int | None = None,
+        title: str = "",
+        permission_mode: str | None = None,
+        model: str | None = None,
+        origin: str = "cli_rc",
+    ) -> dict[str, Any]: ...
+
+    def list_sidecars(self) -> list[dict[str, Any]]: ...
 
     async def import_session(
         self,
