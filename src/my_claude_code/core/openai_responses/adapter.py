@@ -25,9 +25,12 @@ class OpenAIResponsesAdapter:
         request: OpenAIResponsesRequest,
         *,
         allow_web_search: bool = False,
+        allow_image_generation: bool = False,
     ) -> dict[str, Any]:
         return convert_request_to_anthropic_payload(
-            request, allow_web_search=allow_web_search
+            request,
+            allow_web_search=allow_web_search,
+            allow_image_generation=allow_image_generation,
         )
 
     def iter_sse_from_anthropic(

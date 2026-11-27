@@ -66,6 +66,7 @@ def convert_request_to_anthropic_payload(
     request: OpenAIResponsesRequest,
     *,
     allow_web_search: bool = False,
+    allow_image_generation: bool = False,
 ) -> dict[str, Any]:
     """Convert an OpenAI Responses request into an Anthropic Messages payload."""
 
@@ -130,7 +131,11 @@ def convert_request_to_anthropic_payload(
         )
 
     raw_tool_choice = request.tool_choice
-    tools = convert_tools(request.tools, allow_web_search=allow_web_search)
+    tools = convert_tools(
+        request.tools,
+        allow_web_search=allow_web_search,
+        allow_image_generation=allow_image_generation,
+    )
     forbids_tools = tool_choice_forbids_tools(raw_tool_choice)
     history_has_tools = has_tool_history(messages)
     if forbids_tools and history_has_tools:
@@ -143,6 +148,7 @@ def convert_request_to_anthropic_payload(
             raw_tool_choice,
             parallel_tool_calls=request.parallel_tool_calls if tools else None,
             allow_web_search=allow_web_search,
+            allow_image_generation=allow_image_generation,
         )
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
@@ -256,7 +262,7 @@ def _append_input_item(
         _append_pending_reasoning(messages, pending)
         messages.append({"role": "user", "content": _text_from_part(item)})
         return _PendingReasoning()
-    if allow_web_search and item_type == "web_search_call":
+    if item_type == "web_search_call":
         action = item.get("action")
         action_summary = ""
         if isinstance(action, dict):
@@ -269,6 +275,25 @@ def _append_input_item(
             f"[Prior web_search_call: {action_summary}]"
             if action_summary
             else "[Prior web_search_call]"
+        )
+        _append_message_item(
+            "assistant",
+            note,
+            messages,
+            system_parts,
+            reasoning_content=pending.text,
+            encrypted_reasoning=pending.items,
+        )
+        return _PendingReasoning()
+    if item_type == "image_generation_call":
+        revised_prompt = optional_str(item.get("revised_prompt"))
+        _status = optional_str(item.get("status"))
+        _output_format = optional_str(item.get("output_format"))
+        summary = revised_prompt.strip() if revised_prompt else ""
+        note = (
+            f"[Prior image_generation_call: {summary}]"
+            if summary
+            else "[Prior image_generation_call]"
         )
         _append_message_item(
             "assistant",

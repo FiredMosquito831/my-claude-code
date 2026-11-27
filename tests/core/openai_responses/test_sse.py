@@ -1662,3 +1662,125 @@ async def test_seeded_tool_input_emits_when_no_deltas_arrive() -> None:
         {"model": "nvidia_nim/test-model", "stream": True},
     )
     assert response["output"][0]["arguments"] == '{"k":"only"}'
+
+
+@pytest.mark.asyncio
+async def test_citations_delta_and_start_citations_emit_url_citation_annotations() -> (
+    None
+):
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesAdapter,
+        OpenAIResponsesRequest,
+    )
+
+    events_in = [
+        format_sse_event("message_start", {"type": "message_start", "message": {}}),
+        format_sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "text",
+                    "text": "Intro ",
+                    "citations": [
+                        {
+                            "type": "web_search_result_location",
+                            "url": "https://docs.python.org/3/",
+                            "title": "Python Docs",
+                            "cited_text": "Python 3 docs",
+                        }
+                    ],
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "see example."},
+            },
+        ),
+        # Duplicate of initial citation should be deduplicated
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "citations_delta",
+                    "citation": {
+                        "type": "web_search_result_location",
+                        "url": "https://docs.python.org/3/",
+                        "title": "Python Docs",
+                    },
+                },
+            },
+        ),
+        # Second distinct citation with start/end indices
+        format_sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "citations_delta",
+                    "citation": {
+                        "type": "url_citation",
+                        "url": "https://example.test/ref",
+                        "start_index": 6,
+                        "end_index": 17,
+                    },
+                },
+            },
+        ),
+        format_sse_event(
+            "content_block_stop", {"type": "content_block_stop", "index": 0}
+        ),
+        format_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+    expected_annotations = [
+        {
+            "type": "url_citation",
+            "url": "https://docs.python.org/3/",
+            "title": "Python Docs",
+        },
+        {
+            "type": "url_citation",
+            "url": "https://example.test/ref",
+            "start_index": 6,
+            "end_index": 17,
+        },
+    ]
+
+    text = await _collect_sse(
+        _responses_sse(
+            _aiter(events_in),
+            {"model": "nvidia_nim/test-model", "stream": True},
+        )
+    )
+    events = parse_sse_text(text)
+
+    ann_events = [
+        ev for ev in events if ev.event == "response.output_text.annotation.added"
+    ]
+    assert len(ann_events) == 2
+    assert ann_events[0].data["annotation_index"] == 0
+    assert ann_events[0].data["annotation"] == expected_annotations[0]
+    assert ann_events[1].data["annotation_index"] == 1
+    assert ann_events[1].data["annotation"] == expected_annotations[1]
+
+    part_done = next(ev for ev in events if ev.event == "response.content_part.done")
+    assert part_done.data["part"]["annotations"] == expected_annotations
+
+    completed = events[-1].data["response"]
+    assert completed["output"][0]["content"][0]["annotations"] == expected_annotations
+
+    non_stream, raw_error = await OpenAIResponsesAdapter().complete_from_anthropic_sse(
+        _aiter(events_in),
+        OpenAIResponsesRequest(model="nvidia_nim/test-model", input="Hi", stream=False),
+    )
+    assert raw_error is None
+    assert non_stream["output"][0]["content"][0]["annotations"] == expected_annotations

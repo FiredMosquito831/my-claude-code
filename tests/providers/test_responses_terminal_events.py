@@ -1106,3 +1106,90 @@ async def test_chatgpt_oauth_and_responses_transport_hold_start_and_fallback(
         assert [r.outcome for r in attempts_tr] == ["failed", "succeeded"]
     finally:
         await transport.aclose()
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [
+            {
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "ws_1",
+                    "type": "web_search_call",
+                    "status": "in_progress",
+                },
+            },
+            {"type": "response.web_search_call.in_progress", "item_id": "ws_1"},
+            {"type": "response.web_search_call.searching", "item_id": "ws_1"},
+            {"type": "response.web_search_call.completed", "item_id": "ws_1"},
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "ws_1",
+                    "type": "web_search_call",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "codex"},
+                },
+            },
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
+        ],
+        [
+            {
+                "type": "response.output_item.added",
+                "item": {
+                    "id": "ig_1",
+                    "type": "image_generation_call",
+                    "status": "in_progress",
+                },
+            },
+            {"type": "response.image_generation_call.in_progress", "item_id": "ig_1"},
+            {"type": "response.image_generation_call.generating", "item_id": "ig_1"},
+            {
+                "type": "response.image_generation_call.partial_image",
+                "item_id": "ig_1",
+                "partial_image_index": 0,
+                "partial_image_b64": "AAAA",
+            },
+            {"type": "response.image_generation_call.completed", "item_id": "ig_1"},
+            {
+                "type": "response.output_item.done",
+                "item": {
+                    "id": "ig_1",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": "BBBB",
+                },
+            },
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
+        ],
+        [
+            {"type": "response.web_search_call.searching", "item_id": "ws_only"},
+        ],
+        [
+            {
+                "type": "response.image_generation_call.partial_image",
+                "item_id": "ig_only",
+            },
+        ],
+    ],
+)
+def test_server_tool_items_and_lifecycle_events_mark_output_seen(
+    events: list[dict[str, Any]],
+) -> None:
+    """Hosted server-tool items/events never trigger TruncatedProviderStreamError."""
+    frames = _run(events)
+    delta = _message_delta(frames)
+    assert delta["delta"]["stop_reason"] in {"max_tokens", "end_turn"}

@@ -1866,6 +1866,7 @@ def _sanitize_passthrough_input(
                 "local_shell_call",
                 "local_shell_call_output",
                 "web_search_call",
+                "image_generation_call",
                 "additional_tools",
                 "configuration_update",
             }

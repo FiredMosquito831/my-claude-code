@@ -187,6 +187,10 @@ class ResponsesStreamAssembler:
                 return chunks
             if text := _string_value(block.get("text")):
                 chunks.extend(self._emit_text_delta(state, text))
+            citations = block.get("citations")
+            if isinstance(citations, list):
+                for citation in citations:
+                    chunks.extend(self._append_text_annotation(state, citation))
             return chunks
         if block_type == "thinking":
             if index is None:
@@ -290,6 +294,14 @@ class ResponsesStreamAssembler:
                     state.argument_parts.clear()
                     state.seeded_input = False
                 state.argument_parts.append(fragment)
+            return []
+        if delta_type == "citations_delta":
+            if index is None:
+                return []
+            state = self._ledger.active_block(index)
+            if isinstance(state, TextBlockState):
+                return self._append_text_annotation(state, delta.get("citation"))
+            return []
         return []
 
     def _handle_content_block_stop(self, data: Mapping[str, Any]) -> list[str]:
@@ -437,6 +449,38 @@ class ResponsesStreamAssembler:
         state.text_parts.append(text)
         return [events.output_text_delta(state.item_id, state.output_index, text)]
 
+    def _append_text_annotation(
+        self, state: TextBlockState, citation: object
+    ) -> list[str]:
+        annotation = _normalize_url_citation(citation)
+        if annotation is None:
+            return []
+        key = (
+            annotation["url"],
+            annotation.get("start_index"),
+            annotation.get("end_index"),
+        )
+        if any(
+            (
+                existing.get("url"),
+                existing.get("start_index"),
+                existing.get("end_index"),
+            )
+            == key
+            for existing in state.annotations
+        ):
+            return []
+        annotation_index = len(state.annotations)
+        state.annotations.append(annotation)
+        return [
+            events.output_text_annotation_added(
+                state.item_id,
+                state.output_index,
+                annotation_index,
+                annotation,
+            )
+        ]
+
     def _emit_reasoning_delta(self, state: ReasoningBlockState, text: str) -> list[str]:
         if not text:
             return []
@@ -508,3 +552,23 @@ def _string_value(value: Any) -> str:
     if value is None:
         return ""
     return value if isinstance(value, str) else str(value)
+
+
+def _normalize_url_citation(citation: object) -> dict[str, Any] | None:
+    """Normalize an Anthropic citation or Responses url_citation dict."""
+    if not isinstance(citation, Mapping):
+        return None
+    if citation.get("type") not in {"web_search_result_location", "url_citation"}:
+        return None
+    url = citation.get("url")
+    if not isinstance(url, str) or not url.strip():
+        return None
+    annotation: dict[str, Any] = {"type": "url_citation", "url": url}
+    title = citation.get("title")
+    if isinstance(title, str) and title:
+        annotation["title"] = title
+    for index_key in ("start_index", "end_index"):
+        index_val = citation.get(index_key)
+        if isinstance(index_val, int) and not isinstance(index_val, bool):
+            annotation[index_key] = index_val
+    return annotation

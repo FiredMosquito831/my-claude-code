@@ -191,6 +191,31 @@ _REASONING_DONE_EVENTS = frozenset(
     }
 )
 
+#: Output item types that prove the host produced model output, even when no
+#: text delta was emitted (e.g. encrypted reasoning or hosted server tools).
+_OUTPUT_ITEM_TYPES = frozenset(
+    {
+        "reasoning",
+        "function_call",
+        "custom_tool_call",
+        "web_search_call",
+        "image_generation_call",
+    }
+)
+
+#: Hosted Responses server-tool SSE lifecycle events that confirm host output.
+_SERVER_TOOL_CALL_EVENTS = frozenset(
+    {
+        "response.web_search_call.in_progress",
+        "response.web_search_call.searching",
+        "response.web_search_call.completed",
+        "response.image_generation_call.in_progress",
+        "response.image_generation_call.generating",
+        "response.image_generation_call.partial_image",
+        "response.image_generation_call.completed",
+    }
+)
+
 
 def _reasoning_done_text(event: Mapping[str, Any]) -> str:
     """Read the complete part text off one terminal reasoning frame.
@@ -361,12 +386,17 @@ class ResponsesStreamConverter:
                 yield from self._emit_thinking(text)
             return
 
+        if event_type in _SERVER_TOOL_CALL_EVENTS:
+            self._output_seen = True
+            return
+
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
             item_type = item.get("type")
-            if item_type in {"reasoning", "function_call", "custom_tool_call"}:
+            if item_type in _OUTPUT_ITEM_TYPES:
                 # An item the host opened is output the host produced, even
-                # when its text is withheld (``encrypted_content``).
+                # when its text is withheld (``encrypted_content``) or it is a
+                # hosted server-tool call (``web_search_call``, ``image_generation_call``).
                 self._output_seen = True
             if item_type == "reasoning":
                 # Deliberately opens nothing. A reasoning item whose only
@@ -459,7 +489,7 @@ class ResponsesStreamConverter:
         if event_type == "response.output_item.done":
             item = event.get("item") or {}
             item_type = item.get("type")
-            if item_type in {"reasoning", "function_call", "custom_tool_call"}:
+            if item_type in _OUTPUT_ITEM_TYPES:
                 self._output_seen = True
             if item_type == "reasoning":
                 yield from self._flush_reasoning_item(item)

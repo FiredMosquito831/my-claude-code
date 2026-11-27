@@ -1,7 +1,7 @@
 """Block state for OpenAI Responses streaming assembly."""
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass(slots=True)
@@ -10,6 +10,7 @@ class TextBlockState:
     output_index: int
     item_id: str
     text_parts: list[str] = field(default_factory=list)
+    annotations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

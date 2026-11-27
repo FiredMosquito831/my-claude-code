@@ -928,3 +928,148 @@ def test_opt_in_web_search_rejects_bad_schema_or_undeclared_tool_choice() -> Non
             ),
             allow_web_search=True,
         )
+
+
+def test_image_generation_call_and_web_search_call_replay_without_base64_bloat() -> (
+    None
+):
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesAdapter,
+        OpenAIResponsesRequest,
+    )
+
+    giant_b64 = "A" * 4096
+    req = OpenAIResponsesRequest(
+        model="gpt-5.6-terra",
+        input=[
+            {
+                "type": "reasoning",
+                "id": "rs_img",
+                "summary": [{"type": "summary_text", "text": "Planning artwork"}],
+                "encrypted_content": "enc_img_1",
+            },
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "output_format": "png",
+                "revised_prompt": "A watercolor lighthouse at dusk",
+                "result": giant_b64,
+            },
+            {
+                "type": "image_generation_call",
+                "id": "ig_2",
+                "status": "completed",
+                "result": giant_b64,
+            },
+            {
+                "type": "web_search_call",
+                "id": "ws_1",
+                "status": "completed",
+                "action": {"type": "search", "query": "lighthouse architecture"},
+            },
+            {"role": "user", "content": "Make the sky warmer"},
+        ],
+        tools=[
+            {"type": "image_generation", "output_format": "png", "quality": "high"},
+            {"type": "web_search", "external_web_access": True},
+        ],
+    )
+    adapter = OpenAIResponsesAdapter()
+
+    # Default allow_web_search=False / allow_image_generation=False still replays cleanly.
+    payload_default = adapter.to_anthropic_payload(req)
+    assert "tools" not in payload_default
+    assert payload_default["messages"][0] == {
+        "role": "assistant",
+        "content": "[Prior image_generation_call: A watercolor lighthouse at dusk]",
+        "reasoning_content": "Planning artwork",
+        "encrypted_reasoning": [
+            {
+                "type": "reasoning",
+                "id": "rs_img",
+                "summary": [{"type": "summary_text", "text": "Planning artwork"}],
+                "encrypted_content": "enc_img_1",
+            }
+        ],
+    }
+    assert payload_default["messages"][1] == {
+        "role": "assistant",
+        "content": "[Prior image_generation_call]",
+    }
+    assert payload_default["messages"][2] == {
+        "role": "assistant",
+        "content": "[Prior web_search_call: search: lighthouse architecture]",
+    }
+    assert giant_b64 not in str(payload_default["messages"])
+
+    envelope = payload_default["responses_envelope"]
+    assert [item["type"] for item in envelope["input"]] == [
+        "reasoning",
+        "image_generation_call",
+        "image_generation_call",
+        "web_search_call",
+        "message",
+    ]
+    assert envelope["input"][1]["result"] == giant_b64
+    assert [tool["type"] for tool in envelope["tools"]] == [
+        "image_generation",
+        "web_search",
+    ]
+
+
+def test_opt_in_allow_image_generation_validates_without_emitting_function_tool() -> (
+    None
+):
+    from my_claude_code.core.openai_responses import (
+        OpenAIResponsesAdapter,
+        OpenAIResponsesRequest,
+    )
+
+    adapter = OpenAIResponsesAdapter()
+    req = OpenAIResponsesRequest(
+        model="gpt-5.6-terra",
+        input="Draw a cat",
+        tools=[
+            {
+                "type": "image_generation",
+                "output_format": "png",
+                "size": "1024x1024",
+                "quality": "high",
+                "partial_images": 2,
+            },
+            {
+                "type": "function",
+                "name": "ping",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        ],
+        tool_choice={"type": "image_generation"},
+    )
+
+    with pytest.raises(_CONVERSION_ERROR):
+        adapter.to_anthropic_payload(req)
+
+    payload = adapter.to_anthropic_payload(req, allow_image_generation=True)
+    assert [t["name"] for t in payload["tools"]] == ["ping"]
+    assert payload["tool_choice"] == {"type": "image_generation"}
+
+    with pytest.raises(_CONVERSION_ERROR, match="output_format"):
+        adapter.to_anthropic_payload(
+            OpenAIResponsesRequest(
+                model="gpt-5.6-terra",
+                input="Draw",
+                tools=[{"type": "image_generation", "output_format": 123}],
+            ),
+            allow_image_generation=True,
+        )
+
+    with pytest.raises(_CONVERSION_ERROR, match="partial_images"):
+        adapter.to_anthropic_payload(
+            OpenAIResponsesRequest(
+                model="gpt-5.6-terra",
+                input="Draw",
+                tools=[{"type": "image_generation", "partial_images": -1}],
+            ),
+            allow_image_generation=True,
+        )
