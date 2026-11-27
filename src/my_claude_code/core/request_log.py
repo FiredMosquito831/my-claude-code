@@ -1357,7 +1357,11 @@ CREATE TABLE IF NOT EXISTS media_jobs (
     content_sha TEXT,
     content_bytes INTEGER,
     content_mime TEXT,
-    row_seconds_written INTEGER NOT NULL DEFAULT 0
+    row_seconds_written INTEGER NOT NULL DEFAULT 0,
+    job_dialect TEXT,
+    poll_url TEXT,
+    content_url TEXT,
+    operation TEXT DEFAULT 'video_create'
 );
 CREATE INDEX IF NOT EXISTS idx_media_jobs_created ON media_jobs(created_at);
 -- One row per model the chain reached, or deliberately did not reach.
@@ -2380,6 +2384,14 @@ _ATTEMPT_ADDED_COLUMNS = (
     ("gen_last_ms", "ALTER TABLE request_attempts ADD COLUMN gen_last_ms REAL"),
 )
 
+# Added in 8.61.0: multi-dialect video job routing and polling metadata.
+_MEDIA_JOB_ADDED_COLUMNS = (
+    ("job_dialect", "ALTER TABLE media_jobs ADD COLUMN job_dialect TEXT"),
+    ("poll_url", "ALTER TABLE media_jobs ADD COLUMN poll_url TEXT"),
+    ("content_url", "ALTER TABLE media_jobs ADD COLUMN content_url TEXT"),
+    ("operation", "ALTER TABLE media_jobs ADD COLUMN operation TEXT"),
+)
+
 # Written in this order by ``_record_to_row``. The INSERT's column list, its
 # placeholder list and the runtime width assertion are all generated from this
 # tuple for the same reason ``_ATTEMPT_INSERT_COLUMNS`` exists: a hand-written
@@ -3108,6 +3120,10 @@ class MediaJobRecord:
     usage_json: str | None = None
     updated_at: float | None = None
     completed_at: float | None = None
+    job_dialect: str | None = None
+    poll_url: str | None = None
+    content_url: str | None = None
+    operation: str | None = None
 
 
 # Written in this order by ``insert_media_job``: the names are the record's
@@ -3134,6 +3150,10 @@ _MEDIA_JOB_INSERT_COLUMNS = (
     "usage_json",
     "updated_at",
     "completed_at",
+    "job_dialect",
+    "poll_url",
+    "content_url",
+    "operation",
 )
 _MEDIA_JOB_INSERT_SQL = (
     "INSERT INTO media_jobs"
@@ -3156,6 +3176,10 @@ _MEDIA_JOB_UPDATABLE = frozenset(
         "content_bytes",
         "content_mime",
         "row_seconds_written",
+        "job_dialect",
+        "poll_url",
+        "content_url",
+        "operation",
     }
 )
 #: A job's request row is written by the batched writer, after the job row:
@@ -3977,6 +4001,7 @@ class RequestLogStore:
                 self._ensure_input_sha_column(conn)
                 self._ensure_dictionary_kind_column(conn)
                 self._ensure_attempt_columns(conn)
+                self._ensure_media_job_columns(conn)
                 self._ensure_image_blob_columns(conn)
                 self._ensure_session_columns(conn)
                 self._ensure_rollup_counter_columns(conn)
@@ -6589,6 +6614,24 @@ class RequestLogStore:
                 columns = {
                     str(row[1])
                     for row in conn.execute("PRAGMA table_info(request_attempts)")
+                }
+                if column not in columns:
+                    raise
+
+    @staticmethod
+    def _ensure_media_job_columns(conn: sqlite3.Connection) -> None:
+        """Add dialect/poll/content columns to ``media_jobs`` created before 8.61.0."""
+        for column, ddl in _MEDIA_JOB_ADDED_COLUMNS:
+            columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
+            }
+            if column in columns:
+                continue
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                columns = {
+                    str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
                 }
                 if column not in columns:
                     raise

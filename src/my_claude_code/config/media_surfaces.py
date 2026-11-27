@@ -196,6 +196,9 @@ class MediaSurface:
     #: and never says so. ``False`` (every built-in): the path is the declared
     #: home of the file and is asked first.
     only_without_url: bool = False
+    #: 8.61.0: optional distinct identifier when a provider declares multiple
+    #: surfaces sharing a shape for the same operation.
+    surface_id: str | None = None
 
 
 def image_generation_surface(
@@ -453,6 +456,20 @@ def model_path(path: str, model: str) -> str:
     """``path`` with ``{model}`` replaced by the URL-quoted provider model id."""
 
     return path.replace("{model}", quote(model, safe=""))
+
+
+def surface_key(surface: MediaSurface) -> str:
+    """Stable identifier for ``surface`` (``surface_id`` when set, else ``shape``)."""
+
+    return surface.surface_id or surface.shape
+
+
+def surfaces_for(
+    surfaces: tuple[MediaSurface, ...], operation: str
+) -> tuple[MediaSurface, ...]:
+    """All declared surfaces serving ``operation``, in declaration order."""
+
+    return tuple(surface for surface in surfaces if surface.operation == operation)
 
 
 def surface_for(

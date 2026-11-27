@@ -21,6 +21,7 @@ from my_claude_code.core.request_log import (
 )
 
 NEW_REQUEST_COLUMNS = ("media_job_id", "output_video_seconds")
+NEW_MEDIA_JOB_COLUMNS = ("job_dialect", "poll_url", "content_url", "operation")
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -213,5 +214,49 @@ def test_downloaded_content_is_linked_to_the_create_row(tmp_path: Path) -> None:
             ).fetchone()
         assert tuple(link) == ("out", 0, "f" * 64)
         assert tuple(blob) == ("video/mp4", 42, 1)
+    finally:
+        store.close()
+
+
+def test_old_database_gains_new_media_job_columns(tmp_path: Path) -> None:
+    path = tmp_path / "requests.db"
+    RequestLogStore(path).close()
+    with _connect(path) as conn, conn:
+        for column in NEW_MEDIA_JOB_COLUMNS:
+            conn.execute(f"ALTER TABLE media_jobs DROP COLUMN {column}")
+    with _connect(path) as conn:
+        before = _columns(conn, "media_jobs")
+        assert set(NEW_MEDIA_JOB_COLUMNS).isdisjoint(before)
+
+    store = RequestLogStore(path)
+    try:
+        with _connect(path) as conn:
+            after = _columns(conn, "media_jobs")
+            assert set(NEW_MEDIA_JOB_COLUMNS) <= after
+        store.insert_media_job(
+            MediaJobRecord(
+                job_id="video_lro_1",
+                request_id="req-lro-1",
+                provider="gemini",
+                model="veo-3.0-generate-001",
+                upstream_id="operations/123",
+                created_at=time.time(),
+                status="queued",
+                job_dialect="gemini_veo_lro",
+                poll_url="https://example.invalid/v1beta/operations/123",
+                content_url=None,
+                operation="video_create",
+            )
+        )
+        assert store.update_media_job(
+            "video_lro_1",
+            content_url="https://example.invalid/v1beta/files/123:download",
+        )
+        job = store.media_job("video_lro_1")
+        assert job is not None
+        assert job["job_dialect"] == "gemini_veo_lro"
+        assert job["poll_url"] == "https://example.invalid/v1beta/operations/123"
+        assert job["content_url"] == "https://example.invalid/v1beta/files/123:download"
+        assert job["operation"] == "video_create"
     finally:
         store.close()

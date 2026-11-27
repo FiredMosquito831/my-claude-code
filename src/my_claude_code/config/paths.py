@@ -60,6 +60,7 @@ MODEL_OVERRIDES_FILENAME = "model_overrides.json"
 OTHER_SERVERS_FILENAME = "other-servers.json"
 LEARNED_FACTS_FILENAME = "learned_facts.json"
 MEDIA_REQUEST_FIELDS_FILENAME = "media_request_fields.json"
+MEDIA_OVERRIDES_FILENAME = "media_overrides.json"
 HARNESS_TIERS_FILENAME = "harness_tiers.json"
 PROXY_CHAINS_FILENAME = "proxy_chains.json"
 # 7.109.0: the marketplace selection profiles an override row names by name.
@@ -593,6 +594,19 @@ def media_request_fields_path() -> Path:
     """
 
     return config_dir_path() / MEDIA_REQUEST_FIELDS_FILENAME
+
+
+def media_overrides_path() -> Path:
+    """Return the operator's media routing and parameter overrides (8.61.0).
+
+    Its own document beside ``model_overrides.json`` and
+    ``media_request_fields.json``: ``media_request_fields.json`` is strictly
+    publish-only (never sent, never changes a route), whereas this store holds
+    live routing preferences (``preferred_surface``, ``surface``,
+    ``pin_surface``) and media parameter defaults/unsets.
+    """
+
+    return config_dir_path() / MEDIA_OVERRIDES_FILENAME
 
 
 def harness_tiers_path() -> Path:

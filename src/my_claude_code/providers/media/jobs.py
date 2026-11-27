@@ -26,11 +26,14 @@ import httpx
 from my_claude_code.application.media.request import MediaDownload, MediaResponse
 from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.config.media_surfaces import (
+    MEDIA_OPERATION_VIDEO_CONTENT,
     MEDIA_OPERATION_VIDEO_DELETE,
+    MEDIA_OPERATION_VIDEO_RETRIEVE,
     MediaSurface,
     job_path,
     media_url,
     surface_for,
+    surfaces_for,
 )
 from my_claude_code.core.failures import (
     ExecutionFailure,
@@ -75,7 +78,16 @@ class PinnedMediaClient:
     def leaf(self) -> MediaLeaf:
         return self._leaf
 
-    def _surface(self, operation: str) -> MediaSurface:
+    def _surface(
+        self, operation: str, *, job_dialect: str | None = None
+    ) -> MediaSurface:
+        if job_dialect:
+            for candidate in surfaces_for(self._leaf.surfaces, operation):
+                if (
+                    candidate.shape == job_dialect
+                    or candidate.surface_id == job_dialect
+                ):
+                    return candidate
         surface = surface_for(self._leaf.surfaces, operation)
         if surface is None:
             raise ExecutionFailure(
@@ -85,6 +97,25 @@ class PinnedMediaClient:
                 retryable=False,
             )
         return surface
+
+    def _job_auth_header(self, *, job_dialect: str | None = None) -> str | None:
+        """Auth header from the job's content/retrieve surface, if any."""
+
+        for operation in (
+            MEDIA_OPERATION_VIDEO_CONTENT,
+            MEDIA_OPERATION_VIDEO_RETRIEVE,
+        ):
+            candidates = surfaces_for(self._leaf.surfaces, operation)
+            if job_dialect:
+                for candidate in candidates:
+                    if (
+                        candidate.shape == job_dialect
+                        or candidate.surface_id == job_dialect
+                    ):
+                        return candidate.auth_header
+            if candidates:
+                return candidates[0].auth_header
+        return None
 
     def _target(
         self,
@@ -108,8 +139,9 @@ class PinnedMediaClient:
         model: str,
         request_id: str,
         query: Mapping[str, str] | None = None,
+        job_dialect: str | None = None,
     ) -> MediaResponse:
-        surface = self._surface(operation)
+        surface = self._surface(operation, job_dialect=job_dialect)
         url, params = self._target(surface, upstream_id, query)
         method = "DELETE" if operation == MEDIA_OPERATION_VIDEO_DELETE else "GET"
         async with self._leaf.rate_limiter.concurrency_slot():
@@ -121,6 +153,7 @@ class PinnedMediaClient:
                 params=params,
                 model=model,
                 request_id=request_id,
+                auth_header=surface.auth_header,
             )
         return MediaResponse(
             status_code=response.status_code,
@@ -142,15 +175,23 @@ class PinnedMediaClient:
         model: str,
         request_id: str,
         query: Mapping[str, str] | None = None,
+        job_dialect: str | None = None,
+        auth_header: str | None = None,
     ) -> MediaDownload:
+        effective_auth_header = auth_header
         if operation is not None:
-            target, params = self._target(self._surface(operation), upstream_id, query)
+            surface = self._surface(operation, job_dialect=job_dialect)
+            target, params = self._target(surface, upstream_id, query)
             auth = True
+            if effective_auth_header is None:
+                effective_auth_header = surface.auth_header
         elif url and urlsplit(url).scheme in {"https", "http"}:
             # A key goes only to the provider's own host: a URL the host
             # handed out elsewhere (a storage bucket, a CDN) is fetched bare.
             target, params = url, {}
             auth = same_host(url, self._leaf.config.base_url)
+            if auth and effective_auth_header is None:
+                effective_auth_header = self._job_auth_header(job_dialect=job_dialect)
         else:
             raise ExecutionFailure(
                 kind=FailureKind.UPSTREAM,
@@ -173,6 +214,7 @@ class PinnedMediaClient:
                 params=params,
                 model=model,
                 request_id=request_id,
+                auth_header=effective_auth_header,
             )
         except BaseException:
             await stack.aclose()
@@ -198,6 +240,7 @@ class PinnedMediaClient:
         params: Mapping[str, str],
         model: str,
         request_id: str,
+        auth_header: str | None = None,
     ) -> httpx.Response:
         """One call up the attempt's own retry ladder, classified the same way."""
         leaf = self._leaf
@@ -205,7 +248,13 @@ class PinnedMediaClient:
         limiter = leaf.rate_limiter
         try:
             response = await limiter.execute_with_retry(
-                leaf.request, method, url, auth=auth, stream=stream, params=params
+                leaf.request,
+                method,
+                url,
+                auth=auth,
+                stream=stream,
+                params=params,
+                auth_header=auth_header,
             )
         except Exception as error:
             failure = classify_provider_failure(
