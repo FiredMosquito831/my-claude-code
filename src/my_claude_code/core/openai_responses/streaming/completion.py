@@ -53,11 +53,17 @@ class ResponseBlockCompleter:
 
     def _complete_text_block(self, state: TextBlockState) -> list[str]:
         text = "".join(state.text_parts)
-        item = message_item(state.item_id, text, "completed")
+        annotations = state.annotations or None
+        item = message_item(state.item_id, text, "completed", annotations=annotations)
         self._ledger.commit_output(state.output_index, item)
         return [
             events.output_text_done(state.item_id, state.output_index, text),
-            events.content_part_done(state.item_id, state.output_index, text),
+            events.content_part_done(
+                state.item_id,
+                state.output_index,
+                text,
+                annotations=annotations,
+            ),
             events.output_item_done(state.output_index, item),
         ]
 

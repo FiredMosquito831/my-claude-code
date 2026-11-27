@@ -217,10 +217,44 @@ class ResponsesToolIdentity:
     namespace: str | None = None
 
 
+def _validate_responses_image_generation_tool(tool: dict[str, Any]) -> None:
+    """Validate optional fields on a Responses ``image_generation`` tool."""
+    for field_name in (
+        "output_format",
+        "size",
+        "quality",
+        "background",
+        "moderation",
+        "input_fidelity",
+        "model",
+        "action",
+    ):
+        value = tool.get(field_name)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ResponsesConversionError(
+                f"Invalid {field_name!r} on 'image_generation' tool: expected a non-empty string."
+            )
+    partial_images = tool.get("partial_images")
+    if partial_images is not None and (
+        not isinstance(partial_images, int)
+        or isinstance(partial_images, bool)
+        or partial_images < 0
+    ):
+        raise ResponsesConversionError(
+            "Invalid 'partial_images' on 'image_generation' tool: expected a non-negative integer."
+        )
+    mask = tool.get("input_image_mask")
+    if mask is not None and not isinstance(mask, dict):
+        raise ResponsesConversionError(
+            "Invalid 'input_image_mask' on 'image_generation' tool: expected an object."
+        )
+
+
 def convert_tools(
     value: Any,
     *,
     allow_web_search: bool = False,
+    allow_image_generation: bool = False,
 ) -> list[dict[str, Any]] | None:
     if value is None:
         return None
@@ -246,6 +280,9 @@ def convert_tools(
         if allow_web_search and tool_type in SUPPORTED_RESPONSES_WEB_SEARCH_TYPES:
             _validate_responses_web_search_tool(tool)
             continue
+        if allow_image_generation and tool_type == "image_generation":
+            _validate_responses_image_generation_tool(tool)
+            continue
         if tool_type in _UNSUPPORTED_PASSIVE_TOOL_TYPES:
             continue
         if tool_type != "function":
@@ -267,8 +304,13 @@ def convert_tool_choice(
     *,
     parallel_tool_calls: bool | None = None,
     allow_web_search: bool = False,
+    allow_image_generation: bool = False,
 ) -> dict[str, Any] | None:
-    choice = _base_tool_choice(value, allow_web_search=allow_web_search)
+    choice = _base_tool_choice(
+        value,
+        allow_web_search=allow_web_search,
+        allow_image_generation=allow_image_generation,
+    )
     if parallel_tool_calls is False and not tool_choice_forbids_tools(value):
         if choice is None:
             choice = {"type": "auto"}
@@ -280,6 +322,7 @@ def _base_tool_choice(
     value: Any,
     *,
     allow_web_search: bool = False,
+    allow_image_generation: bool = False,
 ) -> dict[str, Any] | None:
     if value is None or value == "auto":
         return None
@@ -329,6 +372,8 @@ def _base_tool_choice(
             return dict(value)
         if allow_web_search and choice_type in SUPPORTED_RESPONSES_WEB_SEARCH_TYPES:
             return {"type": "web_search"}
+        if allow_image_generation and choice_type == "image_generation":
+            return {"type": "image_generation"}
     raise ResponsesConversionError(f"Unsupported Responses tool_choice: {value!r}")
 
 

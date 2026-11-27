@@ -1009,3 +1009,67 @@ def test_web_search_tool_loop_clears_stale_envelope_tools_and_input() -> None:
     assert "__mcc_web_search" in tool_names
     assert sent["text"] == {"verbosity": "low"}
     assert sent["reasoning"]["summary"] == "concise"
+
+
+def test_passthrough_preserves_image_generation_call_and_built_in_tools() -> None:
+    from my_claude_code.providers.openai_responses.conversion import (
+        _sanitize_passthrough_input,
+        _sanitize_passthrough_tool,
+    )
+
+    raw_items = [
+        {
+            "type": "image_generation_call",
+            "id": "ig_1",
+            "role": "assistant",
+            "status": "completed",
+            "revised_prompt": "A fox in snow",
+            "result": "iVBORw0KGgo=",
+            "encrypted_content": "ig_opaque",
+        },
+        {
+            "type": "web_search_call",
+            "id": "ws_1",
+            "status": "completed",
+            "action": {"type": "search", "query": "foxes"},
+        },
+    ]
+    sanitized = _sanitize_passthrough_input(
+        raw_items,
+        tool_names=None,
+        origin=None,
+        plaintext_replay=False,
+        drop_reasoning_items=False,
+        history_counts={},
+    )
+    assert sanitized == raw_items
+
+    img_tool = {"type": "image_generation", "output_format": "png", "partial_images": 1}
+    ws_tool = {"type": "web_search", "external_web_access": True}
+    assert _sanitize_passthrough_tool(img_tool, tool_names=None) == img_tool
+    assert _sanitize_passthrough_tool(ws_tool, tool_names=None) == ws_tool
+
+    msg_req = _to_messages_request(
+        {
+            "model": "gpt-5.6-terra",
+            "instructions": "Base instructions.",
+            "input": [
+                {
+                    "type": "image_generation_call",
+                    "id": "ig_prev",
+                    "status": "completed",
+                    "revised_prompt": "A red lantern",
+                    "result": "iVBORw0KGgo=",
+                },
+                {"role": "user", "content": "Add snow"},
+            ],
+            "tools": [img_tool, ws_tool],
+        }
+    )
+    body = build_chatgpt_oauth_request_body(
+        msg_req,
+        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+    )
+    assert body["input"][0]["type"] == "image_generation_call"
+    assert body["input"][0]["result"] == "iVBORw0KGgo="
+    assert body["tools"] == [img_tool, ws_tool]
