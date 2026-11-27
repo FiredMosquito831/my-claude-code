@@ -54,17 +54,20 @@ from my_claude_code.config.media_overrides import current_media_overrides
 from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
     MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_OPERATION_VIDEO_EDIT,
+    MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+    MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
     MISTRAL_IMAGE_FILE_CONTENT_PATH,
     MediaSurface,
+    effective_surfaces_for,
     job_path,
     media_url,
     model_path,
-    surface_for,
     surface_key,
-    surfaces_for,
 )
 from my_claude_code.config.settings import (
     Settings,
@@ -75,6 +78,7 @@ from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
 from my_claude_code.core.gemini_native_media import (
     GeminiAnswerError,
+    parse_gemini_image_answer,
     speech_answer,
     transcript_answer,
 )
@@ -85,6 +89,10 @@ from my_claude_code.core.mistral_media import (
 )
 from my_claude_code.core.openai_images import inline_image_urls, url_only_images
 from my_claude_code.core.openai_videos import parse_job
+from my_claude_code.core.openrouter_media import (
+    OpenRouterAnswerError,
+    parse_openrouter_image_answer,
+)
 from my_claude_code.core.proxy_attribution import (
     DIRECT_PROXY_LABEL,
     record_proxy,
@@ -139,6 +147,9 @@ def same_host(url: str, base_url: str) -> bool:
 def _surface_serves(surface: MediaSurface, request: MediaRequest) -> bool:
     if request.stream and not surface.stream:
         return False
+    # Imagen :predict accepts text prompt only, not uploaded images.
+    if surface.shape == MEDIA_SHAPE_GEMINI_PREDICT_IMAGE and request.uploads:
+        return False
     # A file cannot be sent where the host documents JSON only, unless the
     # operation supports off-loop upload -> JSON data-URI encoding.
     if (
@@ -163,7 +174,7 @@ def surfaces_serve(surfaces: tuple[MediaSurface, ...], request: MediaRequest) ->
     that never builds a leaf (the masked refusal) answers it identically.
     """
 
-    candidates = surfaces_for(surfaces, request.operation)
+    candidates = effective_surfaces_for(surfaces, request.operation)
     if not candidates:
         return False
     return any(_surface_serves(surface, request) for surface in candidates)
@@ -271,7 +282,8 @@ class MediaLeaf:
             ladder = self._endpoint_ladder(model_ref, request.operation, self._surfaces)
             if ladder.winner is not None:
                 return ladder.winner.surface
-        return surface_for(self._surfaces, request.operation)
+        candidates = effective_surfaces_for(self._surfaces, request.operation)
+        return candidates[0] if candidates else None
 
     def supports(self, request: MediaRequest) -> bool:
         return surfaces_serve(self._surfaces, request)
@@ -439,7 +451,10 @@ class MediaLeaf:
                 and active_candidate.detail == "pinned"
             )
         else:
-            active_surface = surface_for(self._surfaces, attempt.request.operation)
+            candidates = effective_surfaces_for(
+                self._surfaces, attempt.request.operation
+            )
+            active_surface = candidates[0] if candidates else None
             surface_source = "provider_default"
             is_pinned = False
         if active_surface is None:  # pragma: no cover - the gate runs first
@@ -553,7 +568,10 @@ class MediaLeaf:
                         mark_rate_limited_enabled=not self._config.routes_around_model,
                     ) from error
 
-            if current_attempt.request.operation == MEDIA_OPERATION_VIDEO_CREATE:
+            if current_attempt.request.operation in (
+                MEDIA_OPERATION_VIDEO_CREATE,
+                MEDIA_OPERATION_VIDEO_EDIT,
+            ):
                 self._require_job_id(response)
             persist_media_recovery_facts(
                 provider_id=self._provider_id,
@@ -588,6 +606,15 @@ class MediaLeaf:
             ):
                 answer = await self._translated(
                     active_surface, current_attempt, answer, body
+                )
+            elif active_surface.shape in (
+                MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+                MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
+            ):
+                answer = await self._gemini_image_answer(active_surface, answer, body)
+            elif active_surface.shape == MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE:
+                answer = await self._openrouter_image_answer(
+                    current_attempt, answer, body
                 )
             elif active_surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
                 answer = await self._mistral_image_answer(
@@ -660,6 +687,71 @@ class MediaLeaf:
             media_surface_source=answer.media_surface_source,
         )
 
+    async def _gemini_image_answer(
+        self,
+        surface: MediaSurface,
+        answer: MediaResponse,
+        body: WireBody,
+    ) -> MediaResponse:
+        """A Gemini native ``:generateContent`` or ``:predict`` image answer as OpenAI JSON."""
+        try:
+            translated = await asyncio.to_thread(
+                parse_gemini_image_answer, answer.body, shape=surface.shape
+            )
+        except GeminiAnswerError as error:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=f"{self._provider_id} answered {error}",
+                retryable=False,
+            ) from error
+        return MediaResponse(
+            status_code=answer.status_code,
+            content_type=translated.content_type,
+            body=translated.body,
+            headers={**answer.headers, "content-type": translated.content_type},
+            usage=translated.usage,
+            text=translated.text,
+            not_forwarded=body.not_forwarded,
+            adaptations=answer.adaptations,
+            media_surface=answer.media_surface,
+            media_surface_source=answer.media_surface_source,
+        )
+
+    async def _openrouter_image_answer(
+        self,
+        attempt: MediaAttempt,
+        answer: MediaResponse,
+        body: WireBody,
+    ) -> MediaResponse:
+        """An OpenRouter Chat Completions image answer translated to OpenAI Images JSON."""
+        try:
+            translated = await asyncio.to_thread(
+                parse_openrouter_image_answer, answer.body
+            )
+        except OpenRouterAnswerError as error:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=f"{self._provider_id} answered {error}",
+                retryable=False,
+            ) from error
+        result = MediaResponse(
+            status_code=answer.status_code,
+            content_type=translated.content_type,
+            body=translated.body,
+            headers={**answer.headers, "content-type": translated.content_type},
+            usage=translated.usage,
+            text=translated.text,
+            not_forwarded=body.not_forwarded,
+            adaptations=answer.adaptations,
+            media_surface=answer.media_surface,
+            media_surface_source=answer.media_surface_source,
+        )
+        if attempt.request.inline_urls:
+            result = await self._inlined(result)
+        return result
+
     async def _mistral_image_answer(
         self,
         attempt: MediaAttempt,
@@ -729,6 +821,71 @@ class MediaLeaf:
             media_surface=answer.media_surface,
             media_surface_source=answer.media_surface_source,
         )
+
+    async def _gemini_image_answer(
+        self,
+        surface: MediaSurface,
+        answer: MediaResponse,
+        body: WireBody,
+    ) -> MediaResponse:
+        """A Gemini native ``:generateContent`` or ``:predict`` image answer as OpenAI JSON."""
+        try:
+            translated = await asyncio.to_thread(
+                parse_gemini_image_answer, answer.body, shape=surface.shape
+            )
+        except GeminiAnswerError as error:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=f"{self._provider_id} answered {error}",
+                retryable=False,
+            ) from error
+        return MediaResponse(
+            status_code=answer.status_code,
+            content_type=translated.content_type,
+            body=translated.body,
+            headers={**answer.headers, "content-type": translated.content_type},
+            usage=translated.usage,
+            text=translated.text,
+            not_forwarded=body.not_forwarded,
+            adaptations=answer.adaptations,
+            media_surface=answer.media_surface,
+            media_surface_source=answer.media_surface_source,
+        )
+
+    async def _openrouter_image_answer(
+        self,
+        attempt: MediaAttempt,
+        answer: MediaResponse,
+        body: WireBody,
+    ) -> MediaResponse:
+        """An OpenRouter Chat Completions image answer translated to OpenAI Images JSON."""
+        try:
+            translated = await asyncio.to_thread(
+                parse_openrouter_image_answer, answer.body
+            )
+        except OpenRouterAnswerError as error:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=f"{self._provider_id} answered {error}",
+                retryable=False,
+            ) from error
+        result = MediaResponse(
+            status_code=answer.status_code,
+            content_type=translated.content_type,
+            body=translated.body,
+            headers={**answer.headers, "content-type": translated.content_type},
+            usage=translated.usage,
+            text=translated.text,
+            not_forwarded=body.not_forwarded,
+            adaptations=answer.adaptations,
+            media_surface=answer.media_surface,
+            media_surface_source=answer.media_surface_source,
+        )
+        if attempt.request.inline_urls:
+            result = await self._inlined(result)
+        return result
 
     async def _file_bytes(self, url: str, *, request_id: str | None) -> bytes:
         """One file's bytes from the provider's OWN endpoint, classified.

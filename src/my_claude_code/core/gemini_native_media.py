@@ -26,8 +26,9 @@ import base64
 import binascii
 import io
 import json
+import time
 import wave
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,6 +63,8 @@ class GeminiMediaAnswer:
     usage: dict[str, Any] | None = None
     #: The length of raw PCM, which states none in a header; ``None`` otherwise.
     audio_seconds: float | None = None
+    #: Optional prose text emitted alongside image parts.
+    text: str | None = None
 
 
 # ----------------------------------------------------------------- requests
@@ -112,6 +115,79 @@ def transcribe_request(instruction: str, mime_type: str, audio: bytes) -> bytes:
         ]
     }
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
+
+
+def image_generate_request(
+    prompt: str,
+    *,
+    aspect_ratio: str | None = None,
+    image_size: str | None = None,
+    input_images: Sequence[tuple[str, bytes]] = (),
+) -> dict[str, Any]:
+    """The ``generateContent`` body for image generation or editing."""
+
+    parts: list[dict[str, Any]] = [{"text": prompt}]
+    for mime_type, raw_bytes in input_images:
+        parts.append(
+            {
+                "inlineData": {
+                    "mimeType": mime_type or "image/png",
+                    "data": base64.b64encode(raw_bytes).decode("ascii"),
+                }
+            }
+        )
+    generation: dict[str, Any] = {"responseModalities": ["IMAGE"]}
+    image_config: dict[str, str] = {}
+    if isinstance(aspect_ratio, str) and aspect_ratio.strip():
+        image_config["aspectRatio"] = aspect_ratio.strip()
+    if isinstance(image_size, str) and image_size.strip():
+        image_config["imageSize"] = image_size.strip()
+    if image_config:
+        generation["imageConfig"] = image_config
+    return {
+        "contents": [{"parts": parts}],
+        "generationConfig": generation,
+    }
+
+
+def image_predict_request(
+    prompt: str,
+    *,
+    n: int | None = None,
+    aspect_ratio: str | None = None,
+) -> dict[str, Any]:
+    """The Imagen ``:predict`` body."""
+
+    body: dict[str, Any] = {"instances": [{"prompt": prompt}]}
+    parameters: dict[str, Any] = {}
+    if n is not None and not isinstance(n, bool) and n > 0:
+        parameters["sampleCount"] = n
+    if isinstance(aspect_ratio, str) and aspect_ratio.strip():
+        parameters["aspectRatio"] = aspect_ratio.strip()
+    if parameters:
+        body["parameters"] = parameters
+    return body
+
+
+def veo_lro_request(
+    prompt: str,
+    *,
+    params: Mapping[str, Any] | None = None,
+    input_image: tuple[str, bytes] | None = None,
+) -> dict[str, Any]:
+    """The Veo ``:predictLongRunning`` body."""
+
+    instance: dict[str, Any] = {"prompt": prompt}
+    if input_image is not None:
+        mime_type, raw_bytes = input_image
+        instance["image"] = {
+            "bytesBase64Encoded": base64.b64encode(raw_bytes).decode("ascii"),
+            "mimeType": mime_type or "image/png",
+        }
+    body: dict[str, Any] = {"instances": [instance]}
+    if params:
+        body["parameters"] = dict(params)
+    return body
 
 
 # ------------------------------------------------------------------ answers
@@ -401,3 +477,109 @@ def transcript_answer(raw: bytes, named: str | None) -> GeminiMediaAnswer:
         content_type="application/json",
         usage=measured,
     )
+
+
+def _image_items_from_parts(parts: Sequence[Mapping[str, Any]]) -> list[str]:
+    images: list[str] = []
+    for part in parts:
+        if part.get("thought"):
+            continue
+        inline = _mapping(_pick(part, "inlineData", "inline_data"))
+        if inline is None:
+            continue
+        mime = _pick(inline, "mimeType", "mime_type")
+        if (
+            isinstance(mime, str)
+            and mime.strip()
+            and not mime.strip().lower().startswith("image/")
+        ):
+            continue
+        data = inline.get("data")
+        if not isinstance(data, str) or not data.strip():
+            continue
+        try:
+            decoded = base64.b64decode(data, validate=False)
+        except binascii.Error, ValueError:
+            continue
+        if decoded:
+            images.append(data.strip())
+    return images
+
+
+def generate_content_image_answer(
+    raw: bytes, *, created: int | None = None
+) -> GeminiMediaAnswer:
+    """Translate a Gemini ``:generateContent`` image response into OpenAI Images JSON."""
+
+    payload = _payload(raw)
+    parts = _parts(payload)
+    images = _image_items_from_parts(parts)
+    if not images:
+        raise GeminiAnswerError("without an image")
+    texts = [
+        part["text"]
+        for part in parts
+        if isinstance(part.get("text"), str) and not part.get("thought")
+    ]
+    out: dict[str, Any] = {
+        "created": created if created is not None else int(time.time()),
+        "data": [{"b64_json": item} for item in images],
+    }
+    usage = token_usage(payload)
+    if usage is not None:
+        out["usage"] = usage
+    return GeminiMediaAnswer(
+        body=json.dumps(out, separators=(",", ":")).encode("utf-8"),
+        content_type="application/json",
+        usage=measured_usage(payload),
+        text="".join(texts).strip() or None,
+    )
+
+
+def predict_image_answer(
+    raw: bytes, *, created: int | None = None
+) -> GeminiMediaAnswer:
+    """Translate an Imagen ``:predict`` response into OpenAI Images JSON."""
+
+    payload = _payload(raw)
+    predictions = payload.get("predictions")
+    if not isinstance(predictions, list):
+        raise GeminiAnswerError("without predictions")
+    items: list[dict[str, Any]] = []
+    for entry in predictions:
+        item = _mapping(entry)
+        if item is None:
+            continue
+        encoded = _pick(item, "bytesBase64Encoded", "bytes_base64_encoded", "b64_json")
+        if not isinstance(encoded, str) or not encoded.strip():
+            continue
+        try:
+            decoded = base64.b64decode(encoded, validate=False)
+        except binascii.Error, ValueError:
+            continue
+        if decoded:
+            items.append({"b64_json": encoded.strip()})
+    if not items:
+        raise GeminiAnswerError("without an image")
+    out: dict[str, Any] = {
+        "created": created if created is not None else int(time.time()),
+        "data": items,
+    }
+    usage = token_usage(payload)
+    if usage is not None:
+        out["usage"] = usage
+    return GeminiMediaAnswer(
+        body=json.dumps(out, separators=(",", ":")).encode("utf-8"),
+        content_type="application/json",
+        usage=measured_usage(payload),
+    )
+
+
+def parse_gemini_image_answer(
+    raw: bytes, *, shape: str, created: int | None = None
+) -> GeminiMediaAnswer:
+    """Dispatch Gemini native image answer parsing by ``shape``."""
+
+    if "predict" in shape.lower():
+        return predict_image_answer(raw, created=created)
+    return generate_content_image_answer(raw, created=created)

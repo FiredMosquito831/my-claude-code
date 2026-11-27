@@ -30,8 +30,8 @@ from my_claude_code.config.media_overrides import (
 )
 from my_claude_code.config.media_surfaces import (
     MediaSurface,
+    effective_surfaces_for,
     surface_key,
-    surfaces_for,
 )
 
 if TYPE_CHECKING:
@@ -283,7 +283,7 @@ def resolve_media_endpoint_ladder(
     explicitly pinned by the operator.
     """
 
-    pool = surfaces_for(surfaces, operation)
+    pool = effective_surfaces_for(surfaces, operation)
     if not pool:
         return ResolvedMediaEndpointLadder(
             model_ref=target_ref,

@@ -46,9 +46,11 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_CONTENT,
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_OPERATION_VIDEO_DELETE,
+    MEDIA_OPERATION_VIDEO_EDIT,
     MEDIA_OPERATION_VIDEO_RETRIEVE,
     MediaSurface,
     surface_for,
+    surfaces_for,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
@@ -100,7 +102,7 @@ from .media_routes import (
 from .ports import ApiServices
 from .request_ids import get_request_id
 from .response_streams import ManagedStreamingResponse, bind_response_lifetime
-from .wire_surfaces import VIDEOS_ENDPOINT
+from .wire_surfaces import VIDEOS_EDITS_ENDPOINT, VIDEOS_ENDPOINT
 
 router = APIRouter()
 
@@ -159,16 +161,30 @@ def _expired(
     )
 
 
-def _declared(provider_id: str, operation: str) -> MediaSurface | None:
-    """The surface ``provider_id`` declares for ``operation``, if any."""
+def _job_dialect(job: Mapping[str, Any]) -> str | None:
+    raw = job.get("job_dialect")
+    return raw if isinstance(raw, str) and raw else None
+
+
+def _declared(
+    provider_id: str, operation: str, *, job_dialect: str | None = None
+) -> MediaSurface | None:
+    """The surface ``provider_id`` declares for ``operation``, matching ``job_dialect`` when set."""
     descriptor = get_provider_registry().all_descriptors().get(provider_id)
     if descriptor is None:
+        return None
+    if job_dialect:
+        for candidate in surfaces_for(descriptor.media_surfaces, operation):
+            if candidate.shape == job_dialect or candidate.surface_id == job_dialect:
+                return candidate
         return None
     return surface_for(descriptor.media_surfaces, operation)
 
 
 def _content_surfaces(
     provider_id: str,
+    *,
+    job_dialect: str | None = None,
 ) -> tuple[MediaSurface | None, MediaSurface | None]:
     """``(declared content path, fallback path)`` for a provider's videos.
 
@@ -176,7 +192,9 @@ def _content_surfaces(
     file, asked first; the second (7.95.0, a custom provider's ``video``
     box) is asked only when the retrieve answer carries no URL.
     """
-    content = _declared(provider_id, MEDIA_OPERATION_VIDEO_CONTENT)
+    content = _declared(
+        provider_id, MEDIA_OPERATION_VIDEO_CONTENT, job_dialect=job_dialect
+    )
     if content is not None and content.only_without_url:
         return None, content
     return content, None
@@ -275,6 +293,8 @@ def _video_complete(
             usage_json=None if upstream.usage is None else json.dumps(upstream.usage),
             updated_at=now,
             completed_at=now if upstream.status == STATUS_COMPLETED else None,
+            job_dialect=first.media_surface,
+            operation=media_request.operation,
         )
         try:
             await asyncio.to_thread(store.insert_media_job, record)
@@ -305,17 +325,19 @@ async def probe_videos(_auth=Depends(require_proxy_auth)):
     return Response(status_code=204, headers={"Allow": "GET, POST, HEAD, OPTIONS"})
 
 
-@router.post(VIDEOS_ENDPOINT)
-async def create_video(
-    request: Request,
-    services: ApiServices = Depends(get_services),
-    _auth=Depends(require_proxy_auth),
-):
-    """Start a video job on the Video rail (OpenAI ``videos.create``).
+@router.api_route(VIDEOS_EDITS_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_videos_edits(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
 
-    Multipart -- what the OpenAI SDK always sends, with an optional
-    ``input_reference`` file -- or JSON.
-    """
+
+async def _submit_video(
+    request: Request,
+    services: ApiServices,
+    *,
+    operation: str,
+    endpoint: str,
+):
+    """Validate and dispatch a video create or edit job on the Video rail."""
     media = services.media
     if (
         media is not None
@@ -352,7 +374,7 @@ async def create_video(
         await cleanup()
         return _invalid("'prompt' is required and must be a string.")
     media_request = MediaRequest(
-        operation=MEDIA_OPERATION_VIDEO_CREATE,
+        operation=operation,
         rail=MediaRail.VIDEO,
         model=str(fields.get("model") or ""),
         body={key: value for key, value in fields.items() if key != "model"},
@@ -364,9 +386,43 @@ async def create_video(
         request,
         services,
         media_request,
-        endpoint=VIDEOS_ENDPOINT,
+        endpoint=endpoint,
         cleanup=cleanup,
         complete=None if media is None else _video_complete(media, media_request),
+    )
+
+
+@router.post(VIDEOS_ENDPOINT)
+async def create_video(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Start a video job on the Video rail (OpenAI ``videos.create``).
+
+    Multipart -- what the OpenAI SDK always sends, with an optional
+    ``input_reference`` file -- or JSON.
+    """
+    return await _submit_video(
+        request,
+        services,
+        operation=MEDIA_OPERATION_VIDEO_CREATE,
+        endpoint=VIDEOS_ENDPOINT,
+    )
+
+
+@router.post(VIDEOS_EDITS_ENDPOINT)
+async def edit_video(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Edit/extend a video on the Video rail (OpenAI ``videos.edits``)."""
+    return await _submit_video(
+        request,
+        services,
+        operation=MEDIA_OPERATION_VIDEO_EDIT,
+        endpoint=VIDEOS_EDITS_ENDPOINT,
     )
 
 
@@ -480,6 +536,7 @@ async def _poll(
         str(job["upstream_id"]),
         model=str(job["model"]),
         request_id=request_id,
+        job_dialect=_job_dialect(job),
     )
     upstream = await asyncio.to_thread(parse_job, answer.body)
     if upstream is None:
@@ -629,7 +686,15 @@ async def delete_video(
         if isinstance(loaded, JSONResponse):
             return loaded
         store, job = loaded
-        if _declared(str(job["provider"]), MEDIA_OPERATION_VIDEO_DELETE) is not None:
+        dialect = _job_dialect(job)
+        if (
+            _declared(
+                str(job["provider"]),
+                MEDIA_OPERATION_VIDEO_DELETE,
+                job_dialect=dialect,
+            )
+            is not None
+        ):
             client = _client_for(lease.settings, media, job)
             if isinstance(client, JSONResponse):
                 return client
@@ -639,6 +704,7 @@ async def delete_video(
                     str(job["upstream_id"]),
                     model=str(job["model"]),
                     request_id=get_request_id(request),
+                    job_dialect=dialect,
                 )
             except Exception as exc:
                 return _failure_response(exc)
@@ -723,7 +789,8 @@ async def _open_download(
     """
     video_id = str(job["job_id"])
     provider = str(job["provider"])
-    content, fallback = _content_surfaces(provider)
+    dialect = _job_dialect(job)
+    content, fallback = _content_surfaces(provider, job_dialect=dialect)
     upstream: UpstreamJob | None = None
     current: Mapping[str, Any] = job
     if content is None or job.get("status") != STATUS_COMPLETED:
@@ -756,6 +823,7 @@ async def _open_download(
                 model=str(job["model"]),
                 request_id=request_id,
                 query=query,
+                job_dialect=dialect,
             )
         except Exception as exc:
             failure = find_execution_failure(exc)
@@ -770,6 +838,7 @@ async def _open_download(
             model=str(job["model"]),
             request_id=request_id,
             query=query,
+            job_dialect=dialect,
         )
     except Exception as exc:
         failure = find_execution_failure(exc)
@@ -794,7 +863,7 @@ async def _content(
     store, job = loaded
     provider = str(job["provider"])
     # A fallback content path (7.95.0) declares no variant: like no path.
-    content, _fallback = _content_surfaces(provider)
+    content, _fallback = _content_surfaces(provider, job_dialect=_job_dialect(job))
     if variant != "video" and (content is None or "variant" not in content.query):
         return wire.error(
             400,

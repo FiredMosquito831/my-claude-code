@@ -27,26 +27,36 @@ from typing import Any
 from my_claude_code.application.media.request import MediaAttempt, MediaUpload
 from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
+    MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+    MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
+    MEDIA_SHAPE_GEMINI_VEO_LRO,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MEDIA_SHAPE_OPENAI_IMAGES,
     MEDIA_SHAPE_OPENAI_SPEECH,
     MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
     MEDIA_SHAPE_OPENAI_VIDEOS,
+    MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
     MISTRAL_IMAGE_TOOL_TYPE,
     MediaSurface,
 )
 from my_claude_code.core.gemini_native_media import (
+    image_generate_request,
+    image_predict_request,
     speech_request,
     transcribe_instruction,
     transcribe_request,
+    veo_lro_request,
 )
 from my_claude_code.core.mistral_media import image_tool_request
+from my_claude_code.core.openrouter_media import openrouter_chat_image_request
 
 from .multipart import MultipartBody
 from .translation import (
     data_uris_to_uploads,
+    extract_image_url,
     has_decodable_data_uris,
     translate_size_and_aspect,
     upload_to_data_uri,
@@ -64,6 +74,37 @@ _GEMINI_TRANSCRIBE_USED = frozenset({"language", "response_format", "stream"})
 #: to put them in, and MCC never translates one by guess -- each is named in
 #: ``not_forwarded`` (spec §4.2, the rule ``_GEMINI_TRANSCRIBE_USED`` follows).
 _MISTRAL_IMAGE_USED = frozenset({"prompt"})
+_OPENROUTER_IMAGE_USED = frozenset(
+    {"prompt", "size", "aspect_ratio", "image_size", "image_config", "images", "image"}
+)
+_GEMINI_IMAGE_USED = frozenset(
+    {"prompt", "size", "aspect_ratio", "image_size", "image_config", "images", "image"}
+)
+_GEMINI_PREDICT_USED = frozenset(
+    {"prompt", "n", "size", "aspect_ratio", "image_config"}
+)
+_GEMINI_VEO_USED = frozenset(
+    {
+        "prompt",
+        "seconds",
+        "size",
+        "aspect_ratio",
+        "resolution",
+        "negative_prompt",
+        "seed",
+        "input_reference",
+        "video",
+    }
+)
+_OFF_LOOP_SHAPES = frozenset(
+    {
+        MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+        MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
+        MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+        MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
+        MEDIA_SHAPE_GEMINI_VEO_LRO,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,13 +330,263 @@ def _mistral_image_body(attempt: MediaAttempt) -> WireBody:
     )
 
 
+def _prompt_text(attempt: MediaAttempt) -> str:
+    prompt = attempt.request.body.get("prompt")
+    if isinstance(prompt, str) and prompt.strip():
+        return prompt
+    if attempt.request.operation == MEDIA_OPERATION_IMAGE_VARIATION:
+        return "Create a variation of this image."
+    return ""
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        num = int(value.strip())
+        return num if num > 0 else None
+    return None
+
+
+def _read_upload_bytes(upload: MediaUpload) -> tuple[str, bytes]:
+    upload.file.seek(0)
+    data = upload.file.read()
+    upload.file.seek(0)
+    return (upload.content_type or "image/png"), data
+
+
+def _extract_input_images(attempt: MediaAttempt) -> list[tuple[str, bytes]]:
+    if attempt.request.uploads:
+        return [_read_upload_bytes(upload) for upload in attempt.request.uploads]
+    raw_images = attempt.request.body.get("images")
+    if isinstance(raw_images, list | tuple) and has_decodable_data_uris(
+        attempt.request.body
+    ):
+        decoded = data_uris_to_uploads(raw_images)
+        try:
+            return [_read_upload_bytes(upload) for upload in decoded]
+        finally:
+            for upload in decoded:
+                upload.file.close()
+    return []
+
+
+def _image_config_fields(body: dict[str, Any]) -> tuple[str | None, str | None]:
+    config = body.get("image_config")
+    cfg = config if isinstance(config, dict) else {}
+    aspect = (
+        body.get("aspect_ratio") or cfg.get("aspect_ratio") or cfg.get("aspectRatio")
+    )
+    img_size = body.get("image_size") or cfg.get("image_size") or cfg.get("imageSize")
+    return (
+        aspect.strip() if isinstance(aspect, str) and aspect.strip() else None,
+        img_size.strip() if isinstance(img_size, str) and img_size.strip() else None,
+    )
+
+
+def _openrouter_chat_image_body(
+    attempt: MediaAttempt, *, approximate_mapping: bool = False
+) -> WireBody:
+    raw_body = dict(attempt.request.body)
+    cfg_aspect, image_size = _image_config_fields(raw_body)
+    if cfg_aspect and "aspect_ratio" not in raw_body:
+        raw_body["aspect_ratio"] = cfg_aspect
+    translated, adaptations, size_nf = translate_size_and_aspect(
+        raw_body,
+        target_fields=("aspect_ratio", "resolution"),
+        approximate=approximate_mapping,
+    )
+    aspect_ratio = translated.get("aspect_ratio")
+    aspect_str = (
+        aspect_ratio.strip()
+        if isinstance(aspect_ratio, str) and aspect_ratio.strip()
+        else None
+    )
+    uris: list[str] = []
+    if attempt.request.uploads:
+        uris.extend(upload_to_data_uri(upload) for upload in attempt.request.uploads)
+    raw_images = attempt.request.body.get("images")
+    if isinstance(raw_images, list | tuple):
+        for entry in raw_images:
+            url = extract_image_url(entry)
+            if isinstance(url, str) and url.strip():
+                uris.append(url.strip())
+    single_image = attempt.request.body.get("image")
+    if not uris and single_image is not None:
+        url = extract_image_url(single_image)
+        if isinstance(url, str) and url.strip():
+            uris.append(url.strip())
+    notes = list(size_nf)
+    for name in attempt.request.body:
+        if name not in _OPENROUTER_IMAGE_USED and name not in notes:
+            notes.append(name)
+    payload = openrouter_chat_image_request(
+        _prompt_text(attempt),
+        attempt.resolved.provider_model,
+        image_data_uris=uris,
+        aspect_ratio=aspect_str,
+        image_size=image_size,
+    )
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=tuple(notes),
+        adaptations=adaptations,
+    )
+
+
+def _gemini_generate_content_image_body(
+    attempt: MediaAttempt, *, approximate_mapping: bool = False
+) -> WireBody:
+    raw_body = dict(attempt.request.body)
+    cfg_aspect, image_size = _image_config_fields(raw_body)
+    if cfg_aspect and "aspect_ratio" not in raw_body:
+        raw_body["aspect_ratio"] = cfg_aspect
+    translated, adaptations, size_nf = translate_size_and_aspect(
+        raw_body,
+        target_fields=("aspect_ratio",),
+        approximate=approximate_mapping,
+    )
+    aspect_ratio = translated.get("aspect_ratio")
+    aspect_str = (
+        aspect_ratio.strip()
+        if isinstance(aspect_ratio, str) and aspect_ratio.strip()
+        else None
+    )
+    input_images = _extract_input_images(attempt)
+    notes = list(size_nf)
+    for name in attempt.request.body:
+        if name not in _GEMINI_IMAGE_USED and name not in notes:
+            notes.append(name)
+    payload = image_generate_request(
+        _prompt_text(attempt),
+        aspect_ratio=aspect_str,
+        image_size=image_size,
+        input_images=input_images,
+    )
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=tuple(notes),
+        adaptations=adaptations,
+    )
+
+
+def _gemini_predict_image_body(
+    attempt: MediaAttempt, *, approximate_mapping: bool = False
+) -> WireBody:
+    raw_body = dict(attempt.request.body)
+    cfg_aspect, _image_size = _image_config_fields(raw_body)
+    if cfg_aspect and "aspect_ratio" not in raw_body:
+        raw_body["aspect_ratio"] = cfg_aspect
+    translated, adaptations, size_nf = translate_size_and_aspect(
+        raw_body,
+        target_fields=("aspect_ratio",),
+        approximate=approximate_mapping,
+    )
+    aspect_ratio = translated.get("aspect_ratio")
+    aspect_str = (
+        aspect_ratio.strip()
+        if isinstance(aspect_ratio, str) and aspect_ratio.strip()
+        else None
+    )
+    n = _positive_int(raw_body.get("n"))
+    notes = list(size_nf)
+    for name in attempt.request.body:
+        if name not in _GEMINI_PREDICT_USED and name not in notes:
+            notes.append(name)
+    payload = image_predict_request(
+        _prompt_text(attempt),
+        n=n,
+        aspect_ratio=aspect_str,
+    )
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=tuple(notes),
+        adaptations=adaptations,
+    )
+
+
+def _gemini_veo_lro_body(
+    attempt: MediaAttempt, *, approximate_mapping: bool = False
+) -> WireBody:
+    raw_body = dict(attempt.request.body)
+    translated, adaptations, size_nf = translate_size_and_aspect(
+        raw_body,
+        target_fields=("aspect_ratio", "resolution"),
+        approximate=approximate_mapping,
+    )
+    params: dict[str, Any] = {}
+    seconds_val = translated.get("seconds")
+    if seconds_val is not None and not isinstance(seconds_val, bool):
+        if isinstance(seconds_val, int | float):
+            params["durationSeconds"] = (
+                int(seconds_val)
+                if float(seconds_val).is_integer()
+                else float(seconds_val)
+            )
+        elif isinstance(seconds_val, str) and seconds_val.strip():
+            try:
+                num = float(seconds_val.strip())
+                params["durationSeconds"] = int(num) if num.is_integer() else num
+            except ValueError:
+                pass
+    aspect_ratio = translated.get("aspect_ratio")
+    if isinstance(aspect_ratio, str) and aspect_ratio.strip():
+        params["aspectRatio"] = aspect_ratio.strip()
+    resolution = translated.get("resolution")
+    if isinstance(resolution, str) and resolution.strip():
+        params["resolution"] = resolution.strip()
+    negative_prompt = translated.get("negative_prompt")
+    if isinstance(negative_prompt, str) and negative_prompt.strip():
+        params["negativePrompt"] = negative_prompt.strip()
+    seed = translated.get("seed")
+    if seed is not None and not isinstance(seed, bool):
+        if isinstance(seed, int):
+            params["seed"] = seed
+        elif isinstance(seed, str) and seed.strip().isdigit():
+            params["seed"] = int(seed.strip())
+
+    input_image: tuple[str, bytes] | None = None
+    if attempt.request.uploads:
+        input_image = _read_upload_bytes(attempt.request.uploads[0])
+    elif raw_body.get("input_reference") is not None:
+        ref = raw_body["input_reference"]
+        decoded = data_uris_to_uploads([ref])
+        try:
+            if decoded:
+                input_image = _read_upload_bytes(decoded[0])
+        finally:
+            for upload in decoded:
+                upload.file.close()
+
+    notes = list(size_nf)
+    for name in attempt.request.body:
+        if name not in _GEMINI_VEO_USED and name not in notes:
+            notes.append(name)
+    payload = veo_lro_request(
+        _prompt_text(attempt),
+        params=params or None,
+        input_image=input_image,
+    )
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=tuple(notes),
+        adaptations=adaptations,
+    )
+
+
 def _needs_off_loop_encoding(
     surface: MediaSurface,
     attempt: MediaAttempt,
     *,
     encoding_override: str | None = None,
 ) -> bool:
-    if surface.shape == MEDIA_SHAPE_GEMINI_TRANSCRIBE:
+    if surface.shape in _OFF_LOOP_SHAPES:
         return True
     effective_encoding = encoding_override or surface.encoding
     if effective_encoding == MEDIA_ENCODING_JSON and bool(attempt.request.uploads):
@@ -425,4 +716,18 @@ def build_request_body(
         return _gemini_transcribe_body(attempt)
     if surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
         return _mistral_image_body(attempt)
+    if surface.shape == MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE:
+        return _openrouter_chat_image_body(
+            attempt, approximate_mapping=approximate_mapping
+        )
+    if surface.shape == MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE:
+        return _gemini_generate_content_image_body(
+            attempt, approximate_mapping=approximate_mapping
+        )
+    if surface.shape == MEDIA_SHAPE_GEMINI_PREDICT_IMAGE:
+        return _gemini_predict_image_body(
+            attempt, approximate_mapping=approximate_mapping
+        )
+    if surface.shape == MEDIA_SHAPE_GEMINI_VEO_LRO:
+        return _gemini_veo_lro_body(attempt, approximate_mapping=approximate_mapping)
     raise ValueError(f"unknown media shape {surface.shape!r}")

@@ -49,10 +49,12 @@ GEMINI_FILES_PREFIX = "/v1beta/files"
 # every OpenAI SDK client reads.
 IMAGES_GENERATIONS_ENDPOINT = "/v1/images/generations"
 IMAGES_EDITS_ENDPOINT = "/v1/images/edits"
+IMAGES_VARIATIONS_ENDPOINT = "/v1/images/variations"
 AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
 AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
 AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 VIDEOS_ENDPOINT = "/v1/videos"
+VIDEOS_EDITS_ENDPOINT = "/v1/videos/edits"
 #: 7.98.0: every media rail model and the request fields each one takes, for
 #: a client (and O's MCP tools) to build a request from. A list, like
 #: ``/v1/models``, and answered the way ``/v1/models`` is; deliberately not a
@@ -72,10 +74,12 @@ _WIRE_API_BY_PATH: dict[str, WireApi] = {
     CHAT_COMPLETIONS_ENDPOINT: "chat_completions",
     IMAGES_GENERATIONS_ENDPOINT: "chat_completions",
     IMAGES_EDITS_ENDPOINT: "chat_completions",
+    IMAGES_VARIATIONS_ENDPOINT: "chat_completions",
     AUDIO_SPEECH_ENDPOINT: "chat_completions",
     AUDIO_TRANSCRIPTIONS_ENDPOINT: "chat_completions",
     AUDIO_TRANSLATIONS_ENDPOINT: "chat_completions",
     VIDEOS_ENDPOINT: "chat_completions",
+    VIDEOS_EDITS_ENDPOINT: "chat_completions",
     WEBSEARCH_ENDPOINT: "chat_completions",
     WEBFETCH_ENDPOINT: "chat_completions",
 }
@@ -131,10 +135,12 @@ _MEDIA_PATHS: frozenset[str] = frozenset(
     {
         IMAGES_GENERATIONS_ENDPOINT,
         IMAGES_EDITS_ENDPOINT,
+        IMAGES_VARIATIONS_ENDPOINT,
         AUDIO_SPEECH_ENDPOINT,
         AUDIO_TRANSCRIPTIONS_ENDPOINT,
         AUDIO_TRANSLATIONS_ENDPOINT,
         VIDEOS_ENDPOINT,
+        VIDEOS_EDITS_ENDPOINT,
     }
 )
 

@@ -24,6 +24,10 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.errors import UnknownProviderError
+from my_claude_code.application.media.capabilities import (
+    MediaCapabilityInputs,
+    resolve_media_capability_profile,
+)
 from my_claude_code.application.media.endpoint_ladder import (
     ResolvedMediaEndpointLadder,
     resolve_media_endpoint_ladder,
@@ -48,6 +52,7 @@ from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.providers.base import MaskedRefusalPlan, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
+from my_claude_code.providers.model_listing import cached_provider_model_info
 from my_claude_code.providers.proxy_keepalive import proxied_leg_keepalive
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.recovery import learned_fact_store
@@ -221,10 +226,23 @@ class MediaRegistry:
         operation: str,
         surfaces: tuple[MediaSurface, ...],
     ) -> ResolvedMediaEndpointLadder:
+        provider_id, sep, item_key = target_ref.strip().partition("/")
+        capability_profile = None
+        if sep and provider_id and item_key:
+            info = cached_provider_model_info(provider_id, item_key)
+            if info is not None:
+                capability_profile = resolve_media_capability_profile(
+                    target_ref,
+                    MediaCapabilityInputs(
+                        provider_info=info,
+                        surfaces=surfaces,
+                    ),
+                )
         return resolve_media_endpoint_ladder(
             target_ref,
             operation,
             surfaces=surfaces,
+            capability_profile=capability_profile,
             overrides=current_media_overrides(),
             learned_facts=learned_fact_store().all_facts(),
         )
