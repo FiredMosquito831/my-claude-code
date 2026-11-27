@@ -1431,6 +1431,44 @@
     el("newSessionDialog").close();
   });
 
+  function openHelpDialog() {
+    const dlg = el("rcHelpDialog");
+    if (!dlg) return;
+    if (typeof dlg.showModal === "function") {
+      if (!dlg.open) dlg.showModal();
+    } else {
+      dlg.setAttribute("open", "");
+    }
+  }
+
+  function closeHelpDialog() {
+    const dlg = el("rcHelpDialog");
+    if (!dlg) return;
+    if (typeof dlg.close === "function" && dlg.open) {
+      dlg.close();
+    } else {
+      dlg.removeAttribute("open");
+    }
+    const trigger = el("btnHelpOpen");
+    if (trigger) trigger.focus();
+  }
+
+  if (el("btnHelpOpen")) {
+    el("btnHelpOpen").addEventListener("click", openHelpDialog);
+  }
+  if (el("btnCloseHelp")) {
+    el("btnCloseHelp").addEventListener("click", closeHelpDialog);
+  }
+  if (el("rcHelpDialog")) {
+    el("rcHelpDialog").addEventListener("click", (e) => {
+      if (e.target === el("rcHelpDialog")) closeHelpDialog();
+    });
+    el("rcHelpDialog").addEventListener("cancel", (e) => {
+      e.preventDefault();
+      closeHelpDialog();
+    });
+  }
+
   el("newModeSelect").addEventListener("change", () => {
     el("yoloWarning").hidden = el("newModeSelect").value !== "yolo";
   });

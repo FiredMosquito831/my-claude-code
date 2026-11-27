@@ -15895,3 +15895,31 @@ def test_jsdom_remote_control_page(remote_control_ui: dict) -> None:
         "/admin/api/rc/pair-token",
         "/admin/api/rc/devices/dev_abc123/revoke",
     ]
+    tm = remote_control_ui["tunnelModal"]
+    assert [c["mode"] for c in tm["cardModes"]] == [
+        "local_loopback",
+        "tailscale_serve",
+        "tailscale_local",
+        "cloudflare",
+    ]
+    assert all(c["role"] == "button" and c["tabIndex"] == 0 for c in tm["cardModes"])
+    assert tm["openedOnClick"] is True
+    assert tm["tailscaleServeTitle"] == "Tailscale Serve"
+    assert tm["tailscaleServeBodyLen"] > 40
+    assert tm["hasLoopbackNote"] is True
+    assert tm["hasTailscaleSettingName"] is True
+    assert tm["dataKeysInModal"] == 0
+    assert tm["scrollLockedDuringOpen"] == "hidden"
+    assert tm["closeButtonFocused"] is True
+    assert tm["closedOnCloseBtn"] is True
+    assert tm["scrollUnlockedAfterClose"] == ""
+    assert tm["focusReturnedToServeCard"] is True
+    assert tm["openedOnEnter"] is True
+    assert tm["cloudflareTitle"] == "Cloudflare Tunnel"
+    assert tm["cloudflareDataKeys"] == 0
+    assert tm["closedOnEscape"] is True
+    assert tm["scrollUnlockedAfterEscape"] == ""
+    assert tm["modalStayedClosedOnControl"] is True
+    assert tm["tunnelPosts"] == [
+        {"path": "/admin/api/rc/tunnel/start", "body": {"mode": "tailscale_local"}}
+    ]

@@ -43218,6 +43218,7 @@ const DASHBOARD_DIALOG_IDS = [
   "exportModal",
   "reqDetailModal",
   "providerDetailModal",
+  "rcTunnelModal",
 ];
 
 /* Everything Tab may reach inside an open dialog, in document order.
@@ -43734,6 +43735,8 @@ const closeProviderDetail = () =>
   providerOverlayOpen ? closeProviderOverlay() : closeWebSearchOverlay();
 byId("providerDetailClose").addEventListener("click", closeProviderDetail);
 dialogKit({ modal: byId("providerDetailModal"), close: closeProviderDetail });
+byId("rcTunnelClose").addEventListener("click", closeRcTunnelOverlay);
+dialogKit({ modal: byId("rcTunnelModal"), close: closeRcTunnelOverlay });
 byId("reqRawExportToggle").addEventListener("click", toggleRawExportPanel);
 byId("reqRawExportDownload").addEventListener("click", () => {
   runRawRequestExport();
@@ -52211,7 +52214,302 @@ function makeRcPill(text, tone) {
   return pill;
 }
 
+let rcTunnelOverlayOpen = null;
+let lastRcStatusPayload = null;
+
+function readRcSettingSummary(key) {
+  const field = state.fields && state.fields.get(key);
+  if (!field) return "(not loaded)";
+  if (field.secret) return field.value ? "Configured (hidden)" : "(not set)";
+  const val = String(field.value ?? "").trim();
+  return val || (field.default ? `${field.default} (default)` : "(not set)");
+}
+
+function buildRcTunnelDescriptors(statusPayload) {
+  const tunnels = statusPayload?.tunnels || {};
+  const ts = tunnels.tailscale || {};
+  const cf = tunnels.cloudflare || {};
+  const configuredMode = tunnels.configured_mode || statusPayload?.tunnel_mode || "off";
+  const activeMode = tunnels.active_mode || statusPayload?.active_tunnel_mode || "off";
+
+  return [
+    {
+      modeKey: "local_loopback",
+      title: "Local Loopback",
+      rcTunnelModeValue: "off",
+      statusText: "Ready",
+      tone: "ok",
+      detailText: tunnels.local_url || "/rc",
+      actionLabel: null,
+      actionMode: null,
+      whatItDoes:
+        "Serves /rc only on this machine over loopback HTTP (127.0.0.1). Best for local testing, same-device browsers, or when you terminate TLS in your own reverse proxy.",
+      liveRows: [
+        ["Configured mode", `RC_TUNNEL_MODE=${configuredMode} (active: ${activeMode})`],
+        ["Status", "Ready on local loopback"],
+        ["Active URL", tunnels.local_url || "http://127.0.0.1:8082/rc"],
+        ["Notes / warnings", "None"],
+        ["/admin isolation", "Loopback-only (127.0.0.1); forwarding headers rejected"],
+      ],
+      relatedSettings: ["RC_TUNNEL_MODE", "HOST", "ANTHROPIC_AUTH_TOKEN"],
+    },
+    {
+      modeKey: "tailscale_serve",
+      title: "Tailscale Serve",
+      rcTunnelModeValue: "tailscale_serve",
+      statusText: ts.serve_active
+        ? "Active"
+        : ts.running
+          ? "Ready"
+          : ts.installed
+            ? "Idle"
+            : "Missing",
+      tone: ts.serve_active ? "ok" : ts.running ? "neutral" : "warn",
+      detailText:
+        ts.serve_url || ts.error || ts.bind_warning || "HTTPS serve over Tailscale MagicDNS",
+      actionLabel: "Start Tailscale Serve",
+      actionMode: "tailscale_serve",
+      whatItDoes:
+        "Recommended remote transport. Runs tailscale serve --bg to proxy only /rc over HTTPS (*.ts.net MagicDNS) inside your Tailnet, enabling PWA install and Web Push alerts without exposing /admin.",
+      liveRows: [
+        ["Configured mode", `RC_TUNNEL_MODE=${configuredMode} (active: ${activeMode})`],
+        [
+          "Tailscale CLI / daemon",
+          `${ts.installed ? "Installed" : "Not installed"} · ${ts.running ? "Running" : "Stopped"} · ${ts.serve_active ? "Serve active" : "Serve inactive"}`,
+        ],
+        ["Active HTTPS URL", ts.serve_url || "(not active yet)"],
+        ["Notes / warnings", ts.error || ts.bind_warning || "None"],
+        ["/admin isolation", "Loopback-only (127.0.0.1); forwarding headers rejected"],
+      ],
+      relatedSettings: ["RC_TUNNEL_MODE", "RC_TAILSCALE_BINARY", "RC_TAILSCALE_HOSTNAME"],
+    },
+    {
+      modeKey: "tailscale_local",
+      title: "Tailnet Direct",
+      rcTunnelModeValue: "tailscale_local",
+      statusText: ts.running ? "Ready" : ts.installed ? "Stopped" : "Missing",
+      tone: ts.running ? "neutral" : "warn",
+      detailText: ts.local_url || ts.bind_warning || "Direct tailnet IP access",
+      actionLabel: "Use Tailnet Direct",
+      actionMode: "tailscale_local",
+      whatItDoes:
+        "Connects directly to your Tailnet IP (100.x.y.z) over plain HTTP. Browsers restrict Service Workers and Web Push to HTTPS on non-loopback hosts, so Web Push stays unavailable here; external binding requires HOST=0.0.0.0 and ANTHROPIC_AUTH_TOKEN.",
+      liveRows: [
+        ["Configured mode", `RC_TUNNEL_MODE=${configuredMode} (active: ${activeMode})`],
+        [
+          "Tailscale CLI / daemon",
+          `${ts.installed ? "Installed" : "Not installed"} · ${ts.running ? "Running" : "Stopped"}`,
+        ],
+        ["Tailnet HTTP URL", ts.local_url || "(unavailable until Tailscale is running)"],
+        ["Notes / warnings", ts.bind_warning || ts.error || "None"],
+        ["/admin isolation", "Loopback-only (127.0.0.1); forwarding headers rejected"],
+      ],
+      relatedSettings: [
+        "RC_TUNNEL_MODE",
+        "RC_TAILSCALE_BINARY",
+        "RC_TAILSCALE_HOSTNAME",
+        "HOST",
+        "ANTHROPIC_AUTH_TOKEN",
+      ],
+    },
+    {
+      modeKey: "cloudflare",
+      title: "Cloudflare Tunnel",
+      rcTunnelModeValue: "cloudflare",
+      statusText: cf.running ? "Active" : cf.installed ? "Idle" : "Not installed",
+      tone: cf.running ? "ok" : "warn",
+      detailText:
+        cf.public_url || cf.error || cf.install_hint || "Expose only /rc via cloudflared",
+      actionLabel: "Start Cloudflare Tunnel",
+      actionMode: "cloudflare",
+      whatItDoes:
+        "Starts an outbound-only cloudflared HTTPS tunnel exposing only /rc (either an ephemeral trycloudflare.com quick tunnel or a persistent Zero Trust Named Tunnel via RC_CLOUDFLARE_TUNNEL_TOKEN and RC_CLOUDFLARE_PUBLIC_HOSTNAME). Requests to /admin stay blocked unless arriving directly from 127.0.0.1.",
+      liveRows: [
+        ["Configured mode", `RC_TUNNEL_MODE=${configuredMode} (active: ${activeMode})`],
+        [
+          "cloudflared / tunnel",
+          `${cf.installed ? "Installed" : "Not installed"} · ${cf.running ? `Running (${cf.mode || "quick"})` : "Stopped"}`,
+        ],
+        ["Public HTTPS URL", cf.public_url || "(not started)"],
+        ["Notes / warnings", cf.error || cf.install_hint || "None"],
+        ["/admin isolation", "Loopback-only (127.0.0.1); forwarding headers rejected"],
+      ],
+      relatedSettings: [
+        "RC_TUNNEL_MODE",
+        "RC_CLOUDFLARE_BINARY",
+        "RC_CLOUDFLARE_TUNNEL_TOKEN",
+        "RC_CLOUDFLARE_PUBLIC_HOSTNAME",
+      ],
+    },
+  ];
+}
+
+async function startRcTunnelMode(actionMode) {
+  try {
+    await api("/admin/api/rc/tunnel/start", {
+      method: "POST",
+      body: JSON.stringify({ mode: actionMode }),
+    });
+    await loadRemoteControlView();
+    showMessage(`Tunnel updated (${actionMode}).`, "ok");
+  } catch (err) {
+    showMessage(err.message, "error");
+  }
+}
+
+function buildRcTunnelOverlayBody(descriptor) {
+  const root = document.createElement("div");
+  root.className = "rc-tunnel-detail";
+
+  const whatSection = document.createElement("section");
+  whatSection.className = "rc-tunnel-detail-section";
+  const whatHeading = document.createElement("h4");
+  whatHeading.textContent = "What it does";
+  const whatBody = document.createElement("p");
+  whatBody.className = "field-description";
+  whatBody.textContent = descriptor.whatItDoes;
+  whatSection.append(whatHeading, whatBody);
+
+  const statusSection = document.createElement("section");
+  statusSection.className = "rc-tunnel-detail-section";
+  const statusHeading = document.createElement("h4");
+  statusHeading.textContent = "Live status";
+  const metaList = document.createElement("dl");
+  metaList.className = "rc-tunnel-detail-meta";
+  descriptor.liveRows.forEach(([label, value]) => {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    metaList.append(dt, dd);
+  });
+  statusSection.append(statusHeading, metaList);
+
+  const settingsSection = document.createElement("section");
+  settingsSection.className = "rc-tunnel-detail-section";
+  const settingsHeading = document.createElement("h4");
+  settingsHeading.textContent = "Related settings";
+  const settingsList = document.createElement("ul");
+  settingsList.className = "rc-tunnel-settings-list";
+  descriptor.relatedSettings.forEach((key) => {
+    const item = document.createElement("li");
+    item.className = "rc-tunnel-setting-row";
+    const keyEl = document.createElement("code");
+    keyEl.textContent = key;
+    const valEl = document.createElement("span");
+    valEl.textContent = readRcSettingSummary(key);
+    item.append(keyEl, valEl);
+    settingsList.appendChild(item);
+  });
+  const jumpRow = document.createElement("div");
+  jumpRow.className = "pv-detail-actions";
+  const editSettingsBtn = document.createElement("button");
+  editSettingsBtn.type = "button";
+  editSettingsBtn.className = "secondary-button";
+  editSettingsBtn.textContent = "Configure in Settings";
+  editSettingsBtn.addEventListener("click", () => {
+    closeRcTunnelOverlay();
+    const container = byId("remoteControlSections");
+    if (container) {
+      if (typeof container.scrollIntoView === "function") {
+        container.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      const firstInput = container.querySelector("input, select, textarea, button");
+      if (firstInput instanceof HTMLElement) firstInput.focus();
+    }
+  });
+  jumpRow.appendChild(editSettingsBtn);
+  settingsSection.append(settingsHeading, settingsList, jumpRow);
+
+  const actionsSection = document.createElement("section");
+  actionsSection.className = "rc-tunnel-detail-section";
+  const actionsHeading = document.createElement("h4");
+  actionsHeading.textContent = "Actions";
+  const actionsRow = document.createElement("div");
+  actionsRow.className = "pv-detail-actions";
+  if (descriptor.actionMode) {
+    const startBtn = document.createElement("button");
+    startBtn.type = "button";
+    startBtn.className = "primary-button";
+    startBtn.textContent = descriptor.actionLabel;
+    startBtn.addEventListener("click", () => {
+      startRcTunnelMode(descriptor.actionMode);
+    });
+    actionsRow.appendChild(startBtn);
+  }
+  const stopBtn = document.createElement("button");
+  stopBtn.type = "button";
+  stopBtn.className = "secondary-button";
+  stopBtn.textContent = "Stop tunnel";
+  stopBtn.addEventListener("click", async () => {
+    try {
+      await api("/admin/api/rc/tunnel/stop", { method: "POST" });
+      await loadRemoteControlView();
+      showMessage("Tunnel stopped.", "ok");
+    } catch (err) {
+      showMessage(err.message, "error");
+    }
+  });
+  const refreshBtn = document.createElement("button");
+  refreshBtn.type = "button";
+  refreshBtn.className = "secondary-button";
+  refreshBtn.textContent = "Refresh";
+  refreshBtn.addEventListener("click", () => {
+    loadRemoteControlView().catch((err) => showMessage(err.message, "error"));
+  });
+  actionsRow.append(stopBtn, refreshBtn);
+  actionsSection.append(actionsHeading, actionsRow);
+
+  root.append(whatSection, statusSection, settingsSection, actionsSection);
+  return root;
+}
+
+function openRcTunnelOverlay(descriptor, card) {
+  const modal = byId("rcTunnelModal");
+  const title = byId("rcTunnelTitle");
+  const subtitle = byId("rcTunnelSubtitle");
+  const body = byId("rcTunnelBody");
+  if (!modal || !title || !subtitle || !body) return;
+  if (!modal.hidden) {
+    modal.hidden = true;
+    unlockBackgroundScroll();
+  }
+  rcTunnelOverlayOpen = {
+    modeKey: descriptor.modeKey,
+    card,
+    returnFocus: card || document.activeElement,
+  };
+  title.textContent = descriptor.title;
+  subtitle.textContent = `${descriptor.statusText} · RC_TUNNEL_MODE=${descriptor.rcTunnelModeValue}`;
+  body.replaceChildren(buildRcTunnelOverlayBody(descriptor));
+  modal.hidden = false;
+  lockBackgroundScroll();
+  const closeBtn = byId("rcTunnelClose");
+  if (closeBtn) closeBtn.focus();
+}
+
+function closeRcTunnelOverlay() {
+  const modal = byId("rcTunnelModal");
+  const body = byId("rcTunnelBody");
+  if (!modal || modal.hidden) return;
+  const open = rcTunnelOverlayOpen;
+  rcTunnelOverlayOpen = null;
+  modal.hidden = true;
+  unlockBackgroundScroll();
+  if (body) body.replaceChildren();
+  const back = open && open.returnFocus;
+  const fallback = open
+    ? document.querySelector(
+        `.rc-tunnel-card[data-rc-tunnel-mode="${goToSelectorPart(open.modeKey)}"]`,
+      )
+    : null;
+  const target =
+    back instanceof HTMLElement && document.contains(back) ? back : fallback;
+  if (target instanceof HTMLElement) target.focus();
+}
+
 function renderRcStatus(statusPayload) {
+  lastRcStatusPayload = statusPayload;
   const summary = byId("rcStatusSummary");
   const cards = byId("rcTunnelCards");
   if (!summary || !cards) return;
@@ -52232,84 +52530,76 @@ function renderRcStatus(statusPayload) {
   );
 
   const tunnels = statusPayload.tunnels || {};
-  const ts = tunnels.tailscale || {};
-  const cf = tunnels.cloudflare || {};
+  const descriptors = buildRcTunnelDescriptors(statusPayload);
 
-  const buildTunnelCard = (title, statusText, tone, detailText, actionLabel, actionMode) => {
+  descriptors.forEach((descriptor) => {
     const card = document.createElement("div");
     card.className = "rc-tunnel-card";
+    card.dataset.rcTunnelMode = descriptor.modeKey;
+    makeCardAFace(card);
+    card.setAttribute("aria-label", `${descriptor.title} details`);
+
     const head = document.createElement("div");
     head.className = "rc-tunnel-card-head";
     const h4 = document.createElement("strong");
-    h4.textContent = title;
-    head.append(h4, makeRcPill(statusText, tone));
+    h4.textContent = descriptor.title;
+    head.append(h4, makeRcPill(descriptor.statusText, descriptor.tone));
     card.appendChild(head);
+
     const desc = document.createElement("p");
     desc.className = "field-description";
-    desc.textContent = detailText;
+    desc.textContent = descriptor.detailText;
     card.appendChild(desc);
-    if (actionMode) {
+
+    const footer = document.createElement("div");
+    footer.className = "rc-tunnel-card-actions";
+    if (descriptor.actionMode) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "secondary-button";
-      btn.textContent = actionLabel;
-      btn.addEventListener("click", async () => {
-        try {
-          await api("/admin/api/rc/tunnel/start", {
-            method: "POST",
-            body: JSON.stringify({ mode: actionMode }),
-          });
-          await loadRemoteControlView();
-          showMessage(`Tunnel updated (${actionMode}).`, "ok");
-        } catch (err) {
-          showMessage(err.message, "error");
-        }
+      btn.textContent = descriptor.actionLabel;
+      btn.addEventListener("click", () => {
+        startRcTunnelMode(descriptor.actionMode);
       });
-      card.appendChild(btn);
+      footer.appendChild(faceControl(btn));
     }
-    return card;
-  };
+    const hint = document.createElement("span");
+    hint.className = "rc-tunnel-card-hint";
+    hint.textContent = "Details";
+    footer.appendChild(hint);
+    card.appendChild(footer);
 
-  cards.appendChild(
-    buildTunnelCard(
-      "Local Loopback",
-      "Ready",
-      "ok",
-      tunnels.local_url || "/rc",
-      null,
-      null,
-    ),
-  );
-  cards.appendChild(
-    buildTunnelCard(
-      "Tailscale Serve",
-      ts.serve_active ? "Active" : ts.running ? "Ready" : ts.installed ? "Idle" : "Missing",
-      ts.serve_active ? "ok" : ts.running ? "neutral" : "warn",
-      ts.serve_url || ts.error || ts.bind_warning || "HTTPS serve over Tailscale MagicDNS",
-      "Start Tailscale Serve",
-      "tailscale_serve",
-    ),
-  );
-  cards.appendChild(
-    buildTunnelCard(
-      "Tailnet Direct",
-      ts.running ? "Ready" : ts.installed ? "Stopped" : "Missing",
-      ts.running ? "neutral" : "warn",
-      ts.local_url || ts.bind_warning || "Direct tailnet IP access",
-      "Use Tailnet Direct",
-      "tailscale_local",
-    ),
-  );
-  cards.appendChild(
-    buildTunnelCard(
-      "Cloudflare Tunnel",
-      cf.running ? "Active" : cf.installed ? "Idle" : "Not installed",
-      cf.running ? "ok" : "warn",
-      cf.public_url || cf.error || cf.install_hint || "Expose only /rc via cloudflared",
-      "Start Cloudflare Tunnel",
-      "cloudflare",
-    ),
-  );
+    card.addEventListener("click", (event) => {
+      if (pressIsOnACardControl(event)) return;
+      openRcTunnelOverlay(descriptor, card);
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.target !== card || !cardKeyOpens(event)) return;
+      event.preventDefault();
+      openRcTunnelOverlay(descriptor, card);
+    });
+
+    cards.appendChild(card);
+  });
+
+  if (rcTunnelOverlayOpen) {
+    const modal = byId("rcTunnelModal");
+    const updated = descriptors.find((d) => d.modeKey === rcTunnelOverlayOpen.modeKey);
+    const updatedCard = cards.querySelector(
+      `.rc-tunnel-card[data-rc-tunnel-mode="${goToSelectorPart(rcTunnelOverlayOpen.modeKey)}"]`,
+    );
+    if (modal && !modal.hidden && updated) {
+      rcTunnelOverlayOpen.card = updatedCard || rcTunnelOverlayOpen.card;
+      const titleEl = byId("rcTunnelTitle");
+      const subtitleEl = byId("rcTunnelSubtitle");
+      const bodyEl = byId("rcTunnelBody");
+      if (titleEl) titleEl.textContent = updated.title;
+      if (subtitleEl) {
+        subtitleEl.textContent = `${updated.statusText} · RC_TUNNEL_MODE=${updated.rcTunnelModeValue}`;
+      }
+      if (bodyEl) bodyEl.replaceChildren(buildRcTunnelOverlayBody(updated));
+    }
+  }
 
   const openLink = byId("rcOpenLocalLink");
   if (openLink && tunnels.local_url) {

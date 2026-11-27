@@ -710,6 +710,50 @@ body {
   gap: 8px;
 }
 
+.rc-help-dialog {
+  width: min(680px, 94vw);
+  max-height: 86vh;
+  overflow-y: auto;
+}
+
+.rc-help-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.rc-help-card {
+  border: 1px solid var(--rc-border);
+  border-radius: 12px;
+  background: #090e1a;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rc-help-card h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--rc-text);
+}
+
+.rc-help-card p,
+.rc-help-card li {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--rc-muted);
+}
+
+.rc-help-card ul {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .rc-mobile-only {
   display: none;
 }
