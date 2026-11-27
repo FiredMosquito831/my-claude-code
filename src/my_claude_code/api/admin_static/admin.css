@@ -12670,6 +12670,7 @@ audio.req-media-preview {
 }
 
 .media-endpoint-ladder,
+.media-overrides-form,
 .media-override-editor,
 .media-learned-facts {
   min-width: 0;
