@@ -22,6 +22,7 @@ from my_claude_code.application.media.schemas import (
     GEMINI_NATIVE_FORWARDED,
     MISTRAL_IMAGE_TOOL_FORWARDED,
     MISTRAL_OCR_FORWARDED,
+    NIM_RIVA_FORWARDED,
     STATE_NOT_FORWARDED,
     STATE_NOT_KNOWN,
     STATE_REFUSED_LEARNED,
@@ -43,9 +44,11 @@ from my_claude_code.config.media_request_fields import (
 from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+    MEDIA_SHAPE_GEMINI_TRANSLATE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MEDIA_SHAPE_MISTRAL_OCR,
+    MEDIA_SHAPE_NIM_RIVA_GRPC,
     MEDIA_SHAPE_VISION_OCR_CHAT,
     MediaSurface,
     custom_media_surfaces,
@@ -445,6 +448,12 @@ def test_gemini_native_forwarded_mirrors_the_adapter() -> None:
     assert GEMINI_NATIVE_FORWARDED[MEDIA_SHAPE_GEMINI_TRANSCRIBE] == (
         adapters._GEMINI_TRANSCRIBE_USED | {"file"}
     )
+    assert GEMINI_NATIVE_FORWARDED[MEDIA_SHAPE_GEMINI_TRANSLATE] == (
+        adapters._GEMINI_TRANSLATE_USED | {"file"}
+    )
+    assert NIM_RIVA_FORWARDED[MEDIA_SHAPE_NIM_RIVA_GRPC] == (
+        adapters._NIM_RIVA_USED | {"file"}
+    )
     assert GEMINI_NATIVE_FORWARDED[MEDIA_SHAPE_GEMINI_NATIVE_OCR] == (
         adapters._GEMINI_OCR_USED
     )
@@ -488,6 +497,7 @@ def test_the_two_mirror_tables_are_the_one_translated_set() -> None:
         **MISTRAL_IMAGE_TOOL_FORWARDED,
         **MISTRAL_OCR_FORWARDED,
         **VISION_OCR_CHAT_FORWARDED,
+        **NIM_RIVA_FORWARDED,
     }
     assert schemas.forwarded_fields(MEDIA_SHAPE_MISTRAL_IMAGE_TOOL) == frozenset(
         {"prompt"}

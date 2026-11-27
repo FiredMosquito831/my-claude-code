@@ -61,6 +61,9 @@ MEDIA_SHAPE_GEMINI_VEO_LRO = "gemini_veo_lro"
 MEDIA_SHAPE_MISTRAL_OCR = "mistral_ocr"
 MEDIA_SHAPE_GEMINI_NATIVE_OCR = "gemini_native_ocr"
 MEDIA_SHAPE_VISION_OCR_CHAT = "vision_ocr_chat_fallback"
+#: 8.65.0: NVIDIA NIM Riva gRPC offline ASR and Gemini native audio translation.
+MEDIA_SHAPE_NIM_RIVA_GRPC = "nim_riva_grpc"
+MEDIA_SHAPE_GEMINI_TRANSLATE = "gemini_translate"
 
 #: A surface whose host documents a JSON body only (``MediaSurface.encoding``).
 MEDIA_ENCODING_JSON = "json"
@@ -94,6 +97,8 @@ MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_MISTRAL_OCR,
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_VISION_OCR_CHAT,
+    MEDIA_SHAPE_NIM_RIVA_GRPC,
+    MEDIA_SHAPE_GEMINI_TRANSLATE,
 )
 
 #: The header Gemini's native API reads the key from (instead of Bearer).
@@ -154,6 +159,23 @@ GEMINI_TTS_VOICES: tuple[str, ...] = (
     "Sadachbia",
     "Sadaltager",
     "Sulafat",
+)
+
+#: OpenAI's documented prebuilt TTS voices for ``/v1/audio/speech``.
+OPENAI_TTS_VOICES: tuple[str, ...] = (
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "onyx",
+    "nova",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
 )
 
 #: 8.14.0: the built-in tool a Mistral image is asked for by. The VALUE is the
@@ -370,12 +392,13 @@ def speech_surface(
     *,
     formats: tuple[str, ...] | None = None,
     stream: bool = False,
+    voices: tuple[str, ...] | None = None,
 ) -> MediaSurface:
     """The OpenAI ``POST /audio/speech`` shape: the answer is the audio itself.
 
     ``stream`` (7.95.0) is whether the host documents ``stream_format:
-    "sse"``; no declaration sets it yet, and a streamed request on a rail
-    where nothing declares it is answered from a whole answer instead.
+    "sse"`` or chunked streaming; a streamed request on a rail where nothing
+    declares it is answered from a whole answer instead.
     """
 
     return MediaSurface(
@@ -384,6 +407,7 @@ def speech_surface(
         path=path,
         stream=stream,
         formats=formats,
+        voices=voices,
     )
 
 
@@ -437,6 +461,29 @@ def gemini_transcription_surface() -> MediaSurface:
         path=GEMINI_GENERATE_CONTENT_PATH,
         formats=("json", "text"),
         auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
+def gemini_translation_surface() -> MediaSurface:
+    """Gemini's native audio translation: audio inline in ``generateContent``, English text out."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_TRANSLATE,
+        shape=MEDIA_SHAPE_GEMINI_TRANSLATE,
+        path=GEMINI_GENERATE_CONTENT_PATH,
+        formats=("json", "text"),
+        auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
+def nim_riva_asr_surface() -> MediaSurface:
+    """NVIDIA NIM's Riva gRPC offline ASR surface on ``grpc.nvcf.nvidia.com:443``."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_TRANSCRIBE,
+        shape=MEDIA_SHAPE_NIM_RIVA_GRPC,
+        path="grpc.nvcf.nvidia.com:443",
+        formats=("json", "text"),
     )
 
 

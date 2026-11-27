@@ -25,12 +25,16 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
+    MEDIA_SHAPE_GEMINI_TRANSLATE,
     surface_for,
 )
 from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from my_claude_code.config.settings import Settings
 from my_claude_code.core import gemini_native_media, request_log
-from my_claude_code.core.gemini_native_media import TRANSCRIBE_INSTRUCTION
+from my_claude_code.core.gemini_native_media import (
+    TRANSCRIBE_INSTRUCTION,
+    TRANSLATE_INSTRUCTION,
+)
 from my_claude_code.providers.media import adapters, leaf
 from my_claude_code.providers.media.registry import MediaRegistry
 from tests.api.support import attempts_as_read, create_test_app, requests_as_read
@@ -468,24 +472,32 @@ def test_transcribe_answer_without_text_falls_back(monkeypatch, tmp_path) -> Non
     assert upstream.hosts() == [GOOGLE, TOGETHER]
 
 
-def test_translation_is_not_declared_for_gemini(monkeypatch, tmp_path) -> None:
+def test_translation_is_declared_for_gemini(monkeypatch, tmp_path) -> None:
     surfaces = PROVIDER_CATALOG["gemini"].media_surfaces
-    assert surface_for(surfaces, MEDIA_OPERATION_TRANSLATE) is None
+    translate = surface_for(surfaces, MEDIA_OPERATION_TRANSLATE)
     speech = surface_for(surfaces, MEDIA_OPERATION_SPEECH)
     transcribe = surface_for(surfaces, MEDIA_OPERATION_TRANSCRIBE)
+    assert translate is not None
+    assert translate.shape == MEDIA_SHAPE_GEMINI_TRANSLATE
+    assert translate.formats == ("json", "text")
     assert speech is not None and speech.voices == GEMINI_TTS_VOICES
     assert len(GEMINI_TTS_VOICES) == 30
     assert transcribe is not None and transcribe.formats == ("json", "text")
     settings = _settings(monkeypatch, tmp_path)
-    upstream = Upstream({})
+    upstream = Upstream({GOOGLE: [_text("hello in english")]})
     with _client(settings, upstream) as client:
         response = client.post(
             "/v1/audio/translations",
             files={"file": ("clip.wav", UPLOAD, "audio/wav")},
             data={"model": "whisper-1"},
         )
-    assert response.status_code == 400
-    assert upstream.seen == []
+    assert response.status_code == 200, response.text
+    assert response.json()["text"] == "hello in english"
+    sent = json.loads(upstream.seen[0].content)
+    parts = sent["contents"][0]["parts"]
+    assert parts[0] == {"text": TRANSLATE_INSTRUCTION}
+    assert parts[1]["inlineData"]["data"] == _b64(UPLOAD)
+    assert upstream.seen[0].headers["x-goog-api-key"] == GEMINI_KEY
 
 
 # ------------------------------------------------------ Gemini-shaped client

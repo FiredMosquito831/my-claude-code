@@ -28,6 +28,7 @@ no limit) refuses a larger file with 413 before any provider is asked.
 
 import asyncio
 import dataclasses
+import functools
 import hashlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
@@ -41,6 +42,10 @@ from starlette.datastructures import FormData, UploadFile
 
 from my_claude_code.application.errors import ApplicationError
 from my_claude_code.application.execution import route_execution_policy
+from my_claude_code.application.media.capabilities import (
+    MediaCapabilityInputs,
+    resolve_media_capability_profile,
+)
 from my_claude_code.application.media.executor import (
     MediaExecutor,
     media_route_health_registry,
@@ -49,7 +54,11 @@ from my_claude_code.application.media.ports import (
     MediaProviderResolver,
     MediaRuntimePort,
 )
-from my_claude_code.application.media.rails import MediaRouter, chat_probe_candidates
+from my_claude_code.application.media.rails import (
+    MediaRouter,
+    chat_probe_candidates,
+    rail_refs,
+)
 from my_claude_code.application.media.request import (
     MediaChunk,
     MediaPlan,
@@ -58,9 +67,11 @@ from my_claude_code.application.media.request import (
     MediaResponse,
     MediaUpload,
 )
+from my_claude_code.application.model_metadata import ProviderModelInfo
 from my_claude_code.application.ports import RequestRuntimeLease
 from my_claude_code.config.mcp_media import MCP_MEDIA_INLINE_IMAGES_HEADER
 from my_claude_code.config.media_surfaces import (
+    GEMINI_TTS_VOICES,
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_VARIATION,
@@ -68,8 +79,10 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
+    OPENAI_TTS_VOICES,
     effective_surfaces_for,
 )
+from my_claude_code.config.model_refs import parse_model_name, parse_provider_type
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
 from my_claude_code.core.diagnostics import safe_exception_message
@@ -100,7 +113,12 @@ from my_claude_code.core.openai_transcriptions import (
     wav_file_seconds,
 )
 
-from .dependencies import get_services, require_proxy_auth, resolve_provider
+from .dependencies import (
+    get_services,
+    get_settings,
+    require_proxy_auth,
+    resolve_provider,
+)
 from .media_answer_fetch import inline_url_pictures
 from .media_capture import (
     MEDIA_PROTOCOL_OPENAI,
@@ -114,6 +132,7 @@ from .wire_surfaces import (
     AUDIO_SPEECH_ENDPOINT,
     AUDIO_TRANSCRIPTIONS_ENDPOINT,
     AUDIO_TRANSLATIONS_ENDPOINT,
+    AUDIO_VOICES_ENDPOINT,
     IMAGES_EDITS_ENDPOINT,
     IMAGES_GENERATIONS_ENDPOINT,
     IMAGES_VARIATIONS_ENDPOINT,
@@ -423,11 +442,23 @@ async def _serve(
             )
         finally:
             await cleanup()
+    first_content_type = (
+        first.content_type if isinstance(first, MediaResponse) else None
+    )
+    stream_media_type = (
+        first_content_type
+        if first_content_type and media_request.operation == MEDIA_OPERATION_SPEECH
+        else "text/event-stream"
+    )
     response = ManagedStreamingResponse(
         _stream_body(
-            first, stream, capture, cleanup, _stream_parser_for(media_request)
+            first,
+            stream,
+            capture,
+            cleanup,
+            _stream_parser_for(media_request, content_type=first_content_type),
         ),
-        media_type="text/event-stream",
+        media_type=stream_media_type,
     )
     bound = await bind_response_lifetime(response, lease.release)
     assert isinstance(bound, Response)
@@ -767,15 +798,118 @@ def _parser_for(media_request: MediaRequest) -> Callable[[MediaResponse], MediaO
     return _parse_images
 
 
-def _stream_parser_for(media_request: MediaRequest) -> Callable[[bytes], MediaOutputs]:
+def _stream_parser_for(
+    media_request: MediaRequest, *, content_type: str | None = None
+) -> Callable[[bytes], MediaOutputs]:
     if media_request.operation in (
         MEDIA_OPERATION_TRANSCRIBE,
         MEDIA_OPERATION_TRANSLATE,
     ):
         return parse_transcription_stream
     if media_request.operation == MEDIA_OPERATION_SPEECH:
+        base_type = (content_type or "").split(";")[0].strip().lower()
+        if base_type and base_type != "text/event-stream":
+            return functools.partial(parse_speech_response, content_type=content_type)
         return parse_speech_stream
     return parse_images_stream
+
+
+def _collect_audio_voices(
+    settings: Settings,
+    cached_infos: Mapping[str, ProviderModelInfo],
+    learned_by_model: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    provider_filter: str | None = None,
+    model_filter: str | None = None,
+) -> dict[str, Any]:
+    descriptors = get_provider_registry().all_descriptors()
+    refs = list(dict.fromkeys(rail_refs(settings, MediaRail.TTS)))
+    wanted_provider = (provider_filter or "").strip().casefold()
+    wanted_model = (model_filter or "").strip()
+
+    voices: list[dict[str, Any]] = []
+    by_model: dict[str, list[dict[str, Any]]] = {}
+
+    for ref in refs:
+        provider_id = parse_provider_type(ref)
+        model_id = parse_model_name(ref)
+        if wanted_provider and provider_id.casefold() != wanted_provider:
+            continue
+        if wanted_model and ref != wanted_model and model_id != wanted_model:
+            continue
+
+        descriptor = descriptors.get(provider_id)
+        surfaces = () if descriptor is None else descriptor.media_surfaces
+        profile = resolve_media_capability_profile(
+            ref,
+            MediaCapabilityInputs(
+                provider_info=cached_infos.get(ref),
+                surfaces=surfaces,
+                learned_facts=learned_by_model.get(ref, ()),
+            ),
+        )
+        voice_names: tuple[str, ...] = ()
+        source = ""
+        if profile.accepted_voices:
+            voice_names = profile.accepted_voices
+            prov = profile.field_provenance.get("accepted_voices")
+            source = prov[0] if prov else "provider_default"
+        else:
+            speech_surfaces = effective_surfaces_for(surfaces, MEDIA_OPERATION_SPEECH)
+            surface_voices = [
+                voice
+                for surface in speech_surfaces
+                if surface.voices
+                for voice in surface.voices
+            ]
+            if surface_voices:
+                voice_names = tuple(dict.fromkeys(surface_voices))
+                source = "provider_declared"
+            elif provider_id == "gemini":
+                voice_names = GEMINI_TTS_VOICES
+                source = "catalog"
+            elif provider_id == "openai":
+                voice_names = OPENAI_TTS_VOICES
+                source = "catalog"
+
+        model_entries: list[dict[str, Any]] = []
+        for voice_id in voice_names:
+            entry = {
+                "id": voice_id,
+                "name": voice_id,
+                "provider": provider_id,
+                "model_ref": ref,
+                "source": source,
+            }
+            voices.append(entry)
+            model_entries.append(entry)
+        by_model[ref] = model_entries
+
+    return {"object": "list", "voices": voices, "by_model": by_model}
+
+
+@router.get(AUDIO_VOICES_ENDPOINT)
+async def list_audio_voices(
+    provider: str | None = None,
+    model: str | None = None,
+    services: ApiServices = Depends(get_services),
+    settings: Settings = Depends(get_settings),
+    _auth=Depends(require_proxy_auth),
+):
+    """List available TTS voices across configured ``MODEL_TTS`` / fallback models."""
+
+    learned = services.admin.learned_facts_by_model()
+    cached_infos = {
+        info.model_id: info for info in services.requests.cached_prefixed_model_infos()
+    }
+    return await asyncio.to_thread(
+        _collect_audio_voices,
+        settings,
+        cached_infos,
+        learned,
+        provider_filter=provider,
+        model_filter=model,
+    )
 
 
 @router.post(AUDIO_SPEECH_ENDPOINT)
@@ -787,9 +921,9 @@ async def create_speech(
     """Synthesize speech through the Speech rail (OpenAI ``audio.speech``).
 
     The answer is the audio itself, returned with the host's own Content-Type.
-    ``stream_format: "sse"`` is routed only to a surface that declares it;
-    on a rail where none does it is served whole and answered as one
-    ``speech.audio.delta`` and ``speech.audio.done`` (7.95.0).
+    ``stream_format: "sse"`` or ``stream: true`` is routed to a surface that
+    declares streaming; on a rail where none does it is served whole and
+    answered as one ``speech.audio.delta`` and ``speech.audio.done`` (7.95.0).
     """
     payload = await _read_json_object(request)
     if payload is None:
@@ -802,7 +936,7 @@ async def create_speech(
         rail=MediaRail.TTS,
         model=str(payload.get("model") or ""),
         body={key: value for key, value in payload.items() if key != "model"},
-        stream=payload.get("stream_format") == "sse",
+        stream=payload.get("stream_format") == "sse" or payload.get("stream") is True,
     )
     return await _serve(
         request, services, media_request, endpoint=AUDIO_SPEECH_ENDPOINT
@@ -987,7 +1121,7 @@ _STREAM_FIELDS: dict[str, tuple[str, ...]] = {
     MEDIA_OPERATION_IMAGE_GENERATE: ("stream", "partial_images"),
     MEDIA_OPERATION_IMAGE_EDIT: ("stream", "partial_images"),
     MEDIA_OPERATION_IMAGE_VARIATION: ("stream", "partial_images"),
-    MEDIA_OPERATION_SPEECH: ("stream_format",),
+    MEDIA_OPERATION_SPEECH: ("stream_format", "stream"),
 }
 
 
@@ -1146,6 +1280,7 @@ async def _stream_body(
     seen = bytearray()
     status = "success"
     error: BaseException | None = None
+    first_response = first if isinstance(first, MediaResponse) else None
     try:
         data = first.body if isinstance(first, MediaResponse) else first
         seen.extend(data)
@@ -1164,7 +1299,15 @@ async def _stream_body(
         if status == "success" and b"event: error" in seen:
             status = "error"
         finishing = asyncio.ensure_future(
-            _finish_stream(capture, status, error, bytes(seen), cleanup, parse_stream)
+            _finish_stream(
+                capture,
+                status,
+                error,
+                bytes(seen),
+                cleanup,
+                parse_stream,
+                first_response=first_response,
+            )
         )
     try:
         await asyncio.shield(finishing)
@@ -1182,9 +1325,13 @@ async def _finish_stream(
     seen: bytes,
     cleanup: Cleanup,
     parse_stream: Callable[[bytes], MediaOutputs],
+    *,
+    first_response: MediaResponse | None = None,
 ) -> None:
     try:
         outputs = await asyncio.to_thread(parse_stream, seen)
+        if first_response is not None:
+            outputs = _with_leaf_measures(outputs, first_response)
         if status == "success":
             await capture.finish("success", outputs=outputs)
         elif status == "cancelled":
@@ -1213,6 +1360,11 @@ async def probe_audio_translations(_auth=Depends(require_proxy_auth)):
 @router.api_route(AUDIO_SPEECH_ENDPOINT, methods=["HEAD", "OPTIONS"])
 async def probe_audio_speech(_auth=Depends(require_proxy_auth)):
     return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
+
+
+@router.api_route(AUDIO_VOICES_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_audio_voices(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "GET, HEAD, OPTIONS"})
 
 
 @router.api_route(IMAGES_EDITS_ENDPOINT, methods=["HEAD", "OPTIONS"])

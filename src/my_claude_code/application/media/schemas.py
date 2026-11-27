@@ -89,9 +89,11 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_EDIT,
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+    MEDIA_SHAPE_GEMINI_TRANSLATE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MEDIA_SHAPE_MISTRAL_OCR,
+    MEDIA_SHAPE_NIM_RIVA_GRPC,
     MEDIA_SHAPE_VISION_OCR_CHAT,
     MediaSurface,
     surface_for,
@@ -360,8 +362,16 @@ GEMINI_NATIVE_FORWARDED: Mapping[str, frozenset[str]] = {
     MEDIA_SHAPE_GEMINI_TRANSCRIBE: frozenset(
         {"language", "response_format", "stream", "file"}
     ),
+    MEDIA_SHAPE_GEMINI_TRANSLATE: frozenset({"response_format", "file"}),
     MEDIA_SHAPE_GEMINI_NATIVE_OCR: frozenset(
         {"file", "document", "document_url", "image_url", "prompt", "output_format"}
+    ),
+}
+
+#: 8.65.0: NVIDIA NIM Riva gRPC ASR fields forwarded by MCC.
+NIM_RIVA_FORWARDED: Mapping[str, frozenset[str]] = {
+    MEDIA_SHAPE_NIM_RIVA_GRPC: frozenset(
+        {"language", "response_format", "stream", "file"}
     ),
 }
 
@@ -403,6 +413,7 @@ TRANSLATED_SHAPES: Mapping[str, frozenset[str]] = {
     **MISTRAL_IMAGE_TOOL_FORWARDED,
     **MISTRAL_OCR_FORWARDED,
     **VISION_OCR_CHAT_FORWARDED,
+    **NIM_RIVA_FORWARDED,
 }
 
 
