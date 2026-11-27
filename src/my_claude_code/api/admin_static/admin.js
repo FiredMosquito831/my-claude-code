@@ -12001,7 +12001,7 @@ function gsWebSearchServices(snap) {
           ? "oauth"
           : credential || option.value === "deepseek"
             ? "api_key"
-            : "keyless");
+            : "no_key");
       if (authKind === "oauth") {
         const oauth = webSearchOAuthState(
           option.value,
@@ -24855,7 +24855,7 @@ function webSearchProviders() {
           ? "oauth"
           : credential || item.value === "deepseek"
             ? "api_key"
-            : "keyless");
+            : "no_key");
       const inferenceFallback =
         item.value === "deepseek" &&
         state.fields.get("DEEPSEEK_SEARCH_USE_INFERENCE_KEY")?.value === "true" &&
