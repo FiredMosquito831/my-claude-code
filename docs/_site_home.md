@@ -70,10 +70,18 @@ provenance, and a full request log — in front of every provider below.
 
     ---
 
-    Sixteen `mcc-*` launchers, plus the recipe for any OpenAI-, Anthropic- or Gemini-shaped client
+    Eighteen `mcc-*` launchers across 18 agent harnesses, plus the recipe for any OpenAI-, Anthropic- or Gemini-shaped client
     that is not one of them.
 
     [Clients →](CLIENTS.md)
+
+-   **Drive agents remotely**
+
+    ---
+
+    Pair a phone or remote browser to `/rc` over Tailscale Serve, Tailnet Direct or Cloudflare Tunnel while `/admin` stays loopback-only.
+
+    [Remote Control →](REMOTE-CONTROL.md)
 
 -   **Route your models**
 
@@ -107,7 +115,7 @@ provenance, and a full request log — in front of every provider below.
 ## Install
 
 Pick one. Every route ends at the same server, the same dashboard and the same configuration
-directory, and installs `mcc-server` plus the 16 `mcc-*` agent launchers on your `PATH`.
+directory, and installs `mcc-server` plus the 18 `mcc-*` agent launchers on your `PATH`.
 
 === "Windows"
 
@@ -173,7 +181,7 @@ Every platform, every flag, and what the installer cannot do: [Usage Guide → I
 *The request log: every call, with the key and the model that answered it.*{ .caption }
 
 ![A Coding agents page listing Claude Code, Codex CLI and Pi as Installed, each with its mcc-* launcher command and copyable argument variants](../assets/admin-coding-agents.png)
-*Coding agents: sixteen launchers, each pointed at the same server.*{ .caption }
+*Coding agents: eighteen launchers across 18 agent harnesses, each pointed at the same server.*{ .caption }
 
 </div>
 

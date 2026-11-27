@@ -8,9 +8,10 @@ The [README](../README.md) is the map: what My Claude Code is, how to install it
 | [Clients](./CLIENTS.md) | Editor integrations, and the API reference for any OpenAI-, Anthropic- or Gemini-shaped client that is not one of the launchers: one runnable example per endpoint, auth, errors. |
 | [OAuth providers](./OAUTH-PROVIDERS.md) | Sign-in-based providers: a Claude subscription, ChatGPT, Kimi For Coding. |
 | [Messaging](./MESSAGING.md) | Running sessions over Discord or Telegram, with voice-note transcription. |
+| [Remote Control](./REMOTE-CONTROL.md) | Driving local coding agents from a phone or remote browser at `/rc` over Tailscale Serve, Tailnet Direct or Cloudflare Tunnel, with 60-second QR pairing, directory allowlisting and `--rc` sidecars while `/admin` stays loopback-only. |
 | [Routing reference](./ROUTING-REFERENCE.md) | Key rotation, fallback chains, output budgets, limits and resilience, and the token optimizer, as reference rather than tutorial. |
 | [Media routing](./MEDIA.md) | Image generation and edits, speech, transcription and translation, and video, routed over media rails with the chat engine's retry, key and proxy rules; a curl per rail, an Image-rail walkthrough and today's known limits. |
-| [Web search](./WEB-SEARCH.md) | The `web_search` server tool, fulfilled at the proxy by 14 search providers instead of by Anthropic. |
+| [Web search](./WEB-SEARCH.md) | The `web_search` server tool, fulfilled at the proxy by 16 search providers instead of by Anthropic. |
 | [Claude Code config](./CLAUDE-CODE-CONFIG.md) | Pointing Claude Code at this proxy, per session or permanently. |
 | [Anthropic subscription](./ANTHROPIC-SUBSCRIPTION.md) | What signing in with a Claude subscription costs you, and why Anthropic does not permit it. |
 | [Brand](./BRAND.md) | Naming, what the 7.0.0 rename retired, and what may not change. |
@@ -19,4 +20,4 @@ The [README](../README.md) is the map: what My Claude Code is, how to install it
 | [Contributing](../CONTRIBUTING.md) | Local checks, versioning rules, and how changes get merged. |
 | [Decision records](./adr/) | Why the load-bearing choices were made. |
 
-The dashboard renders this index and every page above it that is written for whoever *runs* MCC — the README, this page, the Usage Guide, Clients, OAuth providers, Messaging, the routing reference, web search, the Claude Code config page, the Anthropic subscription page, Architecture and Contributing — on its own **Docs** page, offline, for the version you actually have installed. Brand, the release checklist and the decision records are written for whoever *builds* it and stay on GitHub.
+The dashboard renders this index and every page above it that is written for whoever *runs* MCC — the README, this page, the Usage Guide, Clients, OAuth providers, Messaging, Remote Control, the routing reference, media routing, web search, the Claude Code config page, the Anthropic subscription page, Architecture and Contributing — on its own **Docs** page, offline, for the version you actually have installed. Brand, the release checklist and the decision records are written for whoever *builds* it and stay on GitHub.

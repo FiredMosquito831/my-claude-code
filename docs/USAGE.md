@@ -66,6 +66,7 @@ The [README](../README.md) is the overview. This is the long-form manual.
 - [14. Updating](#14-updating)
   - [Stopping and restarting, and how long it takes](#stopping-and-restarting-and-how-long-it-takes)
 - [15. Security and networking](#15-security-and-networking)
+  - [Remote Control (`/rc`) and tunnels](#remote-control-rc-and-tunnels)
   - [Tutorial: route a provider through a VPN, WARP or Tor](#tutorial-route-a-provider-through-a-vpn-warp-or-tor)
 - [16. Troubleshooting](#16-troubleshooting)
 - [Appendix: what changed in 6.x](#appendix-what-changed-in-6x)
@@ -105,7 +106,7 @@ Both end at the same place: one server, one dashboard, one configuration directo
 
 | | **Server + web dashboard** | **Desktop app** |
 | --- | --- | --- |
-| You get | `mcc-server` plus the 16 `mcc-*` launchers on your `PATH`; the dashboard opens in a browser tab. | A window with its own icon and tray icon, rendering the same dashboard. |
+| You get | `mcc-server` plus the 18 `mcc-*` launchers on your `PATH`; the dashboard opens in a browser tab. | A window with its own icon and tray icon, rendering the same dashboard. |
 | You install it by | running the one-liner below — or `npm install -g @firedmosquito831/my-claude-code`, which is a wrapper over that same script and installs the desktop app with it ([Or with npm](#or-with-npm-any-platform)). | downloading an installer from the [latest release](https://github.com/FiredMosquito831/my-claude-code/releases/latest). |
 | The other half | — | is installed **by the app**, on first launch, in front of you: no `mcc-desktop` on the machine means the window prints the exact install command and runs it, streaming the output. Nothing is bundled. |
 | Available | Windows, WSL, Linux, macOS — today. | **All three**: `MyClaudeCode-Setup-windows-x86_64.exe`, `MyClaudeCode-linux-x86_64.deb`, `MyClaudeCode-linux-x86_64.tar.gz` and `MyClaudeCode-macos-universal.dmg`. The macOS image is **unsigned and un-notarised**, so its first launch needs one `xattr` command ([The macOS desktop-app disk image](#the-macos-desktop-app-disk-image)); `mcc-desktop` fetching the same binary avoids that entirely ([The desktop app](#the-desktop-app-fetched-verified-installed)). |
@@ -7269,6 +7270,15 @@ Loopback-only (`HOST=127.0.0.1`) is the shipped default.
 ### What never leaves the machine
 
 Provider API keys are never sent to your agent, never written to the analytics stores, and never included in configuration snapshots — only masked `first4…last4` labels. Proxy credentials are stripped from any recorded URL. Since 7.89.0 the two files that can hold a proxy login, `proxy_chains.json` and `proxy_sources.json`, are written readable by you only (POSIX `0600`; on Windows you, `SYSTEM` and Administrators, nothing inherited). Since 7.90.0 `proxy_sources.json` may also hold a tor control password; tor's cookie is never stored anywhere — it is read from the file tor names at the moment you press a Tor button.
+
+### Remote Control (`/rc`) and tunnels
+
+MCC includes an opt-in mobile/browser Remote Control workspace at `/rc` (`RC_ENABLED=false` by default). Enabling `/rc` **never** exposes `/admin`: the Admin UI and `/admin/api/*` remain strictly loopback-only (`127.0.0.1` / `::1`) even when a tunnel forwards external traffic to the server.
+
+- **Pairing & session isolation:** Pair devices from the **Remote Control** page using **Generate pairing QR** (single-use 60-second token) to receive an HMAC-SHA256 signed HttpOnly cookie (`RC_SESSION_SECRET`). New remote sessions and the folder picker are restricted to `RC_ALLOWED_DIRS` (fail-closed when empty), capped by `RC_MAX_SESSIONS`, and governed by `RC_PERMISSION_MODE` (`ask`, `auto_edits`, or `yolo`). Click **Revoke all devices** at any time to invalidate paired sessions immediately.
+- **Transports:** Keep `RC_TUNNEL_MODE=off` for loopback-only access, use `tailscale_serve` for Tailnet HTTPS (recommended when Tailscale is installed — required by mobile browsers for Service Workers and Web Push without exposing `/admin`), `tailscale_local` for direct plain HTTP over your Tailnet IP (requires `HOST=0.0.0.0` + `ANTHROPIC_AUTH_TOKEN`), or `cloudflare` for an outbound-only `cloudflared` quick (`trycloudflare.com`) or named tunnel. **Stop tunnel** tears down the active tunnel immediately.
+
+For driver tiers, `--rc` live sidecar dual-sync (`mcc-claude --rc`), Web Push alerts, and all `RC_*` settings, see the [Remote Control guide](REMOTE-CONTROL.md).
 
 ### Tutorial: route a provider through a VPN, WARP or Tor
 

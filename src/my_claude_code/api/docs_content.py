@@ -119,6 +119,15 @@ DOCUMENTS: tuple[Document, ...] = (
         repo_path="docs/MESSAGING.md",
     ),
     Document(
+        slug="remote-control",
+        title="Remote Control",
+        summary=(
+            "Drive local coding agents remotely from a phone or browser over "
+            "Tailscale or Cloudflare Tunnel."
+        ),
+        repo_path="docs/REMOTE-CONTROL.md",
+    ),
+    Document(
         slug="routing-reference",
         title="Routing Reference",
         summary=(
@@ -131,7 +140,7 @@ DOCUMENTS: tuple[Document, ...] = (
         slug="web-search",
         title="Web Search",
         summary=(
-            "The `web_search` server tool, fulfilled at the proxy by 14 "
+            "The `web_search` server tool, fulfilled at the proxy by 16 "
             "search providers instead of by Anthropic."
         ),
         repo_path="docs/WEB-SEARCH.md",

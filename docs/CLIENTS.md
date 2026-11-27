@@ -256,7 +256,7 @@ publishes or pins. The media routes pick their rail by endpoint; a
 | `POST /v1/messages` | Anthropic Messages, streamed or not | [below](#messages) |
 | `POST /v1/messages/count_tokens` | Anthropic token count | [below](#count-tokens) |
 | `POST /v1/chat/completions` | OpenAI Chat Completions, streamed or not | [below](#chat-completions) |
-| `POST /v1/responses` | OpenAI Responses, **streamed only** | [below](#responses) |
+| `POST /v1/responses` | OpenAI Responses, streamed or not | [below](#responses) |
 | `GET /v1/models` | OpenAI/Anthropic model list | [below](#models-and-health) |
 | `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`, `:countTokens`; `GET /v1beta/models` | Google Gemini | [below](#gemini) |
 | `POST /v1/images/generations`, `/v1/images/edits`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/videos` (+ `GET`/`DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content`) | OpenAI media | [Media routing](MEDIA.md#every-rail-with-curl) |
@@ -326,8 +326,9 @@ curl -N http://127.0.0.1:8082/v1/responses \
   -d '{"model": "mcc/medium", "input": "Say hello", "stream": true}'
 ```
 
-`response.created` … `response.output_text.delta` … `response.completed`. A request
-with `"stream": false` answers `400`: *MCC /v1/responses supports streaming only*.
+Streams `response.created` … `response.output_text.delta` … `response.completed`
+when `stream` is omitted or `true`, and returns a complete JSON `response` object
+when `"stream": false`.
 An image in a user message (`{"type": "input_image", "image_url": "data:image/png;base64,…"}`
 or an `https://` URL) is accepted since 7.95.0 and reaches the model as the same image the
 Chat Completions door sends; an `input_image` with a `file_id` answers `400` (MCC has no

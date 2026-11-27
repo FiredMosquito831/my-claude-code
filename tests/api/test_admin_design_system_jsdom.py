@@ -60,10 +60,10 @@ EXPECTED_NAVIGATOR = {
     "limits": 8,
     # 8.15.0 adds the Guide's "Responses protocol" section, 8.16.1 its
     # "Reasoning carriers" section, 8.16.3 its "Carrier text recovery"
-    # section, and 8.35.0 its "Surfaces it uses" section -- each one more
-    # heading in the strip's own table, and each a real `<h3 id="guide-...">`
-    # in the Guide body.
-    "guide": 45,
+    # section, 8.35.0 its "Surfaces it uses" section, and 8.58.0 its
+    # "Remote control" section -- each one more heading in the strip's own
+    # table, and each a real `<h3 id="guide-...">` in the Guide body.
+    "guide": 46,
     "docs": 3,
     # 8.7.0 (USAGE-LAYOUTS): the Usage page's strip. THREE entries, not five:
     # the five layouts draw five different DOMs, so the strip names the

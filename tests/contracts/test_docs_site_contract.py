@@ -182,3 +182,36 @@ def test_the_workflow_checks_every_sitemap_entry_is_on_the_host() -> None:
         "the workflow counts sitemap entries on the host but never requires that "
         "count to equal the total, so a partly-wrong sitemap would pass"
     )
+
+
+def _mkdocs_nav_targets(node: object) -> set[str]:
+    targets: set[str] = set()
+    if isinstance(node, str):
+        targets.add(node)
+    elif isinstance(node, list):
+        for item in node:
+            targets.update(_mkdocs_nav_targets(item))
+    elif isinstance(node, dict):
+        for value in node.values():
+            targets.update(_mkdocs_nav_targets(value))
+    return targets
+
+
+def test_every_curated_docs_topic_page_is_in_mkdocs_nav() -> None:
+    """Every curated ``docs/*.md`` page must appear in ``mkdocs.yml`` ``nav``."""
+
+    from my_claude_code.api.docs_content import DOCUMENTS
+
+    expected = {
+        "documentation.md"
+        if doc.repo_path == "docs/README.md"
+        else doc.repo_path.removeprefix("docs/")
+        for doc in DOCUMENTS
+        if doc.repo_path.startswith("docs/")
+    }
+    nav_targets = _mkdocs_nav_targets(_mkdocs_config()["nav"])
+    missing = sorted(expected - nav_targets)
+    assert not missing, (
+        "curated docs/*.md pages missing from mkdocs.yml nav: "
+        f"{missing}. Add each page to mkdocs.yml so the documentation site exposes it."
+    )
