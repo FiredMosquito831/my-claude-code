@@ -40,6 +40,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_OPERATION_OCR,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
@@ -94,6 +95,7 @@ _OPENAI_PROTOCOL_BY_OPERATION: dict[str, str] = {
     MEDIA_OPERATION_TRANSLATE: MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
     MEDIA_OPERATION_VIDEO_CREATE: MEDIA_SHAPE_OPENAI_VIDEOS,
     MEDIA_OPERATION_VIDEO_EDIT: MEDIA_SHAPE_OPENAI_VIDEOS,
+    MEDIA_OPERATION_OCR: MEDIA_PROTOCOL_OPENAI,
 }
 
 
@@ -407,6 +409,7 @@ class MediaCapture:
             output_audio_seconds=(
                 outputs.audio_seconds if succeeded and outputs is not None else None
             ),
+            pages=(outputs.pages if succeeded and outputs is not None else None),
         )
 
     def _input_records(self) -> tuple[MediaOutputRecord, ...]:

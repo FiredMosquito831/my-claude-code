@@ -1761,6 +1761,10 @@ MOVED_VIEWS = {
     # 8.34.0: Web Search Analytics & UI (Track 5 PR3) adds Logical Searches
     # (Routes), skipped/tool_kind/door/empty_only filters, and failed-try columns.
     "web_search": "Web Search Analytics adds Logical Searches and chain filters",
+    # 8.64.0: Unified OCR rail (PR-M5) adds OCR rail to Model Config and updates
+    # the onboarding mediaTools rail count to 5.
+    "model_config": "MEDIA_RAILS adds the OCR rail",
+    "get_started": "onboarding mediaTools step reflects 5 rails",
 }
 
 #: The base-written per-view digests. Recorded by running THIS harness against
@@ -6761,8 +6765,11 @@ def test_jsdom_the_media_block_and_the_mcp_notes_are_untouched(models_fields) ->
         models_fields["mediaSection"]["sha256"]
         == (MODELS_FIELDS_BEFORE["media_section_sha256"])
     )
-    assert models_fields["mcpNotes"] == MODELS_FIELDS_BEFORE["mcp_notes"]
-    assert models_fields["mcpNotes"]["count"] == 4
+    assert models_fields["mcpNotes"]["count"] == 5
+    assert (
+        models_fields["mcpNotes"]["preOcrSha256"]
+        == MODELS_FIELDS_BEFORE["mcp_notes"]["sha256"]
+    )
 
 
 # ------------------------------------------------------------- key pool rail
@@ -9259,6 +9266,7 @@ def test_the_image_rail_is_its_own_card(rendered) -> None:
         "Speech rail",
         "Transcription rail",
         "Video rail",
+        "OCR rail",
     ]
     assert rail["speechPrimaryInCard"] is True
 
@@ -10943,12 +10951,13 @@ def test_mcc_media_server_card_shows_status_bytes_and_copy_line(rendered: dict) 
 def test_model_config_media_rails_say_how_an_agent_reaches_them(rendered: dict) -> None:
     rail = rendered["imageRail"]
     notes = {note["rail"]: note for note in rail["mcpNotes"]}
-    assert list(notes) == ["image", "tts", "asr", "video"]
+    assert list(notes) == ["image", "tts", "asr", "video", "ocr"]
     assert all(note["inMediaCard"] for note in notes.values())
     assert "as generate_image and edit_image" in notes["image"]["text"]
     assert "as speak" in notes["tts"]["text"]
     assert "as transcribe and translate_audio" in notes["asr"]["text"]
     assert "as create_video and get_video" in notes["video"]["text"]
+    assert "as ocr_document" in notes["ocr"]["text"]
     # Counted from MCP_MEDIA_APPS (the fixture's two agents); display only.
     assert "2 agents have it." in notes["image"]["text"]
     assert notes["image"]["link"] == "Add or remove it on Coding agents"
@@ -11768,7 +11777,13 @@ _VOLATILE_CAPTURE_KEYS = {"harnessWallMs", "scriptErrors", "consoleErrors", "_ca
 
 
 def _capture(payload: dict) -> dict:
-    return {k: v for k, v in payload.items() if k not in _VOLATILE_CAPTURE_KEYS}
+    out = {k: v for k, v in payload.items() if k not in _VOLATILE_CAPTURE_KEYS}
+    mcp = out.get("mcpNotes")
+    if isinstance(mcp, dict) and "preOcrSha256" in mcp:
+        # 8.64.0 (PR-M5) adds the 5th OCR rail; prove the 4 pre-OCR notes match 7.104.0.
+        assert mcp["count"] == 5
+        out["mcpNotes"] = {"count": 4, "sha256": mcp["preOcrSha256"]}
+    return out
 
 
 def _without_the_lifetime(node: object) -> object:
@@ -11829,7 +11844,10 @@ def test_jsdom_the_14th_key_moves_no_other_row_body_or_block(
     # the MCP notes.
     assert _without_the_lifetime(_capture(run)) == _capture(MODELS_FIELDS_7_104_0)
     assert run["mediaSection"] == MODELS_FIELDS_7_104_0["mediaSection"]
-    assert run["mcpNotes"] == MODELS_FIELDS_7_104_0["mcpNotes"]
+    assert run["mcpNotes"]["count"] == 5
+    assert (
+        run["mcpNotes"]["preOcrSha256"] == MODELS_FIELDS_7_104_0["mcpNotes"]["sha256"]
+    )
 
 
 # --------------------------------------------------------------------------
@@ -13092,11 +13110,12 @@ def test_jsdom_coding_agents_filter_nothing_matches_and_no_control_leaves(
     #
     # USER 2026-11-02 moved four of them into the provider dialog (the two
     # web-search cards this fixture draws carry no settings on the face), so
-    # the absolute number is 160. What the test is about is the INVARIANCE, and
+    # the absolute number was 160; 8.64.0 (PR-M5) adds MODEL_OCR* (+3 data-key
+    # attributes on the page). What the test is about is the INVARIANCE, and
     # the three assertions below still hold it.
-    assert coding_agents_filter["dataKeyCountEmpty"] == 160
-    assert coding_agents_filter["dataKeyCountFiltered"] == 160
-    assert coding_agents_filter["dataKeyCountCleared"] == 160
+    assert coding_agents_filter["dataKeyCountEmpty"] == 163
+    assert coding_agents_filter["dataKeyCountFiltered"] == 163
+    assert coding_agents_filter["dataKeyCountCleared"] == 163
 
 
 def test_jsdom_coding_agents_filter_typing_sends_nothing_and_clearing_restores(
@@ -14008,6 +14027,7 @@ PAUSE_LIST_FIELDS = frozenset(
         "MODEL_SONNET_PAUSED",
         "MODEL_TTS_PAUSED",
         "MODEL_VIDEO_PAUSED",
+        "MODEL_OCR_PAUSED",
         "MODEL_VISION_PAUSED",
     }
 )
@@ -15126,7 +15146,7 @@ def test_get_started_statuses_come_from_the_loaded_payload(get_started) -> None:
     assert cards["web_search"]["pill"] == "Ready · DuckDuckGo, no key"
     assert cards["web_search"]["state"] == "ready"
     assert cards["images"]["pill"] == "Vision adapter: llama-4-scout"
-    assert cards["media_tools"]["pill"] == "1 of 4 rails"
+    assert cards["media_tools"]["pill"] == "1 of 5 rails"
     assert cards["media_tools"]["detail"] == "Tools in 2 agents"
     assert cards["analytics_cost"]["pill"] == "No requests yet"
     assert cards["several_keys"]["pill"] == "1 provider with 2+ keys"

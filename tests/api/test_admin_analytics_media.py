@@ -197,6 +197,7 @@ def test_rows_are_grouped_by_rail_then_provider_and_model(client, seeded):
         ("tts", "Speech", 2),
         ("asr", "Transcription", 2),
         ("video", "Video", 2),
+        ("ocr", "OCR", 0),
         ("hologram", "hologram", 1),
     ]
     image = _rail(payload, "image")

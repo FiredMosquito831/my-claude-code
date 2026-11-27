@@ -14,6 +14,7 @@ its base URL at the proxy and keeps its own code.
 | `POST /v1/audio/speech` | 7.62.0 | Speech | `MODEL_TTS`, `MODEL_TTS_FALLBACKS`, `MODEL_TTS_PAUSED` |
 | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | 7.63.0 | Transcription | `MODEL_ASR`, `MODEL_ASR_FALLBACKS`, `MODEL_ASR_PAUSED` |
 | `POST /v1/videos`, `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content`, `GET /v1/videos`, `DELETE /v1/videos/{id}` | 7.64.0 | Video | `MODEL_VIDEO`, `MODEL_VIDEO_FALLBACKS`, `MODEL_VIDEO_PAUSED` |
+| `POST /v1/ocr` | 8.64.0 | OCR | `MODEL_OCR`, `MODEL_OCR_FALLBACKS`, `MODEL_OCR_PAUSED` |
 | Gemini `:generateContent` / `:streamGenerateContent` with image or audio output, `:predictLongRunning`, `GET /v1beta/operations/{id}` | 7.65.0 | Image, Speech, Video | the same rails |
 | `GET /v1/media/models`: every media rail model and the request fields it takes ([Request fields per model](#request-fields-per-model-7980)) | 7.98.0 | every rail | none (read only) |
 | `mcc-mcp`: the rails as tools for a coding agent, over MCP, added per agent ([Coding agents: the media server](#coding-agents-the-media-server-mcp-7990)); since 7.100.0 also into your own app files from the Desktop apps cards ([In your own app files](#in-your-own-app-files-71000)) | 7.99.0 | every rail | `MCP_MEDIA_APPS` (the Add / Remove MCP server buttons); the Desktop apps cards write your file, not a setting |

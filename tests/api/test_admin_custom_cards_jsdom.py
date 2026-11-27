@@ -470,6 +470,10 @@ MOVED_VIEWS = {
     # pre-fix write; it now names the two additive keys MCC writes beside its
     # block and the add-only default model. Prose only.
     "claude": "the OpenClaw launcher paragraph names MCC's additive keys",
+    # 8.64.0: Unified OCR rail (PR-M5) updates onboarding mediaTools count to
+    # 5 rails and adds MODEL_OCR to the empty-state text on Media Models.
+    "get_started": "onboarding mediaTools step reflects 5 rails",
+    "models": "renderMediaModels empty state names MODEL_OCR",
 }
 
 #: Views that had ALREADY moved at this branch's base, measured -- not assumed.
@@ -536,10 +540,10 @@ def test_the_pre_existing_exemption_is_still_one_measured_view() -> None:
     moved-set off the diff -- which is what produced the three entries here.
     """
     assert set(PRE_EXISTING_MOVES) == {"requests", "web_search", "guide"}
-    # And exactly the views this release moves: this PR's own face, and
-    # 8.20.3's OpenClaw paragraph on the Claude page (prose only). The
-    # pre-existing set above is untouched by either.
-    assert set(MOVED_VIEWS) == {"providers", "claude"}
+    # And exactly the views this release moves: this PR's own face,
+    # 8.20.3's OpenClaw paragraph on the Claude page, and 8.64.0's OCR rail
+    # updates on Get Started and Models. The pre-existing set above is untouched.
+    assert set(MOVED_VIEWS) == {"providers", "claude", "get_started", "models"}
 
 
 # --------------------------------------------------------------------------

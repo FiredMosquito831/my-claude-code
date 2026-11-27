@@ -102,7 +102,6 @@ NON_RAIL_KIND_LABELS: Mapping[str, str] = {
     EMBEDDING_KIND: "Embedding",
     RERANK_KIND: "Rerank",
     REALTIME_KIND: "Realtime",
-    OCR_KIND: "OCR",
     MODERATION_KIND: "Moderation",
     DECISION_KIND: "Decision",
 }
@@ -439,6 +438,8 @@ def kinds_from_modalities(modalities: DeclaredModalities) -> frozenset[str]:
         kinds.add(MediaRail.ASR.value)
     if "video" in outputs:
         kinds.add(MediaRail.VIDEO.value)
+    if "ocr" in outputs:
+        kinds.add(MediaRail.OCR.value)
     for non_rail in NON_RAIL_KIND_LABELS:
         if non_rail in outputs:
             kinds.add(non_rail)

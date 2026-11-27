@@ -17,6 +17,7 @@ billed to an allowance nobody agreed to spend.
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MEDIA_SHAPE_MISTRAL_OCR,
     mistral_image_tool_surface,
     surface_for,
 )
@@ -55,16 +56,20 @@ def test_mistral_serves_image_generation_through_the_tool_shape() -> None:
 
 
 def test_mistrals_transcription_surface_is_untouched() -> None:
-    """8.14.0 ADDS a surface; the one the provider PR shipped is unchanged."""
+    """8.14.0/8.64.0 ADD surfaces; the ones shipped earlier are unchanged."""
 
     shapes = [surface.shape for surface in PROVIDER_CATALOG["mistral"].media_surfaces]
-    assert shapes == ["openai_transcriptions", MEDIA_SHAPE_MISTRAL_IMAGE_TOOL]
+    assert shapes == [
+        "openai_transcriptions",
+        MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+        MEDIA_SHAPE_MISTRAL_OCR,
+    ]
 
 
 def test_no_other_mistral_rail_is_declared() -> None:
-    """Q6: no edit surface, no speech, no video -- only the two above."""
+    """Only transcription, image generation, and OCR are declared on Mistral Studio."""
 
     operations = sorted(
         surface.operation for surface in PROVIDER_CATALOG["mistral"].media_surfaces
     )
-    assert operations == ["image_generate", "transcribe"]
+    assert operations == ["image_generate", "ocr", "transcribe"]

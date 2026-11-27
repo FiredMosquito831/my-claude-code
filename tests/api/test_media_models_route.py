@@ -151,4 +151,4 @@ def test_an_install_with_no_media_rail_lists_nothing(monkeypatch, tmp_path):
     payload = _get(client).json()
 
     assert payload["data"] == []
-    assert [rail["models"] for rail in payload["rails"]] == [[], [], [], []]
+    assert [rail["models"] for rail in payload["rails"]] == [[], [], [], [], []]

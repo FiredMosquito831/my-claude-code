@@ -1040,6 +1040,12 @@ class Settings(BaseSettings):
     model_video_fallbacks: str | None = Field(
         default=None, validation_alias="MODEL_VIDEO_FALLBACKS"
     )
+    # The OCR rail (8.64.0): `POST /v1/ocr` routes here. A media rail, never
+    # a chat tier -- nothing on it is offered to coding agents.
+    model_ocr: str | None = Field(default=None, validation_alias="MODEL_OCR")
+    model_ocr_fallbacks: str | None = Field(
+        default=None, validation_alias="MODEL_OCR_FALLBACKS"
+    )
 
     # ==================== Paused route entries ====================
     # Comma-separated `provider/model` refs the operator has switched off for
@@ -1077,6 +1083,9 @@ class Settings(BaseSettings):
     )
     model_video_paused: str | None = Field(
         default=None, validation_alias="MODEL_VIDEO_PAUSED"
+    )
+    model_ocr_paused: str | None = Field(
+        default=None, validation_alias="MODEL_OCR_PAUSED"
     )
     # The largest file a media request may upload, in MB (7.95.0). 0 sets no
     # limit of MCC's own; above 0, a larger upload is refused 413 before any

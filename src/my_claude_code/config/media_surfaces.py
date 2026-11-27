@@ -31,6 +31,8 @@ MEDIA_OPERATION_VIDEO_EDIT = "video_edit"
 MEDIA_OPERATION_VIDEO_RETRIEVE = "video_retrieve"
 MEDIA_OPERATION_VIDEO_CONTENT = "video_content"
 MEDIA_OPERATION_VIDEO_DELETE = "video_delete"
+#: 8.64.0: unified OCR rail (Mistral OCR, Gemini native OCR, vision-chat fallback).
+MEDIA_OPERATION_OCR = "ocr"
 
 #: Wire-shape families: one adapter per family, never per provider.
 MEDIA_SHAPE_OPENAI_IMAGES = "openai_images"
@@ -54,6 +56,11 @@ MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE = "openrouter_chat_image"
 MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE = "gemini_generate_content_image"
 MEDIA_SHAPE_GEMINI_PREDICT_IMAGE = "gemini_predict_image"
 MEDIA_SHAPE_GEMINI_VEO_LRO = "gemini_veo_lro"
+#: 8.64.0: OCR wire shapes (Mistral ``POST /v1/ocr``, Gemini native ``generateContent``,
+#: and OpenAI vision-chat fallback on ``POST /chat/completions``).
+MEDIA_SHAPE_MISTRAL_OCR = "mistral_ocr"
+MEDIA_SHAPE_GEMINI_NATIVE_OCR = "gemini_native_ocr"
+MEDIA_SHAPE_VISION_OCR_CHAT = "vision_ocr_chat_fallback"
 
 #: A surface whose host documents a JSON body only (``MediaSurface.encoding``).
 MEDIA_ENCODING_JSON = "json"
@@ -70,6 +77,7 @@ MEDIA_OPERATIONS: tuple[str, ...] = (
     MEDIA_OPERATION_VIDEO_RETRIEVE,
     MEDIA_OPERATION_VIDEO_CONTENT,
     MEDIA_OPERATION_VIDEO_DELETE,
+    MEDIA_OPERATION_OCR,
 )
 MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_OPENAI_IMAGES,
@@ -83,6 +91,9 @@ MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
     MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
     MEDIA_SHAPE_GEMINI_VEO_LRO,
+    MEDIA_SHAPE_MISTRAL_OCR,
+    MEDIA_SHAPE_GEMINI_NATIVE_OCR,
+    MEDIA_SHAPE_VISION_OCR_CHAT,
 )
 
 #: The header Gemini's native API reads the key from (instead of Bearer).
@@ -448,6 +459,44 @@ def mistral_image_tool_surface() -> MediaSurface:
         operation=MEDIA_OPERATION_IMAGE_GENERATE,
         shape=MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
         path="chat/completions",
+    )
+
+
+def ocr_surface(
+    path: str = "ocr", *, encoding: str = MEDIA_ENCODING_JSON
+) -> MediaSurface:
+    """Mistral's dedicated ``POST /v1/ocr`` surface."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_OCR,
+        shape=MEDIA_SHAPE_MISTRAL_OCR,
+        path=path,
+        encoding=encoding,
+    )
+
+
+def gemini_ocr_surface() -> MediaSurface:
+    """Gemini native ``generateContent`` document/image OCR surface."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_OCR,
+        shape=MEDIA_SHAPE_GEMINI_NATIVE_OCR,
+        path=GEMINI_GENERATE_CONTENT_PATH,
+        encoding=MEDIA_ENCODING_JSON,
+        auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
+def vision_ocr_chat_surface(
+    path: str = "chat/completions", *, encoding: str = MEDIA_ENCODING_JSON
+) -> MediaSurface:
+    """Vision-chat fallback OCR surface on OpenAI ``POST /chat/completions``."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_OCR,
+        shape=MEDIA_SHAPE_VISION_OCR_CHAT,
+        path=path,
+        encoding=encoding,
     )
 
 

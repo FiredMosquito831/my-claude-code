@@ -154,6 +154,7 @@ def test_the_vibe_provider_declares_no_media_surface() -> None:
     ] == [
         ("transcribe", "openai_transcriptions"),
         ("image_generate", "mistral_image_tool"),
+        ("ocr", "mistral_ocr"),
     ]
 
 

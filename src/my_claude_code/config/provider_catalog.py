@@ -11,6 +11,7 @@ from .media_surfaces import (
     MediaSurface,
     gemini_generate_content_image_edit_surface,
     gemini_generate_content_image_surface,
+    gemini_ocr_surface,
     gemini_predict_image_surface,
     gemini_speech_surface,
     gemini_transcription_surface,
@@ -19,12 +20,14 @@ from .media_surfaces import (
     image_generation_surface,
     image_variation_surface,
     mistral_image_tool_surface,
+    ocr_surface,
     openrouter_image_edit_surface,
     openrouter_image_generation_surface,
     speech_surface,
     transcription_surface,
     translation_surface,
     video_surfaces,
+    vision_ocr_chat_surface,
 )
 
 # Default upstream base URLs are owned here with the provider catalog.
@@ -359,7 +362,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "openai": ProviderDescriptor(
         image_token_family="openai_patch",
         provider_id="openai",
-        media_surfaces=(image_variation_surface(),),
+        media_surfaces=(image_variation_surface(), vision_ocr_chat_surface()),
         display_name="OpenAI / ChatGPT",
         credential_env="CHATGPT_OAUTH_ACCESS_TOKEN",
         credential_url="https://github.com/openai/codex",
@@ -383,6 +386,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             ),
             openrouter_image_generation_surface(),
             openrouter_image_edit_surface(),
+            vision_ocr_chat_surface(),
         ),
         display_name="OpenRouter",
         credential_env="OPENROUTER_API_KEY",
@@ -414,6 +418,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             gemini_predict_image_surface(),
             image_edit_surface(),
             *gemini_veo_lro_surfaces(),
+            gemini_ocr_surface(),
         ),
         display_name="Gemini",
         credential_env="GEMINI_API_KEY",
@@ -485,6 +490,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         media_surfaces=(
             transcription_surface(stream=True),
             mistral_image_tool_surface(),
+            ocr_surface(),
         ),
         display_name="Mistral Studio (API)",
         credential_env="MISTRAL_API_KEY",

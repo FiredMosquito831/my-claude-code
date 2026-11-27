@@ -37,6 +37,7 @@ from my_claude_code.config.mcp_media import (
     TOOL_GENERATE_IMAGE,
     TOOL_GET_VIDEO,
     TOOL_MEDIA_STATUS,
+    TOOL_OCR_DOCUMENT,
     TOOL_SPEAK,
     TOOL_TRANSCRIBE,
     TOOL_TRANSLATE_AUDIO,
@@ -44,6 +45,7 @@ from my_claude_code.config.mcp_media import (
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_OCR,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
@@ -83,7 +85,13 @@ OPERATION_TOOLS: Mapping[str, tuple[str, str]] = {
         TOOL_CREATE_VIDEO,
         "Start a video job through MCC's {rail} rail. The provider bills the "
         "job. Returns its id at once; call get_video with it to see progress "
-        "and save the video when it is done.",
+        "and save the video when the job is done.",
+    ),
+    MEDIA_OPERATION_OCR: (
+        TOOL_OCR_DOCUMENT,
+        "Extract text and markdown from a local document or image through "
+        "MCC's {rail} rail. The provider bills each call. Returns the "
+        "extracted markdown.",
     ),
 }
 
@@ -101,6 +109,7 @@ SERVER_OWNED_FIELDS: Mapping[str, frozenset[str]] = {
     MEDIA_OPERATION_TRANSCRIBE: frozenset({"stream"}),
     MEDIA_OPERATION_TRANSLATE: frozenset(),
     MEDIA_OPERATION_VIDEO_CREATE: frozenset(),
+    MEDIA_OPERATION_OCR: frozenset(),
 }
 
 
@@ -147,11 +156,21 @@ FILE_ARGUMENTS: Mapping[str, FileArgument] = {
     ),
 }
 
+_OPERATION_FILE_ARGUMENTS: Mapping[tuple[str, str], FileArgument] = {
+    (MEDIA_OPERATION_OCR, "file"): FileArgument(
+        "file_path",
+        "file",
+        False,
+        "The local document or image file to OCR, as a path. It is uploaded to MCC.",
+    ),
+}
+
 #: Operations whose door refuses a request without one of its file fields,
 #: and which file argument that is. Edits take the picture as an upload here
 #: (``images`` is the JSON variant the media server does not use).
 REQUIRED_FILE_ARGUMENTS: Mapping[str, str] = {
     MEDIA_OPERATION_IMAGE_EDIT: "image_paths",
+    MEDIA_OPERATION_OCR: "file_path",
 }
 
 #: Operations whose result is a file, so the agent may say where it goes.
@@ -345,7 +364,9 @@ def _operation_tool(
             # No model on the rail can take it: refused by, or not sent to,
             # every one of them. Offering it would only invite a refusal.
             continue
-        file_argument = FILE_ARGUMENTS.get(field_name)
+        file_argument = _OPERATION_FILE_ARGUMENTS.get(
+            (operation, field_name), FILE_ARGUMENTS.get(field_name)
+        )
         if file_argument is not None:
             argument = file_argument.argument
             prop: dict[str, Any] = (

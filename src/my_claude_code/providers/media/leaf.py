@@ -56,11 +56,14 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_OPERATION_VIDEO_EDIT,
     MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+    MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MEDIA_SHAPE_MISTRAL_OCR,
     MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
+    MEDIA_SHAPE_VISION_OCR_CHAT,
     MISTRAL_IMAGE_FILE_CONTENT_PATH,
     MediaSurface,
     effective_surfaces_for,
@@ -86,6 +89,12 @@ from my_claude_code.core.mistral_media import (
     MistralAnswerError,
     images_answer,
     parse_image_tool_answer,
+)
+from my_claude_code.core.ocr_media import (
+    OcrAnswerError,
+    parse_gemini_ocr_answer,
+    parse_mistral_ocr_answer,
+    parse_vision_chat_ocr_answer,
 )
 from my_claude_code.core.openai_images import inline_image_urls, url_only_images
 from my_claude_code.core.openai_videos import parse_job
@@ -620,6 +629,12 @@ class MediaLeaf:
                 answer = await self._mistral_image_answer(
                     current_attempt, answer, body, request_id=request_id
                 )
+            elif active_surface.shape in (
+                MEDIA_SHAPE_MISTRAL_OCR,
+                MEDIA_SHAPE_GEMINI_NATIVE_OCR,
+                MEDIA_SHAPE_VISION_OCR_CHAT,
+            ):
+                answer = await self._ocr_answer(active_surface, answer, body)
             elif current_attempt.request.inline_urls:
                 answer = await self._inlined(answer)
             # 8.8.0: a successful answer is a metadata line too, and never
@@ -817,6 +832,41 @@ class MediaLeaf:
             usage=parsed.usage,
             not_forwarded=body.not_forwarded,
             text=parsed.text,
+            adaptations=answer.adaptations,
+            media_surface=answer.media_surface,
+            media_surface_source=answer.media_surface_source,
+        )
+
+    async def _ocr_answer(
+        self,
+        surface: MediaSurface,
+        answer: MediaResponse,
+        body: WireBody,
+    ) -> MediaResponse:
+        """Translate a Mistral, Gemini native, or Vision-chat OCR answer off the loop."""
+        if surface.shape == MEDIA_SHAPE_MISTRAL_OCR:
+            parser = parse_mistral_ocr_answer
+        elif surface.shape == MEDIA_SHAPE_GEMINI_NATIVE_OCR:
+            parser = parse_gemini_ocr_answer
+        else:
+            parser = parse_vision_chat_ocr_answer
+        try:
+            translated = await asyncio.to_thread(parser, answer.body)
+        except OcrAnswerError as error:
+            raise ExecutionFailure(
+                kind=FailureKind.UPSTREAM,
+                status_code=502,
+                message=f"{self._provider_id} answered {error}",
+                retryable=False,
+            ) from error
+        return MediaResponse(
+            status_code=answer.status_code,
+            content_type=translated.content_type,
+            body=translated.body,
+            headers={**answer.headers, "content-type": translated.content_type},
+            usage=translated.usage,
+            text=translated.text,
+            not_forwarded=body.not_forwarded,
             adaptations=answer.adaptations,
             media_surface=answer.media_surface,
             media_surface_source=answer.media_surface_source,

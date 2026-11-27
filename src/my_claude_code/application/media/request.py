@@ -16,6 +16,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_OPERATION_OCR,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
@@ -36,6 +37,7 @@ class MediaRail(StrEnum):
     TTS = "tts"
     ASR = "asr"
     VIDEO = "video"
+    OCR = "ocr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +90,15 @@ RAIL_SETTINGS: Mapping[MediaRail, MediaRailSettings] = {
         paused_attr="model_video_paused",
         paused_env="MODEL_VIDEO_PAUSED",
     ),
+    MediaRail.OCR: MediaRailSettings(
+        label="OCR",
+        model_attr="model_ocr",
+        model_env="MODEL_OCR",
+        fallbacks_attr="model_ocr_fallbacks",
+        fallbacks_env="MODEL_OCR_FALLBACKS",
+        paused_attr="model_ocr_paused",
+        paused_env="MODEL_OCR_PAUSED",
+    ),
 }
 
 #: The routed operations each rail carries (7.67.0, for the dashboard). A
@@ -102,6 +113,7 @@ RAIL_OPERATIONS: Mapping[MediaRail, tuple[str, ...]] = {
     MediaRail.TTS: (MEDIA_OPERATION_SPEECH,),
     MediaRail.ASR: (MEDIA_OPERATION_TRANSCRIBE, MEDIA_OPERATION_TRANSLATE),
     MediaRail.VIDEO: (MEDIA_OPERATION_VIDEO_CREATE, MEDIA_OPERATION_VIDEO_EDIT),
+    MediaRail.OCR: (MEDIA_OPERATION_OCR,),
 }
 
 #: The rail a logged ``media_operation`` is counted under.

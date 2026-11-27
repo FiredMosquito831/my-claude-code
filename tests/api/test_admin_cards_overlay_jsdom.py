@@ -437,6 +437,10 @@ MOVED_VIEWS = {
     # recorded). It now names the two additive keys and the add-only default
     # model. Prose only: no control, id or launcher row moved.
     "claude": "the OpenClaw launcher paragraph names MCC's additive keys",
+    # 8.64.0: Unified OCR rail (PR-M5) updates onboarding mediaTools count to
+    # 5 rails and adds MODEL_OCR to the empty-state text on Media Models.
+    "get_started": "onboarding mediaTools step reflects 5 rails",
+    "models": "renderMediaModels empty state names MODEL_OCR",
 }
 
 #: Views that had ALREADY moved at this branch's base, measured -- not assumed.

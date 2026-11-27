@@ -283,6 +283,9 @@ def test_with_both_features_off_every_view_is_the_base_tree(
         # (Routes) panel, skipped/tool_kind/door/empty_only filters, and
         # failed-try key-pool telemetry on the web_search page.
         "web_search",
+        # 8.64.0: Unified OCR rail (PR-M5) updates GET_STARTED_STATUS.mediaTools
+        # for the 5th OCR rail.
+        "get_started",
     }
     base = baseline["views"]
     mine = design_system_off["views"]

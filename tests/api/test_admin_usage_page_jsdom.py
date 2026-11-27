@@ -652,7 +652,17 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
     #: names the additive keys MCC writes beside its block (prose only).
     #: 8.34.0 adds `web_search`: Track 5 PR3 upgrades the Web Search Analytics
     #: view with Logical Searches (Routes), chain filters, and failed-try columns.
-    DECLARED_MOVES = {"guide", "requests", "usage", "providers", "claude", "web_search"}
+    #: 8.64.0 adds `get_started` and `model_config` for the 5th OCR rail (PR-M5).
+    DECLARED_MOVES = {
+        "guide",
+        "requests",
+        "usage",
+        "providers",
+        "claude",
+        "web_search",
+        "get_started",
+        "model_config",
+    }
 
     # 8.53.0 adds `remote_control`; no pre-existing view was removed.
     assert sorted(set(mine) - set(base)) == ["remote_control"]

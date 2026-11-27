@@ -21,6 +21,7 @@ from my_claude_code.application.media.schemas import (
     DOOR_FIELDS,
     GEMINI_NATIVE_FORWARDED,
     MISTRAL_IMAGE_TOOL_FORWARDED,
+    MISTRAL_OCR_FORWARDED,
     STATE_NOT_FORWARDED,
     STATE_NOT_KNOWN,
     STATE_REFUSED_LEARNED,
@@ -29,6 +30,7 @@ from my_claude_code.application.media.schemas import (
     STATE_REQUIRED_STATED,
     STATE_STATED,
     TRANSLATED_SHAPES,
+    VISION_OCR_CHAT_FORWARDED,
     field_acceptance,
     request_schema,
     request_schemas,
@@ -39,9 +41,12 @@ from my_claude_code.config.media_request_fields import (
     with_statement,
 )
 from my_claude_code.config.media_surfaces import (
+    MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MEDIA_SHAPE_MISTRAL_OCR,
+    MEDIA_SHAPE_VISION_OCR_CHAT,
     MediaSurface,
     custom_media_surfaces,
     gemini_speech_surface,
@@ -440,6 +445,14 @@ def test_gemini_native_forwarded_mirrors_the_adapter() -> None:
     assert GEMINI_NATIVE_FORWARDED[MEDIA_SHAPE_GEMINI_TRANSCRIBE] == (
         adapters._GEMINI_TRANSCRIBE_USED | {"file"}
     )
+    assert GEMINI_NATIVE_FORWARDED[MEDIA_SHAPE_GEMINI_NATIVE_OCR] == (
+        adapters._GEMINI_OCR_USED
+    )
+    assert MISTRAL_OCR_FORWARDED[MEDIA_SHAPE_MISTRAL_OCR] == adapters._MISTRAL_OCR_USED
+    assert (
+        VISION_OCR_CHAT_FORWARDED[MEDIA_SHAPE_VISION_OCR_CHAT]
+        == adapters._VISION_OCR_CHAT_USED
+    )
     asr = _schema(gemini_transcription_surface(), "transcribe", model_ref="gemini/asr")
     assert _state(asr, "language") == STATE_NOT_KNOWN
     assert _state(asr, "temperature") == STATE_NOT_FORWARDED
@@ -473,6 +486,8 @@ def test_the_two_mirror_tables_are_the_one_translated_set() -> None:
     assert TRANSLATED_SHAPES == {
         **GEMINI_NATIVE_FORWARDED,
         **MISTRAL_IMAGE_TOOL_FORWARDED,
+        **MISTRAL_OCR_FORWARDED,
+        **VISION_OCR_CHAT_FORWARDED,
     }
     assert schemas.forwarded_fields(MEDIA_SHAPE_MISTRAL_IMAGE_TOOL) == frozenset(
         {"prompt"}

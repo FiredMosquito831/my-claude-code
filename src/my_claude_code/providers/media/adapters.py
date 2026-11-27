@@ -29,16 +29,19 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
     MEDIA_OPERATION_IMAGE_VARIATION,
     MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+    MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_GEMINI_VEO_LRO,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MEDIA_SHAPE_MISTRAL_OCR,
     MEDIA_SHAPE_OPENAI_IMAGES,
     MEDIA_SHAPE_OPENAI_SPEECH,
     MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
     MEDIA_SHAPE_OPENAI_VIDEOS,
     MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
+    MEDIA_SHAPE_VISION_OCR_CHAT,
     MISTRAL_IMAGE_TOOL_TYPE,
     MediaSurface,
 )
@@ -51,6 +54,11 @@ from my_claude_code.core.gemini_native_media import (
     veo_lro_request,
 )
 from my_claude_code.core.mistral_media import image_tool_request
+from my_claude_code.core.ocr_media import (
+    gemini_ocr_request,
+    mistral_ocr_request,
+    vision_chat_ocr_request,
+)
 from my_claude_code.core.openrouter_media import openrouter_chat_image_request
 
 from .multipart import MultipartBody
@@ -96,6 +104,15 @@ _GEMINI_VEO_USED = frozenset(
         "video",
     }
 )
+_MISTRAL_OCR_USED = frozenset(
+    {"file", "document", "document_url", "image_url", "pages", "include_image_base64"}
+)
+_GEMINI_OCR_USED = frozenset(
+    {"file", "document", "document_url", "image_url", "prompt", "output_format"}
+)
+_VISION_OCR_CHAT_USED = frozenset(
+    {"file", "document", "document_url", "image_url", "prompt", "output_format"}
+)
 _OFF_LOOP_SHAPES = frozenset(
     {
         MEDIA_SHAPE_GEMINI_TRANSCRIBE,
@@ -103,6 +120,9 @@ _OFF_LOOP_SHAPES = frozenset(
         MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
         MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
         MEDIA_SHAPE_GEMINI_VEO_LRO,
+        MEDIA_SHAPE_MISTRAL_OCR,
+        MEDIA_SHAPE_GEMINI_NATIVE_OCR,
+        MEDIA_SHAPE_VISION_OCR_CHAT,
     }
 )
 
@@ -580,6 +600,104 @@ def _gemini_veo_lro_body(
     )
 
 
+def _parse_ocr_pages_form(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return parsed
+        except ValueError:
+            pass
+    parts = [part.strip() for part in stripped.split(",") if part.strip()]
+    if parts and all(part.isdigit() for part in parts):
+        return [int(part) for part in parts]
+    return value
+
+
+def _mistral_ocr_body(attempt: MediaAttempt) -> WireBody:
+    raw_body = dict(attempt.request.body)
+    if attempt.request.multipart or attempt.request.uploads:
+        if "pages" in raw_body:
+            parsed_pages = _parse_ocr_pages_form(raw_body["pages"])
+            if parsed_pages is None:
+                raw_body.pop("pages", None)
+            else:
+                raw_body["pages"] = parsed_pages
+        if "include_image_base64" in raw_body:
+            raw_body["include_image_base64"] = _from_form(
+                raw_body["include_image_base64"]
+            )
+    data_uri = (
+        upload_to_data_uri(attempt.request.uploads[0])
+        if attempt.request.uploads
+        else None
+    )
+    adaptations: tuple[str, ...] = (
+        ("encoding:multipart->json",) if attempt.request.uploads else ()
+    )
+    notes = tuple(name for name in raw_body if name not in _MISTRAL_OCR_USED)
+    payload = mistral_ocr_request(
+        raw_body, model=attempt.resolved.provider_model, data_uri=data_uri
+    )
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=notes,
+        adaptations=adaptations,
+    )
+
+
+def _gemini_ocr_body(attempt: MediaAttempt) -> WireBody:
+    raw_body = dict(attempt.request.body)
+    data: bytes | None = None
+    mime_type: str | None = None
+    if attempt.request.uploads:
+        mime_type, data = _read_upload_bytes(attempt.request.uploads[0])
+    adaptations: tuple[str, ...] = (
+        ("encoding:multipart->json",) if attempt.request.uploads else ()
+    )
+    notes = tuple(name for name in raw_body if name not in _GEMINI_OCR_USED)
+    payload = gemini_ocr_request(raw_body, data=data, mime_type=mime_type)
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=notes,
+        adaptations=adaptations,
+    )
+
+
+def _vision_ocr_chat_body(attempt: MediaAttempt) -> WireBody:
+    raw_body = dict(attempt.request.body)
+    data_uri: str | None = None
+    filename = "document.pdf"
+    if attempt.request.uploads:
+        upload = attempt.request.uploads[0]
+        data_uri = upload_to_data_uri(upload)
+        if upload.filename:
+            filename = upload.filename
+    adaptations: tuple[str, ...] = (
+        ("encoding:multipart->json",) if attempt.request.uploads else ()
+    )
+    notes = tuple(name for name in raw_body if name not in _VISION_OCR_CHAT_USED)
+    payload = vision_chat_ocr_request(
+        raw_body,
+        model=attempt.resolved.provider_model,
+        data_uri=data_uri,
+        filename=filename,
+    )
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=notes,
+        adaptations=adaptations,
+    )
+
+
 def _needs_off_loop_encoding(
     surface: MediaSurface,
     attempt: MediaAttempt,
@@ -730,4 +848,10 @@ def build_request_body(
         )
     if surface.shape == MEDIA_SHAPE_GEMINI_VEO_LRO:
         return _gemini_veo_lro_body(attempt, approximate_mapping=approximate_mapping)
+    if surface.shape == MEDIA_SHAPE_MISTRAL_OCR:
+        return _mistral_ocr_body(attempt)
+    if surface.shape == MEDIA_SHAPE_GEMINI_NATIVE_OCR:
+        return _gemini_ocr_body(attempt)
+    if surface.shape == MEDIA_SHAPE_VISION_OCR_CHAT:
+        return _vision_ocr_chat_body(attempt)
     raise ValueError(f"unknown media shape {surface.shape!r}")

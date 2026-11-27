@@ -112,7 +112,10 @@ def test_ux_pass_leaves_every_other_view_as_the_base_tree_drew_it(ux_views) -> N
     # the claim being tested, not a failure. (Before this was a ceiling it was
     # an equality, and it went red on CI whenever a declared view's markup
     # happened to normalise back to the base tree's bytes there.)
-    unexpected = sorted(set(moved) - (UX_CHANGED_VIEWS | {"get_started"}))
+    # 8.64.0 (PR-M5) adds the OCR rail card on model_config.
+    unexpected = sorted(
+        set(moved) - (UX_CHANGED_VIEWS | {"get_started", "model_config"})
+    )
     assert not unexpected, (
         "these views are not what the base tree drew, and are not declared "
         f"moves: {unexpected}"

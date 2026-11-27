@@ -94,6 +94,7 @@ class MediaUsage:
     input_audio_seconds: float | None = None
     output_audio_seconds: float | None = None
     output_video_seconds: float | None = None
+    pages: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
