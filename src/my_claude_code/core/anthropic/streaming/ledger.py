@@ -244,6 +244,13 @@ class AnthropicStreamLedger:
             extra_content = kwargs.get("extra_content")
             if isinstance(extra_content, dict) and extra_content:
                 content_block["extra_content"] = extra_content
+        elif block_type == "server_tool_use":
+            content_block["id"] = kwargs.get("id", "")
+            content_block["name"] = kwargs.get("name", "")
+            content_block["input"] = kwargs.get("input", {})
+        elif block_type == "web_search_tool_result":
+            content_block["tool_use_id"] = kwargs.get("tool_use_id", "")
+            content_block["content"] = kwargs.get("content", [])
         elif block_type == "redacted_thinking":
             data = kwargs.get("data")
             if isinstance(data, str):
@@ -259,7 +266,9 @@ class AnthropicStreamLedger:
             },
         )
 
-    def content_block_delta(self, index: int, delta_type: str, content: str) -> str:
+    def content_block_delta(
+        self, index: int, delta_type: str, content: str | Mapping[str, Any]
+    ) -> str:
         delta: dict[str, Any] = {"type": delta_type}
         if delta_type == "thinking_delta":
             delta["thinking"] = content
@@ -269,6 +278,10 @@ class AnthropicStreamLedger:
             delta["text"] = content
         elif delta_type == "input_json_delta":
             delta["partial_json"] = content
+        elif delta_type == "citations_delta":
+            delta["citation"] = (
+                dict(content) if isinstance(content, Mapping) else content
+            )
 
         self._record_block_delta(index, delta)
         return self._emitter.event(
