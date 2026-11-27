@@ -19,6 +19,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 from loguru import logger
 
+from my_claude_code.config.constants import (
+    CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE,
+)
 from my_claude_code.config.credentials import parse_credential_keys
 from my_claude_code.config.env_files import env_file_override
 from my_claude_code.config.settings import Settings
@@ -31,6 +34,7 @@ from my_claude_code.core.websearch.models import (
     WebSearchResponse,
     WebSearchResultItem,
 )
+from my_claude_code.providers.chatgpt_oauth.credentials import load_chatgpt_accounts
 
 from .adapters import ADAPTER_CLASSES
 from .base import BaseWebSearchProvider, KeyChargeJudge, WebSearchProviderConfig
@@ -144,16 +148,45 @@ def build_provider(settings: Settings, provider_id: str) -> BaseWebSearchProvide
         raise WebSearchConfigError(
             provider_id, f"unknown web search provider: {provider_id!r}"
         )
-    keys = _descriptor_keys(descriptor, settings)
-    if descriptor.requires_key and not keys:
-        raise WebSearchConfigError(
-            provider_id,
-            f"{descriptor.credential_env} is not configured "
-            f"(set it in your .env to enable {descriptor.display_name})",
+    oauth_access_token: str | None = None
+    oauth_account_id: str | None = None
+    if descriptor.auth_kind == "oauth":
+        if descriptor.provider_id != "chatgpt_oauth":
+            raise WebSearchConfigError(
+                provider_id,
+                f"unsupported OAuth web search provider: {provider_id!r}",
+            )
+        if not settings.chatgpt_oauth_websearch_enabled:
+            raise WebSearchConfigError(
+                provider_id,
+                "CHATGPT_OAUTH_WEBSEARCH_ENABLED is false "
+                "(set CHATGPT_OAUTH_WEBSEARCH_ENABLED=true to enable ChatGPT OAuth web search)",
+            )
+        if not _oauth_credentials_ready(descriptor, settings):
+            raise WebSearchConfigError(
+                provider_id,
+                "ChatGPT OAuth credentials are not configured "
+                "(sign in or import Codex credentials in Admin to enable ChatGPT OAuth)",
+            )
+        keys: tuple[str, ...] = ()
+        oauth_access_token = settings.chatgpt_oauth_access_token.strip() or None
+        oauth_account_id = settings.chatgpt_oauth_account_id.strip() or None
+        base_url = settings.chatgpt_oauth_base_url.strip() or None
+        rotation = "single"
+        proxy = resolve_websearch_proxy() or (
+            settings.chatgpt_oauth_proxy.strip() or None
         )
-    base_url = _descriptor_base_url(descriptor, settings)
-    rotation = _resolve_rotation_policy(descriptor, len(keys))
-    proxy = resolve_websearch_proxy()
+    else:
+        keys = _descriptor_keys(descriptor, settings)
+        if descriptor.requires_key and not keys:
+            raise WebSearchConfigError(
+                provider_id,
+                f"{descriptor.credential_env} is not configured "
+                f"(set it in your .env to enable {descriptor.display_name})",
+            )
+        base_url = _descriptor_base_url(descriptor, settings)
+        rotation = _resolve_rotation_policy(descriptor, len(keys))
+        proxy = resolve_websearch_proxy()
     options = read_websearch_options(provider_id, descriptor)
     adapter_cls = ADAPTER_CLASSES[provider_id]
     return adapter_cls(
@@ -165,6 +198,8 @@ def build_provider(settings: Settings, provider_id: str) -> BaseWebSearchProvide
             http_timeout=DEFAULT_HTTP_TIMEOUT,
             options=options,
             quota_cooldown_seconds=settings.web_search_quota_cooldown_seconds,
+            oauth_access_token=oauth_access_token,
+            oauth_account_id=oauth_account_id,
         )
     )
 
@@ -769,9 +804,33 @@ def _descriptor_base_url(
     return base_url
 
 
+def _oauth_credentials_ready(
+    descriptor: WebSearchDescriptor, settings: Settings
+) -> bool:
+    if descriptor.provider_id != "chatgpt_oauth":
+        return False
+    raw = (settings.chatgpt_oauth_access_token or "").strip()
+    if raw and raw != CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE:
+        return True
+    try:
+        return bool(load_chatgpt_accounts(migrate=False))
+    except Exception:
+        return False
+
+
+def _oauth_configured(descriptor: WebSearchDescriptor, settings: Settings) -> bool:
+    if descriptor.provider_id != "chatgpt_oauth":
+        return False
+    if not settings.chatgpt_oauth_websearch_enabled:
+        return False
+    return _oauth_credentials_ready(descriptor, settings)
+
+
 def _descriptor_is_configured(
     descriptor: WebSearchDescriptor, settings: Settings
 ) -> bool:
+    if descriptor.auth_kind == "oauth":
+        return _oauth_configured(descriptor, settings)
     try:
         if descriptor.requires_key and not _descriptor_keys(descriptor, settings):
             return False

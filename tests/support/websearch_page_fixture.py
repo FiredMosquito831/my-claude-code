@@ -479,7 +479,7 @@ def websearch_page_fixture() -> dict[str, Any]:
         "fields_chain_disabled": websearch_fields(
             {"WEB_SEARCH_CHAIN": "exa,tavily", "WEB_SEARCH_PROVIDER": "disabled"}
         ),
-        "manual_only": ["context7", "deepseek"],
+        "manual_only": ["context7", "deepseek", "chatgpt_oauth"],
         "keys": {
             "unused": exa_unused,
             "healthy": exa_healthy,

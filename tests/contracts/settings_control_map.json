@@ -332,6 +332,14 @@
       "control": "field-CHATGPT_OAUTH_SESSION_AFFINITY",
       "page": "providers"
     },
+    "CHATGPT_OAUTH_WEBSEARCH_ENABLED": {
+      "control": "field-CHATGPT_OAUTH_WEBSEARCH_ENABLED",
+      "page": "web_search"
+    },
+    "CHATGPT_OAUTH_WEBSEARCH_MODEL": {
+      "control": "field-CHATGPT_OAUTH_WEBSEARCH_MODEL",
+      "page": "web_search"
+    },
     "CHATGPT_OAUTH_WRITE_BACK": {
       "control": "field-CHATGPT_OAUTH_WRITE_BACK",
       "page": "providers"

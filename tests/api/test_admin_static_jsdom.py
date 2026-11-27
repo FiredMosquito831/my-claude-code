@@ -12553,6 +12553,7 @@ WS_CHOICES = [
     "serpapi",
     "context7",
     "deepseek",
+    "chatgpt_oauth",
     "legacy",
 ]
 
@@ -12812,8 +12813,12 @@ def test_jsdom_context7_has_a_card_and_auto_never_picks_it(websearch_chain) -> N
     assert card["buttons"] == ["Use provider"]
     assert "Test provider" in card["dialogButtons"]
     assert "Hide keys" in card["dialogButtons"]
-    assert len(websearch_chain["cardOrder"]) == 16
-    assert websearch_chain["cardOrder"][-2:] == ["context7", "deepseek"]
+    assert len(websearch_chain["cardOrder"]) == 17
+    assert websearch_chain["cardOrder"][-3:] == [
+        "context7",
+        "deepseek",
+        "chatgpt_oauth",
+    ]
     # Auto with Exa, Tavily and Context7 keyed: Exa, as the server resolves it.
     assert websearch_chain["autoActive"] == ["exa"]
 
@@ -12835,6 +12840,24 @@ def test_jsdom_deepseek_has_a_manual_only_card_and_auto_never_picks_it(
     assert "DEEPSEEK_SEARCH_USE_INFERENCE_KEY" in card["dialog"]["keys"]
     assert "DEEPSEEK_SEARCH_NEED_CONTENT" in card["dialog"]["keys"]
     assert "DEEPSEEK_SEARCH_LOCALIZATION" in card["dialog"]["keys"]
+
+
+def test_jsdom_chatgpt_oauth_card_renders_opt_in_disabled_state_honestly(
+    websearch_chain,
+) -> None:
+    card = websearch_chain["chatgptOAuth"]
+    assert card is not None
+    assert card["label"] == "ChatGPT OAuth"
+    assert card["pill"] == "Disabled"
+    assert card["pill"] != "Configured"
+    assert "No key required" not in card["meta"]
+    assert "Manual only · never picked by Auto" in card["meta"]
+    assert "CHATGPT_OAUTH_WEBSEARCH_ENABLED=false" in card["meta"]
+    assert card["buttons"] == ["Use provider"]
+    assert card["useDisabled"] is True
+    assert card["gridEnabledField"] is True
+    assert card["dialog"]["hasKeyManager"] is False
+    assert "CHATGPT_OAUTH_WEBSEARCH_MODEL" in card["dialog"]["keys"]
 
 
 def test_jsdom_analytics_shows_position_key_tries_and_failure_kind(

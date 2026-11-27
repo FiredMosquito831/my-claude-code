@@ -851,6 +851,20 @@ async def admin_document(slug: str, request: Request):
     }
 
 
+def _chatgpt_oauth_websearch_credentials_ready() -> bool:
+    """Return True when ChatGPT OAuth credentials exist for standalone websearch."""
+
+    raw = str(
+        load_value_state().get("CHATGPT_OAUTH_ACCESS_TOKEN", {}).get("value", "")
+    ).strip()
+    if raw and raw != CHATGPT_OAUTH_MANAGED_CREDENTIAL_REFERENCE:
+        return True
+    try:
+        return bool(load_chatgpt_oauth_accounts(migrate=False))
+    except Exception:
+        return False
+
+
 def _config_response() -> dict[str, Any]:
     """The admin config payload, plus the tier alias each route answers to.
 
@@ -875,6 +889,13 @@ def _config_response() -> dict[str, Any]:
         for provider_id, descriptor in WEBSEARCH_CATALOG.items()
         if not descriptor.auto_select
     ]
+    payload["websearch_auth_kinds"] = {
+        provider_id: descriptor.auth_kind
+        for provider_id, descriptor in WEBSEARCH_CATALOG.items()
+    }
+    payload["websearch_oauth_ready"] = {
+        "chatgpt_oauth": _chatgpt_oauth_websearch_credentials_ready()
+    }
     _attach_provider_status_endpoints(payload)
     return payload
 

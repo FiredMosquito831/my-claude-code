@@ -188,6 +188,7 @@ def test_websearch_field_specs_cover_section_fields() -> None:
         "WEB_SEARCH_DOOR_MODE",
         "WEB_SEARCH_TOOL_LOOP_MAX_STEPS",
         "WEB_SEARCH_MCP_HTTP_ENABLED",
+        "CHATGPT_OAUTH_WEBSEARCH_ENABLED",
         "WEBSEARCH_LOG_ENABLED",
         "WEBSEARCH_LOG_CAPTURE_CONTENT",
         "WEBSEARCH_LOG_CONTENT_MAX_CHARS",

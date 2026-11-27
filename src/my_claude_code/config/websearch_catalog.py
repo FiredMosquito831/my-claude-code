@@ -6,6 +6,7 @@ free of adapter implementation imports (see contract tests). Insertion order of
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 OLLAMA_SEARCH_DEFAULT_BASE = "https://ollama.com"
 EXA_DEFAULT_BASE = "https://api.exa.ai"
@@ -79,6 +80,7 @@ class WebSearchDescriptor:
     supports_domains: bool  # allowed/blocked domains passthrough
     free_tier: str  # short human note for UI
     notes: str
+    auth_kind: Literal["api_key", "keyless", "oauth"] = "api_key"
     advanced_options: tuple[WebSearchOptionSpec, ...] = ()
     #: Whether ``WEB_SEARCH_PROVIDER=auto`` may pick this provider (7.113.0).
     #: False only for a provider that answers something other than a web
@@ -98,6 +100,7 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
         default_base_url=None,
         base_url_attr=None,
         requires_key=False,
+        auth_kind="keyless",
         supports_domains=False,
         free_tier="Free, keyless (unofficial metasearch)",
         notes="Uses the ddgs package (DDGS().text()); engines may IP-rate-limit.",
@@ -493,6 +496,7 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
         default_base_url=None,
         base_url_attr="searxng_base_url",
         requires_key=False,
+        auth_kind="keyless",
         supports_domains=False,
         free_tier="Free, self-hosted (AGPL)",
         notes="Needs SEARXNG_BASE_URL; instance must enable format=json in settings.yml.",
@@ -1059,6 +1063,36 @@ WEBSEARCH_CATALOG: dict[str, WebSearchDescriptor] = {
                 cost_note=(
                     "Optional client/region IPv4/IPv6 string for DeepSeek "
                     "geo-localization. Empty = unset."
+                ),
+            ),
+        ),
+        auto_select=False,
+    ),
+    "chatgpt_oauth": WebSearchDescriptor(
+        provider_id="chatgpt_oauth",
+        display_name="ChatGPT OAuth",
+        credential_env=None,
+        credential_url=None,
+        settings_attr=None,
+        default_base_url=None,
+        base_url_attr=None,
+        requires_key=False,
+        auth_kind="oauth",
+        supports_domains=True,
+        free_tier="ChatGPT/Codex OAuth subscription (opt-in; consumes Codex quota)",
+        notes=(
+            "Opt-in standalone /v1/websearch via CHATGPT_OAUTH_WEBSEARCH_ENABLED=true "
+            "reusing ChatGPT/Codex OAuth credentials (POST /codex/responses; never auto-selected)."
+        ),
+        advanced_options=(
+            WebSearchOptionSpec(
+                env="CHATGPT_OAUTH_WEBSEARCH_MODEL",
+                label="Codex model override",
+                field_type="text",
+                default="",
+                cost_note=(
+                    "Empty uses the default Codex model (gpt-5.4). Override to pin "
+                    "another ChatGPT/Codex model for standalone OAuth web searches."
                 ),
             ),
         ),

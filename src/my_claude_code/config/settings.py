@@ -36,6 +36,7 @@ from .constants import (
     CHATGPT_OAUTH_SERVICE_TIER_DEFAULT,
     CHATGPT_OAUTH_SERVICE_TIER_VALUES,
     CHATGPT_OAUTH_SESSION_AFFINITY_DEFAULT,
+    CHATGPT_OAUTH_WEBSEARCH_ENABLED_DEFAULT,
     COST_ESTIMATION_MODE_DEFAULT,
     CREDENTIAL_LOCKOUT_TIERS_DEFAULT,
     CREDENTIAL_MODEL_BENCH_ESCALATION_DEFAULT,
@@ -2371,6 +2372,10 @@ class Settings(BaseSettings):
     )
     web_search_mcp_http_enabled: bool = Field(
         default=True, validation_alias="WEB_SEARCH_MCP_HTTP_ENABLED"
+    )
+    chatgpt_oauth_websearch_enabled: bool = Field(
+        default=CHATGPT_OAUTH_WEBSEARCH_ENABLED_DEFAULT,
+        validation_alias="CHATGPT_OAUTH_WEBSEARCH_ENABLED",
     )
 
     # ==================== Debug / diagnostic logging (avoid sensitive content) ====================

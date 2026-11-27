@@ -29,6 +29,8 @@ _EXPECTED_WEBSEARCH_ORDER: tuple[str, ...] = (
     "context7",
     # 8.25.0: paid standalone Search API ($0.75/1k, ``auto_select=False``).
     "deepseek",
+    # 8.70.0: opt-in ChatGPT OAuth Codex Responses search (``auto_select=False``).
+    "chatgpt_oauth",
 )
 
 
@@ -46,7 +48,13 @@ def test_websearch_catalog_descriptors_are_internally_consistent() -> None:
             problems.append(f"{provider_id}: provider_id mismatch {desc.provider_id!r}")
         if not desc.display_name.strip():
             problems.append(f"{provider_id}: display_name is empty")
+        if desc.auth_kind not in {"api_key", "keyless", "oauth"}:
+            problems.append(f"{provider_id}: invalid auth_kind {desc.auth_kind!r}")
         if desc.requires_key:
+            if desc.auth_kind != "api_key":
+                problems.append(
+                    f"{provider_id}: requires_key must have auth_kind='api_key'"
+                )
             if desc.credential_env is None:
                 problems.append(
                     f"{provider_id}: requires_key but credential_env is None"
@@ -56,10 +64,14 @@ def test_websearch_catalog_descriptors_are_internally_consistent() -> None:
                     f"{provider_id}: requires_key but settings_attr is None"
                 )
         else:
+            if desc.auth_kind not in {"keyless", "oauth"}:
+                problems.append(
+                    f"{provider_id}: non-keyed must have auth_kind 'keyless' or 'oauth'"
+                )
             if desc.credential_env is not None:
-                problems.append(f"{provider_id}: keyless but credential_env set")
+                problems.append(f"{provider_id}: keyless/oauth but credential_env set")
             if desc.settings_attr is not None:
-                problems.append(f"{provider_id}: keyless but settings_attr set")
+                problems.append(f"{provider_id}: keyless/oauth but settings_attr set")
         if desc.credential_env is not None and not desc.credential_env.endswith("_KEY"):
             problems.append(
                 f"{provider_id}: credential_env {desc.credential_env} shape"
@@ -204,6 +216,7 @@ _EXPECTED_ADVANCED_ENVS: dict[str, tuple[str, ...]] = {
         "DEEPSEEK_SEARCH_NEED_CONTENT",
         "DEEPSEEK_SEARCH_LOCALIZATION",
     ),
+    "chatgpt_oauth": ("CHATGPT_OAUTH_WEBSEARCH_MODEL",),
 }
 
 
@@ -214,7 +227,9 @@ def test_only_context7_is_kept_out_of_auto() -> None:
         provider_id
         for provider_id, desc in WEBSEARCH_CATALOG.items()
         if not desc.auto_select
-    ] == ["context7", "deepseek"]
+    ] == ["context7", "deepseek", "chatgpt_oauth"]
+    assert "anthropic_oauth" not in WEBSEARCH_CATALOG
+    assert WEBSEARCH_CATALOG["chatgpt_oauth"].auth_kind == "oauth"
 
 
 _FIELD_TYPES = frozenset({"select", "text", "number", "boolean"})

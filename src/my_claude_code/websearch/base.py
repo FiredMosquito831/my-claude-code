@@ -111,6 +111,8 @@ class WebSearchProviderConfig:
     # Dotenv-only advanced options (env var name -> raw value), catalog-driven.
     options: Mapping[str, str] = field(default_factory=dict)
     quota_cooldown_seconds: float = WEB_SEARCH_QUOTA_COOLDOWN_SECONDS_DEFAULT
+    oauth_access_token: str | None = field(default=None, repr=False)
+    oauth_account_id: str | None = None
 
 
 class BaseWebSearchProvider(ABC):

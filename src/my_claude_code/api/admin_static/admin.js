@@ -11636,6 +11636,8 @@ function getStartedSnapshot() {
         ? state.config.websearch_manual_only
         : [],
     ),
+    websearchAuthKinds: (state.config && state.config.websearch_auth_kinds) || {},
+    websearchOauthReady: (state.config && state.config.websearch_oauth_ready) || null,
     harnessTiers: state.harnessTiers,
     steps,
     skipped: Array.isArray(onboarding.skipped) ? onboarding.skipped : [],
@@ -11857,9 +11859,16 @@ const GET_STARTED_STATUS = {
     }
     if (active !== "auto") {
       const label = gsOptionLabel(snap, "WEB_SEARCH_PROVIDER", active);
-      return gsWebSearchServiceReady(snap, active)
-        ? { state: "ready", text: `Ready · ${label}` }
-        : { state: "not_set_up", text: `${label}: no key yet` };
+      if (gsWebSearchServiceReady(snap, active)) {
+        return { state: "ready", text: `Ready · ${label}` };
+      }
+      const isOAuth =
+        (snap.websearchAuthKinds && snap.websearchAuthKinds[active] === "oauth") ||
+        active === "chatgpt_oauth";
+      return {
+        state: "not_set_up",
+        text: isOAuth ? `${label}: opt-in or sign-in needed` : `${label}: no key yet`,
+      };
     }
     const configured = gsWebSearchServices(snap).find(
       (service) =>
@@ -11933,12 +11942,51 @@ const GET_STARTED_STATUS = {
  * keyed service needs its key, SearXNG needs its base URL, and a service with
  * no credential at all (DuckDuckGo) is always available.
  */
+function webSearchOAuthState(
+  providerId,
+  fieldsMap,
+  providerStatus,
+  oauthReadyMap,
+) {
+  const enabledField =
+    providerId === "chatgpt_oauth"
+      ? fieldsMap?.get?.("CHATGPT_OAUTH_WEBSEARCH_ENABLED")
+      : null;
+  const enabledText = String(
+    enabledField?.value ?? enabledField?.default ?? "false",
+  )
+    .trim()
+    .toLowerCase();
+  const enabled = ["1", "true", "yes", "on"].includes(enabledText);
+  const hasReadyEntry = Boolean(
+    oauthReadyMap &&
+      Object.prototype.hasOwnProperty.call(oauthReadyMap, providerId),
+  );
+  const providerStatusReady = (providerStatus || []).some(
+    (entry) => entry.provider_id === providerId && entry.status === "configured",
+  );
+  const tokenField =
+    providerId === "chatgpt_oauth"
+      ? fieldsMap?.get?.("CHATGPT_OAUTH_ACCESS_TOKEN")
+      : null;
+  const oauthSignedIn = hasReadyEntry
+    ? Boolean(oauthReadyMap[providerId])
+    : providerStatusReady ||
+      Boolean(tokenField?.configured || tokenField?.value);
+  return {
+    enabled,
+    oauthSignedIn,
+    configured: enabled && oauthSignedIn,
+  };
+}
+
 function gsWebSearchServices(snap) {
   const field = gsFieldOf(snap, "WEB_SEARCH_PROVIDER");
   if (!field) return [];
   const credentials = Array.from((snap.fields || new Map()).values()).filter(
     (candidate) => candidate.section === "websearch" && candidate.secret,
   );
+  const authKinds = snap.websearchAuthKinds || {};
   return (field.options || [])
     .filter((option) => !["auto", "off", "disabled"].includes(option.value))
     .map((option) => {
@@ -11947,6 +11995,26 @@ function gsWebSearchServices(snap) {
       );
       const baseUrl =
         option.value === "searxng" ? gsFieldOf(snap, "SEARXNG_BASE_URL") : null;
+      const authKind =
+        authKinds[option.value] ||
+        (option.value === "chatgpt_oauth"
+          ? "oauth"
+          : credential || option.value === "deepseek"
+            ? "api_key"
+            : "no_key");
+      if (authKind === "oauth") {
+        const oauth = webSearchOAuthState(
+          option.value,
+          snap.fields,
+          snap.providerStatus,
+          snap.websearchOauthReady,
+        );
+        return {
+          id: option.value,
+          label: option.label,
+          configured: oauth.configured,
+        };
+      }
       const inferenceFallback =
         option.value === "deepseek" &&
         gsFieldOf(snap, "DEEPSEEK_SEARCH_USE_INFERENCE_KEY")?.value === "true" &&
@@ -24771,6 +24839,8 @@ function webSearchProviders() {
   const credentialFields = Array.from(state.fields.values()).filter(
     (field) => field.section === "websearch" && field.secret,
   );
+  const authKinds = state.config?.websearch_auth_kinds || {};
+  const oauthReadyMap = state.config?.websearch_oauth_ready || null;
   return providerField.options
     .filter((item) => !["auto", "off", "disabled"].includes(item.value))
     .map((item) => {
@@ -24779,6 +24849,13 @@ function webSearchProviders() {
       );
       const baseUrlField =
         item.value === "searxng" ? state.fields.get("SEARXNG_BASE_URL") : null;
+      const authKind =
+        authKinds[item.value] ||
+        (item.value === "chatgpt_oauth"
+          ? "oauth"
+          : credential || item.value === "deepseek"
+            ? "api_key"
+            : "no_key");
       const inferenceFallback =
         item.value === "deepseek" &&
         state.fields.get("DEEPSEEK_SEARCH_USE_INFERENCE_KEY")?.value === "true" &&
@@ -24786,6 +24863,24 @@ function webSearchProviders() {
           state.fields.get("DEEPSEEK_API_KEY")?.configured ||
             state.fields.get("DEEPSEEK_API_KEY")?.value,
         );
+      if (authKind === "oauth") {
+        const oauth = webSearchOAuthState(
+          item.value,
+          state.fields,
+          state.config?.provider_status,
+          oauthReadyMap,
+        );
+        return {
+          id: item.value,
+          label: item.label,
+          authKind,
+          enabled: oauth.enabled,
+          oauthSignedIn: oauth.oauthSignedIn,
+          envKey: null,
+          rotationKey: null,
+          configured: oauth.configured,
+        };
+      }
       const configured =
         (credential
           ? credential.configured
@@ -24795,11 +24890,45 @@ function webSearchProviders() {
       return {
         id: item.value,
         label: item.label,
+        authKind,
+        enabled: true,
+        oauthSignedIn: false,
         envKey: credential ? credential.key : null,
         rotationKey: credential ? `${credential.key}_ROTATION` : null,
         configured,
       };
     });
+}
+
+function webSearchProviderStatus(provider) {
+  if (provider.authKind === "oauth") {
+    if (!provider.enabled) {
+      return { ok: false, cls: "neutral", label: "Disabled" };
+    }
+    if (!provider.oauthSignedIn) {
+      return { ok: false, cls: "warn", label: "Not signed in" };
+    }
+    return { ok: true, cls: "ok", label: "Configured" };
+  }
+  return provider.configured
+    ? { ok: true, cls: "ok", label: "Configured" }
+    : { ok: false, cls: "warn", label: "Missing key" };
+}
+
+function webSearchProviderAuthLabel(provider) {
+  if (provider.authKind === "oauth") {
+    if (!provider.enabled) {
+      return "Opt-in off (CHATGPT_OAUTH_WEBSEARCH_ENABLED=false)";
+    }
+    if (!provider.oauthSignedIn) {
+      return "OAuth sign-in required (CHATGPT_OAUTH_ACCESS_TOKEN)";
+    }
+    return "ChatGPT OAuth (opt-in)";
+  }
+  return (
+    provider.envKey ||
+    (provider.id === "searxng" ? "SEARXNG_BASE_URL" : "No key required")
+  );
 }
 
 /** Providers Auto never picks (7.113.0: Context7), from the config payload,
@@ -24840,10 +24969,7 @@ function webSearchProviderMeta(provider, activeSelection, effectiveProvider) {
         ? `Search chain ${places.join(", ")}${paused ? " (paused)" : ""}`
         : "Not in the search chain",
     );
-    parts.push(
-      provider.envKey ||
-        (provider.id === "searxng" ? "SEARXNG_BASE_URL" : "No key required"),
-    );
+    parts.push(webSearchProviderAuthLabel(provider));
     return parts.join(" · ");
   }
   const manualOnly = webSearchManualOnly().has(provider.id);
@@ -24859,10 +24985,7 @@ function webSearchProviderMeta(provider, activeSelection, effectiveProvider) {
   } else if (activeSelection === "auto" && provider.configured && !manualOnly) {
     parts.push("Available");
   }
-  parts.push(
-    provider.envKey ||
-      (provider.id === "searxng" ? "SEARXNG_BASE_URL" : "No key required"),
-  );
+  parts.push(webSearchProviderAuthLabel(provider));
   return parts.join(" · ");
 }
 
@@ -25201,7 +25324,7 @@ function webSearchOverlaySubtitle(provider, active, effectiveProvider) {
       ? effectiveWebSearchProvider(webSearchProviders(), selection)
       : effectiveProvider;
   return [
-    provider.configured ? "Configured" : "Missing key",
+    webSearchProviderStatus(provider).label,
     webSearchProviderMeta(provider, selection, effective),
   ]
     .filter(Boolean)
@@ -25256,9 +25379,10 @@ function renderWebSearchProviders() {
     label.textContent = provider.label;
     labelWrap.appendChild(label);
     title.appendChild(labelWrap);
+    const status = webSearchProviderStatus(provider);
     const pill = document.createElement("span");
-    pill.className = `status-pill ${provider.configured ? "ok" : "warn"}`;
-    pill.textContent = provider.configured ? "Configured" : "Missing key";
+    pill.className = `status-pill ${status.cls}`;
+    pill.textContent = status.label;
     title.appendChild(pill);
 
     const meta = document.createElement("div");
@@ -25302,7 +25426,7 @@ function renderWebSearchProviders() {
     });
     grid.appendChild(card);
   });
-  ["WEB_SEARCH_PROVIDER", "WEB_SEARCH_FALLBACK_POLICY"].forEach((key) => {
+  ["WEB_SEARCH_PROVIDER", "WEB_SEARCH_FALLBACK_POLICY", "CHATGPT_OAUTH_WEBSEARCH_ENABLED"].forEach((key) => {
     const input = document.querySelector(`select[data-key="${key}"]`);
     if (!input || input.dataset.routeSummaryWired === "true") return;
     input.dataset.routeSummaryWired = "true";
@@ -25334,7 +25458,11 @@ function webSearchProviderHaystack(provider) {
     provider.id === "searxng"
       ? String(state.fields?.get("SEARXNG_BASE_URL")?.value || "")
       : "";
-  return [provider.label, provider.id, provider.envKey || "", baseUrl]
+  const extra =
+    provider.authKind === "oauth"
+      ? "oauth CHATGPT_OAUTH_WEBSEARCH_ENABLED CHATGPT_OAUTH_ACCESS_TOKEN"
+      : "";
+  return [provider.label, provider.id, provider.envKey || "", baseUrl, extra]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
@@ -25391,9 +25519,10 @@ function updateWebSearchCardsFromState() {
     );
     if (!card) return;
     setWebSearchCardEffective(card, effectiveProvider === provider.id);
+    const status = webSearchProviderStatus(provider);
     const pill = card.querySelector(".status-pill");
-    pill.className = `status-pill ${provider.configured ? "ok" : "warn"}`;
-    pill.textContent = provider.configured ? "Configured" : "Missing key";
+    pill.className = `status-pill ${status.cls}`;
+    pill.textContent = status.label;
     card.querySelector(".provider-meta").textContent = webSearchProviderMeta(
       provider,
       active,

@@ -38,6 +38,7 @@ def websearch_field_specs() -> tuple[dict[str, Any], ...]:
         *_search_chain_field_specs(),
         _legacy_interval_spec(),
         *_multi_door_and_mcp_field_specs(),
+        *_oauth_field_specs(),
         *_analytics_field_specs(),
         _searxng_base_url_spec(),
         *_credential_field_specs(),
@@ -291,6 +292,27 @@ def _multi_door_and_mcp_field_specs() -> tuple[dict[str, Any], ...]:
             "description": (
                 "Expose MCC's Streamable HTTP MCP web search endpoint at "
                 "/v1/mcp/websearch for MCP-capable coding agents and tools."
+            ),
+        },
+    )
+
+
+def _oauth_field_specs() -> tuple[dict[str, Any], ...]:
+    """Return opt-in OAuth standalone web search controls."""
+
+    return (
+        {
+            "key": "CHATGPT_OAUTH_WEBSEARCH_ENABLED",
+            "label": "ChatGPT OAuth Web Search",
+            "section_id": "websearch",
+            "field_type": "boolean",
+            "settings_attr": "chatgpt_oauth_websearch_enabled",
+            "default": "false",
+            "restart_required": False,
+            "description": (
+                "Opt-in standalone /v1/websearch backend using ChatGPT/Codex "
+                "OAuth credentials (off by default; consumes Codex quota and is "
+                "never auto-selected)."
             ),
         },
     )
