@@ -31,7 +31,7 @@ _RIVA_SERVER = "grpc.nvcf.nvidia.com:443"
 def _import_riva_client(riva_client_module: Any = None) -> Any:
     if riva_client_module is not None:
         return riva_client_module
-    import riva.client  # type: ignore[import-not-found]
+    import riva.client
 
     return riva.client
 
