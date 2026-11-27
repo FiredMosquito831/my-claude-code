@@ -59,9 +59,11 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+    MEDIA_SHAPE_GEMINI_TRANSLATE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MEDIA_SHAPE_MISTRAL_OCR,
+    MEDIA_SHAPE_NIM_RIVA_GRPC,
     MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
     MEDIA_SHAPE_VISION_OCR_CHAT,
     MISTRAL_IMAGE_FILE_CONTENT_PATH,
@@ -111,6 +113,7 @@ from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.failure_policy import classify_provider_failure
 from my_claude_code.providers.http import error_response_headers, read_error_body
+from my_claude_code.providers.nvidia_nim.voice import transcribe_riva_bytes
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
 from my_claude_code.providers.raw_upstream import (
@@ -122,7 +125,7 @@ from my_claude_code.providers.raw_upstream import (
 from my_claude_code.providers.recovery import learned_fact_store
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
-from .adapters import WireBody, build_wire_body
+from .adapters import _NIM_RIVA_USED, WireBody, _audio_upload, build_wire_body
 from .param_refusal import note_param_refusal
 from .recovery import (
     apply_media_preflight,
@@ -493,6 +496,47 @@ class MediaLeaf:
         pending_facts: list[tuple[str, object, str, str]] = []
         stream = bool(current_attempt.request.stream)
 
+        if active_surface.shape == MEDIA_SHAPE_NIM_RIVA_GRPC:
+            async with self._rate_limiter.concurrency_slot():
+                try:
+                    (
+                        riva_bytes,
+                        riva_content_type,
+                        riva_not_forwarded,
+                    ) = await self._rate_limiter.execute_with_retry(
+                        self._run_riva_asr, current_attempt
+                    )
+                except Exception as error:
+                    raise classify_provider_failure(
+                        error,
+                        provider_name=self._provider_id.upper(),
+                        read_timeout_s=self._config.http_read_timeout,
+                        request_id=request_id,
+                        mark_rate_limited=self._rate_limiter.extend_reactive_block,
+                        cooldown=self._config.rate_limit_cooldown(),
+                        mark_rate_limited_enabled=not self._config.routes_around_model,
+                    ) from error
+            answer = MediaResponse(
+                status_code=200,
+                content_type=riva_content_type,
+                body=riva_bytes,
+                headers={"content-type": riva_content_type},
+                not_forwarded=riva_not_forwarded,
+                adaptations=tuple(dict.fromkeys(adaptations)),
+                media_surface=surface_key(active_surface),
+                media_surface_source=surface_source,
+            )
+            if capture_enabled():
+                for line in media_line(
+                    DOOR_MEDIA,
+                    status=answer.status_code,
+                    content_type=answer.content_type,
+                    nbytes=len(answer.body),
+                ):
+                    emit(line)
+            yield answer
+            return
+
         while True:
             url = media_url(
                 self._config.base_url,
@@ -612,6 +656,7 @@ class MediaLeaf:
             if active_surface.shape in (
                 MEDIA_SHAPE_GEMINI_TTS,
                 MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+                MEDIA_SHAPE_GEMINI_TRANSLATE,
             ):
                 answer = await self._translated(
                     active_surface, current_attempt, answer, body
@@ -651,12 +696,61 @@ class MediaLeaf:
                     emit(line)
             yield answer
             return
+        first_chunk = True
+        stream_content_type = response.headers.get("content-type", "text/event-stream")
         try:
             async for raw in response.aiter_bytes():
-                if raw:
+                if not raw:
+                    continue
+                if first_chunk:
+                    first_chunk = False
+                    yield MediaResponse(
+                        status_code=response.status_code,
+                        content_type=stream_content_type,
+                        body=raw,
+                        headers={
+                            name: response.headers[name]
+                            for name in _KEPT_HEADERS
+                            if name in response.headers
+                        },
+                        not_forwarded=body.not_forwarded,
+                        adaptations=all_adaptations,
+                        media_surface=used_surface_key,
+                        media_surface_source=surface_source,
+                    )
+                else:
                     yield raw
         finally:
             await response.aclose()
+
+    async def _run_riva_asr(
+        self, attempt: MediaAttempt
+    ) -> tuple[bytes, str, tuple[str, ...]]:
+        """Run NVIDIA NIM Riva gRPC offline transcription off the event loop."""
+
+        return await asyncio.to_thread(self._run_riva_asr_sync, attempt)
+
+    def _run_riva_asr_sync(
+        self, attempt: MediaAttempt
+    ) -> tuple[bytes, str, tuple[str, ...]]:
+        audio = _audio_upload(attempt.request.uploads)
+        notes = [name for name in attempt.request.body if name not in _NIM_RIVA_USED]
+        notes.extend(
+            upload.field for upload in attempt.request.uploads if upload is not audio
+        )
+        language = attempt.request.body.get("language")
+        fmt = attempt.request.body.get("response_format")
+        audio.file.seek(0)
+        audio_bytes = audio.file.read()
+        audio.file.seek(0)
+        body, content_type = transcribe_riva_bytes(
+            audio_bytes,
+            model=attempt.resolved.provider_model,
+            api_key=self._config.api_key or "",
+            language=language if isinstance(language, str) else None,
+            response_format=fmt if isinstance(fmt, str) and fmt else "json",
+        )
+        return body, content_type, tuple(notes)
 
     async def _translated(
         self,

@@ -51,6 +51,7 @@ from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.providers.base import MaskedRefusalPlan, ProviderConfig
+from my_claude_code.providers.cloudflare import cloudflare_ai_base_url
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.model_listing import cached_provider_model_info
 from my_claude_code.providers.proxy_keepalive import proxied_leg_keepalive
@@ -138,6 +139,13 @@ class MediaRegistry:
         if descriptor is None:
             raise UnknownProviderError.for_provider(provider_id, descriptors)
         config = build_provider_config(descriptor, settings)
+        if provider_id == "cloudflare":
+            account_id = (getattr(settings, "cloudflare_account_id", "") or "").strip()
+            if account_id and "/accounts/" not in config.base_url:
+                config = dataclasses.replace(
+                    config,
+                    base_url=cloudflare_ai_base_url(config.base_url, account_id),
+                )
         entry = self._entries.get(provider_id)
         if (
             entry is not None

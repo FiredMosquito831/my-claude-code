@@ -32,10 +32,12 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+    MEDIA_SHAPE_GEMINI_TRANSLATE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_GEMINI_VEO_LRO,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
     MEDIA_SHAPE_MISTRAL_OCR,
+    MEDIA_SHAPE_NIM_RIVA_GRPC,
     MEDIA_SHAPE_OPENAI_IMAGES,
     MEDIA_SHAPE_OPENAI_SPEECH,
     MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS,
@@ -51,6 +53,7 @@ from my_claude_code.core.gemini_native_media import (
     speech_request,
     transcribe_instruction,
     transcribe_request,
+    translate_request,
     veo_lro_request,
 )
 from my_claude_code.core.mistral_media import image_tool_request
@@ -77,6 +80,10 @@ _GEMINI_SPEECH_USED = frozenset({"input", "response_format", "stream_format"})
 #: Transcription fields the Gemini translation consumes (a streamed request
 #: never gets here).
 _GEMINI_TRANSCRIBE_USED = frozenset({"language", "response_format", "stream"})
+#: Audio-to-English translation fields Gemini native ``generateContent`` consumes.
+_GEMINI_TRANSLATE_USED = frozenset({"response_format"})
+#: Transcription fields the NVIDIA NIM Riva gRPC adapter consumes.
+_NIM_RIVA_USED = frozenset({"language", "response_format", "stream"})
 #: Image fields the Mistral tool translation consumes: the prompt, and nothing
 #: else. A chat call has no ``n``, ``size``, ``quality`` or ``response_format``
 #: to put them in, and MCC never translates one by guess -- each is named in
@@ -116,6 +123,7 @@ _VISION_OCR_CHAT_USED = frozenset(
 _OFF_LOOP_SHAPES = frozenset(
     {
         MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+        MEDIA_SHAPE_GEMINI_TRANSLATE,
         MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
         MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
         MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
@@ -322,6 +330,25 @@ def _gemini_transcribe_body(attempt: MediaAttempt) -> WireBody:
     return WireBody(
         encoded=transcribe_request(
             transcribe_instruction(named or None),
+            audio.content_type or "application/octet-stream",
+            data,
+        ),
+        not_forwarded=tuple(notes),
+    )
+
+
+def _gemini_translate_body(attempt: MediaAttempt) -> WireBody:
+    """Native audio-to-English translation: the fixed instruction and the audio inline."""
+
+    request = attempt.request
+    audio = _audio_upload(request.uploads)
+    notes = [name for name in request.body if name not in _GEMINI_TRANSLATE_USED]
+    notes.extend(upload.field for upload in request.uploads if upload is not audio)
+    audio.file.seek(0)
+    data = audio.file.read()
+    audio.file.seek(0)
+    return WireBody(
+        encoded=translate_request(
             audio.content_type or "application/octet-stream",
             data,
         ),
@@ -832,6 +859,13 @@ def build_request_body(
         return _gemini_speech_body(surface, attempt)
     if surface.shape == MEDIA_SHAPE_GEMINI_TRANSCRIBE:
         return _gemini_transcribe_body(attempt)
+    if surface.shape == MEDIA_SHAPE_GEMINI_TRANSLATE:
+        return _gemini_translate_body(attempt)
+    if surface.shape == MEDIA_SHAPE_NIM_RIVA_GRPC:
+        notes = tuple(
+            name for name in attempt.request.body if name not in _NIM_RIVA_USED
+        )
+        return WireBody(not_forwarded=notes)
     if surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
         return _mistral_image_body(attempt)
     if surface.shape == MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE:

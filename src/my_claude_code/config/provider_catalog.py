@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from .media_surfaces import (
     MEDIA_ENCODING_JSON,
+    OPENAI_TTS_VOICES,
     MediaSurface,
     gemini_generate_content_image_edit_surface,
     gemini_generate_content_image_surface,
@@ -15,11 +16,13 @@ from .media_surfaces import (
     gemini_predict_image_surface,
     gemini_speech_surface,
     gemini_transcription_surface,
+    gemini_translation_surface,
     gemini_veo_lro_surfaces,
     image_edit_surface,
     image_generation_surface,
     image_variation_surface,
     mistral_image_tool_surface,
+    nim_riva_asr_surface,
     ocr_surface,
     openrouter_image_edit_surface,
     openrouter_image_generation_surface,
@@ -351,6 +354,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "nvidia_nim": ProviderDescriptor(
         provider_id="nvidia_nim",
+        media_surfaces=(nim_riva_asr_surface(),),
         display_name="NVIDIA NIM",
         credential_env="NVIDIA_NIM_API_KEY",
         credential_url="https://build.nvidia.com/settings/api-keys",
@@ -362,7 +366,11 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "openai": ProviderDescriptor(
         image_token_family="openai_patch",
         provider_id="openai",
-        media_surfaces=(image_variation_surface(), vision_ocr_chat_surface()),
+        media_surfaces=(
+            image_variation_surface(),
+            vision_ocr_chat_surface(),
+            speech_surface(stream=True, voices=OPENAI_TTS_VOICES),
+        ),
         display_name="OpenAI / ChatGPT",
         credential_env="CHATGPT_OAUTH_ACCESS_TOKEN",
         credential_url="https://github.com/openai/codex",
@@ -401,9 +409,9 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         provider_id="gemini",
         # Video: the OpenAI-compatible layer takes the SDK's multipart create
         # and serves the finished video at the ``url`` its retrieve answer
-        # carries (no content endpoint, no delete). Speech and transcription:
-        # that layer has neither, so they go to native ``generateContent``
-        # (7.66.0). No translation surface: none is documented.
+        # carries (no content endpoint, no delete). Speech, transcription,
+        # and translation: that layer has none, so they go to native
+        # ``generateContent`` (7.66.0 / 8.65.0).
         # 8.63.0: native image (:generateContent, :predict), edit, and Veo LRO
         # surfaces are appended after the OpenAI-compat defaults so existing
         # default-order behavior is preserved when no discovery metadata speaks,
@@ -419,6 +427,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             image_edit_surface(),
             *gemini_veo_lro_surfaces(),
             gemini_ocr_surface(),
+            gemini_translation_surface(),
         ),
         display_name="Gemini",
         credential_env="GEMINI_API_KEY",
@@ -573,6 +582,11 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "huggingface": ProviderDescriptor(
         provider_id="huggingface",
+        media_surfaces=(
+            image_generation_surface(),
+            speech_surface(),
+            transcription_surface(),
+        ),
         display_name="Hugging Face",
         credential_env="HUGGINGFACE_API_KEY",
         credential_url="https://huggingface.co/settings/tokens",
@@ -772,6 +786,11 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     ),
     "cloudflare": ProviderDescriptor(
         provider_id="cloudflare",
+        media_surfaces=(
+            image_generation_surface(),
+            speech_surface(),
+            transcription_surface(),
+        ),
         display_name="Cloudflare",
         credential_env="CLOUDFLARE_API_TOKEN",
         credential_url="https://dash.cloudflare.com/profile/api-tokens",

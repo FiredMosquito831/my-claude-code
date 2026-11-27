@@ -37,6 +37,11 @@ TRANSCRIBE_INSTRUCTION = (
     "Transcribe the speech in this audio exactly as spoken. Answer with the "
     "transcript only, with no introduction or commentary."
 )
+#: The instruction an audio-to-English translation is asked with.
+TRANSLATE_INSTRUCTION = (
+    "Translate the speech in this audio accurately into English text. Answer "
+    "with the English translation only, with no introduction or commentary."
+)
 
 #: Content types a host labels raw 16-bit PCM with.
 _PCM_TYPES = frozenset({"audio/l16", "audio/pcm"})
@@ -115,6 +120,12 @@ def transcribe_request(instruction: str, mime_type: str, audio: bytes) -> bytes:
         ]
     }
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
+
+
+def translate_request(mime_type: str, audio: bytes) -> bytes:
+    """The encoded ``generateContent`` body for an English translation. Run off the loop."""
+
+    return transcribe_request(TRANSLATE_INSTRUCTION, mime_type, audio)
 
 
 def image_generate_request(

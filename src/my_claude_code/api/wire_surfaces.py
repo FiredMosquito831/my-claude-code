@@ -51,6 +51,7 @@ IMAGES_GENERATIONS_ENDPOINT = "/v1/images/generations"
 IMAGES_EDITS_ENDPOINT = "/v1/images/edits"
 IMAGES_VARIATIONS_ENDPOINT = "/v1/images/variations"
 AUDIO_SPEECH_ENDPOINT = "/v1/audio/speech"
+AUDIO_VOICES_ENDPOINT = "/v1/audio/voices"
 AUDIO_TRANSCRIPTIONS_ENDPOINT = "/v1/audio/transcriptions"
 AUDIO_TRANSLATIONS_ENDPOINT = "/v1/audio/translations"
 VIDEOS_ENDPOINT = "/v1/videos"
@@ -77,6 +78,7 @@ _WIRE_API_BY_PATH: dict[str, WireApi] = {
     IMAGES_EDITS_ENDPOINT: "chat_completions",
     IMAGES_VARIATIONS_ENDPOINT: "chat_completions",
     AUDIO_SPEECH_ENDPOINT: "chat_completions",
+    AUDIO_VOICES_ENDPOINT: "chat_completions",
     AUDIO_TRANSCRIPTIONS_ENDPOINT: "chat_completions",
     AUDIO_TRANSLATIONS_ENDPOINT: "chat_completions",
     VIDEOS_ENDPOINT: "chat_completions",
