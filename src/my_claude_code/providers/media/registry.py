@@ -45,12 +45,16 @@ from my_claude_code.config.constants import (
 from my_claude_code.config.credential_names import credential_fingerprint
 from my_claude_code.config.credentials import mask_key_label, mask_proxy_label
 from my_claude_code.config.media_overrides import current_media_overrides
-from my_claude_code.config.media_surfaces import MediaSurface
+from my_claude_code.config.media_surfaces import (
+    MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
+    MediaSurface,
+)
 from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.providers.base import MaskedRefusalPlan, ProviderConfig
+from my_claude_code.providers.chatgpt_oauth.credentials import load_chatgpt_accounts
 from my_claude_code.providers.cloudflare import cloudflare_ai_base_url
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.model_listing import cached_provider_model_info
@@ -61,6 +65,7 @@ from my_claude_code.providers.runtime.config import build_provider_config
 from my_claude_code.providers.runtime.exit_rotation import credential_identity
 from my_claude_code.providers.runtime.proxy_leg import ProxiedLegRateLimiter
 
+from .chatgpt_oauth import ChatGPTOAuthMediaNode, normalize_chatgpt_oauth_base_url
 from .jobs import PinnedMediaClient
 from .key_pool import MediaKeyPool
 from .leaf import MediaLeaf, MediaNode
@@ -115,6 +120,24 @@ def _pinned_key_index(
     return None
 
 
+def _chatgpt_oauth_account_ids() -> tuple[str, ...]:
+    """Every stored ChatGPT account id in slot order. Never raises."""
+
+    try:
+        return tuple(
+            record.id for record in load_chatgpt_accounts(migrate=False) if record.id
+        )
+    except Exception:  # pragma: no cover - a store problem is not a crash
+        return ()
+
+
+def _uses_chatgpt_oauth_media(descriptor: ProviderDescriptor) -> bool:
+    return any(
+        surface.shape == MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE
+        for surface in descriptor.media_surfaces
+    )
+
+
 class MediaRegistry:
     """The process-wide owner of every provider's media stack."""
 
@@ -126,6 +149,7 @@ class MediaRegistry:
         # media endpoints (7.67.0) live on its descriptor, not in the config a
         # stack is keyed on; a static provider's never change.
         self._declared: dict[str, tuple[MediaSurface, ...]] = {}
+        self._oauth_accounts: dict[str, tuple[str, ...]] = {}
         self._retired: list[MediaNode] = []
         self._latest_settings: Settings | None = None
 
@@ -146,18 +170,25 @@ class MediaRegistry:
                     config,
                     base_url=cloudflare_ai_base_url(config.base_url, account_id),
                 )
+        account_ids: tuple[str, ...] = (
+            _chatgpt_oauth_account_ids()
+            if _uses_chatgpt_oauth_media(descriptor)
+            else ()
+        )
         entry = self._entries.get(provider_id)
         if (
             entry is not None
             and entry[0] == config
             and self._declared.get(provider_id) == descriptor.media_surfaces
+            and self._oauth_accounts.get(provider_id, ()) == account_ids
         ):
             return entry[1]
-        node = self._build(descriptor, config, settings)
+        node = self._build(descriptor, config, settings, account_ids=account_ids)
         if entry is not None:
             self._retired.append(entry[1])
         self._entries[provider_id] = (config, node)
         self._declared[provider_id] = descriptor.media_surfaces
+        self._oauth_accounts[provider_id] = account_ids
         return node
 
     def key_fingerprint(
@@ -208,12 +239,14 @@ class MediaRegistry:
 
         self._entries.clear()
         self._declared.clear()
+        self._oauth_accounts.clear()
         self._retired = []
 
     async def close(self) -> None:
         nodes = [node for _config, node in self._entries.values()] + self._retired
         self._entries.clear()
         self._declared.clear()
+        self._oauth_accounts.clear()
         self._retired = []
         for node in nodes:
             try:
@@ -262,7 +295,35 @@ class MediaRegistry:
         *,
         proxied_leg: bool,
         proxy_label: str = "",
-    ) -> MediaLeaf:
+        settings: Settings | None = None,
+        account_ids: tuple[str, ...] = (),
+    ) -> MediaNode:
+        if _uses_chatgpt_oauth_media(descriptor):
+            active_settings = (
+                settings if settings is not None else self._current_settings()
+            )
+            normalized_base = normalize_chatgpt_oauth_base_url(config.base_url)
+            if normalized_base != config.base_url:
+                config = dataclasses.replace(config, base_url=normalized_base)
+            pinned = config.oauth_account_id
+            first_account = account_ids[0] if account_ids else ""
+            header_account_id = (
+                getattr(active_settings, "chatgpt_oauth_account_id", "")
+                if not pinned or pinned == first_account
+                else ""
+            )
+            return ChatGPTOAuthMediaNode(
+                provider_id=descriptor.provider_id,
+                config=config,
+                surfaces=descriptor.media_surfaces,
+                rate_limiter=_leaf_limiter(config, proxied_leg=proxied_leg),
+                transport=self._transport,
+                proxy_label=proxy_label,
+                account_id=header_account_id,
+                pinned_account_id=pinned,
+                endpoint_ladder=self._resolve_endpoint_ladder,
+                settings_getter=self._current_settings,
+            )
         return MediaLeaf(
             provider_id=descriptor.provider_id,
             config=config,
@@ -279,6 +340,8 @@ class MediaRegistry:
         descriptor: ProviderDescriptor,
         config: ProviderConfig,
         settings: Settings,
+        *,
+        account_ids: tuple[str, ...] = (),
     ) -> MediaNode:
         plan = config.proxy_chain
         if isinstance(plan, MaskedRefusalPlan):
@@ -300,6 +363,8 @@ class MediaRegistry:
                 proxied_leg=False,
                 proxy_label=config.proxy_label
                 or (mask_proxy_label(config.proxy) if config.proxy else ""),
+                settings=settings,
+                account_ids=account_ids,
             )
         legs = plan.legs
         labels = tuple(leg.label or DIRECT_PROXY_LABEL for leg in legs)
@@ -318,6 +383,8 @@ class MediaRegistry:
                     descriptor,
                     dataclasses.replace(config, proxy=url, proxy_chain=None),
                     proxied_leg=False,
+                    settings=settings,
+                    account_ids=account_ids,
                 )
             leaf = self._leaf(
                 descriptor,
@@ -329,8 +396,10 @@ class MediaRegistry:
                     http_keepalive_expiry=keepalive_expiry,
                 ),
                 proxied_leg=True,
+                settings=settings,
+                account_ids=account_ids,
             )
-            limiter = leaf.rate_limiter
+            limiter = getattr(leaf, "rate_limiter", None)
             if plan.until_served and isinstance(limiter, ProxiedLegRateLimiter):
                 # Chat's rule for a ticked chain (7.81.0): what the exit
                 # refused or dropped is not retried on the same exit.
@@ -369,10 +438,41 @@ class MediaRegistry:
         descriptor: ProviderDescriptor,
         config: ProviderConfig,
         settings: Settings,
+        *,
+        account_ids: tuple[str, ...] = (),
     ) -> MediaNode:
+        if _uses_chatgpt_oauth_media(descriptor) and len(account_ids) >= 2:
+            providers = [
+                self._single(
+                    descriptor,
+                    dataclasses.replace(
+                        config,
+                        credential_rotation="single",
+                        oauth_account_id=account_id,
+                    ),
+                    settings,
+                    account_ids=account_ids,
+                )
+                for account_id in account_ids
+            ]
+            state = CredentialRotationState(
+                len(providers),
+                config.credential_rotation,
+                rate_limit_seconds=config.rate_limit_cooldown_seconds,
+                lockout_tiers=config.lockout_tiers,
+                model_bench_escalation=config.credential_model_bench_escalation,
+                cooldown=config.rate_limit_cooldown(),
+            )
+            return MediaKeyPool(
+                providers,
+                state,
+                key_labels=account_ids,
+                provider_id=descriptor.provider_id,
+                routes_around_model=config.routes_around_model,
+            )
         keys = config.api_keys or ((config.api_key,) if config.api_key else ())
         if len(keys) <= 1:
-            return self._single(descriptor, config, settings)
+            return self._single(descriptor, config, settings, account_ids=account_ids)
         providers = [
             self._single(
                 descriptor,
@@ -383,6 +483,7 @@ class MediaRegistry:
                     credential_rotation="single",
                 ),
                 settings,
+                account_ids=account_ids,
             )
             for key in keys
         ]

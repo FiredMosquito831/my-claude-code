@@ -18,6 +18,7 @@ import pytest
 
 from my_claude_code.application.media import schemas
 from my_claude_code.application.media.schemas import (
+    CHATGPT_OAUTH_IMAGE_FORWARDED,
     DOOR_FIELDS,
     GEMINI_NATIVE_FORWARDED,
     MISTRAL_IMAGE_TOOL_FORWARDED,
@@ -42,6 +43,7 @@ from my_claude_code.config.media_request_fields import (
     with_statement,
 )
 from my_claude_code.config.media_surfaces import (
+    MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TRANSLATE,
@@ -51,6 +53,8 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_NIM_RIVA_GRPC,
     MEDIA_SHAPE_VISION_OCR_CHAT,
     MediaSurface,
+    chatgpt_oauth_image_edit_surface,
+    chatgpt_oauth_image_generation_surface,
     custom_media_surfaces,
     gemini_speech_surface,
     gemini_transcription_surface,
@@ -489,12 +493,40 @@ def test_a_mistral_image_schema_says_every_other_field_is_not_forwarded() -> Non
     assert schema["additionalProperties"]["x-mcc"]["state"] == STATE_NOT_FORWARDED
 
 
+def test_chatgpt_oauth_image_forwarded_mirrors_the_adapter() -> None:
+    """8.69.0: the same mirror, for ChatGPT OAuth Codex Responses image gen/edit."""
+
+    assert (
+        CHATGPT_OAUTH_IMAGE_FORWARDED[MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE]
+        == adapters._CHATGPT_OAUTH_IMAGE_USED
+    )
+    gen_schema = _schema(
+        chatgpt_oauth_image_generation_surface(),
+        "image_generate",
+        model_ref="chatgpt_oauth/gpt-image-1",
+    )
+    assert _state(gen_schema, "size") == STATE_NOT_KNOWN
+    assert _state(gen_schema, "quality") == STATE_NOT_KNOWN
+    assert _state(gen_schema, "response_format") == STATE_NOT_FORWARDED
+    assert _state(gen_schema, "n") == STATE_NOT_FORWARDED
+    assert _state(gen_schema, "user") == STATE_NOT_FORWARDED
+
+    edit_schema = _schema(
+        chatgpt_oauth_image_edit_surface(),
+        "image_edit",
+        model_ref="chatgpt_oauth/gpt-image-1",
+    )
+    assert _state(edit_schema, "mask") == STATE_NOT_FORWARDED
+    assert _state(edit_schema, "image") == STATE_NOT_KNOWN
+
+
 def test_the_two_mirror_tables_are_the_one_translated_set() -> None:
     """One table, so a new translated shape cannot be added to one reader only."""
 
     assert TRANSLATED_SHAPES == {
         **GEMINI_NATIVE_FORWARDED,
         **MISTRAL_IMAGE_TOOL_FORWARDED,
+        **CHATGPT_OAUTH_IMAGE_FORWARDED,
         **MISTRAL_OCR_FORWARDED,
         **VISION_OCR_CHAT_FORWARDED,
         **NIM_RIVA_FORWARDED,

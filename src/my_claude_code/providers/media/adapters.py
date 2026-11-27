@@ -24,10 +24,12 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from my_claude_code.application.catalogues.codex import CODEX_BASE_INSTRUCTIONS
 from my_claude_code.application.media.request import MediaAttempt, MediaUpload
 from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
     MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
     MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
@@ -46,6 +48,10 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_VISION_OCR_CHAT,
     MISTRAL_IMAGE_TOOL_TYPE,
     MediaSurface,
+)
+from my_claude_code.core.chatgpt_oauth_media import (
+    CHATGPT_OAUTH_IMAGE_TOOL_OPTIONS,
+    chatgpt_oauth_image_request,
 )
 from my_claude_code.core.gemini_native_media import (
     image_generate_request,
@@ -89,6 +95,18 @@ _NIM_RIVA_USED = frozenset({"language", "response_format", "stream"})
 #: to put them in, and MCC never translates one by guess -- each is named in
 #: ``not_forwarded`` (spec §4.2, the rule ``_GEMINI_TRANSCRIBE_USED`` follows).
 _MISTRAL_IMAGE_USED = frozenset({"prompt"})
+_CHATGPT_OAUTH_IMAGE_USED = frozenset(
+    {
+        "prompt",
+        "size",
+        "quality",
+        "background",
+        "output_format",
+        "moderation",
+        "image",
+        "images",
+    }
+)
 _OPENROUTER_IMAGE_USED = frozenset(
     {"prompt", "size", "aspect_ratio", "image_size", "image_config", "images", "image"}
 )
@@ -122,6 +140,7 @@ _VISION_OCR_CHAT_USED = frozenset(
 )
 _OFF_LOOP_SHAPES = frozenset(
     {
+        MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
         MEDIA_SHAPE_GEMINI_TRANSCRIBE,
         MEDIA_SHAPE_GEMINI_TRANSLATE,
         MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
@@ -374,6 +393,74 @@ def _mistral_image_body(attempt: MediaAttempt) -> WireBody:
             MISTRAL_IMAGE_TOOL_TYPE,
         ),
         not_forwarded=notes,
+    )
+
+
+def _chatgpt_oauth_responses_image_body(attempt: MediaAttempt) -> WireBody:
+    """Codex ``/codex/responses`` body with the built-in ``image_generation`` tool.
+
+    ``mask`` uploads/fields and unsupported OpenAI Images options have no
+    Codex Responses equivalent: never forwarded, and recorded in
+    ``not_forwarded``. Multipart image uploads are encoded off-loop as ``data:``
+    URI ``input_image`` parts with ``encoding:multipart->json`` recorded in
+    ``adaptations``.
+    """
+
+    body = attempt.request.body
+    image_uris: list[str] = []
+    notes: list[str] = []
+    adaptations: list[str] = []
+
+    for upload in attempt.request.uploads:
+        if upload.field.startswith("mask"):
+            if "mask" not in notes:
+                notes.append("mask")
+            continue
+        if upload.field.startswith("image"):
+            image_uris.append(upload_to_data_uri(upload))
+            if "encoding:multipart->json" not in adaptations:
+                adaptations.append("encoding:multipart->json")
+        elif upload.field not in notes:
+            notes.append(upload.field)
+
+    raw_images = body.get("images")
+    if isinstance(raw_images, list | tuple):
+        for entry in raw_images:
+            url = extract_image_url(entry)
+            if isinstance(url, str) and url.strip():
+                image_uris.append(url.strip())
+
+    single_image = body.get("image")
+    if not image_uris and single_image is not None:
+        url = extract_image_url(single_image)
+        if isinstance(url, str) and url.strip():
+            image_uris.append(url.strip())
+
+    tool_options: dict[str, str] = {}
+    for key in CHATGPT_OAUTH_IMAGE_TOOL_OPTIONS:
+        if key in body:
+            value = body[key]
+            if isinstance(value, str) and value.strip():
+                tool_options[key] = value.strip()
+            elif key not in notes:
+                notes.append(key)
+
+    for name in body:
+        if name not in _CHATGPT_OAUTH_IMAGE_USED and name not in notes:
+            notes.append(name)
+
+    payload = chatgpt_oauth_image_request(
+        _prompt_text(attempt),
+        attempt.resolved.provider_model,
+        instructions=CODEX_BASE_INSTRUCTIONS,
+        image_urls=image_uris,
+        tool_options=tool_options,
+    )
+    return WireBody(
+        json=payload,
+        encoded=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        not_forwarded=tuple(notes),
+        adaptations=tuple(adaptations),
     )
 
 
@@ -868,6 +955,8 @@ def build_request_body(
         return WireBody(not_forwarded=notes)
     if surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
         return _mistral_image_body(attempt)
+    if surface.shape == MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE:
+        return _chatgpt_oauth_responses_image_body(attempt)
     if surface.shape == MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE:
         return _openrouter_chat_image_body(
             attempt, approximate_mapping=approximate_mapping

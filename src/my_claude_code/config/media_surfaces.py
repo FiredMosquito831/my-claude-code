@@ -64,6 +64,9 @@ MEDIA_SHAPE_VISION_OCR_CHAT = "vision_ocr_chat_fallback"
 #: 8.65.0: NVIDIA NIM Riva gRPC offline ASR and Gemini native audio translation.
 MEDIA_SHAPE_NIM_RIVA_GRPC = "nim_riva_grpc"
 MEDIA_SHAPE_GEMINI_TRANSLATE = "gemini_translate"
+#: 8.69.0: ChatGPT OAuth serves image generation/editing via the built-in
+#: ``image_generation`` tool on Codex Responses (``POST /codex/responses``).
+MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE = "chatgpt_oauth_responses_image"
 
 #: A surface whose host documents a JSON body only (``MediaSurface.encoding``).
 MEDIA_ENCODING_JSON = "json"
@@ -99,6 +102,7 @@ MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_VISION_OCR_CHAT,
     MEDIA_SHAPE_NIM_RIVA_GRPC,
     MEDIA_SHAPE_GEMINI_TRANSLATE,
+    MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
 )
 
 #: The header Gemini's native API reads the key from (instead of Bearer).
@@ -506,6 +510,28 @@ def mistral_image_tool_surface() -> MediaSurface:
         operation=MEDIA_OPERATION_IMAGE_GENERATE,
         shape=MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
         path="chat/completions",
+    )
+
+
+def chatgpt_oauth_image_generation_surface() -> MediaSurface:
+    """ChatGPT OAuth Codex Responses ``image_generation`` generation surface."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        shape=MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
+        path="codex/responses",
+        encoding=MEDIA_ENCODING_JSON,
+    )
+
+
+def chatgpt_oauth_image_edit_surface() -> MediaSurface:
+    """ChatGPT OAuth Codex Responses ``image_generation`` edit surface."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_EDIT,
+        shape=MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
+        path="codex/responses",
+        encoding=MEDIA_ENCODING_JSON,
     )
 
 

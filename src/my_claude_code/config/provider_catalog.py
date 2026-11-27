@@ -10,6 +10,8 @@ from .media_surfaces import (
     MEDIA_ENCODING_JSON,
     OPENAI_TTS_VOICES,
     MediaSurface,
+    chatgpt_oauth_image_edit_surface,
+    chatgpt_oauth_image_generation_surface,
     gemini_generate_content_image_edit_surface,
     gemini_generate_content_image_surface,
     gemini_ocr_surface,
@@ -648,6 +650,10 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "chatgpt_oauth": ProviderDescriptor(
         image_token_family="openai_patch",
         provider_id="chatgpt_oauth",
+        media_surfaces=(
+            chatgpt_oauth_image_generation_surface(),
+            chatgpt_oauth_image_edit_surface(),
+        ),
         display_name="ChatGPT OAuth (experimental)",
         credential_env="CHATGPT_OAUTH_ACCESS_TOKEN",
         credential_attr="chatgpt_oauth_access_token",

@@ -63,6 +63,7 @@ CODEX_OAUTH_SCOPE = (
     "openid profile email offline_access api.connectors.read api.connectors.invoke"
 )
 MANAGED_CREDENTIAL_SCHEMA_VERSION = 1
+CHATGPT_OAUTH_MANAGED_SOURCE_NAME = "fcc-managed"
 PRIVATE_DIR_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
 
