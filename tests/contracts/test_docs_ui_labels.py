@@ -12,6 +12,7 @@ This does not try to check prose for accuracy — nothing can. It checks the one
 mechanical thing that goes stale first and silently: control names.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,11 @@ DOCUMENTED_CONTROLS: tuple[str, ...] = (
     "New profile",
     "Add row",
     "Fetch the charged ask",
+    # Remote Control (8.58.0): docs/REMOTE-CONTROL.md, docs/USAGE.md, and
+    # #guide-remote-control instruct the reader to press these.
+    "Generate pairing QR",
+    "Stop tunnel",
+    "Revoke all devices",
 )
 
 
@@ -118,7 +124,9 @@ def _defines_control(label: str) -> bool:
     quoted_in_script = any(
         f"{quote}{label}{quote}" in script for quote in ('"', "'", "`")
     )
-    tag_text_in_markup = f">{label}<" in " ".join(chrome.split())
+    tag_text_in_markup = (
+        re.search(rf">\s*{re.escape(label)}\s*<", " ".join(chrome.split())) is not None
+    )
     return quoted_in_script or tag_text_in_markup
 
 

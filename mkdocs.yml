@@ -192,6 +192,7 @@ nav:
       - Clients: CLIENTS.md
       - Claude Code config: CLAUDE-CODE-CONFIG.md
       - Messaging: MESSAGING.md
+      - Remote control: REMOTE-CONTROL.md
   - Providers and routing:
       - Routing reference: ROUTING-REFERENCE.md
       - OAuth providers: OAUTH-PROVIDERS.md

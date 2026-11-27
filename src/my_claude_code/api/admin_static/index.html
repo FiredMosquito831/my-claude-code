@@ -3009,6 +3009,7 @@
                 <a href="#guide-credits">Running out of credit</a>
                 <a href="#guide-rotation">Rotate keys safely</a>
                 <a href="#guide-updates">Update the server</a>
+                <a href="#guide-remote-control">Remote Control</a>
                 <a href="#guide-security">Lock it down</a>
                 <a href="#guide-trouble">Troubleshooting</a>
               </nav>
@@ -3025,9 +3026,9 @@
                   Streaming, tool use, reasoning and image input all keep working.
                 </p>
                 <p>
-                  The 16 <code>mcc-*</code> launchers &mdash; Claude Code, Codex, OpenCode,
+                  The 18 <code>mcc-*</code> launchers &mdash; Claude Code, Codex, OpenCode,
                   Gemini CLI, Crush, Cline, Goose, Aider, Kimi Code, Qwen Code, Command
-                  Code, Droid, Pi, Kilo, Roo Code, Antigravity &mdash; and the desktop apps
+                  Code, OpenClaw, Hermes Agent, Droid, Pi, Kilo &mdash; and the desktop apps
                   beside them all point at one address and share this one control panel.
                   Claude Code is one first-class client here, not the frame around
                   everything else; it leads the walkthroughs below only because it is the
@@ -5423,7 +5424,8 @@ mcc-gemini</code></pre>
                   <strong>Requests</strong> page labels each of these rows
                   <code>openai_chat</code> in its Protocol row, so you can tell at a
                   glance which door a request came through. <code>/v1/responses</code>
-                  answers streamed requests only. Every endpoint, its auth headers, its
+                  streams by default and answers non-streaming JSON when
+                  <code>&quot;stream&quot;: false</code>. Every endpoint, its auth headers, its
                   error shapes and one runnable example each are in the <em>API
                   reference</em> of <em>Clients</em> on the <strong>Docs</strong> page.
                 </p>
@@ -8772,6 +8774,34 @@ EXA_API_KEY_ROTATION=failover</code></pre>
                   failed install left a good previous version on disk with nothing
                   running it. The helper now starts one on both branches and the banner
                   says which happened.
+                </p>
+                <h3 id="guide-remote-control">Remote Control</h3>
+                <p>
+                  Open the <strong>Remote Control</strong> page to drive local coding
+                  agents from a phone or remote browser at <code>/rc</code> while
+                  <code>/admin</code> stays strictly loopback-only. Enable
+                  <code>RC_ENABLED</code> (off by default), list the workspace folders
+                  remote sessions may touch in <code>RC_ALLOWED_DIRS</code>, and pick
+                  <code>RC_PERMISSION_MODE</code> (<code>ask</code>,
+                  <code>auto_edits</code>, or high-risk <code>yolo</code>).
+                </p>
+                <table class="guide-table">
+                  <thead><tr><th>Transport</th><th><code>RC_TUNNEL_MODE</code></th><th>What it does</th></tr></thead>
+                  <tbody>
+                    <tr><td>Local Loopback</td><td><code>off</code></td><td>Same machine only (<code>http://127.0.0.1:8082/rc</code>).</td></tr>
+                    <tr><td>Tailscale Serve</td><td><code>tailscale_serve</code></td><td>Recommended HTTPS inside your Tailnet (<code>tailscale serve --bg</code>); supports PWA install &amp; Web Push while keeping <code>/admin</code> loopback-only.</td></tr>
+                    <tr><td>Tailnet Direct</td><td><code>tailscale_local</code></td><td>Plain HTTP over your Tailnet IP (requires <code>HOST=0.0.0.0</code> + <code>ANTHROPIC_AUTH_TOKEN</code>).</td></tr>
+                    <tr><td>Cloudflare Tunnel</td><td><code>cloudflare</code></td><td>Outbound-only <code>cloudflared</code> HTTPS tunnel (ephemeral quick tunnel, or your Named Tunnel with <code>RC_CLOUDFLARE_TUNNEL_TOKEN</code> and <code>RC_CLOUDFLARE_PUBLIC_HOSTNAME</code>).</td></tr>
+                  </tbody>
+                </table>
+                <p>
+                  Click <strong>Generate pairing QR</strong> to issue a 60-second
+                  single-use pairing URL (<code>?pair=...</code>) signed into an HttpOnly
+                  device cookie (<code>RC_SESSION_SECRET</code>). You can also attach any
+                  terminal launcher live with <code>mcc-claude --rc</code> (or any
+                  <code>mcc-* --rc</code>). Click <strong>Stop tunnel</strong> to close
+                  external access, or <strong>Revoke all devices</strong> to sign out
+                  every paired browser and close active WebSockets immediately.
                 </p>
                 <h3 id="guide-security">Lock it down</h3>
                 <table class="guide-table">

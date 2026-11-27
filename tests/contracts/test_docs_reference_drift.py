@@ -53,6 +53,7 @@ MARKDOWN_DOCS: tuple[str, ...] = (
 TOPIC_DOCS: tuple[str, ...] = (
     "docs/CLIENTS.md",
     "docs/MESSAGING.md",
+    "docs/REMOTE-CONTROL.md",
     "docs/OAUTH-PROVIDERS.md",
     "docs/ROUTING-REFERENCE.md",
     "docs/WEB-SEARCH.md",
@@ -247,20 +248,26 @@ def _known_routes() -> frozenset[str]:
     from my_claude_code.api import wire_surfaces
 
     paths: set[str] = set()
+    router_prefix_re = re.compile(
+        r"""(\w+)\s*=\s*APIRouter\([^)]*prefix\s*=\s*["']([^"']+)["']""",
+        re.S,
+    )
+    decorator_re = re.compile(
+        r"@(\w+)\.(?:get|post|put|delete|patch|head|options|api_route)\(\s*"
+        r'(?:"([^"]+)"|([A-Z_]+)(?:\s*\+\s*"([^"]+)")?)',
+    )
     for source in (REPO_ROOT / "src/my_claude_code/api").glob("*.py"):
         text = _read(source)
-        for match in re.finditer(
-            r"@\w+\.(?:get|post|put|delete|patch|head|options|api_route)\(\s*"
-            r'(?:"([^"]+)"|([A-Z_]+)(?:\s*\+\s*"([^"]+)")?)',
-            text,
-        ):
-            literal, constant, suffix = match.groups()
+        prefixes = {m.group(1): m.group(2) for m in router_prefix_re.finditer(text)}
+        for match in decorator_re.finditer(text):
+            router_name, literal, constant, suffix = match.groups()
+            prefix = prefixes.get(router_name, "")
             if literal is not None:
-                paths.add(literal)
+                paths.add(prefix + literal)
                 continue
             base = getattr(wire_surfaces, constant, None)
             if isinstance(base, str):
-                paths.add(base + (suffix or ""))
+                paths.add(prefix + base + (suffix or ""))
     return frozenset(paths)
 
 

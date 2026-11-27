@@ -33,7 +33,7 @@
 
 ## Install
 
-**Pick one.** Every route ends at the same server, the same dashboard and the same configuration directory, and installs `mcc-server` plus the 16 `mcc-*` agent launchers on your `PATH`.
+**Pick one.** Every route ends at the same server, the same dashboard and the same configuration directory, and installs `mcc-server` plus the 18 `mcc-*` agent launchers on your `PATH`.
 
 | Route | Command or download |
 | --- | --- |
@@ -109,7 +109,8 @@ People use it as:
 - a **Gemini CLI proxy**, over the Gemini API;
 - a **local model gateway**, putting Ollama, LM Studio or llama.cpp behind the same address as everything else;
 - a **multi-provider router** with fallback chains, credential rotation, health tracking, and per-request cost with provenance;
-- a **web-search tool proxy**, fulfilling an agent's `web_search` tool at the router across 14 search providers;
+- a **web-search tool proxy**, fulfilling an agent's `web_search` tool at the router across 16 search providers;
+- a **Remote Control interface** (`/rc`), letting you drive local coding agents from a phone or remote browser over Tailscale Serve, Tailnet Direct or Cloudflare Tunnel while `/admin` stays loopback-only ([Remote Control](docs/REMOTE-CONTROL.md));
 - an **observability layer**, because every request through it is logged, priced and searchable afterwards.
 
 MCC is an independent open-source project, not affiliated with Anthropic, OpenAI, Google or OpenCode. It is dual-licensed: AGPL-3.0-or-later, or a [commercial licence](COMMERCIAL-LICENSE.md). MCC itself is free; the models behind it may be free, paid, subscription-based or entirely local — that is your choice and your account.
@@ -191,7 +192,8 @@ MCC is an independent open-source project, not affiliated with Anthropic, OpenAI
 
 | Capability | What it gives you | Where it lives | More |
 | --- | --- | --- | --- |
-| 15 CLI launchers | One `mcc-*` command per agent that points it here and starts it | terminal | [below](#coding-agents) |
+| 18 CLI launchers | One `mcc-*` command per agent that points it here and starts it (`--rc` opts into live Remote Control dual-sync) | terminal | [below](#coding-agents) |
+| Remote Control (`/rc`) | Drive local agents or an interactive PTY from a phone or remote browser over Tailscale or Cloudflare Tunnel, with 60-second QR pairing and `RC_ALLOWED_DIRS` containment; `/admin` stays loopback-only | **Remote Control** page | [Remote Control](docs/REMOTE-CONTROL.md) |
 | Install an agent from the dashboard | An **Install** button on each card that is not installed (CLI and desktop): the vendor's own installer first, npm only where it is the only way, Node.js installed first only when it is missing; the plan — every download, command, permission prompt and PATH or profile change — is shown before anything runs; never `sudo`, never an upgrade of your Node.js | **Coding agents** page | [Guide](docs/USAGE.md#install-an-agent-from-the-dashboard) |
 | Desktop app **Configure** | MCC writes its keys into the one file each app reads, carrying every other byte through | **Coding agents** page | [Guide](docs/USAGE.md#6-point-a-desktop-app-here) |
 | Undo, two ways | Remove MCC's keys, or restore the exact values MCC replaced | **Coding agents** page | [Guide](docs/USAGE.md#6-point-a-desktop-app-here) |
@@ -379,6 +381,7 @@ The Admin UI at `http://127.0.0.1:8082/admin` is local-only and is where everyth
 | **Providers** | One searchable card per provider — keys and key pools you can reorder and name, per-key health and usage, rotation policy, live **Refresh models**. |
 | **Configure Claude Code** | Pointing Claude Code at this proxy, per session or permanently. |
 | **Coding agents** | Every launcher's installed state and flags, the **Install** button for an agent that is not installed, and the **Configure**/**Undo** buttons for the apps MCC does not launch. |
+| **Remote Control** | Opt-in `/rc` mobile PWA control plane: Tailscale Serve, Tailnet Direct and Cloudflare Tunnel controls, 60-second pairing QR, device revocation, and active sessions. |
 | **Model Config** | `MODEL`, the tier map, fallback chains, the vision adapter and reasoning control. |
 | **Models** | Every model every configured provider publishes, with bulk visibility, capability probes and learned facts. |
 | **Web Search** | Route policy, the search chain, provider cards, key health with Reset, advanced options and search analytics. |
