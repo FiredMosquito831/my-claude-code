@@ -50,6 +50,7 @@ from my_claude_code.config.media_surfaces import (
     MediaSurface,
 )
 from my_claude_code.providers.recovery import (
+    FACT_MEDIA_PARAM_ENUM,
     FACT_MEDIA_PARAM_REFUSED,
     FACT_MEDIA_PARAM_REQUIRED,
     SOURCE_REJECTION,
@@ -124,6 +125,59 @@ _SENTENCE_REFUSED: tuple[re.Pattern[str], ...] = (
 #: pydantic's own words for the two directions, v1 and v2.
 _PYDANTIC_REQUIRED_TYPES = frozenset({"missing", "value_error.missing"})
 _PYDANTIC_REFUSED_TYPES = frozenset({"extra_forbidden", "value_error.extra"})
+
+#: Stated enum / allowed-value patterns in 400/422 refusal sentences.
+_ENUM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?:must|should)\s+be\s+one\s+of\s*:?\s*(?P<values>[^\n.;]+)",
+        re.I,
+    ),
+    re.compile(
+        r"(?:expected|allowed|supported|valid)\s+(?:one\s+of\s*:?\s*|(?:values|options|sizes|durations|formats)\s*(?:are|:)\s*)(?P<values>[^\n.;]+)",
+        re.I,
+    ),
+    re.compile(
+        rf"^\s*{_QUOTE}{_SENTENCE_FIELD}{_QUOTE}\s+(?:must|should)\s+be\s+(?P<values>(?:{_QUOTE}[A-Za-z0-9_.:/-]+{_QUOTE}(?:\s*(?:,|or|\|)\s*)+)+{_QUOTE}[A-Za-z0-9_.:/-]+{_QUOTE})",
+        re.I,
+    ),
+)
+_SENTENCE_ENUM_FIELD = re.compile(
+    rf"^\s*{_QUOTE}{_SENTENCE_FIELD}{_QUOTE}\s+(?:must|should|can|expected|is)\b"
+)
+
+#: Explicit wrong-endpoint / unsupported-method markers in 400/422/500 bodies.
+_SURFACE_SHAPED_TEXT = re.compile(
+    r"use\s+(?::?(?:generatecontent|predictlongrunning|predict)\b|/[\w/:-]+)"
+    r"|not\s+supported\s+(?:on|for)\s+(?:this\s+endpoint|/\S+)"
+    r"|(?:wrong|invalid|unsupported|unknown)\s+(?:endpoint|path|url|route|method)"
+    r"|method\s+not\s+allowed"
+    r"|unrecogni[sz]ed\s+request\s+url"
+    r"|does\s+not\s+support\s+(?:this\s+endpoint|/[\w/:-]+)",
+    re.I,
+)
+
+#: Encoding-mismatch refusal markers in 400/415/422 bodies.
+_MULTIPART_REFUSED_RE = re.compile(
+    r"multipart/form-data\s+(?:is\s+)?not\s+supported"
+    r"|unsupported\s+(?:content[- ]type|media\s+type).*multipart"
+    r"|(?:expected|must\s+be|requires?)\s+application/json",
+    re.I,
+)
+_JSON_REFUSED_RE = re.compile(
+    r"application/json\s+(?:is\s+)?not\s+supported"
+    r"|unsupported\s+(?:content[- ]type|media\s+type).*application/json"
+    r"|(?:expected|must\s+be|requires?)\s+multipart/form-data",
+    re.I,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ParamEnumRefusal:
+    """Allowed values stated by a host for one request parameter."""
+
+    field: str
+    allowed: tuple[str, ...]
+    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +318,108 @@ def param_refusals(
     return tuple(found)
 
 
+def _split_enum_tokens(raw_values: str) -> tuple[str, ...]:
+    cleaned = raw_values.strip().strip("[]()")
+    # Drop trailing parenthetical like "(request id: ...)"
+    cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", cleaned).strip()
+    if not cleaned:
+        return ()
+    parts = re.split(r"\s*(?:,|\||\bor\b)\s*", cleaned, flags=re.I)
+    tokens: list[str] = []
+    for part in parts:
+        token = part.strip().strip("`'\".,;: ")
+        if not token or len(token) > 64:
+            continue
+        if " " in token:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tuple(tokens) if len(tokens) >= 2 else ()
+
+
+def parse_param_enum_refusal(
+    status_code: int,
+    content: bytes,
+    *,
+    sent: Iterable[str],
+    renames: Mapping[str, str] | None = None,
+) -> tuple[ParamEnumRefusal, ...]:
+    """Extract stated allowed-value enums from 400/422 refusal bodies."""
+
+    if status_code not in {400, 422}:
+        return ()
+    if not content or len(content) > _MAX_BODY_BYTES:
+        return ()
+    try:
+        document = json.loads(content)
+    except ValueError:
+        return ()
+    carried = frozenset(sent)
+    back = dict(renames or {})
+    found: list[ParamEnumRefusal] = []
+    seen: set[str] = set()
+    for said in _statements(document):
+        if not said.message:
+            continue
+        wire_field = said.param if _STRUCTURED_FIELD.fullmatch(said.param) else ""
+        if not wire_field:
+            field_match = _SENTENCE_ENUM_FIELD.search(said.message)
+            if field_match is not None:
+                wire_field = field_match.group("field")
+        if not wire_field:
+            continue
+        field = back.get(wire_field, wire_field)
+        if field in _NEVER_A_FIELD_FACT or field not in carried or field in seen:
+            continue
+        allowed: tuple[str, ...] = ()
+        for pattern in _ENUM_PATTERNS:
+            match = pattern.search(said.message)
+            if match is not None:
+                allowed = _split_enum_tokens(match.group("values"))
+                if allowed:
+                    break
+        if not allowed:
+            continue
+        seen.add(field)
+        found.append(
+            ParamEnumRefusal(field=field, allowed=allowed, message=said.message)
+        )
+    return tuple(found)
+
+
+def is_media_surface_shaped_failure(status_code: int, content: bytes) -> bool:
+    """Whether an HTTP failure indicates the wrong media endpoint or method."""
+
+    if status_code in {404, 405, 501}:
+        return True
+    if status_code not in {400, 422, 500}:
+        return False
+    if not content or len(content) > _MAX_BODY_BYTES:
+        return False
+    text = content.decode("utf-8", errors="ignore")
+    return _SURFACE_SHAPED_TEXT.search(text) is not None
+
+
+def is_media_encoding_refusal(
+    status_code: int,
+    content: bytes,
+    *,
+    sent_encoding: str | None = None,
+) -> str | None:
+    """Return ``'multipart'`` or ``'json'`` if the refusal rejects that encoding."""
+
+    if status_code not in {400, 415, 422}:
+        return None
+    text = content[:_MAX_BODY_BYTES].decode("utf-8", errors="ignore") if content else ""
+    if _MULTIPART_REFUSED_RE.search(text):
+        return "multipart"
+    if _JSON_REFUSED_RE.search(text):
+        return "json"
+    if status_code == 415 and sent_encoding in {"multipart", "json"}:
+        return sent_encoding
+    return None
+
+
 def _sent_fields(request: MediaRequest) -> set[str]:
     """Every field the request carried, under the client's names."""
 
@@ -303,7 +459,13 @@ def note_param_refusal(
             sent=_sent_fields(request),
             renames={wire: client for client, wire in surface.renames},
         )
-        if not refusals:
+        enum_refusals = parse_param_enum_refusal(
+            response.status_code,
+            response.content,
+            sent=_sent_fields(request),
+            renames={wire: client for client, wire in surface.renames},
+        )
+        if not refusals and not enum_refusals:
             return
         store = learned_fact_store()
         for refusal in refusals:
@@ -324,6 +486,16 @@ def note_param_refusal(
                 refusal.direction,
                 refusal.field,
                 request.operation,
+            )
+        for enum_refusal in enum_refusals:
+            store.record(
+                provider_id,
+                model_id,
+                FACT_MEDIA_PARAM_ENUM,
+                list(enum_refusal.allowed),
+                source=SOURCE_REJECTION,
+                detail=f"{request.operation}:{enum_refusal.field}",
+                evidence=enum_refusal.message,
             )
     except Exception as exc:
         logger.debug(

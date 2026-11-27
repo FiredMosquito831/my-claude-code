@@ -608,7 +608,7 @@ def test_predict_long_running_routes_to_video_rail_and_pins(
 def test_predict_long_running_image_is_the_input_reference(
     monkeypatch, tmp_path
 ) -> None:
-    """The first frame goes up as ``input_reference``; a JSON-only host is skipped."""
+    """The first frame goes up as ``input_reference`` (data URI on JSON, upload on multipart)."""
     settings = _settings(
         monkeypatch,
         tmp_path,
@@ -628,10 +628,15 @@ def test_predict_long_running_image_is_the_input_reference(
     with _client(settings, upstream) as client:
         created = client.post(VEO_PATH, json=payload)
     assert created.status_code == 200, created.text
-    assert upstream.calls() == [("POST", GEMINI, GEMINI_VIDEOS)]
+    assert upstream.calls() == [
+        ("POST", OPENROUTER, OR_VIDEOS),
+        ("POST", GEMINI, GEMINI_VIDEOS),
+    ]
+    or_body = json.loads(upstream.seen[0].content)
+    assert or_body["input_reference"] == f"data:image/png;base64,{_b64(PNG_IN)}"
     files = [
         (name, filename, data)
-        for name, filename, data in _form_parts(upstream.seen[0])
+        for name, filename, data in _form_parts(upstream.seen[1])
         if filename
     ]
     assert files == [("input_reference", "input_reference-0.png", PNG_IN)]

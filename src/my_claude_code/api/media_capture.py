@@ -317,6 +317,13 @@ class MediaCapture:
             )
         if not_forwarded:
             media["not_forwarded"] = not_forwarded
+        if outputs is not None:
+            if outputs.adaptations:
+                media["adapted"] = list(outputs.adaptations)
+            if outputs.media_surface is not None:
+                media["surface"] = outputs.media_surface
+            if outputs.media_surface_source is not None:
+                media["surface_source"] = outputs.media_surface_source
         params["media"] = media
         return params
 

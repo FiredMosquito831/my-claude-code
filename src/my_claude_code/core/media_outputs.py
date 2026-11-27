@@ -42,6 +42,11 @@ class MediaOutputs:
     #: Request fields the answering surface had no exact place for (a
     #: Gemini native answer), logged with the request's own list.
     not_forwarded: tuple[str, ...] = ()
+    #: Parameter/encoding/endpoint adaptations applied on this answer (8.62.0).
+    adaptations: tuple[str, ...] = ()
+    #: Wire surface key/shape and resolution source that served this answer.
+    media_surface: str | None = None
+    media_surface_source: str | None = None
 
     @property
     def bytes_total(self) -> int | None:

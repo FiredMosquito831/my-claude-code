@@ -24,6 +24,10 @@ import httpx
 from loguru import logger
 
 from my_claude_code.application.errors import UnknownProviderError
+from my_claude_code.application.media.endpoint_ladder import (
+    ResolvedMediaEndpointLadder,
+    resolve_media_endpoint_ladder,
+)
 from my_claude_code.application.media.executor import media_route_health_registry
 from my_claude_code.application.media.ports import (
     MediaJobClient,
@@ -36,15 +40,17 @@ from my_claude_code.config.constants import (
 )
 from my_claude_code.config.credential_names import credential_fingerprint
 from my_claude_code.config.credentials import mask_key_label, mask_proxy_label
+from my_claude_code.config.media_overrides import current_media_overrides
 from my_claude_code.config.media_surfaces import MediaSurface
 from my_claude_code.config.provider_catalog import ProviderDescriptor
 from my_claude_code.config.provider_registry import get_provider_registry
-from my_claude_code.config.settings import Settings
+from my_claude_code.config.settings import Settings, get_settings
 from my_claude_code.core.proxy_attribution import DIRECT_PROXY_LABEL
 from my_claude_code.providers.base import MaskedRefusalPlan, ProviderConfig
 from my_claude_code.providers.credential_rotation import CredentialRotationState
 from my_claude_code.providers.proxy_keepalive import proxied_leg_keepalive
 from my_claude_code.providers.rate_limit import ProviderRateLimiter
+from my_claude_code.providers.recovery import learned_fact_store
 from my_claude_code.providers.runtime.config import build_provider_config
 from my_claude_code.providers.runtime.exit_rotation import credential_identity
 from my_claude_code.providers.runtime.proxy_leg import ProxiedLegRateLimiter
@@ -115,11 +121,13 @@ class MediaRegistry:
         # stack is keyed on; a static provider's never change.
         self._declared: dict[str, tuple[MediaSurface, ...]] = {}
         self._retired: list[MediaNode] = []
+        self._latest_settings: Settings | None = None
 
     def resolver(self, settings: Settings) -> MediaProviderResolver:
         return lambda provider_id: self.resolve(provider_id, settings)
 
     def resolve(self, provider_id: str, settings: Settings) -> MediaNode:
+        self._latest_settings = settings
         descriptors = get_provider_registry().all_descriptors()
         descriptor = descriptors.get(provider_id)
         if descriptor is None:
@@ -200,6 +208,27 @@ class MediaRegistry:
             except Exception as exc:
                 logger.debug("Media stack close failed: {}", type(exc).__name__)
 
+    def _current_settings(self) -> Settings:
+        return (
+            self._latest_settings
+            if self._latest_settings is not None
+            else get_settings()
+        )
+
+    @staticmethod
+    def _resolve_endpoint_ladder(
+        target_ref: str,
+        operation: str,
+        surfaces: tuple[MediaSurface, ...],
+    ) -> ResolvedMediaEndpointLadder:
+        return resolve_media_endpoint_ladder(
+            target_ref,
+            operation,
+            surfaces=surfaces,
+            overrides=current_media_overrides(),
+            learned_facts=learned_fact_store().all_facts(),
+        )
+
     def _leaf(
         self,
         descriptor: ProviderDescriptor,
@@ -215,6 +244,8 @@ class MediaRegistry:
             rate_limiter=_leaf_limiter(config, proxied_leg=proxied_leg),
             transport=self._transport,
             proxy_label=proxy_label,
+            endpoint_ladder=self._resolve_endpoint_ladder,
+            settings_getter=self._current_settings,
         )
 
     def _single(

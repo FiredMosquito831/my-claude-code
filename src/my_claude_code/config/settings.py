@@ -3,7 +3,7 @@
 from functools import lru_cache
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 from pydantic import (
@@ -101,6 +101,9 @@ from .constants import (
     MAX_OUTPUT_TOKENS_FLOOR,
     MAX_OUTPUT_TOKENS_UNKNOWN_DEFAULT,
     MCP_MEDIA_APPS_DEFAULT,
+    MEDIA_APPROXIMATE_PARAM_MAPPING_DEFAULT,
+    MEDIA_PARAM_RECOVERY_MODE_DEFAULT,
+    MEDIA_PARAM_RECOVERY_MODES,
     MEDIA_UPLOAD_MAX_MB_DEFAULT,
     MISTRAL_PROMPT_CACHE_AFFINITY_DEFAULT,
     MODEL_DISCOVERY_REFRESH_SECONDS_DEFAULT,
@@ -1351,6 +1354,22 @@ class Settings(BaseSettings):
         description=(
             "Try the next model when a generated image cannot be downloaded, "
             "instead of returning the error."
+        ),
+    )
+    media_param_recovery_mode: Literal["lossless", "strip_optional", "off"] = Field(
+        default=MEDIA_PARAM_RECOVERY_MODE_DEFAULT,
+        validation_alias="MEDIA_PARAM_RECOVERY_MODE",
+        description=(
+            "How media requests recover from upstream parameter refusals: "
+            "lossless (default), strip_optional, or off."
+        ),
+    )
+    media_approximate_param_mapping: bool = Field(
+        default=MEDIA_APPROXIMATE_PARAM_MAPPING_DEFAULT,
+        validation_alias="MEDIA_APPROXIMATE_PARAM_MAPPING",
+        description=(
+            "Allow approximate pixel-size to aspect-ratio rounding and "
+            "nearest-enum clamping on media requests."
         ),
     )
     fallback_end_cleanly_after_commit: bool = Field(
@@ -3426,6 +3445,22 @@ class Settings(BaseSettings):
             )
         return mode
 
+    @field_validator("media_param_recovery_mode", mode="before")
+    @classmethod
+    def validate_media_param_recovery_mode(cls, v: object) -> str:
+        """Validate media parameter recovery mode."""
+        if v is None:
+            return MEDIA_PARAM_RECOVERY_MODE_DEFAULT
+        mode = str(v).strip().lower()
+        if not mode:
+            return MEDIA_PARAM_RECOVERY_MODE_DEFAULT
+        if mode not in MEDIA_PARAM_RECOVERY_MODES:
+            raise ValueError(
+                f"Unknown MEDIA_PARAM_RECOVERY_MODE: {v!r}. Known modes: "
+                f"{', '.join(MEDIA_PARAM_RECOVERY_MODES)}"
+            )
+        return mode
+
     @field_validator(
         "model",
         "model_mythos",
@@ -4082,3 +4117,38 @@ def configured_default_max_output_tokens() -> int | None:
     """
 
     return get_settings().anthropic_default_max_output_tokens
+
+
+def configured_media_param_recovery_mode(settings: Settings | None = None) -> str:
+    """Normalized ``MEDIA_PARAM_RECOVERY_MODE`` (``lossless``, ``strip_optional``, ``off``)."""
+
+    resolved = settings if settings is not None else get_settings()
+    raw = str(
+        getattr(
+            resolved,
+            "media_param_recovery_mode",
+            MEDIA_PARAM_RECOVERY_MODE_DEFAULT,
+        )
+        or MEDIA_PARAM_RECOVERY_MODE_DEFAULT
+    )
+    mode = raw.strip().lower()
+    return (
+        mode
+        if mode in MEDIA_PARAM_RECOVERY_MODES
+        else MEDIA_PARAM_RECOVERY_MODE_DEFAULT
+    )
+
+
+def configured_media_approximate_param_mapping(
+    settings: Settings | None = None,
+) -> bool:
+    """Whether ``MEDIA_APPROXIMATE_PARAM_MAPPING`` allows non-exact mappings."""
+
+    resolved = settings if settings is not None else get_settings()
+    return bool(
+        getattr(
+            resolved,
+            "media_approximate_param_mapping",
+            MEDIA_APPROXIMATE_PARAM_MAPPING_DEFAULT,
+        )
+    )
