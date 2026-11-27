@@ -45,6 +45,8 @@ from my_claude_code.api.web_tools.egress import (
 from my_claude_code.api.web_tools.request import (
     EXPECTED_ANTHROPIC_WEB_TOOLS_SHAPE,
     has_listed_anthropic_server_tools,
+    is_anthropic_server_tool_definition,
+    is_anthropic_web_fetch_tool,
     is_web_server_tool_request,
     list_unsupported_non_web_server_tools,
     selected_server_tool_name,
@@ -247,6 +249,8 @@ class MessagesHandler:
                     harness=harness,
                     capture=capture,
                 )
+            elif multi_tool_mode == "passthrough":
+                result = self._intercept_local_optimization(plan)
             else:
                 result = self._run_message_intercepts(plan)
             if result is None:
@@ -471,6 +475,38 @@ class MessagesHandler:
         if tool_err is not None:
             raise InvalidRequestError(tool_err)
 
+    @staticmethod
+    def _native_web_tool_providers(*, has_web_fetch: bool) -> tuple[str, ...]:
+        if has_web_fetch:
+            return ("anthropic", "anthropic_oauth")
+        return ("anthropic", "anthropic_oauth", "chatgpt_oauth")
+
+    @classmethod
+    def _plan_supports_native_web_tools(
+        cls,
+        plan: RoutedMessagesPlan,
+        *,
+        has_web_fetch: bool,
+    ) -> bool:
+        eligible = cls._native_web_tool_providers(has_web_fetch=has_web_fetch)
+        return bool(plan.attempts) and all(
+            attempt.resolved.provider_id in eligible for attempt in plan.attempts
+        )
+
+    @staticmethod
+    def _passthrough_eligibility_error(*, has_web_fetch: bool) -> InvalidRequestError:
+        if has_web_fetch:
+            return InvalidRequestError(
+                "WEB_SEARCH_DOOR_MODE='passthrough' requires every routed attempt to "
+                "target native Anthropic ('anthropic' or 'anthropic_oauth') when "
+                "web_fetch is requested."
+            )
+        return InvalidRequestError(
+            "WEB_SEARCH_DOOR_MODE='passthrough' requires every routed attempt to "
+            "target a native web search provider ('anthropic', 'anthropic_oauth', or "
+            "'chatgpt_oauth' for web_search-only)."
+        )
+
     def _resolve_multi_tool_mode(
         self,
         plan: RoutedMessagesPlan,
@@ -484,8 +520,34 @@ class MessagesHandler:
                 f"Unsupported Anthropic server tool(s) ({bad}) on /v1/messages. "
                 f"{EXPECTED_ANTHROPIC_WEB_TOOLS_SHAPE}"
             )
-        # Single-tool fast path (IV.18) always takes precedence unchanged.
+        door_mode = self._settings.web_search_door_mode
+        # Single-tool fast path (IV.18) stays unchanged in default "local" mode;
+        # in "passthrough" / "auto", native providers receive the tool upstream.
         if is_web_server_tool_request(routed.request):
+            if door_mode == "local":
+                self._reject_unsupported_server_tools(routed)
+                return None
+            selected = selected_server_tool_name(routed.request)
+            has_web_fetch = selected == "web_fetch" or any(
+                is_anthropic_web_fetch_tool(t) for t in (routed.request.tools or [])
+            )
+            if any(
+                is_anthropic_server_tool_definition(t)
+                for t in (routed.request.tools or [])
+            ):
+                spec = validate_and_extract_multi_tool_spec(routed.request)
+                has_web_fetch = has_web_fetch or spec.has_web_fetch
+            all_native = self._plan_supports_native_web_tools(
+                plan, has_web_fetch=has_web_fetch
+            )
+            if door_mode == "passthrough":
+                if not all_native:
+                    raise self._passthrough_eligibility_error(
+                        has_web_fetch=has_web_fetch
+                    )
+                return "passthrough"
+            if door_mode == "auto" and all_native:
+                return "passthrough"
             self._reject_unsupported_server_tools(routed)
             return None
         if not has_listed_anthropic_server_tools(routed.request):
@@ -495,17 +557,14 @@ class MessagesHandler:
             return None
 
         # Validate web_search/web_fetch tool definitions and tool_choice early.
-        validate_and_extract_multi_tool_spec(routed.request)
-        door_mode = self._settings.web_search_door_mode
-        all_native = bool(plan.attempts) and all(
-            attempt.resolved.provider_id in ("anthropic", "anthropic_oauth")
-            for attempt in plan.attempts
+        spec = validate_and_extract_multi_tool_spec(routed.request)
+        all_native = self._plan_supports_native_web_tools(
+            plan, has_web_fetch=spec.has_web_fetch
         )
         if door_mode == "passthrough":
             if not all_native:
-                raise InvalidRequestError(
-                    "WEB_SEARCH_DOOR_MODE='passthrough' requires every routed attempt to "
-                    "target native Anthropic ('anthropic' or 'anthropic_oauth')."
+                raise self._passthrough_eligibility_error(
+                    has_web_fetch=spec.has_web_fetch
                 )
             return "passthrough"
         if door_mode == "auto" and all_native:

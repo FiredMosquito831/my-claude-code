@@ -10,6 +10,7 @@ Nothing in this module names a provider, a base URL or a credential.
 import json
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 
@@ -303,6 +304,7 @@ class ResponsesStreamConverter:
         #: answer text always opened a text block; see :meth:`finish`.
         self._answer_text_seen = False
         self._active_tool_calls: dict[str, dict[str, Any]] = {}
+        self._emitted_citations: set[tuple[int, str, int | None, int | None]] = set()
         self._usage: dict[str, int] = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -388,6 +390,20 @@ class ResponsesStreamConverter:
 
         if event_type in _SERVER_TOOL_CALL_EVENTS:
             self._output_seen = True
+            return
+
+        if event_type == "response.output_text.annotation.added":
+            yield from self._emit_citation_annotation(event.get("annotation"))
+            return
+
+        if event_type == "response.content_part.done":
+            part = event.get("part")
+            if isinstance(part, Mapping):
+                annotations = part.get("annotations")
+                if isinstance(annotations, list):
+                    yield from self._flush_answer_text()
+                    for ann in annotations:
+                        yield from self._emit_citation_annotation(ann)
             return
 
         if event_type == "response.output_item.added":
@@ -498,6 +514,17 @@ class ResponsesStreamConverter:
                 # The message's text is complete: a held partial tag was not
                 # a tag after all.
                 yield from self._flush_answer_text()
+                content_parts = item.get("content")
+                if isinstance(content_parts, list):
+                    for part in content_parts:
+                        if isinstance(part, Mapping):
+                            annotations = part.get("annotations")
+                            if isinstance(annotations, list):
+                                for ann in annotations:
+                                    yield from self._emit_citation_annotation(ann)
+                return
+            if item_type == "web_search_call":
+                yield from self._emit_web_search_call_item(item)
                 return
             if item_type == "function_call":
                 # The item ``id``, deliberately -- not the ``call_id`` the
@@ -616,6 +643,115 @@ class ResponsesStreamConverter:
                 if _incomplete_reason(response) == "content_filter"
                 else _INCOMPLETE_STOP_REASON
             )
+
+    def _emit_web_search_call_item(self, item: Mapping[str, Any]) -> Iterator[str]:
+        """Translate a completed Responses ``web_search_call`` into Anthropic server tool blocks."""
+        yield from self._flush_answer_text()
+        yield from self._ledger.close_content_blocks()
+
+        raw_id = item.get("id")
+        ws_id = (
+            raw_id
+            if isinstance(raw_id, str) and raw_id
+            else f"ws_{uuid.uuid4().hex[:12]}"
+        )
+        srv_id = (
+            ws_id
+            if ws_id.startswith("srvtoolu_")
+            else f"srvtoolu_{ws_id.removeprefix('ws_')}"
+        )
+
+        action = item.get("action")
+        tool_input: dict[str, Any] = {}
+        result_content: list[dict[str, Any]] = []
+        if isinstance(action, Mapping):
+            query = action.get("query")
+            url = action.get("url")
+            if isinstance(query, str) and query:
+                tool_input["query"] = query
+            elif isinstance(url, str) and url:
+                tool_input["url"] = url
+            sources = action.get("sources")
+            if isinstance(sources, list):
+                for src in sources:
+                    if not isinstance(src, Mapping):
+                        continue
+                    src_url = src.get("url")
+                    if not isinstance(src_url, str) or not src_url.strip():
+                        continue
+                    title = src.get("title")
+                    result_content.append(
+                        {
+                            "type": "web_search_result",
+                            "url": src_url,
+                            "title": title
+                            if isinstance(title, str) and title
+                            else src_url,
+                            "encrypted_content": "",
+                            "page_age": None,
+                        }
+                    )
+
+        tool_idx = self._ledger.blocks.allocate_index()
+        yield self._ledger.content_block_start(
+            tool_idx,
+            "server_tool_use",
+            id=srv_id,
+            name="web_search",
+            input=tool_input,
+        )
+        yield self._ledger.content_block_stop(tool_idx)
+
+        res_idx = self._ledger.blocks.allocate_index()
+        yield self._ledger.content_block_start(
+            res_idx,
+            "web_search_tool_result",
+            tool_use_id=srv_id,
+            content=result_content,
+        )
+        yield self._ledger.content_block_stop(res_idx)
+
+    def _emit_citation_annotation(self, annotation: object) -> Iterator[str]:
+        """Emit an Anthropic ``citations_delta`` for a ``url_citation`` on the open text block."""
+        if not self._ledger.blocks.text_started or not isinstance(annotation, Mapping):
+            return
+        ann_type = annotation.get("type")
+        if ann_type not in {"url_citation", "web_search_result_location"}:
+            return
+        url = annotation.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return
+
+        citation: dict[str, Any] = {
+            "type": "web_search_result_location",
+            "url": url,
+        }
+        title = annotation.get("title")
+        if isinstance(title, str) and title:
+            citation["title"] = title
+        start_idx = annotation.get("start_index")
+        if isinstance(start_idx, int) and not isinstance(start_idx, bool):
+            citation["start_index"] = start_idx
+        else:
+            start_idx = None
+        end_idx = annotation.get("end_index")
+        if isinstance(end_idx, int) and not isinstance(end_idx, bool):
+            citation["end_index"] = end_idx
+        else:
+            end_idx = None
+        cited_text = annotation.get("cited_text")
+        if isinstance(cited_text, str) and cited_text:
+            citation["cited_text"] = cited_text
+
+        key = (self._ledger.blocks.text_index, url, start_idx, end_idx)
+        if key in self._emitted_citations:
+            return
+        self._emitted_citations.add(key)
+        yield self._ledger.content_block_delta(
+            self._ledger.blocks.text_index,
+            "citations_delta",
+            citation,
+        )
 
     def _reasoning_part_key(
         self, event_type: str, event: Mapping[str, Any]

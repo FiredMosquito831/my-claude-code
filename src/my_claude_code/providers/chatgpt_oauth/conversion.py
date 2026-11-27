@@ -156,6 +156,7 @@ def build_chatgpt_oauth_request_body(
             default_instructions=CODEX_BASE_INSTRUCTIONS,
             default_service_tier=default_service_tier,
             accepts_documents=True,
+            allow_native_web_search=True,
         )
     else:
         body = build_responses_request_body(
@@ -178,6 +179,7 @@ def build_chatgpt_oauth_request_body(
             default_instructions=CODEX_BASE_INSTRUCTIONS,
             default_service_tier=default_service_tier,
             accepts_documents=True,
+            allow_native_web_search=True,
         )
     tier = body.get("service_tier")
     if isinstance(tier, str):

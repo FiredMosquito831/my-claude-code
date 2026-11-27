@@ -582,6 +582,54 @@ def _envelope_tool_metadata(
     return strict_by_name, custom_by_name
 
 
+def _is_anthropic_web_search_tool(tool: Any) -> bool:
+    """Whether ``tool`` declares an Anthropic ``web_search`` server tool."""
+    raw_name = (
+        tool.get("name") if isinstance(tool, Mapping) else getattr(tool, "name", None)
+    )
+    name = raw_name.strip() if isinstance(raw_name, str) else ""
+    typ = tool.get("type") if isinstance(tool, Mapping) else getattr(tool, "type", None)
+    if isinstance(typ, str) and typ.startswith("web_search"):
+        return True
+    return name == "web_search" and typ in (None, "custom")
+
+
+def _convert_anthropic_web_search_tool(tool: Any) -> dict[str, Any]:
+    """Convert an Anthropic ``web_search*`` server tool to Codex ``{"type": "web_search"}``."""
+    extra: Mapping[str, Any] = (
+        tool
+        if isinstance(tool, Mapping)
+        else (getattr(tool, "model_extra", None) or {})
+    )
+    converted: dict[str, Any] = {"type": "web_search"}
+
+    raw_allowed = extra.get("allowed_domains")
+    if raw_allowed is None and isinstance(extra.get("filters"), Mapping):
+        raw_allowed = extra["filters"].get("allowed_domains")
+    if isinstance(raw_allowed, list | tuple):
+        domains = [
+            entry.strip().lower().rstrip(".")
+            for entry in raw_allowed
+            if isinstance(entry, str) and entry.strip()
+        ]
+        if domains:
+            converted["filters"] = {"allowed_domains": list(dict.fromkeys(domains))}
+
+    ext = extra.get("external_web_access")
+    if isinstance(ext, bool):
+        converted["external_web_access"] = ext
+
+    size = extra.get("search_context_size")
+    if isinstance(size, str) and size.strip():
+        converted["search_context_size"] = size.strip().lower()
+
+    loc = extra.get("user_location")
+    if isinstance(loc, Mapping):
+        converted["user_location"] = deepcopy(dict(loc))
+
+    return converted
+
+
 def _convert_tools(
     tools: list[Any] | None,
     tool_names: OpenAIToolNameCodec | None = None,
@@ -589,6 +637,7 @@ def _convert_tools(
     *,
     envelope_tools: list[Any] | None = None,
     tool_catalogue: Mapping[str, str] = EMPTY_TOOL_CATALOGUE,
+    allow_native_web_search: bool = False,
 ) -> DialectSweep | None:
     """Convert Anthropic tools to ChatGPT Responses API tool definitions.
 
@@ -611,6 +660,9 @@ def _convert_tools(
     )
     result: list[dict[str, Any]] = []
     for tool in tools:
+        if allow_native_web_search and _is_anthropic_web_search_tool(tool):
+            result.append(_convert_anthropic_web_search_tool(tool))
+            continue
         schema = getattr(tool, "input_schema", None) or {
             "type": "object",
             "properties": {},
@@ -646,6 +698,7 @@ def _convert_tool_choice(
     tool_names: OpenAIToolNameCodec | None = None,
     *,
     custom_tool_names: frozenset[str] = frozenset(),
+    allow_native_web_search: bool = False,
 ) -> Any:
     """Convert Anthropic tool_choice to OpenAI Responses API tool_choice.
 
@@ -659,6 +712,11 @@ def _convert_tool_choice(
     if not isinstance(tool_choice, dict):
         return tool_choice
     choice_type = tool_choice.get("type")
+    if allow_native_web_search and (
+        choice_type == "web_search"
+        or (choice_type == "tool" and tool_choice.get("name") == "web_search")
+    ):
+        return {"type": "web_search"}
     if choice_type == "tool":
         name = tool_choice.get("name")
         if name:
@@ -1370,6 +1428,7 @@ def build_responses_request_body(
     default_instructions: str | None = None,
     default_service_tier: str | None = None,
     accepts_documents: bool = False,
+    allow_native_web_search: bool = False,
 ) -> dict[str, Any]:
     """Build a Responses API request body from an Anthropic request.
 
@@ -1575,17 +1634,23 @@ def build_responses_request_body(
         tool_schema_dialect,
         envelope_tools=envelope_tools,
         tool_catalogue=tool_catalogue,
+        allow_native_web_search=allow_native_web_search,
     )
     tools = converted.tools if converted is not None else None
     if converted is not None and wire_notes is not None:
         wire_notes.update(converted.wire_marker(tool_schema_dialect))
     if tools:
         body["tools"] = tools
+        native_web_search_tools = allow_native_web_search and any(
+            isinstance(tool, Mapping) and tool.get("type") == "web_search"
+            for tool in tools
+        )
         if include_tool_choice:
             tool_choice = _convert_tool_choice(
                 request.tool_choice,
                 tool_names,
                 custom_tool_names=frozenset(custom_by_name),
+                allow_native_web_search=native_web_search_tools,
             )
             if tool_choice is not None:
                 body["tool_choice"] = tool_choice
@@ -1910,6 +1975,7 @@ def build_responses_passthrough_body(
     accepts_documents: bool = False,
     allow_truncation: bool = False,
     extra_body: Mapping[str, Any] | None = None,
+    allow_native_web_search: bool = False,
 ) -> dict[str, Any]:
     """Reconstruct a Codex Responses body from ``request.responses_envelope``.
 
@@ -1944,6 +2010,7 @@ def build_responses_passthrough_body(
             default_instructions=default_instructions,
             default_service_tier=default_service_tier,
             accepts_documents=accepts_documents,
+            allow_native_web_search=allow_native_web_search,
         )
         if not allow_truncation:
             fallback_body.pop("truncation", None)

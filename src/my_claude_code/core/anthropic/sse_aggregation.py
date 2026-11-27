@@ -9,7 +9,7 @@ call.
 
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
 from .stream_contracts import parse_sse_text
@@ -42,7 +42,10 @@ async def aggregate_anthropic_sse_to_message(
             idx = payload.get("index")
             block = payload.get("content_block")
             if isinstance(idx, int) and isinstance(block, dict):
-                blocks[idx] = dict(block)
+                copied_block = dict(block)
+                if isinstance(copied_block.get("citations"), list):
+                    copied_block["citations"] = list(copied_block["citations"])
+                blocks[idx] = copied_block
                 parts.setdefault(idx, [])
         elif ptype == "content_block_delta":
             idx = payload.get("index")
@@ -67,6 +70,14 @@ async def aggregate_anthropic_sse_to_message(
                 existing = blocks[idx].get("signature")
                 prefix = existing if isinstance(existing, str) else ""
                 blocks[idx]["signature"] = prefix + sig_text
+            elif dtype == "citations_delta":
+                citation = delta.get("citation")
+                if isinstance(citation, Mapping):
+                    existing_citations = blocks[idx].get("citations")
+                    if isinstance(existing_citations, list):
+                        existing_citations.append(dict(citation))
+                    else:
+                        blocks[idx]["citations"] = [dict(citation)]
         elif ptype == "message_delta":
             delta = payload.get("delta")
             if isinstance(delta, dict):

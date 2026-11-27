@@ -162,17 +162,6 @@ class ResponsesHandler:
                 response_request = invalidate_envelope_keys(
                     response_request, ENVELOPE_MEDIA_AND_MESSAGE_KEYS
                 )
-            if web_search_spec is not None:
-                return await self._create_web_search_response(
-                    request_data,
-                    response_request,
-                    web_search_spec,
-                    request_payload=request_payload,
-                    request_id=request_id,
-                    harness=harness,
-                    capture=capture,
-                )
-
             plan = self._model_router.resolve_messages_plan(
                 response_request, harness=harness
             )
@@ -184,6 +173,27 @@ class ResponsesHandler:
                 harness=harness,
             )
             plan = apply_message_routing_policies(plan)
+            if web_search_spec is not None:
+                all_chatgpt_oauth = bool(plan.attempts) and all(
+                    attempt.resolved.provider_id == "chatgpt_oauth"
+                    for attempt in plan.attempts
+                )
+                door_mode = self._settings.web_search_door_mode
+                if door_mode == "passthrough" and not all_chatgpt_oauth:
+                    raise InvalidRequestError(
+                        "WEB_SEARCH_DOOR_MODE='passthrough' on POST /v1/responses "
+                        "requires every routed attempt to target 'chatgpt_oauth'."
+                    )
+                if not (all_chatgpt_oauth and door_mode in ("passthrough", "auto")):
+                    return await self._create_web_search_response(
+                        request_data,
+                        response_request,
+                        web_search_spec,
+                        request_payload=request_payload,
+                        request_id=request_id,
+                        harness=harness,
+                        capture=capture,
+                    )
             capture.set_plan(plan)
             capture.set_routing(plan.primary)
 
@@ -263,8 +273,8 @@ class ResponsesHandler:
         """Execute Responses ``web_search*`` tools through MCC's local tool loop."""
         if self._settings.web_search_door_mode == "passthrough":
             raise InvalidRequestError(
-                "WEB_SEARCH_DOOR_MODE='passthrough' is not supported on POST /v1/responses; "
-                "use 'local' or 'auto' instead."
+                "WEB_SEARCH_DOOR_MODE='passthrough' on POST /v1/responses "
+                "requires every routed attempt to target 'chatgpt_oauth'."
             )
 
         from my_claude_code.api.web_tools.constants import _MAX_SEARCH_RESULTS
