@@ -282,6 +282,11 @@ FACT_KIND_LABELS: dict[str, str] = {
     "reasoning_channel": "reasoning wire field",
     # 8.44.0: structured-output format field rejected, using prompt fallback.
     "structured_output_unsupported": "no structured output",
+    # 8.61.0: media endpoint ladder & parameter/encoding capability facts.
+    "media_endpoint_surface": "media endpoint surface",
+    "media_endpoint_refused": "media endpoint refused",
+    "media_param_enum": "media field values",
+    "media_encoding_refused": "media encoding refused",
 }
 
 #: Kinds whose label the Models page payload's ``fact_labels`` table does not
@@ -293,6 +298,10 @@ PAGE_TABLE_UNLISTED_FACT_KINDS: frozenset[str] = frozenset(
     {
         "media_param_required",
         "media_param_refused",
+        "media_endpoint_surface",
+        "media_endpoint_refused",
+        "media_param_enum",
+        "media_encoding_refused",
         "prompt_cache_lifetime_refused",
         "history_thinking_rejected",
         "responses_reasoning_item_rejected",

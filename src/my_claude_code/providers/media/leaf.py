@@ -31,12 +31,13 @@ import asyncio
 import dataclasses
 import json
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Protocol
 from urllib.parse import urlsplit
 
 import httpx
 
+from my_claude_code.application.media.endpoint_ladder import ResolvedMediaEndpointLadder
 from my_claude_code.application.media.ports import MediaProviderPort
 from my_claude_code.application.media.request import (
     MediaAttempt,
@@ -57,6 +58,7 @@ from my_claude_code.config.media_surfaces import (
     media_url,
     model_path,
     surface_for,
+    surfaces_for,
 )
 from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -116,16 +118,7 @@ def same_host(url: str, base_url: str) -> bool:
     return bool(host) and host == _host(base_url)
 
 
-def surfaces_serve(surfaces: tuple[MediaSurface, ...], request: MediaRequest) -> bool:
-    """Whether a provider declaring ``surfaces`` can serve ``request`` at all.
-
-    :meth:`MediaLeaf.supports`, as a function of what was declared, so a node
-    that never builds a leaf (the masked refusal) answers it identically.
-    """
-
-    surface = surface_for(surfaces, request.operation)
-    if surface is None:
-        return False
+def _surface_serves(surface: MediaSurface, request: MediaRequest) -> bool:
     if request.stream and not surface.stream:
         return False
     # A file cannot be sent where the host documents JSON only.
@@ -138,6 +131,19 @@ def surfaces_serve(surfaces: tuple[MediaSurface, ...], request: MediaRequest) ->
     if surface.formats is not None and isinstance(named, str) and named:
         return named in surface.formats
     return True
+
+
+def surfaces_serve(surfaces: tuple[MediaSurface, ...], request: MediaRequest) -> bool:
+    """Whether a provider declaring ``surfaces`` can serve ``request`` at all.
+
+    :meth:`MediaLeaf.supports`, as a function of what was declared, so a node
+    that never builds a leaf (the masked refusal) answers it identically.
+    """
+
+    candidates = surfaces_for(surfaces, request.operation)
+    if not candidates:
+        return False
+    return any(_surface_serves(surface, request) for surface in candidates)
 
 
 class MediaNode(MediaProviderPort, Protocol):
@@ -166,6 +172,10 @@ class MediaLeaf:
         rate_limiter: ProviderRateLimiter,
         transport: httpx.AsyncBaseTransport | None = None,
         proxy_label: str = "",
+        endpoint_ladder: Callable[
+            [str, str, tuple[MediaSurface, ...]], ResolvedMediaEndpointLadder
+        ]
+        | None = None,
     ) -> None:
         self._provider_id = provider_id
         self._config = config
@@ -176,6 +186,7 @@ class MediaLeaf:
         self._proxy_label = proxy_label
         self._surfaces = surfaces
         self._rate_limiter = rate_limiter
+        self._endpoint_ladder = endpoint_ladder
         timeout = httpx.Timeout(
             config.http_read_timeout,
             connect=config.http_connect_timeout,
@@ -224,7 +235,13 @@ class MediaLeaf:
     def throttle_remaining(self, model: str | None = None) -> float:
         return self._rate_limiter.remaining_wait()
 
-    def _surface(self, request: MediaRequest) -> MediaSurface | None:
+    def _surface(
+        self, request: MediaRequest, *, model_ref: str | None = None
+    ) -> MediaSurface | None:
+        if self._endpoint_ladder is not None and model_ref:
+            ladder = self._endpoint_ladder(model_ref, request.operation, self._surfaces)
+            if ladder.winner is not None:
+                return ladder.winner.surface
         return surface_for(self._surfaces, request.operation)
 
     def supports(self, request: MediaRequest) -> bool:
@@ -298,18 +315,24 @@ class MediaLeaf:
         auth: bool,
         stream: bool,
         params: Mapping[str, str] | None = None,
+        auth_header: str | None = None,
     ) -> httpx.Response:
         """A body-less call (GET, DELETE) on a job; refusals read like ``_send``'s.
 
         ``auth`` is decided by the caller: a key is only ever sent to the
-        provider's own host. A GET follows redirects (a finished video's
+        provider's own host. ``auth_header`` selects the header carrying the
+        bare key (e.g. ``x-goog-api-key``); ``None`` sends
+        ``Authorization: Bearer``. A GET follows redirects (a finished video's
         address commonly redirects to storage); httpx drops the
         ``Authorization`` header when a redirect leaves the origin, so the key
         still never reaches another host.
         """
         headers: dict[str, str] = {}
         if auth and self._config.api_key:
-            headers["Authorization"] = f"Bearer {self._config.api_key}"
+            if auth_header is None:
+                headers["Authorization"] = f"Bearer {self._config.api_key}"
+            else:
+                headers[auth_header] = self._config.api_key
         request = self._client.build_request(
             method, url, headers=headers, params=dict(params) if params else None
         )
@@ -360,7 +383,9 @@ class MediaLeaf:
     async def _execute(
         self, attempt: MediaAttempt, *, request_id: str | None
     ) -> AsyncIterator[MediaChunk]:
-        surface = self._surface(attempt.request)
+        surface = self._surface(
+            attempt.request, model_ref=attempt.resolved.provider_model_ref
+        )
         if surface is None:  # pragma: no cover - the gate runs first
             raise RuntimeError(
                 f"{self._provider_id} declares no {attempt.request.operation} surface"

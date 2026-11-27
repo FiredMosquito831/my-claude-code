@@ -158,6 +158,19 @@ FACT_MEDIA_PARAM_REQUIRED = "media_param_required"
 #: on a request that carried it. ``detail`` and value as
 #: :data:`FACT_MEDIA_PARAM_REQUIRED`; shown only, by the same decision.
 FACT_MEDIA_PARAM_REFUSED = "media_param_refused"
+#: Which media endpoint surface/shape this host serves one model+operation on,
+#: proven by a live 200 or probe. ``detail`` is the operation (e.g.
+#: ``"image_generate"``); value is the shape/surface id (or ordered list).
+FACT_MEDIA_ENDPOINT_SURFACE = "media_endpoint_surface"
+#: A media endpoint surface/shape this host refused for one model+operation.
+#: ``detail`` is ``"<operation>:<shape>"``; value: ``True``.
+FACT_MEDIA_ENDPOINT_REFUSED = "media_endpoint_refused"
+#: Allowed values a media host stated for one parameter in a 4xx refusal.
+#: ``detail`` is ``"<operation>:<field>"``; value: ``list[str]``.
+FACT_MEDIA_PARAM_ENUM = "media_param_enum"
+#: A request body encoding (``"multipart"`` or ``"json"``) a media host refused.
+#: ``detail`` is ``"<operation>:<encoding>"``; value: ``True``.
+FACT_MEDIA_ENCODING_REFUSED = "media_encoding_refused"
 #: This model's host refused a replayed ``thinking`` block in the conversation
 #: history (8.12.3), in a 400 whose own words were located in that history
 #: (``messages.N.``) and named the block. Value: ``True``.
@@ -257,6 +270,10 @@ ALLOWED_FACT_KINDS: frozenset[str] = frozenset(
         FACT_RESPONSES_TOOLS_MAX_COUNT,
         FACT_MEDIA_PARAM_REQUIRED,
         FACT_MEDIA_PARAM_REFUSED,
+        FACT_MEDIA_ENDPOINT_SURFACE,
+        FACT_MEDIA_ENDPOINT_REFUSED,
+        FACT_MEDIA_PARAM_ENUM,
+        FACT_MEDIA_ENCODING_REFUSED,
         FACT_PROMPT_CACHE_LIFETIME_REFUSED,
         FACT_HISTORY_THINKING_REJECTED,
         FACT_RESPONSES_REASONING_ITEM_REJECTED,
@@ -312,6 +329,11 @@ FACT_TTL_SECONDS: Mapping[str, float] = {
     # re-taught by its next refusal or forgotten from the page.
     FACT_MEDIA_PARAM_REQUIRED: STATED_FACT_TTL_SECONDS,
     FACT_MEDIA_PARAM_REFUSED: STATED_FACT_TTL_SECONDS,
+    FACT_MEDIA_PARAM_ENUM: STATED_FACT_TTL_SECONDS,
+    FACT_MEDIA_ENCODING_REFUSED: STATED_FACT_TTL_SECONDS,
+    # Same inferred 7-day clock as FACT_RESPONSE_SURFACE / FACT_PREFERRED_SURFACE_REFUSED.
+    FACT_MEDIA_ENDPOINT_SURFACE: INFERRED_FACT_TTL_SECONDS,
+    FACT_MEDIA_ENDPOINT_REFUSED: INFERRED_FACT_TTL_SECONDS,
     # The host named the lifetime field of a marker MCC wrote, in its own
     # sentence about a request MCC actually sent: stated, like the media
     # refusals beside it. Forget on the Models page re-opens it at once.
