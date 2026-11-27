@@ -82,6 +82,15 @@ def test_rc_static_and_vendored_assets_have_zero_cdns(
                 assert "https://" not in lower
                 assert "unpkg.com" not in lower
                 assert "jsdelivr.net" not in lower
+                assert 'id="btnHelpOpen"' in resp.text
+                assert 'id="rcHelpDialog"' in resp.text
+                for heading in (
+                    "Transports",
+                    "Agent Tiers",
+                    "Permission Modes",
+                    "Security &amp; Pairing",
+                ):
+                    assert heading in resp.text
 
 
 def test_allowed_dirs_blocks_traversal_and_symlinks(

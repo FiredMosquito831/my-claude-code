@@ -62,6 +62,7 @@ export function prepareRemoteControlScenario({ window, ROUTES }) {
   };
 
   const posts = [];
+  const tunnelPosts = [];
   const realFetch = window.fetch;
   window.fetch = (url, options = {}) => {
     const path = String(url).split("?")[0];
@@ -90,6 +91,21 @@ export function prepareRemoteControlScenario({ window, ROUTES }) {
         status: 200,
         headers: { get: () => "application/json" },
         json: async () => ({ revoked: true, device_id: "dev_abc123" }),
+      });
+    }
+    if (path === "/admin/api/rc/tunnel/start") {
+      let body = null;
+      try {
+        body = options.body ? JSON.parse(String(options.body)) : null;
+      } catch (_err) {
+        body = null;
+      }
+      tunnelPosts.push({ path, body });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => "application/json" },
+        json: async () => ({ ok: true, mode: body?.mode || "" }),
       });
     }
     return realFetch(url, options);
@@ -135,6 +151,67 @@ export function prepareRemoteControlScenario({ window, ROUTES }) {
 
       const afterRevokeText = doc.getElementById("rcDevicesList")?.textContent || "";
 
+      const modal = doc.getElementById("rcTunnelModal");
+      const closeBtn = doc.getElementById("rcTunnelClose");
+      const titleEl = doc.getElementById("rcTunnelTitle");
+      const bodyEl = doc.getElementById("rcTunnelBody");
+      const cardModes = Array.from(
+        doc.querySelectorAll("#rcTunnelCards .rc-tunnel-card"),
+      ).map((card) => ({
+        mode: card.dataset.rcTunnelMode || "",
+        role: card.getAttribute("role") || "",
+        tabIndex: card.tabIndex,
+      }));
+
+      const tsServeCard = doc.querySelector(
+        '#rcTunnelCards .rc-tunnel-card[data-rc-tunnel-mode="tailscale_serve"]',
+      );
+      tsServeCard.click();
+      await waitFor(() => modal && !modal.hidden);
+      const openedOnClick = Boolean(modal && !modal.hidden);
+      const tailscaleServeTitle = titleEl?.textContent || "";
+      const tailscaleServeBodyText = bodyEl?.textContent || "";
+      const dataKeysInModal = modal
+        ? modal.querySelectorAll("[data-key]").length
+        : -1;
+      const scrollLockedDuringOpen = doc.body.style.overflow;
+      const closeButtonFocused = doc.activeElement === closeBtn;
+
+      closeBtn.click();
+      await waitFor(() => modal && modal.hidden);
+      const closedOnCloseBtn = Boolean(modal && modal.hidden);
+      const scrollUnlockedAfterClose = doc.body.style.overflow;
+      const focusReturnedToServeCard = doc.activeElement === tsServeCard;
+
+      const cfCard = doc.querySelector(
+        '#rcTunnelCards .rc-tunnel-card[data-rc-tunnel-mode="cloudflare"]',
+      );
+      cfCard.focus();
+      cfCard.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+      await waitFor(() => modal && !modal.hidden);
+      const openedOnEnter = Boolean(modal && !modal.hidden);
+      const cloudflareTitle = titleEl?.textContent || "";
+      const cloudflareDataKeys = modal
+        ? modal.querySelectorAll("[data-key]").length
+        : -1;
+
+      doc.dispatchEvent(
+        new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      await waitFor(() => modal && modal.hidden);
+      const closedOnEscape = Boolean(modal && modal.hidden);
+      const scrollUnlockedAfterEscape = doc.body.style.overflow;
+
+      const directBtn = Array.from(
+        doc.querySelectorAll("#rcTunnelCards .rc-tunnel-card button"),
+      ).find((b) => (b.textContent || "").trim() === "Use Tailnet Direct");
+      if (directBtn) directBtn.click();
+      await waitFor(() => tunnelPosts.length >= 1);
+      await wait(120);
+      const modalStayedClosedOnControl = Boolean(modal && modal.hidden);
+
       return {
         scenarioError: null,
         scriptErrors,
@@ -148,6 +225,29 @@ export function prepareRemoteControlScenario({ window, ROUTES }) {
         xssImgs,
         afterRevokeText,
         posts,
+        tunnelModal: {
+          cardModes,
+          openedOnClick,
+          tailscaleServeTitle,
+          tailscaleServeBodyLen: tailscaleServeBodyText.trim().length,
+          hasLoopbackNote: tailscaleServeBodyText.includes("/admin"),
+          hasTailscaleSettingName: tailscaleServeBodyText.includes(
+            "RC_TAILSCALE_HOSTNAME",
+          ),
+          dataKeysInModal,
+          scrollLockedDuringOpen,
+          closeButtonFocused,
+          closedOnCloseBtn,
+          scrollUnlockedAfterClose,
+          focusReturnedToServeCard,
+          openedOnEnter,
+          cloudflareTitle,
+          cloudflareDataKeys,
+          closedOnEscape,
+          scrollUnlockedAfterEscape,
+          modalStayedClosedOnControl,
+          tunnelPosts,
+        },
       };
     },
   };

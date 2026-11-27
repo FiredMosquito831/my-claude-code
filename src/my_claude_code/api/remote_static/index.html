@@ -40,6 +40,15 @@
           <button id="btnLogout" class="rc-btn rc-btn-ghost" type="button" hidden>
             Unpair
           </button>
+          <button
+            id="btnHelpOpen"
+            class="rc-btn rc-btn-ghost"
+            type="button"
+            aria-label="Remote Control Help"
+            aria-haspopup="dialog"
+          >
+            ?
+          </button>
         </div>
       </header>
 
@@ -426,6 +435,62 @@
             </div>
             <div id="discoveredError" class="rc-alert rc-alert-error" hidden></div>
             <div id="discoveredList" class="rc-discover-list"></div>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog id="rcHelpDialog" class="rc-dialog rc-help-dialog">
+        <div class="rc-stack">
+          <div class="rc-dialog-head">
+            <h2>Remote Control Help</h2>
+            <button id="btnCloseHelp" class="rc-btn rc-btn-ghost" type="button">
+              Close
+            </button>
+          </div>
+          <div class="rc-help-cards">
+            <article class="rc-help-card">
+              <h3>Transports</h3>
+              <ul>
+                <li>
+                  <strong>Tailscale Serve</strong> (<code>*.ts.net/rc</code>): Recommended HTTPS inside your Tailnet with PWA install and Web Push alerts; keeps <code>/admin</code> loopback-only.
+                </li>
+                <li>
+                  <strong>Tailnet Direct</strong> (<code>100.x.y.z/rc</code>): Plain HTTP over your Tailnet IP (requires <code>HOST=0.0.0.0</code> and <code>ANTHROPIC_AUTH_TOKEN</code>; Web Push unavailable on HTTP).
+                </li>
+                <li>
+                  <strong>Cloudflare Tunnel</strong> (<code>your-host.trycloudflare.com/rc</code> or named hostname): Outbound-only <code>cloudflared</code> HTTPS tunnel exposing only <code>/rc</code>.
+                </li>
+                <li>
+                  <strong>Local Loopback</strong> (<code>127.0.0.1/rc</code>): Same machine only or manual reverse proxy.
+                </li>
+              </ul>
+            </article>
+            <article class="rc-help-card">
+              <h3>Agent Tiers</h3>
+              <ul>
+                <li><strong>Tier 1B</strong> (Claude): Structured <code>stream-json</code> events, live tool approvals, model and mode switches, and session fork.</li>
+                <li><strong>Tier 1A</strong> (OpenCode, Codex, OpenClaw): Headless event adapters with optional interactive PTY switch.</li>
+                <li><strong>Tier 2</strong> (ACP, Pi, Command Code): Line-oriented JSONL session runners.</li>
+                <li><strong>Tier 3</strong> (PTY &amp; <code>--rc</code>): Full interactive terminal and live detached CLI sidecar attachment.</li>
+              </ul>
+            </article>
+            <article class="rc-help-card">
+              <h3>Permission Modes</h3>
+              <ul>
+                <li><strong>Ask</strong>: Prompts in <code>/rc</code> before running tools or shell commands (recommended).</li>
+                <li><strong>Auto Edits</strong>: Auto-allows file edits while still asking before shell or external tools.</li>
+                <li><strong>YOLO</strong>: Bypasses all tool approval prompts (high risk; enable deliberately per session).</li>
+              </ul>
+            </article>
+            <article class="rc-help-card">
+              <h3>Security &amp; Pairing</h3>
+              <ul>
+                <li><strong>60s single-use QR</strong>: Redeemed once for an HMAC-signed <code>HttpOnly</code> cookie and CSRF token.</li>
+                <li><strong><code>/admin</code> isolation</strong>: Dashboard rejects non-loopback or forwarded requests.</li>
+                <li><strong><code>RC_ALLOWED_DIRS</code> &amp; Worktrees</strong>: Containment inside allowed roots plus isolated <code>rc/*</code> Git branches.</li>
+                <li><strong>Web Push</strong>: Requires an HTTPS origin (Tailscale Serve or Cloudflare Tunnel).</li>
+              </ul>
+            </article>
           </div>
         </div>
       </dialog>
