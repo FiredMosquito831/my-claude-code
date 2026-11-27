@@ -87,6 +87,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_TRANSLATE,
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_OPERATION_VIDEO_EDIT,
+    MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE,
     MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TRANSLATE,
@@ -384,6 +385,22 @@ MISTRAL_IMAGE_TOOL_FORWARDED: Mapping[str, frozenset[str]] = {
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL: frozenset({"prompt"}),
 }
 
+#: 8.69.0: what MCC's ChatGPT OAuth Codex Responses image adapter sends.
+CHATGPT_OAUTH_IMAGE_FORWARDED: Mapping[str, frozenset[str]] = {
+    MEDIA_SHAPE_CHATGPT_OAUTH_RESPONSES_IMAGE: frozenset(
+        {
+            "prompt",
+            "size",
+            "quality",
+            "background",
+            "output_format",
+            "moderation",
+            "image",
+            "images",
+        }
+    ),
+}
+
 #: 8.64.0: OCR wire shapes whose body MCC constructs from the door's fields.
 MISTRAL_OCR_FORWARDED: Mapping[str, frozenset[str]] = {
     MEDIA_SHAPE_MISTRAL_OCR: frozenset(
@@ -411,6 +428,7 @@ VISION_OCR_CHAT_FORWARDED: Mapping[str, frozenset[str]] = {
 TRANSLATED_SHAPES: Mapping[str, frozenset[str]] = {
     **GEMINI_NATIVE_FORWARDED,
     **MISTRAL_IMAGE_TOOL_FORWARDED,
+    **CHATGPT_OAUTH_IMAGE_FORWARDED,
     **MISTRAL_OCR_FORWARDED,
     **VISION_OCR_CHAT_FORWARDED,
     **NIM_RIVA_FORWARDED,
