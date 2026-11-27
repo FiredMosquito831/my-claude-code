@@ -178,6 +178,11 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
     '.field[data-key="WEB_SEARCH_CHAIN_SKIP_KINDS"]',
     '.field[data-key="WEB_SEARCH_QUOTA_COOLDOWN_SECONDS"]',
     '.field[data-key="WEB_SEARCH_FALLBACK_ON_EMPTY"]',
+    // 8.70.0: Opt-in ChatGPT OAuth standalone websearch card/options/toggle, additive.
+    '[data-websearch-provider="chatgpt_oauth"]',
+    'option[value="chatgpt_oauth"]',
+    '.field[data-key="CHATGPT_OAUTH_WEBSEARCH_ENABLED"]',
+    '.field[data-key="CHATGPT_OAUTH_WEBSEARCH_MODEL"]',
   ];
   const stripped = (node) => {
     if (!node) return null;
@@ -441,6 +446,29 @@ export function prepareWebSearchChainScenario({ window, ROUTES }) {
           ),
           dialog: (() => {
             press(ds);
+            const body = doc.getElementById("providerDetailBody");
+            const keys = Array.from(body.querySelectorAll("[data-key]")).map(
+              (node) => node.dataset.key,
+            );
+            const hasKeyManager = Boolean(body.querySelector(".ws-key-manager"));
+            closeDialog();
+            return { keys, hasKeyManager };
+          })(),
+        }
+      : null;
+    const cg = card("chatgpt_oauth");
+    out.chatgptOAuth = cg
+      ? {
+          label: flat(cg.querySelector(".provider-title-label strong")),
+          pill: flat(cg.querySelector(".status-pill")),
+          meta: flat(cg.querySelector(".provider-meta")),
+          buttons: Array.from(cg.querySelectorAll(".card-actions button")).map(flat),
+          useDisabled: Boolean(cg.querySelector(".card-actions button")?.disabled),
+          gridEnabledField: Boolean(
+            doc.querySelector('[data-key="CHATGPT_OAUTH_WEBSEARCH_ENABLED"]'),
+          ),
+          dialog: (() => {
+            press(cg);
             const body = doc.getElementById("providerDetailBody");
             const keys = Array.from(body.querySelectorAll("[data-key]")).map(
               (node) => node.dataset.key,

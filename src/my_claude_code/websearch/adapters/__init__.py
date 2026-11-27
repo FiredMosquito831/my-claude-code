@@ -2,6 +2,7 @@
 
 from ..base import BaseWebSearchProvider
 from .brave import BraveWebSearchProvider
+from .chatgpt_oauth import ChatGPTOAuthWebSearchProvider
 from .context7 import Context7WebSearchProvider
 from .ddgs import DdgsWebSearchProvider
 from .deepseek import DeepSeekWebSearchProvider
@@ -36,6 +37,7 @@ ADAPTER_CLASSES: dict[str, type[BaseWebSearchProvider]] = {
     "serpapi": SerpApiWebSearchProvider,
     "context7": Context7WebSearchProvider,
     "deepseek": DeepSeekWebSearchProvider,
+    "chatgpt_oauth": ChatGPTOAuthWebSearchProvider,
 }
 
 __all__ = ["ADAPTER_CLASSES"]

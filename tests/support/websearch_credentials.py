@@ -47,3 +47,12 @@ def forget_web_search_credentials(monkeypatch) -> None:
 
     for name in WEB_SEARCH_CREDENTIAL_ENVS:
         monkeypatch.delenv(name, raising=False)
+    for name in (
+        "CHATGPT_OAUTH_WEBSEARCH_ENABLED",
+        "CHATGPT_OAUTH_WEBSEARCH_MODEL",
+        "CHATGPT_OAUTH_ACCESS_TOKEN",
+        "CHATGPT_OAUTH_ACCOUNT_ID",
+        "CHATGPT_OAUTH_BASE_URL",
+        "CHATGPT_OAUTH_PROXY",
+    ):
+        monkeypatch.delenv(name, raising=False)

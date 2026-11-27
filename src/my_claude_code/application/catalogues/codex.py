@@ -49,6 +49,7 @@ from my_claude_code.application.catalogues.base import (
     clamp_efforts,
     visible_entries,
 )
+from my_claude_code.core.chatgpt_oauth_websearch import CODEX_BASE_INSTRUCTIONS
 from my_claude_code.core.reasoning import ReasoningEffort
 
 #: Codex's own reasoning vocabulary, in Codex's own order, with the wording
@@ -88,12 +89,6 @@ CODEX_EFFORT_BY_REASONING_EFFORT: dict[ReasoningEffort, str] = {
     ReasoningEffort.XHIGH: "xhigh",
     ReasoningEffort.MAX: "max",
 }
-
-CODEX_BASE_INSTRUCTIONS = (
-    "You are Codex, a coding agent. Help the user understand, modify, test, "
-    "and review code in their workspace. Follow the user's instructions, use "
-    "tools when needed, and communicate concise progress and verification."
-)
 
 #: Keys Codex refuses a catalogue entry without, read out of the 0.151.0
 #: binary's ``ModelInfo`` serde field list (not re-read on 2026-09-14: the

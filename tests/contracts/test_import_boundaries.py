@@ -447,6 +447,33 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
         "Read-only GET, its own client, and no import of the rotation, "
         "rate-limit-cooldown or route-health machinery."
     ),
+    (
+        "my_claude_code.websearch.registry",
+        "my_claude_code.providers.chatgpt_oauth.credentials",
+    ): (
+        "Owner: opt-in ChatGPT OAuth standalone web search registry check. "
+        "Reason: readiness for the chatgpt_oauth search provider must read the "
+        "same managed OAuth account store that owns ChatGPT credentials; a "
+        "mirror in websearch/ would drift. Read-only (migrate=False), no network."
+    ),
+    (
+        "my_claude_code.websearch.adapters.chatgpt_oauth",
+        "my_claude_code.providers.chatgpt_oauth.credentials",
+    ): (
+        "Owner: opt-in ChatGPT OAuth standalone web search adapter. "
+        "Reason: reuses the single owner of ChatGPT/Codex OAuth credential "
+        "loading, shared-Codex adoption, and locked 401 token refresh instead of "
+        "duplicating OAuth file/lock/refresh logic inside websearch/."
+    ),
+    (
+        "my_claude_code.websearch.adapters.chatgpt_oauth",
+        "my_claude_code.providers.chatgpt_oauth.response_headers",
+    ): (
+        "Owner: opt-in ChatGPT OAuth standalone web search adapter. "
+        "Reason: forwards upstream x-codex-* quota/rate-limit headers into the "
+        "provider's single CodexResponseObserver so the ChatGPT card reflects "
+        "search quota usage too."
+    ),
 }
 
 FACADE_ONLY_BOUNDARIES = {

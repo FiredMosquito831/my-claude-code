@@ -1624,6 +1624,11 @@ WEB_SEARCH_TOOL_LOOP_MAX_STEPS_DEFAULT = 5
 WEB_SEARCH_GEMINI_ENABLED_DEFAULT = True
 WEB_SEARCH_CHAT_ENABLED_DEFAULT = True
 
+# Opt-in standalone /v1/websearch adapter backed by ChatGPT/Codex OAuth (8.70.0, IV.24).
+# Disabled by default so standalone search/tool loops never silently spend Codex
+# subscription inference quotas.
+CHATGPT_OAUTH_WEBSEARCH_ENABLED_DEFAULT = False
+
 # Non-registry client attribution vocabulary mirrored from
 # ``core.client_fingerprint`` (``config`` is a leaf package and may not import
 # ``core``; ``tests/contracts/test_import_boundaries.py`` pins both sets and
