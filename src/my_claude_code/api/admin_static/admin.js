@@ -52275,7 +52275,7 @@ function buildRcTunnelDescriptors(statusPayload) {
         ["Configured mode", `RC_TUNNEL_MODE=${configuredMode} (active: ${activeMode})`],
         [
           "Tailscale CLI / daemon",
-          `${ts.installed ? "Installed" : "Not installed"} · ${ts.running ? "Running" : "Stopped"} · ${ts.serve_active ? "Serve active" : "Serve inactive"}`,
+          `${ts.installed ? "Installed" : "Not installed"} · ${ts.running ? "Daemon active" : "Stopped"} · ${ts.serve_active ? "Serve active" : "Serve inactive"}`,
         ],
         ["Active HTTPS URL", ts.serve_url || "(not active yet)"],
         ["Notes / warnings", ts.error || ts.bind_warning || "None"],
@@ -52298,7 +52298,7 @@ function buildRcTunnelDescriptors(statusPayload) {
         ["Configured mode", `RC_TUNNEL_MODE=${configuredMode} (active: ${activeMode})`],
         [
           "Tailscale CLI / daemon",
-          `${ts.installed ? "Installed" : "Not installed"} · ${ts.running ? "Running" : "Stopped"}`,
+          `${ts.installed ? "Installed" : "Not installed"} · ${ts.running ? "Daemon active" : "Stopped"}`,
         ],
         ["Tailnet HTTP URL", ts.local_url || "(unavailable until Tailscale is running)"],
         ["Notes / warnings", ts.bind_warning || ts.error || "None"],
