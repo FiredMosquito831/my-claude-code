@@ -101,18 +101,20 @@ class PinnedMediaClient:
     def _job_auth_header(self, *, job_dialect: str | None = None) -> str | None:
         """Auth header from the job's content/retrieve surface, if any."""
 
-        for operation in (
+        operations = (
             MEDIA_OPERATION_VIDEO_CONTENT,
             MEDIA_OPERATION_VIDEO_RETRIEVE,
-        ):
-            candidates = surfaces_for(self._leaf.surfaces, operation)
-            if job_dialect:
-                for candidate in candidates:
+        )
+        if job_dialect:
+            for operation in operations:
+                for candidate in surfaces_for(self._leaf.surfaces, operation):
                     if (
                         candidate.shape == job_dialect
                         or candidate.surface_id == job_dialect
                     ):
                         return candidate.auth_header
+        for operation in operations:
+            candidates = surfaces_for(self._leaf.surfaces, operation)
             if candidates:
                 return candidates[0].auth_header
         return None

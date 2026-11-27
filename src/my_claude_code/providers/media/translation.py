@@ -20,9 +20,11 @@ from typing import IO, Any, cast
 from my_claude_code.application.media.request import MediaUpload
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_IMAGE_VARIATION,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
     MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_OPERATION_VIDEO_EDIT,
 )
 
 #: Operations whose spooled file uploads can be encoded off-loop into JSON
@@ -30,7 +32,9 @@ from my_claude_code.config.media_surfaces import (
 UPLOAD_TRANSLATABLE_OPERATIONS: frozenset[str] = frozenset(
     {
         MEDIA_OPERATION_IMAGE_EDIT,
+        MEDIA_OPERATION_IMAGE_VARIATION,
         MEDIA_OPERATION_VIDEO_CREATE,
+        MEDIA_OPERATION_VIDEO_EDIT,
         MEDIA_OPERATION_TRANSCRIBE,
         MEDIA_OPERATION_TRANSLATE,
         "ocr",
@@ -256,7 +260,8 @@ def uploads_to_data_uris(uploads: Sequence[MediaUpload]) -> list[dict[str, Any]]
     ]
 
 
-def _extract_image_url(entry: Any) -> str | None:
+def extract_image_url(entry: Any) -> str | None:
+    """Extract an image URL or data URI from a string or OpenAI-style entry dict."""
     if isinstance(entry, str):
         return entry
     if not isinstance(entry, Mapping):
@@ -281,7 +286,7 @@ def has_decodable_data_uris(body: Mapping[str, Any]) -> bool:
     if not isinstance(images, Sequence) or isinstance(images, str | bytes | bytearray):
         return False
     for entry in images:
-        url = _extract_image_url(entry)
+        url = extract_image_url(entry)
         if url is not None and _DATA_URI_RE.match(url) is not None:
             return True
     return False
@@ -296,7 +301,7 @@ def data_uris_to_uploads(images_list: Sequence[Any]) -> tuple[MediaUpload, ...]:
 
     uploads: list[MediaUpload] = []
     for index, entry in enumerate(images_list):
-        url = _extract_image_url(entry)
+        url = extract_image_url(entry)
         if url is None:
             continue
         match = _DATA_URI_RE.match(url)
@@ -333,6 +338,7 @@ __all__ = [
     "EXACT_SIZE_TO_RESOLUTION",
     "UPLOAD_TRANSLATABLE_OPERATIONS",
     "data_uris_to_uploads",
+    "extract_image_url",
     "has_decodable_data_uris",
     "translate_size_and_aspect",
     "upload_to_data_uri",

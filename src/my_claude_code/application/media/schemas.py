@@ -80,10 +80,12 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_IMAGE_VARIATION,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
     MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_OPERATION_VIDEO_EDIT,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
@@ -250,6 +252,14 @@ DOOR_FIELDS: Mapping[str, tuple[DoorField, ...]] = {
         DoorField("stream", _BOOLEAN),
         DoorField("user", _STRING),
     ),
+    MEDIA_OPERATION_IMAGE_VARIATION: (
+        DoorField("image", _FILE, required=True),
+        DoorField("n", _INTEGER),
+        DoorField("response_format", _STRING),
+        DoorField("size", _STRING),
+        DoorField("stream", _BOOLEAN),
+        DoorField("user", _STRING),
+    ),
     MEDIA_OPERATION_SPEECH: (
         DoorField("input", _STRING, required=True),
         DoorField("voice", {"type": ["string", "object"]}),
@@ -294,6 +304,21 @@ DOOR_FIELDS: Mapping[str, tuple[DoorField, ...]] = {
         DoorField("negative_prompt", _STRING),
         DoorField("seed", _STRING),
     ),
+    MEDIA_OPERATION_VIDEO_EDIT: (
+        DoorField("prompt", _STRING, required=True),
+        DoorField("video", _FILE),
+        DoorField(
+            "input_reference",
+            {"anyOf": [dict(_FILE), {"type": "object"}]},
+        ),
+        DoorField("video_url", _STRING),
+        DoorField("seconds", _STRING),
+        DoorField("size", _STRING),
+        DoorField("aspect_ratio", _STRING),
+        DoorField("resolution", _STRING),
+        DoorField("negative_prompt", _STRING),
+        DoorField("seed", _STRING),
+    ),
 }
 
 #: The operations a schema is published for, in the rails' order.
@@ -306,6 +331,7 @@ SCHEMA_OPERATIONS: tuple[str, ...] = tuple(DOOR_FIELDS)
 _STREAM_FIELD: Mapping[str, str] = {
     MEDIA_OPERATION_IMAGE_GENERATE: "stream",
     MEDIA_OPERATION_IMAGE_EDIT: "stream",
+    MEDIA_OPERATION_IMAGE_VARIATION: "stream",
     MEDIA_OPERATION_TRANSCRIBE: "stream",
 }
 

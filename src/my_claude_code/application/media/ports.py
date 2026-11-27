@@ -76,6 +76,7 @@ class MediaJobClient(Protocol):
         model: str,
         request_id: str,
         query: Mapping[str, str] | None = None,
+        job_dialect: str | None = None,
     ) -> MediaResponse:
         """A buffered call on the job (retrieve, delete)."""
         ...
@@ -89,6 +90,7 @@ class MediaJobClient(Protocol):
         model: str,
         request_id: str,
         query: Mapping[str, str] | None = None,
+        job_dialect: str | None = None,
     ) -> MediaDownload:
         """Open the finished file: the declared ``operation``'s path, else ``url``."""
         ...

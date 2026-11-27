@@ -20,6 +20,7 @@ from my_claude_code.application.model_metadata import (
     ProviderModelDeclaration,
     ResponseSurface,
     declared_accepts_images,
+    model_info_from_document,
 )
 from my_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
@@ -1625,13 +1626,24 @@ _NON_HTTP_ENDPOINT_FLAGS = frozenset(
 )
 
 _PROVIDER_CATALOGUE_ENTRY = "provider-catalogue"
+_PROVIDER_ROWS_ENTRY = "provider-rows"
 _CACHE_DIRNAME = "cache"
 _CACHE_SUBDIR = "derived"
 
 _DECLARED_ENDPOINTS_LOCK = threading.Lock()
 _DECLARED_ENDPOINTS_SNAPSHOT: dict[tuple[str, str], tuple[str, ...]] | None = None
+_MODEL_INFOS_SNAPSHOT: dict[tuple[str, str], _ProviderModelInfo] | None = None
 _DISK_DECLARED_ENDPOINTS_MEMO: (
     tuple[Path, tuple[int, int] | None, dict[tuple[str, str], tuple[str, ...]]] | None
+) = None
+_DISK_MODEL_INFOS_MEMO: (
+    tuple[
+        Path,
+        tuple[int, int] | None,
+        tuple[int, int] | None,
+        dict[tuple[str, str], _ProviderModelInfo],
+    ]
+    | None
 ) = None
 
 
@@ -1695,37 +1707,153 @@ def set_declared_endpoints_snapshot(
 ) -> None:
     """Publish the live in-memory ``(provider_id, model_id) -> endpoints`` snapshot."""
 
-    global _DECLARED_ENDPOINTS_SNAPSHOT
+    global _DECLARED_ENDPOINTS_SNAPSHOT, _MODEL_INFOS_SNAPSHOT
     if catalogues is None:
         with _DECLARED_ENDPOINTS_LOCK:
             _DECLARED_ENDPOINTS_SNAPSHOT = None
+            _MODEL_INFOS_SNAPSHOT = None
         return
     snapshot: dict[tuple[str, str], tuple[str, ...]] = {}
+    info_snapshot: dict[tuple[str, str], _ProviderModelInfo] = {}
     for provider_id, infos in catalogues.items():
         for info in infos:
+            info_snapshot[(provider_id, info.model_id)] = info
             declared = info.declared
             if declared is not None and declared.endpoints:
                 snapshot[(provider_id, info.model_id)] = declared.endpoints
     with _DECLARED_ENDPOINTS_LOCK:
         _DECLARED_ENDPOINTS_SNAPSHOT = snapshot
+        _MODEL_INFOS_SNAPSHOT = info_snapshot
 
 
 def reset_declared_endpoints_snapshot() -> None:
     """Clear the process-wide declared-endpoints snapshot and disk memo (for tests)."""
 
-    global _DECLARED_ENDPOINTS_SNAPSHOT, _DISK_DECLARED_ENDPOINTS_MEMO
+    global _DECLARED_ENDPOINTS_SNAPSHOT, _MODEL_INFOS_SNAPSHOT
+    global _DISK_DECLARED_ENDPOINTS_MEMO, _DISK_MODEL_INFOS_MEMO
     with _DECLARED_ENDPOINTS_LOCK:
         _DECLARED_ENDPOINTS_SNAPSHOT = None
+        _MODEL_INFOS_SNAPSHOT = None
         _DISK_DECLARED_ENDPOINTS_MEMO = None
+        _DISK_MODEL_INFOS_MEMO = None
 
 
-def _derived_cache_stat(cache_dir: Path) -> tuple[int, int] | None:
-    path = cache_dir / f"{_PROVIDER_CATALOGUE_ENTRY}.json"
+def _derived_cache_stat(
+    cache_dir: Path, entry_name: str = _PROVIDER_CATALOGUE_ENTRY
+) -> tuple[int, int] | None:
+    path = cache_dir / f"{entry_name}.json"
     try:
         stat = path.stat()
     except OSError:
         return None
     return (stat.st_mtime_ns, stat.st_size)
+
+
+def _read_model_infos_from_derived_cache() -> dict[tuple[str, str], _ProviderModelInfo]:
+    global _DISK_MODEL_INFOS_MEMO
+    cache_dir = config_dir_path() / _CACHE_DIRNAME / _CACHE_SUBDIR
+    cat_stamp = _derived_cache_stat(cache_dir, _PROVIDER_CATALOGUE_ENTRY)
+    rows_stamp = _derived_cache_stat(cache_dir, _PROVIDER_ROWS_ENTRY)
+    with _DECLARED_ENDPOINTS_LOCK:
+        memo = _DISK_MODEL_INFOS_MEMO
+        if (
+            memo is not None
+            and memo[0] == cache_dir
+            and memo[1] == cat_stamp
+            and memo[2] == rows_stamp
+        ):
+            return memo[3]
+
+    rows_by_key: dict[tuple[str, str], str] = {}
+    if rows_stamp is not None:
+        try:
+            rows_entry = DerivedCache(cache_dir).read(_PROVIDER_ROWS_ENTRY)
+        except Exception:
+            rows_entry = None
+        rows_payload = None if rows_entry is None else rows_entry.payload
+        providers = (
+            rows_payload.get("providers") if isinstance(rows_payload, Mapping) else None
+        )
+        if isinstance(providers, Sequence) and not isinstance(providers, str | bytes):
+            for provider_entry in providers:
+                if not isinstance(provider_entry, Mapping):
+                    continue
+                pid = provider_entry.get("provider_id")
+                rows = provider_entry.get("rows")
+                if not isinstance(pid, str) or not isinstance(rows, Mapping):
+                    continue
+                for mid, row_obj in rows.items():
+                    if isinstance(mid, str) and isinstance(row_obj, Mapping):
+                        try:
+                            rows_by_key[(pid, mid)] = json.dumps(
+                                row_obj,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                default=str,
+                            )
+                        except Exception:
+                            continue
+
+    found: dict[tuple[str, str], _ProviderModelInfo] = {}
+    if cat_stamp is not None:
+        try:
+            entry = DerivedCache(cache_dir).read(_PROVIDER_CATALOGUE_ENTRY)
+        except Exception:
+            entry = None
+        payload = None if entry is None else entry.payload
+        providers = payload.get("providers") if isinstance(payload, Mapping) else None
+        if isinstance(providers, Sequence) and not isinstance(providers, str | bytes):
+            for provider_entry in providers:
+                if not isinstance(provider_entry, Mapping):
+                    continue
+                pid = provider_entry.get("provider_id")
+                models = provider_entry.get("models")
+                if (
+                    not isinstance(pid, str)
+                    or not isinstance(models, Sequence)
+                    or isinstance(models, str | bytes)
+                ):
+                    continue
+                for model_entry in models:
+                    if not isinstance(model_entry, Mapping):
+                        continue
+                    info = model_info_from_document(model_entry)
+                    if info is None:
+                        continue
+                    row_text = info.published_row or rows_by_key.get(
+                        (pid, info.model_id)
+                    )
+                    if row_text is not None and row_text != info.published_row:
+                        info = replace(info, published_row=row_text)
+                    found[(pid, info.model_id)] = info
+    for (pid, mid), row_text in rows_by_key.items():
+        if (pid, mid) not in found:
+            found[(pid, mid)] = _ProviderModelInfo(model_id=mid, published_row=row_text)
+
+    with _DECLARED_ENDPOINTS_LOCK:
+        _DISK_MODEL_INFOS_MEMO = (cache_dir, cat_stamp, rows_stamp, found)
+    return found
+
+
+def cached_provider_model_info(
+    provider_id: str, model_id: str
+) -> _ProviderModelInfo | None:
+    """Return cached :class:`ProviderModelInfo` for ``(provider_id, model_id)``, zero live calls."""
+
+    if not provider_id or not model_id:
+        return None
+    with _DECLARED_ENDPOINTS_LOCK:
+        snapshot = _MODEL_INFOS_SNAPSHOT
+    table = snapshot if snapshot is not None else _read_model_infos_from_derived_cache()
+    direct = table.get((provider_id, model_id))
+    if direct is not None:
+        return direct
+    stripped = strip_model_id_tag(model_id)
+    if stripped is not None:
+        for (pid, mid), info in table.items():
+            if pid == provider_id and mid.strip().lower() == stripped:
+                return info
+    return None
 
 
 def _read_declared_endpoints_from_derived_cache() -> dict[

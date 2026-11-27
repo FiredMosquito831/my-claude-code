@@ -19,6 +19,7 @@ from urllib.parse import quote
 #: one list.
 MEDIA_OPERATION_IMAGE_GENERATE = "image_generate"
 MEDIA_OPERATION_IMAGE_EDIT = "image_edit"
+MEDIA_OPERATION_IMAGE_VARIATION = "image_variation"
 MEDIA_OPERATION_SPEECH = "speech"
 MEDIA_OPERATION_TRANSCRIBE = "transcribe"
 MEDIA_OPERATION_TRANSLATE = "translate"
@@ -26,6 +27,7 @@ MEDIA_OPERATION_TRANSLATE = "translate"
 #: (the rail's chain decides who accepts it); the other three are calls on the
 #: accepted job, pinned to the provider and key that accepted it.
 MEDIA_OPERATION_VIDEO_CREATE = "video_create"
+MEDIA_OPERATION_VIDEO_EDIT = "video_edit"
 MEDIA_OPERATION_VIDEO_RETRIEVE = "video_retrieve"
 MEDIA_OPERATION_VIDEO_CONTENT = "video_content"
 MEDIA_OPERATION_VIDEO_DELETE = "video_delete"
@@ -46,6 +48,12 @@ MEDIA_SHAPE_GEMINI_TRANSCRIBE = "gemini_transcribe"
 #: call, ``GET /v1/files/{file_id}/content``. One shape, because the body, the
 #: answer and the byte retrieval all differ from every shape above.
 MEDIA_SHAPE_MISTRAL_IMAGE_TOOL = "mistral_image_tool"
+#: 8.63.0: OpenRouter Chat Completions image generation/editing (``modalities: ["image", "text"]``),
+#: Gemini native image ``generateContent``, Imagen ``:predict``, and Veo ``:predictLongRunning``.
+MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE = "openrouter_chat_image"
+MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE = "gemini_generate_content_image"
+MEDIA_SHAPE_GEMINI_PREDICT_IMAGE = "gemini_predict_image"
+MEDIA_SHAPE_GEMINI_VEO_LRO = "gemini_veo_lro"
 
 #: A surface whose host documents a JSON body only (``MediaSurface.encoding``).
 MEDIA_ENCODING_JSON = "json"
@@ -53,10 +61,12 @@ MEDIA_ENCODING_JSON = "json"
 MEDIA_OPERATIONS: tuple[str, ...] = (
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_IMAGE_VARIATION,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
     MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_OPERATION_VIDEO_EDIT,
     MEDIA_OPERATION_VIDEO_RETRIEVE,
     MEDIA_OPERATION_VIDEO_CONTENT,
     MEDIA_OPERATION_VIDEO_DELETE,
@@ -69,6 +79,10 @@ MEDIA_SHAPES: tuple[str, ...] = (
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
+    MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+    MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
+    MEDIA_SHAPE_GEMINI_VEO_LRO,
 )
 
 #: The header Gemini's native API reads the key from (instead of Bearer).
@@ -79,6 +93,16 @@ GEMINI_API_KEY_HEADER = "x-goog-api-key"
 #: (``.../v1beta/openai/``), not the native API.
 GEMINI_GENERATE_CONTENT_PATH = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
+GEMINI_PREDICT_PATH = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:predict"
+)
+GEMINI_PREDICT_LONG_RUNNING_PATH = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning"
+)
+GEMINI_OPERATION_GET_PATH = "https://generativelanguage.googleapis.com/v1beta/{id}"
+GEMINI_FILE_DOWNLOAD_PATH = (
+    "https://generativelanguage.googleapis.com/v1beta/files/{id}:download"
 )
 
 #: Gemini's prebuilt TTS voices, exactly as the "Prebuilt voices" table of
@@ -229,6 +253,104 @@ def image_edit_surface(
         shape=MEDIA_SHAPE_OPENAI_IMAGES,
         path=path,
         stream=stream,
+    )
+
+
+def image_variation_surface(
+    path: str = "images/variations", *, stream: bool = False
+) -> MediaSurface:
+    """The OpenAI ``POST /images/variations`` shape at ``path``."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_VARIATION,
+        shape=MEDIA_SHAPE_OPENAI_IMAGES,
+        path=path,
+        stream=stream,
+    )
+
+
+def openrouter_image_generation_surface() -> MediaSurface:
+    """OpenRouter's Chat Completions image generation (``modalities: ["image", "text"]``)."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        shape=MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
+        path="chat/completions",
+        encoding=MEDIA_ENCODING_JSON,
+    )
+
+
+def openrouter_image_edit_surface() -> MediaSurface:
+    """OpenRouter's Chat Completions image editing (``modalities: ["image", "text"]``)."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_EDIT,
+        shape=MEDIA_SHAPE_OPENROUTER_CHAT_IMAGE,
+        path="chat/completions",
+        encoding=MEDIA_ENCODING_JSON,
+    )
+
+
+def gemini_generate_content_image_surface() -> MediaSurface:
+    """Gemini native image generation on ``:generateContent``."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        shape=MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+        path=GEMINI_GENERATE_CONTENT_PATH,
+        encoding=MEDIA_ENCODING_JSON,
+        auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
+def gemini_generate_content_image_edit_surface() -> MediaSurface:
+    """Gemini native image editing on ``:generateContent``."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_EDIT,
+        shape=MEDIA_SHAPE_GEMINI_GENERATE_CONTENT_IMAGE,
+        path=GEMINI_GENERATE_CONTENT_PATH,
+        encoding=MEDIA_ENCODING_JSON,
+        auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
+def gemini_predict_image_surface() -> MediaSurface:
+    """Imagen native image generation on ``:predict``."""
+
+    return MediaSurface(
+        operation=MEDIA_OPERATION_IMAGE_GENERATE,
+        shape=MEDIA_SHAPE_GEMINI_PREDICT_IMAGE,
+        path=GEMINI_PREDICT_PATH,
+        encoding=MEDIA_ENCODING_JSON,
+        auth_header=GEMINI_API_KEY_HEADER,
+    )
+
+
+def gemini_veo_lro_surfaces() -> tuple[MediaSurface, ...]:
+    """Veo native LRO surfaces: ``:predictLongRunning``, operation poll, and download."""
+
+    return (
+        MediaSurface(
+            operation=MEDIA_OPERATION_VIDEO_CREATE,
+            shape=MEDIA_SHAPE_GEMINI_VEO_LRO,
+            path=GEMINI_PREDICT_LONG_RUNNING_PATH,
+            encoding=MEDIA_ENCODING_JSON,
+            auth_header=GEMINI_API_KEY_HEADER,
+        ),
+        MediaSurface(
+            operation=MEDIA_OPERATION_VIDEO_RETRIEVE,
+            shape=MEDIA_SHAPE_GEMINI_VEO_LRO,
+            path=GEMINI_OPERATION_GET_PATH,
+            auth_header=GEMINI_API_KEY_HEADER,
+        ),
+        MediaSurface(
+            operation=MEDIA_OPERATION_VIDEO_CONTENT,
+            shape=MEDIA_SHAPE_GEMINI_VEO_LRO,
+            path=GEMINI_FILE_DOWNLOAD_PATH,
+            auth_header=GEMINI_API_KEY_HEADER,
+            only_without_url=True,
+        ),
     )
 
 
@@ -449,6 +571,23 @@ def custom_media_surfaces(operations: tuple[str, ...]) -> tuple[MediaSurface, ..
 def job_path(path: str, job_id: str) -> str:
     """``path`` with ``{id}`` replaced by the URL-quoted upstream job id."""
 
+    if "{raw_id}" in path:
+        return path.replace("{raw_id}", quote(job_id.lstrip("/"), safe="/"))
+    if path.endswith("/v1beta/{id}"):
+        cleaned = job_id.lstrip("/")
+        if "/" in cleaned:
+            return path.replace("{id}", quote(cleaned, safe="/"))
+        return path.replace("{id}", f"operations/{quote(cleaned, safe='')}")
+    if path.endswith("operations/{id}"):
+        cleaned = job_id.lstrip("/")
+        if cleaned.startswith("operations/"):
+            cleaned = cleaned.removeprefix("operations/")
+        return path.replace("{id}", quote(cleaned, safe="/"))
+    if path.endswith("files/{id}:download"):
+        cleaned = job_id.lstrip("/")
+        if cleaned.startswith("files/"):
+            cleaned = cleaned.removeprefix("files/")
+        return path.replace("{id}", quote(cleaned, safe=""))
     return path.replace("{id}", quote(job_id, safe=""))
 
 
@@ -470,6 +609,26 @@ def surfaces_for(
     """All declared surfaces serving ``operation``, in declaration order."""
 
     return tuple(surface for surface in surfaces if surface.operation == operation)
+
+
+_OPERATION_FALLBACKS: dict[str, str] = {
+    MEDIA_OPERATION_IMAGE_VARIATION: MEDIA_OPERATION_IMAGE_EDIT,
+    MEDIA_OPERATION_VIDEO_EDIT: MEDIA_OPERATION_VIDEO_CREATE,
+}
+
+
+def effective_surfaces_for(
+    surfaces: tuple[MediaSurface, ...], operation: str
+) -> tuple[MediaSurface, ...]:
+    """Surfaces for ``operation``, falling back to edit/create peers when undeclared."""
+
+    direct = surfaces_for(surfaces, operation)
+    if direct:
+        return direct
+    fallback_op = _OPERATION_FALLBACKS.get(operation)
+    if fallback_op is not None:
+        return surfaces_for(surfaces, fallback_op)
+    return ()
 
 
 def surface_for(

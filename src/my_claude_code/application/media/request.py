@@ -15,10 +15,12 @@ from my_claude_code.application.routing import ResolvedModel
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_IMAGE_VARIATION,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
     MEDIA_OPERATION_VIDEO_CREATE,
+    MEDIA_OPERATION_VIDEO_EDIT,
 )
 
 
@@ -92,10 +94,14 @@ RAIL_SETTINGS: Mapping[MediaRail, MediaRailSettings] = {
 #: video's retrieve/content/delete are calls on an accepted job, pinned to the
 #: provider that took it, so the rail itself routes only the create.
 RAIL_OPERATIONS: Mapping[MediaRail, tuple[str, ...]] = {
-    MediaRail.IMAGE: (MEDIA_OPERATION_IMAGE_GENERATE, MEDIA_OPERATION_IMAGE_EDIT),
+    MediaRail.IMAGE: (
+        MEDIA_OPERATION_IMAGE_GENERATE,
+        MEDIA_OPERATION_IMAGE_EDIT,
+        MEDIA_OPERATION_IMAGE_VARIATION,
+    ),
     MediaRail.TTS: (MEDIA_OPERATION_SPEECH,),
     MediaRail.ASR: (MEDIA_OPERATION_TRANSCRIBE, MEDIA_OPERATION_TRANSLATE),
-    MediaRail.VIDEO: (MEDIA_OPERATION_VIDEO_CREATE,),
+    MediaRail.VIDEO: (MEDIA_OPERATION_VIDEO_CREATE, MEDIA_OPERATION_VIDEO_EDIT),
 }
 
 #: The rail a logged ``media_operation`` is counted under.

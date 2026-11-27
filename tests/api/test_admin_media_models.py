@@ -132,6 +132,8 @@ def test_a_row_lists_the_operations_its_provider_declares(monkeypatch, tmp_path)
         "video_create",
         "video_retrieve",
         "video_content",
+        "image_generate",
+        "image_edit",
     ]
 
 
@@ -250,7 +252,12 @@ def test_the_provider_table_lists_every_media_provider(monkeypatch, tmp_path):
     assert [op["operation"] for op in speaker["declared"]] == ["speech", "transcribe"]
     assert speaker["rails"] == ["Speech", "Transcription"]
     assert providers["together"]["rails"] == ["Image", "Speech", "Transcription"]
-    assert providers["open_router"]["rails"] == ["Speech", "Transcription", "Video"]
+    assert providers["open_router"]["rails"] == [
+        "Image",
+        "Speech",
+        "Transcription",
+        "Video",
+    ]
     assert providers["together"]["custom"] is False
 
 

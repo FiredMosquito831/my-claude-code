@@ -62,10 +62,11 @@ from my_claude_code.config.mcp_media import MCP_MEDIA_INLINE_IMAGES_HEADER
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
+    MEDIA_OPERATION_IMAGE_VARIATION,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
-    surface_for,
+    effective_surfaces_for,
 )
 from my_claude_code.config.provider_registry import get_provider_registry
 from my_claude_code.config.settings import Settings
@@ -113,6 +114,7 @@ from .wire_surfaces import (
     AUDIO_TRANSLATIONS_ENDPOINT,
     IMAGES_EDITS_ENDPOINT,
     IMAGES_GENERATIONS_ENDPOINT,
+    IMAGES_VARIATIONS_ENDPOINT,
 )
 
 router = APIRouter()
@@ -531,6 +533,50 @@ async def edit_image(
     )
 
 
+@router.post(IMAGES_VARIATIONS_ENDPOINT)
+async def create_image_variation(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Create image variations through the Image rail (OpenAI ``images.create_variation``)."""
+    content_type = request.headers.get("content-type", "")
+    if not content_type.startswith("multipart/form-data"):
+        return _invalid(
+            "The request body must be multipart/form-data with an 'image' file."
+        )
+    form = await request.form()
+
+    async def close_form() -> None:
+        await form.close()
+
+    try:
+        fields, uploads = await _uploads_from_form(form)
+    except BaseException:
+        await close_form()
+        raise
+    if not any(upload.field.startswith("image") for upload in uploads):
+        await close_form()
+        return _invalid("An 'image' file is required to create an image variation.")
+    media_request = MediaRequest(
+        operation=MEDIA_OPERATION_IMAGE_VARIATION,
+        rail=MediaRail.IMAGE,
+        model=str(fields.get("model") or ""),
+        body={key: value for key, value in fields.items() if key != "model"},
+        stream=_stream_flag(fields.get("stream")),
+        uploads=uploads,
+    )
+    media_request, complete = _with_inline_pictures(request, services, media_request)
+    return await _serve(
+        request,
+        services,
+        media_request,
+        endpoint=IMAGES_VARIATIONS_ENDPOINT,
+        cleanup=close_form,
+        complete=complete,
+    )
+
+
 def _inline_pictures_asked(request: Request) -> bool:
     value = request.headers.get(MCP_MEDIA_INLINE_IMAGES_HEADER, "")
     return value.strip().lower() in {"1", "true", "yes"}
@@ -807,6 +853,7 @@ async def _complete_response(
 _STREAM_FIELDS: dict[str, tuple[str, ...]] = {
     MEDIA_OPERATION_IMAGE_GENERATE: ("stream", "partial_images"),
     MEDIA_OPERATION_IMAGE_EDIT: ("stream", "partial_images"),
+    MEDIA_OPERATION_IMAGE_VARIATION: ("stream", "partial_images"),
     MEDIA_OPERATION_SPEECH: ("stream_format",),
 }
 
@@ -826,9 +873,11 @@ def _answer_stream_from_whole(media_request: MediaRequest, plan: MediaPlan) -> b
         descriptor = descriptors.get(attempt.resolved.provider_id)
         if descriptor is None:
             continue
-        surface = surface_for(descriptor.media_surfaces, media_request.operation)
-        if surface is not None and surface.stream:
-            return False
+        for surface in effective_surfaces_for(
+            descriptor.media_surfaces, media_request.operation
+        ):
+            if surface.stream:
+                return False
     return True
 
 
@@ -1035,4 +1084,9 @@ async def probe_audio_speech(_auth=Depends(require_proxy_auth)):
 
 @router.api_route(IMAGES_EDITS_ENDPOINT, methods=["HEAD", "OPTIONS"])
 async def probe_images_edits(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
+
+
+@router.api_route(IMAGES_VARIATIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_images_variations(_auth=Depends(require_proxy_auth)):
     return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})

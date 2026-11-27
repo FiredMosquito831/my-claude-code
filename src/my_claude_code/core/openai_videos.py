@@ -113,11 +113,17 @@ def _error_message(value: Any) -> str | None:
     if text is not None:
         return text
     nested = _object(value)
-    return None if nested is None else _text(nested.get("message"))
+    if nested is None:
+        return None
+    msg = _text(nested.get("message"))
+    if msg is not None:
+        return msg
+    code = nested.get("code")
+    return f"error code {code}" if code is not None else None
 
 
 def _result_url(data: Mapping[str, Any]) -> str | None:
-    """``url`` (Gemini), ``video.url``, ``unsigned_urls[0]`` (OpenRouter), ..."""
+    """``url`` (Gemini), ``video.url``, ``unsigned_urls[0]`` (OpenRouter), Veo LRO..."""
 
     direct = _text(data.get("url"))
     if direct is not None:
@@ -134,14 +140,52 @@ def _result_url(data: Mapping[str, Any]) -> str | None:
         nested = _object(data.get(holder))
         if nested is not None and _text(nested.get("video_url")) is not None:
             return _text(nested.get("video_url"))
+    response = _object(data.get("response"))
+    if response is not None:
+        gen_video = _object(
+            response.get("generateVideoResponse")
+            or response.get("generate_video_response")
+        )
+        if gen_video is not None:
+            samples = gen_video.get("generatedSamples") or gen_video.get(
+                "generated_samples"
+            )
+            if isinstance(samples, list):
+                for sample in samples:
+                    sample_obj = _object(sample)
+                    sample_video = (
+                        None if sample_obj is None else _object(sample_obj.get("video"))
+                    )
+                    if sample_video is not None:
+                        uri = _text(sample_video.get("uri")) or _text(
+                            sample_video.get("url")
+                        )
+                        if uri is not None:
+                            return uri
+        videos = response.get("videos")
+        if isinstance(videos, list):
+            for entry in videos:
+                entry_obj = _object(entry)
+                if entry_obj is None:
+                    continue
+                uri = (
+                    _text(entry_obj.get("uri"))
+                    or _text(entry_obj.get("gcsUri"))
+                    or _text(entry_obj.get("url"))
+                )
+                if uri is not None:
+                    return uri
     return None
 
 
 def parse_job(body: bytes) -> UpstreamJob | None:
     """Read a create or retrieve answer; ``None`` when it is not a JSON object.
 
-    A job whose ``id`` is missing or not a non-empty string parses with
-    ``id=None``: on a create that is "not accepted".
+    Supports both OpenAI ``/videos`` objects (``id``, ``status``) and Google
+    Veo LRO Operations (``name``, ``done``, ``error``, ``response``).
+
+    A job whose ``id`` (or LRO ``name``) is missing or not a non-empty string
+    parses with ``id=None``: on a create that is "not accepted".
     """
 
     try:
@@ -154,6 +198,21 @@ def parse_job(body: bytes) -> UpstreamJob | None:
     status_raw = _text(data.get("status"))
     status = None if status_raw is None else normalise_status(status_raw)
     progress_value = _number(data.get("progress"))
+    metadata = _object(data.get("metadata"))
+    if progress_value is None and metadata is not None:
+        progress_value = _number(metadata.get("progress"))
+    error_message = _error_message(data.get("error"))
+    if status is None and isinstance(data.get("done"), bool):
+        if data["done"] is True:
+            if data.get("error") is not None or error_message is not None:
+                status_raw = "failed"
+                status = STATUS_FAILED
+            else:
+                status_raw = "completed"
+                status = STATUS_COMPLETED
+        else:
+            status_raw = "in_progress"
+            status = STATUS_IN_PROGRESS
     progress = None if progress_value is None else max(0, min(100, int(progress_value)))
     if status == STATUS_COMPLETED:
         progress = 100
@@ -162,7 +221,7 @@ def parse_job(body: bytes) -> UpstreamJob | None:
         seconds = _number(data.get(name))
         if seconds is not None:
             break
-    identifier = _text(data.get("id"))
+    identifier = _text(data.get("id")) or _text(data.get("name"))
     return UpstreamJob(
         id=None if identifier is None else identifier.strip(),
         status_raw=status_raw,
@@ -170,7 +229,7 @@ def parse_job(body: bytes) -> UpstreamJob | None:
         progress=progress,
         seconds=seconds,
         size=_text(data.get("size")),
-        error_message=_error_message(data.get("error")),
+        error_message=error_message,
         result_url=_result_url(data),
         usage=_object(data.get("usage")),
         created_at=_epoch(data.get("created_at")),

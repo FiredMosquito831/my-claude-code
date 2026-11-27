@@ -9,11 +9,18 @@ from dataclasses import dataclass
 from .media_surfaces import (
     MEDIA_ENCODING_JSON,
     MediaSurface,
+    gemini_generate_content_image_edit_surface,
+    gemini_generate_content_image_surface,
+    gemini_predict_image_surface,
     gemini_speech_surface,
     gemini_transcription_surface,
+    gemini_veo_lro_surfaces,
     image_edit_surface,
     image_generation_surface,
+    image_variation_surface,
     mistral_image_tool_surface,
+    openrouter_image_edit_surface,
+    openrouter_image_generation_surface,
     speech_surface,
     transcription_surface,
     translation_surface,
@@ -352,6 +359,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "openai": ProviderDescriptor(
         image_token_family="openai_patch",
         provider_id="openai",
+        media_surfaces=(image_variation_surface(),),
         display_name="OpenAI / ChatGPT",
         credential_env="CHATGPT_OAUTH_ACCESS_TOKEN",
         credential_url="https://github.com/openai/codex",
@@ -373,6 +381,8 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
                 encoding=MEDIA_ENCODING_JSON,
                 renames=(("seconds", "duration"),),
             ),
+            openrouter_image_generation_surface(),
+            openrouter_image_edit_surface(),
         ),
         display_name="OpenRouter",
         credential_env="OPENROUTER_API_KEY",
@@ -390,11 +400,20 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         # carries (no content endpoint, no delete). Speech and transcription:
         # that layer has neither, so they go to native ``generateContent``
         # (7.66.0). No translation surface: none is documented.
+        # 8.63.0: native image (:generateContent, :predict), edit, and Veo LRO
+        # surfaces are appended after the OpenAI-compat defaults so existing
+        # default-order behavior is preserved when no discovery metadata speaks,
+        # while Rung 4 capability promotion selects the native surface first.
         media_surfaces=(
             image_generation_surface(),
             gemini_speech_surface(),
             gemini_transcription_surface(),
             *video_surfaces(),
+            gemini_generate_content_image_surface(),
+            gemini_generate_content_image_edit_surface(),
+            gemini_predict_image_surface(),
+            image_edit_surface(),
+            *gemini_veo_lro_surfaces(),
         ),
         display_name="Gemini",
         credential_env="GEMINI_API_KEY",
