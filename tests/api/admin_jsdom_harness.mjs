@@ -16201,7 +16201,207 @@ const mediaDashboard = {};
   fields.reopenedAfterSave = Boolean(
     doc.querySelector("#mediaModelsTable details.media-request-fields")?.open,
   );
+  fields.inspectorPanelsWithoutPayload = doc.querySelectorAll(
+    "#mediaModelsTable .media-inspector-panel",
+  ).length;
   mediaDashboard.requestFields = fields;
+
+  // --- 8.66.0: media inspector panel (endpoint ladder, overrides editor, learned facts)
+  const GEMINI_VEO = "gemini/veo-3.1-generate-preview";
+  ROUTES["/admin/api/media/models"] = {
+    ...savedModels,
+    models: [
+      {
+        ...savedModels.models[0],
+        model_ref: GEMINI_VEO,
+        provider_id: "gemini",
+        provider_name: "Gemini",
+        model_id: "veo-3.1-generate-preview",
+        custom: false,
+        request_schema: {
+          video_create: {
+            type: "object",
+            required: ["prompt"],
+            properties: {
+              model: { type: "string", const: GEMINI_VEO, "x-mcc": xmcc("stated", "rail") },
+              prompt: { type: "string", "x-mcc": xmcc("required (stated)", "door") },
+            },
+            additionalProperties: { "x-mcc": xmcc("forwarded, not known", "door") },
+            "x-mcc": { model: GEMINI_VEO, operation: "video_create", encoding: null },
+          },
+        },
+        capability: {
+          operations: ["video_create"],
+          sync_mode: "async_job",
+          accepts_encodings: ["json", "multipart"],
+          supported_generation_methods: ["predictLongRunning"],
+        },
+        endpoint_ladders: {
+          video_create: {
+            operation: "video_create",
+            winner: {
+              surface_key: "gemini_veo_lro",
+              operation: "video_create",
+              shape: "gemini_veo_lro",
+              path: "https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning",
+              source: "provider_list",
+              detail: "supported_generation_methods:predictLongRunning",
+              refused: false,
+            },
+            candidates: [
+              {
+                surface_key: "gemini_veo_lro",
+                operation: "video_create",
+                shape: "gemini_veo_lro",
+                path: "https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning",
+                source: "provider_list",
+                detail: "supported_generation_methods:predictLongRunning",
+                refused: false,
+              },
+              {
+                surface_key: "openai_videos",
+                operation: "video_create",
+                shape: "openai_videos",
+                path: "videos",
+                source: "provider_default",
+                detail: "media_endpoint_refused",
+                refused: true,
+              },
+            ],
+          },
+        },
+        learned_facts: [
+          {
+            provider_id: "gemini",
+            model_id: "veo-3.1-generate-preview",
+            fact_kind: "media_endpoint_refused",
+            detail: "video_create:openai_videos",
+            value: true,
+            evidence: "404 on videos",
+            stale: false,
+          },
+          {
+            provider_id: "gemini",
+            model_id: "*",
+            fact_kind: "media_param_refused",
+            detail: "video_create:legacy_field",
+            value: true,
+            evidence: "unsupported field",
+            stale: true,
+          },
+        ],
+        overrides: {
+          effective: {
+            video_create: {
+              preferred_surface: "gemini_veo_lro",
+              pin_surface: false,
+              param_defaults: { aspect_ratio: "16:9" },
+              unset_params: ["quality"],
+            },
+          },
+          model: {
+            video_create: {
+              preferred_surface: "gemini_veo_lro",
+              pin_surface: false,
+              param_defaults: { aspect_ratio: "16:9" },
+              unset_params: ["quality"],
+            },
+          },
+          provider: {},
+        },
+      },
+    ],
+  };
+  ROUTES["/admin/api/media/overrides"] = { saved: true };
+  ROUTES["/admin/api/media/overrides/remove"] = { removed: true };
+  await window.eval("loadMediaModels(true)");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const inspPanel = doc.querySelector("#mediaModelsTable .media-inspector-panel");
+  const insp = {
+    panelCount: doc.querySelectorAll("#mediaModelsTable .media-inspector-panel").length,
+    ladderRows: Array.from(inspPanel.querySelectorAll(".media-ladder-row")).map(flat),
+    learnedFactRows: Array.from(inspPanel.querySelectorAll(".media-learned-fact-row")).map(flat),
+  };
+  posted = fetchBodies.length;
+  inspPanel.querySelector(".media-learned-fact-forget").click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  insp.factForgetPosts = fetchBodies.slice(posted);
+
+  const ovForm = inspPanel.querySelector(".media-overrides-form");
+  const ovPrefSelect = ovForm.querySelector('select[aria-label="Preferred surface"]');
+  const ovPinCheck = ovForm.querySelector('input[aria-label="Pin surface"]');
+  const ovDefaults = ovForm.querySelector('input[aria-label="Param defaults JSON"]');
+  const ovUnset = ovForm.querySelector('input[aria-label="Unset params"]');
+  insp.overrideInitial = {
+    preferred: ovPrefSelect.value,
+    pin: ovPinCheck.checked,
+    defaults: ovDefaults.value,
+    unset: ovUnset.value,
+    options: Array.from(ovPrefSelect.options).map((o) => o.value),
+  };
+  ovPrefSelect.value = "gemini_veo_lro";
+  ovPinCheck.checked = true;
+  ovDefaults.value = '{"aspect_ratio": "9:16"}';
+  ovUnset.value = "size, quality";
+  posted = fetchBodies.length;
+  ovForm.querySelector(".media-override-save").click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  insp.overrideSavePosts = fetchBodies.slice(posted);
+
+  posted = fetchBodies.length;
+  ovForm.querySelector(".media-override-reset").click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  insp.overrideResetPosts = fetchBodies.slice(posted);
+  mediaDashboard.inspector = insp;
+
+  // --- 8.66.0: request detail media wire provenance
+  ROUTES["/admin/api/requests/media-prov-1"] = {
+    id: "media-prov-1",
+    ts_iso: "2026-11-27T12:00:00Z",
+    endpoint: "/v1/videos",
+    protocol: "openai_videos",
+    provider: "gemini",
+    requested_model: "mcc/video",
+    resolved_model: GEMINI_VEO,
+    status: "success",
+    duration_ms: 4200,
+    media_operation: "video_create",
+    endpoint_routing: {
+      harness_endpoint: {
+        value: "openai_videos",
+        path: "/v1/videos",
+        label: "Video (/v1/videos)",
+        short_label: "Video",
+      },
+      provider_endpoint: {
+        value: "gemini_veo_lro",
+        raw: "gemini_veo_lro (provider_list)",
+        label: "Gemini Veo LRO",
+        full_label: "Gemini Veo LRO — provider_list",
+        short_label: "Veo LRO",
+        source_note: "provider_list",
+      },
+      translated: true,
+      translation_label: "Video (/v1/videos) → Gemini Veo LRO (translated)",
+      short_translation: "Video → Veo LRO (translated)",
+      attempt_routes: [],
+      media_routing: {
+        surface: "gemini_veo_lro",
+        surface_source: "provider_list",
+        adapted: ["multipart->json", "seconds->durationSeconds"],
+      },
+    },
+  };
+  await window.eval('openRequestDetail("media-prov-1")');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const metaNodes = Array.from(doc.getElementById("reqDetailMeta").children);
+  const provPairs = [];
+  for (let i = 0; i < metaNodes.length - 1; i += 2) {
+    provPairs.push([flat(metaNodes[i]), flat(metaNodes[i + 1])]);
+  }
+  mediaDashboard.requestProvenance = { metaPairs: provPairs };
+  window.eval("closeRequestDetail()");
+
   ROUTES["/admin/api/media/models"] = savedModels;
   await window.eval("loadMediaModels(true)");
   await new Promise((resolve) => setTimeout(resolve, 50));

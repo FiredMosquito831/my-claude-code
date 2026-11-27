@@ -9574,6 +9574,69 @@ def test_the_operator_editor_saves_one_statement(rendered) -> None:
     }
     # A save reloads the section and keeps the block the operator was in open.
     assert fields["reopenedAfterSave"] is True
+    assert fields["inspectorPanelsWithoutPayload"] == 0
+
+
+def test_media_inspector_panel_renders_ladders_overrides_and_learned_facts(
+    rendered,
+) -> None:
+    """8.66.0: endpoint ladder, media_overrides.json editor, and learned facts + Forget."""
+    insp = rendered["mediaDashboard"]["inspector"]
+
+    assert insp["panelCount"] == 1
+    assert len(insp["ladderRows"]) == 2
+    assert "gemini_veo_lro" in insp["ladderRows"][0]
+    assert "Winner" in insp["ladderRows"][0]
+    assert "openai_videos" in insp["ladderRows"][1]
+    assert "Refused" in insp["ladderRows"][1]
+
+    assert len(insp["learnedFactRows"]) == 2
+    assert "media_endpoint_refused" in insp["learnedFactRows"][0]
+    assert "active" in insp["learnedFactRows"][0]
+    assert "provider-wide" in insp["learnedFactRows"][1]
+    assert "stale" in insp["learnedFactRows"][1]
+
+    (forget_post,) = insp["factForgetPosts"]
+    assert forget_post["path"] == "/admin/api/model-admin/learned/forget"
+    assert forget_post["body"] == {
+        "providerId": "gemini",
+        "modelId": "veo-3.1-generate-preview",
+        "factKind": "media_endpoint_refused",
+        "detail": "video_create:openai_videos",
+    }
+
+    assert insp["overrideInitial"] == {
+        "preferred": "gemini_veo_lro",
+        "pin": False,
+        "defaults": '{"aspect_ratio":"16:9"}',
+        "unset": "quality",
+        "options": ["", "gemini_veo_lro", "openai_videos"],
+    }
+    (save_post,) = insp["overrideSavePosts"]
+    assert save_post["path"] == "/admin/api/media/overrides"
+    assert save_post["body"] == {
+        "modelRef": "gemini/veo-3.1-generate-preview",
+        "operation": "video_create",
+        "preferredSurface": "gemini_veo_lro",
+        "pinSurface": True,
+        "paramDefaults": {"aspect_ratio": "9:16"},
+        "unsetParams": ["size", "quality"],
+    }
+    (reset_post,) = insp["overrideResetPosts"]
+    assert reset_post["path"] == "/admin/api/media/overrides/remove"
+    assert reset_post["body"] == {
+        "modelRef": "gemini/veo-3.1-generate-preview",
+        "operation": "video_create",
+    }
+
+
+def test_request_detail_renders_media_wire_provenance(rendered) -> None:
+    """8.66.0: Request Details shows Media wire surface, Surface source, and Media adaptations."""
+    pairs = dict(rendered["mediaDashboard"]["requestProvenance"]["metaPairs"])
+
+    assert pairs["Media wire surface"] == "gemini_veo_lro (provider_list)"
+    assert pairs["Surface source"] == "provider_list"
+    assert pairs["Media adaptations"] == "multipart->json, seconds->durationSeconds"
 
 
 def test_the_analytics_media_card_is_sent_the_window_only(rendered) -> None:

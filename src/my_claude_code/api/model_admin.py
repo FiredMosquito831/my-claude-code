@@ -2888,7 +2888,29 @@ def request_endpoint_routing(
     outbound = _parse_wire_surface_info(winner_raw_ws, winner_provider)
     top_trans = _translation_summary(inbound, outbound)
 
-    return {
+    raw_params = row.get("params")
+    media_meta = raw_params.get("media") if isinstance(raw_params, Mapping) else None
+    media_routing: dict[str, Any] | None = None
+    if isinstance(media_meta, Mapping):
+        media_surface = str(media_meta.get("surface") or "").strip() or None
+        media_surface_source = (
+            str(media_meta.get("surface_source") or "").strip() or None
+        )
+        raw_adapted = media_meta.get("adapted")
+        media_adapted = (
+            [str(item) for item in raw_adapted if item]
+            if isinstance(raw_adapted, Sequence)
+            and not isinstance(raw_adapted, (str, bytes))
+            else []
+        )
+        if media_surface or media_surface_source or media_adapted:
+            media_routing = {
+                "surface": media_surface,
+                "surface_source": media_surface_source,
+                "adapted": media_adapted,
+            }
+
+    result: dict[str, Any] = {
         "harness_endpoint": inbound,
         "provider_endpoint": outbound,
         "translated": top_trans["translated"],
@@ -2896,6 +2918,9 @@ def request_endpoint_routing(
         "short_translation": top_trans["short_translation"],
         "attempt_routes": attempt_routes,
     }
+    if media_routing is not None:
+        result["media_routing"] = media_routing
+    return result
 
 
 def model_endpoint_readout(

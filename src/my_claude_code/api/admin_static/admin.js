@@ -40192,7 +40192,26 @@ function resolveRowEndpointRouting(row) {
 function appendEndpointRoutingDetail(meta, row) {
   if (!meta) return;
   const routing = resolveRowEndpointRouting(row);
-  if (!routing) return;
+  const rawMedia =
+    row && row.params && row.params.media && typeof row.params.media === "object"
+      ? row.params.media
+      : null;
+  const fallbackMediaRouting =
+    rawMedia &&
+    (rawMedia.surface ||
+      rawMedia.surface_source ||
+      (Array.isArray(rawMedia.adapted) && rawMedia.adapted.length))
+      ? {
+          surface: rawMedia.surface || null,
+          surface_source: rawMedia.surface_source || null,
+          adapted: Array.isArray(rawMedia.adapted) ? rawMedia.adapted : [],
+        }
+      : null;
+  const mediaRouting =
+    (routing && routing.media_routing && typeof routing.media_routing === "object"
+      ? routing.media_routing
+      : null) || fallbackMediaRouting;
+  if (!routing && !mediaRouting) return;
 
   const appendPair = (labelText, nodeOrText) => {
     const dt = document.createElement("dt");
@@ -40206,30 +40225,47 @@ function appendEndpointRoutingDetail(meta, row) {
     meta.append(dt, dd);
   };
 
-  if (routing.harness_endpoint && routing.harness_endpoint.label) {
-    appendPair("Harness endpoint", routing.harness_endpoint.label);
+  if (routing) {
+    if (routing.harness_endpoint && routing.harness_endpoint.label) {
+      appendPair("Harness endpoint", routing.harness_endpoint.label);
+    }
+    if (routing.provider_endpoint) {
+      const outLabel =
+        routing.provider_endpoint.full_label ||
+        routing.provider_endpoint.label ||
+        routing.provider_endpoint.raw ||
+        "";
+      if (outLabel) appendPair("Provider endpoint", outLabel);
+    } else {
+      appendPair("Provider endpoint", "Not recorded");
+    }
+    if (routing.translation_label) {
+      const badge = document.createElement("span");
+      badge.className = `req-translation-badge ${
+        routing.translated === true
+          ? "is-translated"
+          : routing.translated === false
+            ? "is-direct"
+            : "is-unknown"
+      }`;
+      badge.textContent = routing.translation_label;
+      appendPair("Protocol translation", badge);
+    }
   }
-  if (routing.provider_endpoint) {
-    const outLabel =
-      routing.provider_endpoint.full_label ||
-      routing.provider_endpoint.label ||
-      routing.provider_endpoint.raw ||
-      "";
-    if (outLabel) appendPair("Provider endpoint", outLabel);
-  } else {
-    appendPair("Provider endpoint", "Not recorded");
-  }
-  if (routing.translation_label) {
-    const badge = document.createElement("span");
-    badge.className = `req-translation-badge ${
-      routing.translated === true
-        ? "is-translated"
-        : routing.translated === false
-          ? "is-direct"
-          : "is-unknown"
-    }`;
-    badge.textContent = routing.translation_label;
-    appendPair("Protocol translation", badge);
+  if (mediaRouting) {
+    if (mediaRouting.surface || mediaRouting.surface_source) {
+      const surfaceText = mediaRouting.surface || "—";
+      const sourceSuffix = mediaRouting.surface_source
+        ? ` (${mediaRouting.surface_source})`
+        : "";
+      appendPair("Media wire surface", `${surfaceText}${sourceSuffix}`);
+    }
+    if (mediaRouting.surface_source) {
+      appendPair("Surface source", String(mediaRouting.surface_source));
+    }
+    if (Array.isArray(mediaRouting.adapted) && mediaRouting.adapted.length) {
+      appendPair("Media adaptations", mediaRouting.adapted.map(String).join(", "));
+    }
   }
 }
 
@@ -46306,14 +46342,34 @@ function mediaFieldCountChips(schemas) {
     );
 }
 
+function mediaHasInspectorData(row) {
+  if (!row || typeof row !== "object") return false;
+  const hasLadders = Boolean(
+    row.endpoint_ladders &&
+      typeof row.endpoint_ladders === "object" &&
+      Object.keys(row.endpoint_ladders).length,
+  );
+  const hasFacts = Array.isArray(row.learned_facts) && row.learned_facts.length > 0;
+  const overrides = row.overrides;
+  const hasOverrides = Boolean(
+    overrides &&
+      typeof overrides === "object" &&
+      ((overrides.effective && Object.keys(overrides.effective).length) ||
+        (overrides.model && Object.keys(overrides.model).length) ||
+        (overrides.provider && Object.keys(overrides.provider).length)),
+  );
+  return hasLadders || hasFacts || hasOverrides;
+}
+
 function mediaRequestFieldsRow(row, columns) {
   const schemas = row && row.request_schema;
-  if (!schemas || typeof schemas !== "object") return null;
+  const hasSchemas = Boolean(schemas && typeof schemas === "object");
+  if (!hasSchemas && !mediaHasInspectorData(row)) return null;
   const tr = document.createElement("tr");
   tr.className = "media-request-fields-row";
   const td = document.createElement("td");
   td.colSpan = columns;
-  td.appendChild(mediaRequestFieldsBlock(row, schemas));
+  td.appendChild(mediaRequestFieldsBlock(row, hasSchemas ? schemas : {}));
   tr.appendChild(td);
   return tr;
 }
@@ -46334,19 +46390,313 @@ function mediaRequestFieldsBlock(row, schemas) {
   summary.append(title, mediaChipRow(mediaFieldCountChips(schemas)));
   details.appendChild(summary);
   const operations = Object.keys(schemas);
+  const hasInspector = mediaHasInspectorData(row);
   if (!operations.length) {
     details.appendChild(
       mediaEmpty(
         "Its provider serves none of this rail's operations, so no request is ever sent to it.",
       ),
     );
+    if (hasInspector) {
+      details.appendChild(mediaInspectorPanel(row, operations));
+    }
     return details;
   }
   operations.forEach((operation) =>
     details.appendChild(mediaRequestFieldsOperation(row, operation, schemas[operation])),
   );
   details.appendChild(mediaRequestFieldsEditor(row, operations));
+  if (hasInspector) {
+    details.appendChild(mediaInspectorPanel(row, operations));
+  }
   return details;
+}
+
+function mediaInspectorPanel(row, schemaOperations) {
+  const panel = document.createElement("div");
+  panel.className = "media-inspector-panel";
+
+  const ladders =
+    row.endpoint_ladders && typeof row.endpoint_ladders === "object"
+      ? row.endpoint_ladders
+      : {};
+  const ladderEntries = Object.entries(ladders).filter(
+    ([_op, ladder]) =>
+      ladder && Array.isArray(ladder.candidates) && ladder.candidates.length > 0,
+  );
+  if (ladderEntries.length) {
+    const ladderSection = document.createElement("div");
+    ladderSection.className = "media-endpoint-ladder";
+    const heading = document.createElement("p");
+    heading.className = "media-inspector-subhead";
+    heading.textContent = "Endpoint ladder";
+    ladderSection.appendChild(heading);
+
+    ladderEntries.forEach(([op, ladder]) => {
+      const opGroup = document.createElement("div");
+      opGroup.className = "media-ladder-op";
+      const opTitle = document.createElement("p");
+      opTitle.className = "media-ladder-op-title";
+      opTitle.textContent = mediaOperationWords(op);
+      opGroup.appendChild(opTitle);
+
+      const winnerKey =
+        ladder.winner && ladder.winner.surface_key ? ladder.winner.surface_key : null;
+      ladder.candidates.forEach((candidate, index) => {
+        const candRow = document.createElement("div");
+        candRow.className = "media-ladder-row";
+        const keyEl = document.createElement("code");
+        keyEl.textContent = candidate.surface_key || candidate.shape || "";
+        const metaEl = document.createElement("span");
+        metaEl.className = "media-ladder-meta";
+        metaEl.textContent = [candidate.shape, candidate.path].filter(Boolean).join(" · ");
+        const sourceChip = mediaChip(
+          candidate.source || "provider_default",
+          candidate.source === "operator" ? "rail" : "",
+          candidate.detail || "",
+        );
+        candRow.append(keyEl, metaEl, sourceChip);
+        if (candidate.refused) {
+          candRow.appendChild(mediaChip("Refused", "warn", candidate.detail || ""));
+        } else if (
+          index === 0 ||
+          (winnerKey && candidate.surface_key === winnerKey)
+        ) {
+          candRow.appendChild(mediaChip("Winner", "ok", candidate.detail || ""));
+        }
+        opGroup.appendChild(candRow);
+      });
+      ladderSection.appendChild(opGroup);
+    });
+    panel.appendChild(ladderSection);
+  }
+
+  const overridesObj =
+    row.overrides && typeof row.overrides === "object" ? row.overrides : {};
+  const overrideOps = Array.from(
+    new Set([
+      ...ladderEntries.map(([op]) => op),
+      ...(Array.isArray(schemaOperations) ? schemaOperations : []),
+      ...Object.keys(overridesObj.effective || {}),
+      ...Object.keys(overridesObj.model || {}),
+    ]),
+  );
+  if (overrideOps.length) {
+    const form = document.createElement("div");
+    form.className = "media-overrides-form media-override-editor";
+    const heading = document.createElement("p");
+    heading.className = "media-inspector-subhead";
+    heading.textContent = "Media overrides (media_overrides.json)";
+    form.appendChild(heading);
+
+    const opSelect = document.createElement("select");
+    opSelect.setAttribute("aria-label", "Override operation");
+    overrideOps.forEach((op) => {
+      const opt = document.createElement("option");
+      opt.value = op;
+      opt.textContent = mediaOperationWords(op);
+      opSelect.appendChild(opt);
+    });
+
+    const prefSelect = document.createElement("select");
+    prefSelect.setAttribute("aria-label", "Preferred surface");
+
+    const pinWrap = document.createElement("label");
+    pinWrap.className = "media-override-pin-label";
+    const pinCheck = document.createElement("input");
+    pinCheck.type = "checkbox";
+    pinCheck.setAttribute("aria-label", "Pin surface");
+    pinWrap.append(pinCheck, document.createTextNode(" Pin surface"));
+
+    const defaultsInput = document.createElement("input");
+    defaultsInput.type = "text";
+    defaultsInput.placeholder = 'param_defaults JSON (e.g. {"aspect_ratio":"1:1"})';
+    defaultsInput.setAttribute("aria-label", "Param defaults JSON");
+
+    const unsetInput = document.createElement("input");
+    unsetInput.type = "text";
+    unsetInput.placeholder = "unset_params, comma-separated";
+    unsetInput.setAttribute("aria-label", "Unset params");
+
+    const syncOverrideInputs = (op) => {
+      prefSelect.replaceChildren();
+      const autoOpt = document.createElement("option");
+      autoOpt.value = "";
+      autoOpt.textContent = "Auto (ladder)";
+      prefSelect.appendChild(autoOpt);
+      const candList =
+        ladders[op] && Array.isArray(ladders[op].candidates)
+          ? ladders[op].candidates
+          : [];
+      const seenSurfaces = new Set();
+      candList.forEach((cand) => {
+        const sk = cand.surface_key || cand.shape;
+        if (!sk || seenSurfaces.has(sk)) return;
+        seenSurfaces.add(sk);
+        const opt = document.createElement("option");
+        opt.value = sk;
+        opt.textContent = cand.path ? `${sk} (${cand.path})` : sk;
+        prefSelect.appendChild(opt);
+      });
+      const currentOv =
+        (overridesObj.model && overridesObj.model[op]) ||
+        (overridesObj.effective && overridesObj.effective[op]) ||
+        {};
+      const desiredSurface = currentOv.preferred_surface || currentOv.surface || "";
+      if (desiredSurface && !seenSurfaces.has(desiredSurface)) {
+        const opt = document.createElement("option");
+        opt.value = desiredSurface;
+        opt.textContent = desiredSurface;
+        prefSelect.appendChild(opt);
+      }
+      prefSelect.value = desiredSurface;
+      pinCheck.checked = Boolean(currentOv.pin_surface || currentOv.surface);
+      defaultsInput.value =
+        currentOv.param_defaults && Object.keys(currentOv.param_defaults).length
+          ? JSON.stringify(currentOv.param_defaults)
+          : "";
+      unsetInput.value = Array.isArray(currentOv.unset_params)
+        ? currentOv.unset_params.join(", ")
+        : "";
+    };
+    syncOverrideInputs(opSelect.value);
+    opSelect.addEventListener("change", () => syncOverrideInputs(opSelect.value));
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "ghost-button media-override-save";
+    saveBtn.textContent = "Save override";
+    saveBtn.addEventListener("click", () => {
+      let paramDefaults = {};
+      const rawDefaults = defaultsInput.value.trim();
+      if (rawDefaults) {
+        try {
+          const parsed = JSON.parse(rawDefaults);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            showMessage("param_defaults must be a JSON object.", "error");
+            return;
+          }
+          paramDefaults = parsed;
+        } catch (err) {
+          showMessage(`Invalid param_defaults JSON: ${err.message}`, "error");
+          return;
+        }
+      }
+      const unsetParams = unsetInput.value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      mediaFieldsWrite(
+        "/admin/api/media/overrides",
+        {
+          modelRef: row.model_ref,
+          operation: opSelect.value,
+          preferredSurface: prefSelect.value || null,
+          pinSurface: Boolean(pinCheck.checked),
+          paramDefaults,
+          unsetParams,
+        },
+        saveBtn,
+        () => `Saved media override for ${row.model_ref} (${opSelect.value}).`,
+      );
+    });
+
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.className = "ghost-button media-override-reset";
+    resetBtn.textContent = "Reset override";
+    resetBtn.addEventListener("click", () => {
+      mediaFieldsWrite(
+        "/admin/api/media/overrides/remove",
+        {
+          modelRef: row.model_ref,
+          operation: opSelect.value,
+        },
+        resetBtn,
+        (result) =>
+          result.removed
+            ? `Reset media override for ${row.model_ref} (${opSelect.value}).`
+            : `No saved override to reset for ${opSelect.value}.`,
+      );
+    });
+
+    const controls = document.createElement("div");
+    controls.className = "media-override-controls";
+    controls.append(
+      opSelect,
+      prefSelect,
+      pinWrap,
+      defaultsInput,
+      unsetInput,
+      saveBtn,
+      resetBtn,
+    );
+    form.appendChild(controls);
+    panel.appendChild(form);
+  }
+
+  const factsSection = document.createElement("div");
+  factsSection.className = "media-learned-facts";
+  const factsHeading = document.createElement("p");
+  factsHeading.className = "media-inspector-subhead";
+  factsHeading.textContent = "Learned media facts";
+  factsSection.appendChild(factsHeading);
+  const facts = Array.isArray(row.learned_facts) ? row.learned_facts : [];
+  if (!facts.length) {
+    factsSection.appendChild(mediaEmpty("No learned media facts for this model."));
+  } else {
+    facts.forEach((fact) => {
+      const factRow = document.createElement("div");
+      factRow.className = "media-learned-fact-row";
+      const kindCode = document.createElement("code");
+      kindCode.textContent = fact.fact_kind || "";
+      factRow.appendChild(kindCode);
+      if (fact.model_id === "*") {
+        factRow.appendChild(mediaChip("provider-wide", "muted"));
+      }
+      if (fact.detail) {
+        const detailEl = document.createElement("span");
+        detailEl.className = "media-learned-fact-detail";
+        detailEl.textContent = fact.detail;
+        factRow.appendChild(detailEl);
+      }
+      if (fact.value !== undefined && fact.value !== null && fact.value !== "") {
+        const valEl = document.createElement("span");
+        valEl.className = "media-learned-fact-value";
+        valEl.textContent =
+          typeof fact.value === "string" ? fact.value : JSON.stringify(fact.value);
+        factRow.appendChild(valEl);
+      }
+      factRow.appendChild(
+        mediaChip(
+          fact.stale ? "stale" : "active",
+          fact.stale ? "warn" : "ok",
+          fact.evidence || "",
+        ),
+      );
+      const forgetBtn = document.createElement("button");
+      forgetBtn.type = "button";
+      forgetBtn.className = "ghost-button media-learned-fact-forget";
+      forgetBtn.textContent = "Forget";
+      forgetBtn.title = "Forget this learned media fact";
+      forgetBtn.addEventListener("click", () =>
+        forgetMediaFieldFact(
+          {
+            providerId: fact.provider_id || row.provider_id,
+            modelId: fact.model_id || row.model_id,
+            factKind: fact.fact_kind,
+            detail: fact.detail || "",
+          },
+          forgetBtn,
+        ),
+      );
+      factRow.appendChild(forgetBtn);
+      factsSection.appendChild(factRow);
+    });
+  }
+  panel.appendChild(factsSection);
+
+  return panel;
 }
 
 function mediaRequestFieldsOperation(row, operation, schema) {
