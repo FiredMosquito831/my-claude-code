@@ -368,15 +368,24 @@ _ROW_KEYS_BEFORE_7_98 = [
 ]
 
 
+_ROW_KEYS_ADDITIVE = [
+    "request_schema",
+    "capability",
+    "endpoint_ladders",
+    "learned_facts",
+    "overrides",
+]
+
+
 def test_request_schema_is_additive(monkeypatch, tmp_path):
-    """One key after every key a row had; with a learned fact and an operator
-    statement present, every pre-existing key is exactly what it is without.
+    """Additive keys sit after every key a row had; with a learned fact and an
+    operator statement present, every pre-existing key is exactly what it is without.
     """
 
     settings = _settings(monkeypatch, tmp_path)
     plain = _payload(settings)
     for row in plain["models"]:
-        assert list(row) == [*_ROW_KEYS_BEFORE_7_98, "request_schema"]
+        assert list(row) == [*_ROW_KEYS_BEFORE_7_98, *_ROW_KEYS_ADDITIVE]
 
     learned_fact_store().record(
         "open_router",
@@ -401,7 +410,7 @@ def test_request_schema_is_additive(monkeypatch, tmp_path):
         return {
             **payload,
             "models": [
-                {k: v for k, v in row.items() if k != "request_schema"}
+                {k: v for k, v in row.items() if k not in _ROW_KEYS_ADDITIVE}
                 for row in payload["models"]
             ],
         }

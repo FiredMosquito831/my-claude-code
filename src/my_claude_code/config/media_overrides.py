@@ -488,6 +488,36 @@ def with_media_override(
     return MediaOverridesDocument(providers=providers, models=models)
 
 
+def without_media_override(
+    doc: MediaOverridesDocument,
+    target: str,
+    operation: str,
+) -> tuple[MediaOverridesDocument, bool]:
+    """Return a copy of ``doc`` with one provider or model override removed."""
+
+    op = operation.strip()
+    folded = normalize_override_key(target)
+    if not folded or not op:
+        return doc, False
+    providers = {key: dict(ops) for key, ops in doc.providers.items()}
+    models = {key: dict(ops) for key, ops in doc.models.items()}
+    bucket = models if "/" in folded else providers
+    entry = bucket.get(folded)
+    if not entry or op not in entry:
+        return doc, False
+    del entry[op]
+    if not entry:
+        del bucket[folded]
+    return MediaOverridesDocument(providers=providers, models=models), True
+
+
+def is_valid_media_override_field(name: str) -> bool:
+    """Whether ``name`` is a valid parameter key for ``media_overrides.json``."""
+
+    cleaned = name.strip()
+    return bool(_FIELD_NAME.fullmatch(cleaned)) and cleaned != "model"
+
+
 __all__ = [
     "EMPTY_MEDIA_OVERRIDES",
     "MODELS_KEY",
@@ -497,9 +527,11 @@ __all__ = [
     "MediaOverridesDocument",
     "current_media_overrides",
     "effective_media_override",
+    "is_valid_media_override_field",
     "load_media_overrides",
     "media_overrides_from_document",
     "reset_media_overrides_cache",
     "save_media_overrides",
     "with_media_override",
+    "without_media_override",
 ]

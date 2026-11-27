@@ -12652,6 +12652,103 @@ audio.req-media-preview {
   flex: 1 1 140px;
 }
 
+/* 8.66.0: media endpoint ladder, overrides editor, and learned facts inspector. */
+.media-inspector-panel {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.media-inspector-subhead {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.media-endpoint-ladder,
+.media-overrides-form,
+.media-override-editor,
+.media-learned-facts {
+  min-width: 0;
+}
+
+.media-ladder-op {
+  margin-bottom: var(--space-2);
+}
+
+.media-ladder-op-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.media-ladder-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.media-ladder-meta {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.media-override-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.media-override-controls input[type="text"] {
+  min-width: 0;
+  flex: 1 1 160px;
+}
+
+.media-override-pin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.media-override-save,
+.media-override-reset,
+.media-learned-fact-forget {
+  min-height: 0;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.media-learned-fact-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.media-learned-fact-detail,
+.media-learned-fact-value {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .media-analytics-panel {
   margin-bottom: 16px;
 }

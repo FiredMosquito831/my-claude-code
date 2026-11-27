@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from my_claude_code.api.model_admin import (
+    FACT_KIND_LABELS,
     declared_modalities_lookup,
     declared_model_kind,
     media_output_modalities,
@@ -45,6 +46,11 @@ from my_claude_code.application.media.capabilities import (
     MediaCapabilityInputs,
     MediaCapabilityProfile,
     resolve_media_capability_profile,
+)
+from my_claude_code.application.media.endpoint_ladder import (
+    MediaEndpointCandidate,
+    ResolvedMediaEndpointLadder,
+    resolve_media_endpoint_ladder,
 )
 from my_claude_code.application.media.executor import media_route_health_registry
 from my_claude_code.application.media.rails import rail_refs
@@ -69,6 +75,17 @@ from my_claude_code.application.model_kinds import (
 from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.application.route_health import RouteHealthRegistry
 from my_claude_code.config.admin.status import provider_config_status
+from my_claude_code.config.media_overrides import (
+    MediaOperationOverride,
+    MediaOverridesDocument,
+    current_media_overrides,
+    effective_media_override,
+    is_valid_media_override_field,
+    load_media_overrides,
+    save_media_overrides,
+    with_media_override,
+    without_media_override,
+)
 from my_claude_code.config.media_request_fields import (
     OperatorFieldStatement,
     load_media_request_fields,
@@ -90,7 +107,10 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_VIDEO_DELETE,
     MEDIA_OPERATION_VIDEO_EDIT,
     MEDIA_OPERATION_VIDEO_RETRIEVE,
+    MEDIA_OPERATIONS,
     MediaSurface,
+    effective_surfaces_for,
+    surface_key,
 )
 from my_claude_code.config.model_refs import (
     parse_model_name,
@@ -359,6 +379,123 @@ def media_capability_summary(profile: MediaCapabilityProfile) -> dict[str, Any]:
     }
 
 
+#: Learned fact kinds surfaced on the Media Models inspector.
+MEDIA_FACT_KINDS: frozenset[str] = frozenset(
+    {
+        "media_param_required",
+        "media_param_refused",
+        "media_endpoint_surface",
+        "media_endpoint_refused",
+        "media_param_enum",
+        "media_encoding_refused",
+    }
+)
+
+
+def _serialize_ladder_candidate(candidate: MediaEndpointCandidate) -> dict[str, Any]:
+    return {
+        "surface_key": surface_key(candidate.surface),
+        "operation": candidate.surface.operation,
+        "shape": candidate.surface.shape,
+        "path": candidate.surface.path,
+        "encoding": candidate.surface.encoding,
+        "stream": candidate.surface.stream,
+        "source": candidate.source,
+        "detail": candidate.detail,
+        "guessed": candidate.guessed,
+        "refused": candidate.refused,
+    }
+
+
+def serialize_media_endpoint_ladder(
+    ladder: ResolvedMediaEndpointLadder,
+) -> dict[str, Any]:
+    """Serialize a :class:`ResolvedMediaEndpointLadder` for the Admin UI."""
+
+    return {
+        "operation": ladder.operation,
+        "winner": (
+            None
+            if ladder.winner is None
+            else _serialize_ladder_candidate(ladder.winner)
+        ),
+        "candidates": [
+            _serialize_ladder_candidate(candidate) for candidate in ladder.candidates
+        ],
+    }
+
+
+def _media_learned_facts_for_row(
+    schema: MediaSchemaInputs,
+    provider_id: str,
+    model_ref: str,
+) -> tuple[list[dict[str, Any]], list[Mapping[str, Any]]]:
+    """Return active ``FACT_MEDIA_*`` rows matching ``(provider_id, model_id | '*')``."""
+
+    raw_facts: list[Mapping[str, Any]] = []
+    seen_keys: set[tuple[str, str, str, str]] = set()
+    for lookup_ref in (model_ref, f"{provider_id}/*"):
+        for fact in schema.learned.get(lookup_ref, ()):
+            fact_kind = str(fact.get("fact_kind") or "").strip()
+            if fact_kind not in MEDIA_FACT_KINDS or fact.get("retired"):
+                continue
+            key = (
+                str(fact.get("provider_id") or provider_id),
+                str(fact.get("model_id") or ""),
+                fact_kind,
+                str(fact.get("detail") or ""),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            raw_facts.append(fact)
+
+    serialized = [
+        {
+            "provider_id": str(fact.get("provider_id") or provider_id),
+            "model_id": str(fact.get("model_id") or ""),
+            "fact_kind": str(fact.get("fact_kind") or ""),
+            "fact_label": FACT_KIND_LABELS.get(
+                str(fact.get("fact_kind") or ""),
+                str(fact.get("fact_kind") or ""),
+            ),
+            "detail": str(fact.get("detail") or ""),
+            "value": fact.get("value"),
+            "evidence": str(fact.get("evidence") or ""),
+            "source": str(fact.get("source") or ""),
+            "learned_at": fact.get("learned_at"),
+            "last_confirmed_at": fact.get("last_confirmed_at"),
+            "hits": fact.get("hits", 1),
+            "stale": bool(fact.get("stale", False)),
+        }
+        for fact in raw_facts
+    ]
+    return serialized, raw_facts
+
+
+def _media_overrides_for_row(
+    overrides_doc: MediaOverridesDocument,
+    model_ref: str,
+    provider_id: str,
+    operations: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    raw_model = overrides_doc.for_model(model_ref)
+    raw_provider = overrides_doc.for_provider(provider_id)
+    all_ops = list(
+        dict.fromkeys([*operations, *raw_model.keys(), *raw_provider.keys()])
+    )
+    effective: dict[str, dict[str, Any]] = {}
+    for op in all_ops:
+        merged = effective_media_override(overrides_doc, model_ref, op)
+        if not merged.is_empty:
+            effective[op] = merged.as_row()
+    return {
+        "effective": effective,
+        "model": {op: ov.as_row() for op, ov in raw_model.items()},
+        "provider": {op: ov.as_row() for op, ov in raw_provider.items()},
+    }
+
+
 def ref_request_schemas(
     model_ref: str,
     descriptor: ProviderDescriptor | None,
@@ -418,6 +555,7 @@ def media_models_payload(
         bench = media_bench_readout(settings)
     if schema is None:
         schema = schema_inputs({}, (), operator=load_media_request_fields())
+    overrides_doc = current_media_overrides()
     descriptors, disabled = _all_descriptors()
     custom_ids = {
         provider_id
@@ -519,8 +657,39 @@ def media_models_payload(
             rail = MediaRail(placement["rail"])
             if rail not in placed:
                 placed.append(rail)
-        row["request_schema"] = ref_request_schemas(
-            ref, descriptors.get(row["provider_id"]), placed, schema
+        descriptor = descriptors.get(row["provider_id"])
+        row["request_schema"] = ref_request_schemas(ref, descriptor, placed, schema)
+        # 8.66.0: endpoint ladder, capability summary, learned media facts, and overrides.
+        surfaces = () if descriptor is None else descriptor.media_surfaces
+        cap_profile = ref_capability_profile(ref, descriptor, schema)
+        serialized_facts, raw_facts = _media_learned_facts_for_row(
+            schema, row["provider_id"], ref
+        )
+        placed_ops: list[str] = []
+        for rail in placed:
+            for op in RAIL_OPERATIONS[rail]:
+                if op not in placed_ops:
+                    placed_ops.append(op)
+        ladders: dict[str, dict[str, Any]] = {}
+        for op in placed_ops:
+            ladder = resolve_media_endpoint_ladder(
+                ref,
+                op,
+                surfaces=surfaces,
+                capability_profile=cap_profile,
+                overrides=overrides_doc,
+                learned_facts=raw_facts,
+            )
+            if ladder.candidates:
+                ladders[op] = serialize_media_endpoint_ladder(ladder)
+        row["capability"] = media_capability_summary(cap_profile)
+        row["endpoint_ladders"] = ladders
+        row["learned_facts"] = serialized_facts
+        row["overrides"] = _media_overrides_for_row(
+            overrides_doc,
+            ref,
+            row["provider_id"],
+            list(ladders) or placed_ops,
         )
 
     providers: list[dict[str, Any]] = []
@@ -787,6 +956,203 @@ async def remove_media_request_field(
         "model_ref": model_ref,
         "operation": operation,
         "field": field_name,
+    }
+
+
+class MediaOverridePayload(BaseModel):
+    """Operator routing and parameter overrides for one media operation (8.66.0)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_ref: str = Field(default="", alias="modelRef")
+    provider_id: str = Field(default="", alias="providerId")
+    scope: str = "model"
+    operation: str
+    preferred_surface: str | None = Field(default=None, alias="preferredSurface")
+    pin_surface: bool = Field(default=False, alias="pinSurface")
+    surface: str | None = None
+    param_defaults: dict[str, Any] = Field(default_factory=dict, alias="paramDefaults")
+    unset_params: list[str] = Field(default_factory=list, alias="unsetParams")
+
+
+class MediaOverrideRemovePayload(BaseModel):
+    """Remove one provider or model override for a media operation (8.66.0)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    model_ref: str = Field(default="", alias="modelRef")
+    provider_id: str = Field(default="", alias="providerId")
+    scope: str = "model"
+    operation: str
+
+
+def _resolve_override_target(
+    settings: Settings,
+    *,
+    scope: str,
+    model_ref: str,
+    provider_id: str,
+    require_configured_model: bool,
+) -> tuple[str, str, ProviderDescriptor | None]:
+    clean_scope = scope.strip().lower()
+    if clean_scope not in {"model", "provider"}:
+        raise HTTPException(
+            status_code=400, detail="scope must be 'model' or 'provider'"
+        )
+    descriptors, _disabled = _all_descriptors()
+    if clean_scope == "model":
+        cleaned_ref = (
+            _rail_ref_or_404(settings, model_ref)
+            if require_configured_model
+            else model_ref.strip()
+        )
+        if not cleaned_ref or "/" not in cleaned_ref:
+            raise HTTPException(
+                status_code=400, detail="model_ref must be a provider/model ref"
+            )
+        prov = parse_provider_type(cleaned_ref)
+        return cleaned_ref, prov, descriptors.get(prov)
+    prov = (provider_id.strip() or parse_provider_type(model_ref)).strip()
+    if not prov:
+        raise HTTPException(status_code=400, detail="provider_id must not be empty")
+    descriptor = descriptors.get(prov)
+    if require_configured_model and descriptor is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {prov}")
+    return prov, prov, descriptor
+
+
+@router.post("/admin/api/media/overrides")
+async def set_media_override(
+    payload: MediaOverridePayload,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Save an operator media endpoint/parameter override in ``media_overrides.json``."""
+
+    require_loopback_admin(request)
+    target, provider_id, descriptor = _resolve_override_target(
+        settings,
+        scope=payload.scope,
+        model_ref=payload.model_ref,
+        provider_id=payload.provider_id,
+        require_configured_model=True,
+    )
+    operation = payload.operation.strip()
+    if operation not in MEDIA_OPERATIONS:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown media operation: {operation!r}"
+        )
+
+    surfaces = () if descriptor is None else descriptor.media_surfaces
+    effective = effective_surfaces_for(surfaces, operation)
+    allowed_keys: set[str] = set()
+    for surf in effective:
+        allowed_keys.add(surface_key(surf))
+        allowed_keys.add(surf.shape)
+        if surf.surface_id:
+            allowed_keys.add(surf.surface_id)
+
+    clean_pref = (payload.preferred_surface or "").strip() or None
+    clean_surface = (payload.surface or "").strip() or None
+    for label, candidate_key in (
+        ("preferred_surface", clean_pref),
+        ("surface", clean_surface),
+    ):
+        if candidate_key is not None and candidate_key not in allowed_keys:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{provider_id} does not declare {label}={candidate_key!r} for "
+                    f"{operation}. Allowed: {sorted(allowed_keys)}"
+                ),
+            )
+
+    pin_surface = bool(payload.pin_surface)
+    if pin_surface and clean_pref is None and clean_surface is None:
+        raise HTTPException(
+            status_code=400,
+            detail="pin_surface requires preferred_surface or surface",
+        )
+
+    clean_defaults: dict[str, Any] = {}
+    for raw_key, value in (payload.param_defaults or {}).items():
+        key = str(raw_key).strip()
+        if not is_valid_media_override_field(key):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid param_defaults field name: {raw_key!r}",
+            )
+        clean_defaults[key] = value
+
+    clean_unset: list[str] = []
+    for raw_name in payload.unset_params or ():
+        name = str(raw_name).strip()
+        if not is_valid_media_override_field(name):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid unset_params field name: {raw_name!r}",
+            )
+        if name not in clean_unset:
+            clean_unset.append(name)
+
+    override = MediaOperationOverride(
+        preferred_surface=clean_pref,
+        pin_surface=pin_surface,
+        surface=clean_surface,
+        param_defaults=clean_defaults,
+        unset_params=tuple(clean_unset),
+    )
+
+    def save() -> None:
+        updated = with_media_override(
+            load_media_overrides(), target, operation, override
+        )
+        save_media_overrides(updated)
+
+    await asyncio.to_thread(save)
+    return {
+        "saved": True,
+        "scope": payload.scope.strip().lower(),
+        "target": target,
+        "operation": operation,
+        "override": override.as_row(),
+    }
+
+
+@router.post("/admin/api/media/overrides/remove")
+async def remove_media_override(
+    payload: MediaOverrideRemovePayload,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Remove an operator media override from ``media_overrides.json``."""
+
+    require_loopback_admin(request)
+    target, _provider_id, _descriptor = _resolve_override_target(
+        settings,
+        scope=payload.scope,
+        model_ref=payload.model_ref,
+        provider_id=payload.provider_id,
+        require_configured_model=False,
+    )
+    operation = payload.operation.strip()
+    if not operation:
+        raise HTTPException(status_code=400, detail="operation must not be empty")
+
+    def remove() -> bool:
+        updated, removed = without_media_override(
+            load_media_overrides(), target, operation
+        )
+        if removed:
+            save_media_overrides(updated)
+        return removed
+
+    removed = await asyncio.to_thread(remove)
+    return {
+        "removed": removed,
+        "scope": payload.scope.strip().lower(),
+        "target": target,
+        "operation": operation,
     }
 
 
