@@ -53,6 +53,7 @@ from my_claude_code.config.mcp_media import (
     TOOL_GENERATE_IMAGE,
     TOOL_GET_VIDEO,
     TOOL_MEDIA_STATUS,
+    TOOL_OCR_DOCUMENT,
     TOOL_SPEAK,
     TOOL_TRANSCRIBE,
     TOOL_TRANSLATE_AUDIO,
@@ -487,6 +488,47 @@ async def _get_video(
     return Outcome(_text(f"Saved the video: {path}"), f"video {job_id}", (str(path),))
 
 
+async def _ocr_document(
+    state: ServerState, tool: MediaTool, arguments: Mapping[str, Any]
+) -> Outcome:
+    data, files, read = _multipart(state, tool, arguments)
+    if not files:
+        if any(
+            key in data and str(data[key]).strip()
+            for key in ("document", "document_url", "image_url")
+        ):
+            body, _save_to = _split_arguments(tool, arguments)
+            response = await state.client.request("POST", tool.endpoint, json_body=body)
+        else:
+            raise ToolFailure(
+                f"{tool.name} needs file_path: the document or image file to read."
+            )
+    else:
+        response = await state.client.request(
+            "POST", tool.endpoint, data=data, files=files
+        )
+    if response.status != 200:
+        raise _refused(state, tool, response)
+    payload = _json_object(response)
+    text = ""
+    if payload is not None:
+        raw_text = payload.get("text")
+        if isinstance(raw_text, str) and raw_text:
+            text = raw_text
+        else:
+            pages = payload.get("pages")
+            if isinstance(pages, list):
+                text = "\n\n".join(
+                    str(page.get("markdown") or "")
+                    for page in pages
+                    if isinstance(page, Mapping) and page.get("markdown")
+                )
+    if not text:
+        text = response.content.decode("utf-8", errors="replace")
+    summary = f"ocr from {read[0]}" if read else "ocr"
+    return Outcome(_text(text), summary)
+
+
 Handler = Callable[[ServerState, MediaTool, Mapping[str, Any]], Awaitable[Outcome]]
 
 _HANDLERS: Mapping[str, Handler] = {
@@ -497,6 +539,7 @@ _HANDLERS: Mapping[str, Handler] = {
     TOOL_TRANSLATE_AUDIO: _transcript,
     TOOL_CREATE_VIDEO: _create_video,
     TOOL_GET_VIDEO: _get_video,
+    TOOL_OCR_DOCUMENT: _ocr_document,
 }
 
 

@@ -1001,6 +1001,9 @@ export function prepareModelsFieldsScenario({ window, ROUTES }) {
       out.mcpNotes = {
         count: notes.length,
         sha256: await sha256(notes.map((note) => note.outerHTML).join("\n")),
+        preOcrSha256: await sha256(
+          notes.slice(0, 4).map((note) => note.outerHTML).join("\n"),
+        ),
       };
     }
 

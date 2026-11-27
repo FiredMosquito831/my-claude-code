@@ -98,7 +98,10 @@ def test_all_six_visible_non_rail_kinds_resolve_and_are_not_chat_listable() -> N
         DECISION_KIND: ("decision", "decisions", "/v1/decisions"),
     }
     for expected_kind, words in cases.items():
-        assert expected_kind in NON_RAIL_KIND_LABELS
+        if expected_kind != OCR_KIND:
+            assert expected_kind in NON_RAIL_KIND_LABELS
+        else:
+            assert expected_kind in MODEL_KINDS
         for word in words:
             assert kinds_from_words((word,)) == frozenset({expected_kind}), word
         kind = resolve_model_kind(

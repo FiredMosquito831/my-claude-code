@@ -78,6 +78,7 @@ TOOL_TRANSCRIBE = "transcribe"
 TOOL_TRANSLATE_AUDIO = "translate_audio"
 TOOL_CREATE_VIDEO = "create_video"
 TOOL_GET_VIDEO = "get_video"
+TOOL_OCR_DOCUMENT = "ocr_document"
 
 #: Tools a provider bills. Never marked read-only, so an app that asks before a
 #: tool asks before these (decision 8); the OpenCode-family layer names them.
@@ -88,6 +89,7 @@ MCP_MEDIA_SPENDING_TOOLS: tuple[str, ...] = (
     TOOL_TRANSCRIBE,
     TOOL_TRANSLATE_AUDIO,
     TOOL_CREATE_VIDEO,
+    TOOL_OCR_DOCUMENT,
 )
 #: Tools that spend nothing: what is configured, and a video job's state.
 MCP_MEDIA_FREE_TOOLS: tuple[str, ...] = (TOOL_MEDIA_STATUS, TOOL_GET_VIDEO)

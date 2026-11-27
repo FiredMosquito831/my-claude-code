@@ -260,6 +260,8 @@ const FIELDS = [
     ["MODEL_ASR_FALLBACKS", "", "model_chain"],
     ["MODEL_VIDEO", "p1/v0", "optional_model"],
     ["MODEL_VIDEO_FALLBACKS", "", "model_chain"],
+    ["MODEL_OCR", "", "optional_model"],
+    ["MODEL_OCR_FALLBACKS", "", "model_chain"],
     // 7.95.0: the upload limit every media rail shares, drawn in its own card.
     ["MEDIA_UPLOAD_MAX_MB", "0", "number"],
     // The pause lists. Written by the Pause button rather than typed, so they
@@ -276,6 +278,7 @@ const FIELDS = [
     ["MODEL_TTS_PAUSED", "", "text"],
     ["MODEL_ASR_PAUSED", "", "text"],
     ["MODEL_VIDEO_PAUSED", "", "text"],
+    ["MODEL_OCR_PAUSED", "", "text"],
   ].map(([key, value, type]) => ({
     key,
     label: key,
@@ -973,6 +976,7 @@ const MEDIA_MODELS = {
     { rail: "tts", label: "Speech", model_env: "MODEL_TTS", operations: [], refs: [] },
     { rail: "asr", label: "Transcription", model_env: "MODEL_ASR", operations: [], refs: [] },
     { rail: "video", label: "Video", model_env: "MODEL_VIDEO", operations: [], refs: [] },
+    { rail: "ocr", label: "OCR", model_env: "MODEL_OCR", operations: [], refs: [] },
   ],
   models: [
     {
@@ -3587,6 +3591,7 @@ const PAUSE_KEY_BY_MODEL = {
   MODEL_TTS: "MODEL_TTS_PAUSED",
   MODEL_ASR: "MODEL_ASR_PAUSED",
   MODEL_VIDEO: "MODEL_VIDEO_PAUSED",
+  MODEL_OCR: "MODEL_OCR_PAUSED",
 };
 const pausedByKey = new Map();
 const fetchUrls = [];
@@ -12387,6 +12392,9 @@ const imageRail = {};
       "MODEL_VIDEO",
       "MODEL_VIDEO_FALLBACKS",
       "MODEL_VIDEO_PAUSED",
+      "MODEL_OCR",
+      "MODEL_OCR_FALLBACKS",
+      "MODEL_OCR_PAUSED",
     ]
       .filter((key) => doc.querySelector(`.route-layout > .field-grid [data-key='${key}']`));
     /* 7.99.0: under each media rail, how a coding agent reaches it -- shown

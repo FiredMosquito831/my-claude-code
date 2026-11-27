@@ -47,6 +47,8 @@ class MediaOutputs:
     #: Wire surface key/shape and resolution source that served this answer.
     media_surface: str | None = None
     media_surface_source: str | None = None
+    #: Number of pages processed (OCR answers).
+    pages: int | None = None
 
     @property
     def bytes_total(self) -> int | None:

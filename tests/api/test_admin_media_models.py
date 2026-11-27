@@ -87,6 +87,7 @@ def test_one_row_per_ref_with_its_rail_position_and_pause(monkeypatch, tmp_path)
         "Speech",
         "Transcription",
         "Video",
+        "OCR",
     ]
     placements = {
         row["model_ref"]: [
@@ -134,6 +135,7 @@ def test_a_row_lists_the_operations_its_provider_declares(monkeypatch, tmp_path)
         "video_content",
         "image_generate",
         "image_edit",
+        "ocr",
     ]
 
 
@@ -257,6 +259,7 @@ def test_the_provider_table_lists_every_media_provider(monkeypatch, tmp_path):
         "Speech",
         "Transcription",
         "Video",
+        "OCR",
     ]
     assert providers["together"]["custom"] is False
 
@@ -334,7 +337,7 @@ def test_an_empty_install_has_rails_and_no_rows(monkeypatch, tmp_path):
     )
 
     assert payload["models"] == []
-    assert [rail["refs"] for rail in payload["rails"]] == [[], [], [], []]
+    assert [rail["refs"] for rail in payload["rails"]] == [[], [], [], [], []]
 
 
 def test_the_route_is_local_only(monkeypatch, tmp_path):

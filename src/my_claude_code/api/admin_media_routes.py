@@ -81,6 +81,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_OPERATION_OCR,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
@@ -121,6 +122,7 @@ OPERATION_LABELS: dict[str, str] = {
     MEDIA_OPERATION_VIDEO_RETRIEVE: "video status",
     MEDIA_OPERATION_VIDEO_CONTENT: "video content",
     MEDIA_OPERATION_VIDEO_DELETE: "video delete",
+    MEDIA_OPERATION_OCR: "ocr",
 }
 
 #: What a request row that never reached a provider is filed under.

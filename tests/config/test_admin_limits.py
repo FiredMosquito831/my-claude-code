@@ -467,6 +467,10 @@ MODELS_KEYS = (
     "MODEL_VIDEO",
     "MODEL_VIDEO_FALLBACKS",
     "MODEL_VIDEO_PAUSED",
+    # The OCR rail (8.64.0).
+    "MODEL_OCR",
+    "MODEL_OCR_FALLBACKS",
+    "MODEL_OCR_PAUSED",
     # The upload limit every media rail shares (7.95.0), its own card after them.
     "MEDIA_UPLOAD_MAX_MB",
     "MODEL_VISIBILITY_ALLOW",

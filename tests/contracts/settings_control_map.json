@@ -1244,6 +1244,18 @@
       "control": null,
       "page": "model_config"
     },
+    "MODEL_OCR": {
+      "control": "field-MODEL_OCR",
+      "page": "model_config"
+    },
+    "MODEL_OCR_FALLBACKS": {
+      "control": "field-MODEL_OCR_FALLBACKS",
+      "page": "model_config"
+    },
+    "MODEL_OCR_PAUSED": {
+      "control": null,
+      "page": "model_config"
+    },
     "MODEL_OPUS": {
       "control": "field-MODEL_OPUS",
       "page": "model_config"

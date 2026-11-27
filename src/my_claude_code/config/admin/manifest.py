@@ -1080,6 +1080,49 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         affects_providers=False,
     ),
     ConfigFieldSpec(
+        "MODEL_OCR",
+        "OCR Rail",
+        "models",
+        "optional_model",
+        settings_attr="model_ocr",
+        description=(
+            "Model that serves POST /v1/ocr (unified document and image OCR). A "
+            "media rail, never a chat tier. A client that names a provider/model "
+            "ref on this rail pins that model; a ref that is not on the rail is "
+            "refused (400) and nothing is sent; any other model name uses this "
+            "rail. Only providers that declare an OCR or vision-OCR surface can "
+            "serve it."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_OCR_FALLBACKS",
+        "OCR Fallback Chain",
+        "models",
+        "model_chain",
+        settings_attr="model_ocr_fallbacks",
+        description=(
+            "Ordered provider/model refs tried after MODEL_OCR fails, is paused "
+            "or is benched -- the chat engine's retry, key-rotation, 429, bench "
+            "and proxy rules, with health records of their own. Uploaded documents "
+            "or images are re-encoded cleanly for each provider's OCR shape."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MODEL_OCR_PAUSED",
+        "OCR Paused Models",
+        "models",
+        "text",
+        settings_attr="model_ocr_paused",
+        default="",
+        description=(
+            "Comma-separated provider/model refs on the OCR rail that are switched "
+            "off. A paused model is never tried and costs no attempt, but keeps its "
+            "place and appears in the request log as skipped. When every model on "
+            "the rail is paused the endpoint names this setting."
+        ),
+        affects_providers=False,
+    ),
+    ConfigFieldSpec(
         "MEDIA_UPLOAD_MAX_MB",
         "Largest media upload (MB)",
         "models",

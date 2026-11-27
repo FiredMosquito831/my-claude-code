@@ -21,6 +21,7 @@ from my_claude_code.application.media.request import MediaUpload
 from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_OPERATION_OCR,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
     MEDIA_OPERATION_VIDEO_CREATE,
@@ -37,7 +38,7 @@ UPLOAD_TRANSLATABLE_OPERATIONS: frozenset[str] = frozenset(
         MEDIA_OPERATION_VIDEO_EDIT,
         MEDIA_OPERATION_TRANSCRIBE,
         MEDIA_OPERATION_TRANSLATE,
-        "ocr",
+        MEDIA_OPERATION_OCR,
     }
 )
 

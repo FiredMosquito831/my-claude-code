@@ -92,6 +92,8 @@ CORE_PROTECTED_PARAMS: frozenset[str] = frozenset(
         "image",
         "images",
         "document",
+        "document_url",
+        "image_url",
         "mask",
     }
 )

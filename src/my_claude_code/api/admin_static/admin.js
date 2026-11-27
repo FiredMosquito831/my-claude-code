@@ -11785,6 +11785,7 @@ const GS_FALLBACK_KEYS = [
   "MODEL_TTS_FALLBACKS",
   "MODEL_ASR_FALLBACKS",
   "MODEL_VIDEO_FALLBACKS",
+  "MODEL_OCR_FALLBACKS",
 ];
 
 const GS_REASONING_KEYS = [
@@ -11884,13 +11885,13 @@ const GET_STARTED_STATUS = {
     };
   },
   mediaTools(snap) {
-    const rails = ["MODEL_IMAGE", "MODEL_TTS", "MODEL_ASR", "MODEL_VIDEO"].filter(
+    const rails = ["MODEL_IMAGE", "MODEL_TTS", "MODEL_ASR", "MODEL_VIDEO", "MODEL_OCR"].filter(
       (key) => gsValue(snap, key).trim() !== "",
     );
     const agents = gsChainIds(gsValue(snap, "MCP_MEDIA_APPS")).length;
     return {
       state: rails.length ? "in_use" : "not_set_up",
-      text: `${rails.length} of 4 rails`,
+      text: `${rails.length} of 5 rails`,
       detail: agents
         ? `Tools in ${agents} ${agents === 1 ? "agent" : "agents"}`
         : "No agent has the media server yet",
@@ -12614,6 +12615,7 @@ const ROUTE_PAUSE_KEY = new Map([
   ["MODEL_TTS", "MODEL_TTS_PAUSED"],
   ["MODEL_ASR", "MODEL_ASR_PAUSED"],
   ["MODEL_VIDEO", "MODEL_VIDEO_PAUSED"],
+  ["MODEL_OCR", "MODEL_OCR_PAUSED"],
 ]);
 
 /* The media rails (7.60.0+), drawn after the vision adapter: one entry per
@@ -12666,6 +12668,17 @@ const MEDIA_RAILS = [
       "walked only until a provider accepts the job; after that, status checks, " +
       "the download and delete go to that provider with the same key, and a job " +
       "that later fails is never resubmitted elsewhere, so it is never billed twice.",
+  },
+  {
+    modelKey: "MODEL_OCR",
+    chainKey: "MODEL_OCR_FALLBACKS",
+    tier: "ocr",
+    title: "OCR rail",
+    mcpTools: ["ocr_document"],
+    note:
+      "Serves POST /v1/ocr (unified document and image OCR). Dedicated OCR " +
+      "endpoints (Mistral OCR, Gemini native OCR) answer directly, and OpenAI / " +
+      "OpenRouter vision-chat fallbacks convert document or image inputs cleanly.",
   },
 ];
 
@@ -37981,6 +37994,9 @@ function mediaTurnChip(row) {
     if (row.media_job_id) return `video job${seconds(row.output_video_seconds)}`;
     return "video request";
   }
+  if (operation === "ocr") {
+    return answered || row.output_chars ? "ocr" : "ocr request";
+  }
   return "media request";
 }
 
@@ -46583,7 +46599,7 @@ function renderMediaModels(data) {
   if (!rows.length) {
     modelsHost.appendChild(
       mediaEmpty(
-        "No model is on a media rail. Set MODEL_IMAGE, MODEL_TTS, MODEL_ASR or MODEL_VIDEO on Model Config.",
+        "No model is on a media rail. Set MODEL_IMAGE, MODEL_TTS, MODEL_ASR, MODEL_VIDEO or MODEL_OCR on Model Config.",
       ),
     );
   } else {

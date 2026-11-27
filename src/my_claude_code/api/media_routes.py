@@ -29,6 +29,7 @@ no limit) refuses a larger file with 413 before any provider is asked.
 import asyncio
 import dataclasses
 import hashlib
+import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import IO, Any
@@ -63,6 +64,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_OPERATION_OCR,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
@@ -115,6 +117,7 @@ from .wire_surfaces import (
     IMAGES_EDITS_ENDPOINT,
     IMAGES_GENERATIONS_ENDPOINT,
     IMAGES_VARIATIONS_ENDPOINT,
+    OCR_ENDPOINT,
 )
 
 router = APIRouter()
@@ -709,6 +712,47 @@ def _parse_speech(response: MediaResponse) -> MediaOutputs:
     )
 
 
+def _parse_ocr(response: MediaResponse) -> MediaOutputs:
+    text: str | None = response.text
+    usage: dict[str, Any] | None = None
+    pages_processed: int | None = None
+    try:
+        payload = json.loads(response.body)
+    except ValueError, UnicodeDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        if not text:
+            raw_text = payload.get("text")
+            if isinstance(raw_text, str) and raw_text:
+                text = raw_text
+            else:
+                raw_pages = payload.get("pages")
+                if isinstance(raw_pages, list):
+                    parts = [
+                        page.get("markdown")
+                        for page in raw_pages
+                        if isinstance(page, dict)
+                        and isinstance(page.get("markdown"), str)
+                        and page.get("markdown")
+                    ]
+                    if parts:
+                        text = "\n\n".join(parts)
+        raw_usage = payload.get("usage")
+        if isinstance(raw_usage, dict):
+            usage = {str(k): v for k, v in raw_usage.items()}
+        raw_info = payload.get("usage_info")
+        if isinstance(raw_info, dict) and isinstance(
+            raw_info.get("pages_processed"), int
+        ):
+            pages_processed = raw_info["pages_processed"]
+        elif isinstance(payload.get("pages"), list):
+            pages_processed = len(payload["pages"])
+    return _with_leaf_measures(
+        MediaOutputs(count=1, usage=usage, text=text, pages=pages_processed),
+        response,
+    )
+
+
 def _parser_for(media_request: MediaRequest) -> Callable[[MediaResponse], MediaOutputs]:
     """How a buffered answer is measured, by the operation's wire shape."""
     if media_request.operation == MEDIA_OPERATION_SPEECH:
@@ -718,6 +762,8 @@ def _parser_for(media_request: MediaRequest) -> Callable[[MediaResponse], MediaO
         MEDIA_OPERATION_TRANSLATE,
     ):
         return _parse_transcription
+    if media_request.operation == MEDIA_OPERATION_OCR:
+        return _parse_ocr
     return _parse_images
 
 
@@ -815,6 +861,93 @@ router.add_api_route(
     methods=["POST"],
     summary="Translate audio to English text through the Transcription rail",
 )
+
+
+def _has_ocr_json_source(payload: Mapping[str, Any]) -> bool:
+    doc = payload.get("document")
+    if isinstance(doc, str) and doc.strip():
+        return True
+    if isinstance(doc, Mapping) and any(
+        isinstance(doc.get(k), str) and doc.get(k, "").strip()
+        for k in ("document_url", "image_url", "file_url", "url")
+    ):
+        return True
+    for key in ("document_url", "file_url"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return True
+    image_url = payload.get("image_url")
+    if isinstance(image_url, str) and image_url.strip():
+        return True
+    if isinstance(image_url, Mapping):
+        nested = image_url.get("url")
+        if isinstance(nested, str) and nested.strip():
+            return True
+    return False
+
+
+@router.post(OCR_ENDPOINT)
+async def ocr_document(
+    request: Request,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    """Extract text and markdown from documents or images through the OCR rail."""
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+
+        async def close_form() -> None:
+            await form.close()
+
+        try:
+            fields, uploads = await _uploads_from_form(form)
+        except BaseException:
+            await close_form()
+            raise
+        if not any(upload.field in ("file", "document") for upload in uploads):
+            await close_form()
+            return _invalid("A 'file' with the document or image is required.")
+        media_request = MediaRequest(
+            operation=MEDIA_OPERATION_OCR,
+            rail=MediaRail.OCR,
+            model=str(fields.get("model") or ""),
+            body={key: value for key, value in fields.items() if key != "model"},
+            stream=False,
+            uploads=uploads,
+            multipart=True,
+        )
+        return await _serve(
+            request,
+            services,
+            media_request,
+            endpoint=OCR_ENDPOINT,
+            cleanup=close_form,
+        )
+    payload = await _read_json_object(request)
+    if payload is None:
+        return _invalid(
+            "The request body must be multipart/form-data or a JSON object."
+        )
+    if not _has_ocr_json_source(payload):
+        return _invalid(
+            "'document', 'document_url', or 'image_url' is required for OCR."
+        )
+    if payload.get("stream") is True:
+        return _invalid("Streaming is not supported on /v1/ocr.")
+    media_request = MediaRequest(
+        operation=MEDIA_OPERATION_OCR,
+        rail=MediaRail.OCR,
+        model=str(payload.get("model") or ""),
+        body={key: value for key, value in payload.items() if key != "model"},
+        stream=False,
+    )
+    return await _serve(
+        request,
+        services,
+        media_request,
+        endpoint=OCR_ENDPOINT,
+    )
 
 
 async def _complete_response(
@@ -1089,4 +1222,9 @@ async def probe_images_edits(_auth=Depends(require_proxy_auth)):
 
 @router.api_route(IMAGES_VARIATIONS_ENDPOINT, methods=["HEAD", "OPTIONS"])
 async def probe_images_variations(_auth=Depends(require_proxy_auth)):
+    return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})
+
+
+@router.api_route(OCR_ENDPOINT, methods=["HEAD", "OPTIONS"])
+async def probe_ocr(_auth=Depends(require_proxy_auth)):
     return Response(status_code=204, headers={"Allow": "POST, HEAD, OPTIONS"})

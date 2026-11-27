@@ -81,14 +81,18 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_OPERATION_IMAGE_EDIT,
     MEDIA_OPERATION_IMAGE_GENERATE,
     MEDIA_OPERATION_IMAGE_VARIATION,
+    MEDIA_OPERATION_OCR,
     MEDIA_OPERATION_SPEECH,
     MEDIA_OPERATION_TRANSCRIBE,
     MEDIA_OPERATION_TRANSLATE,
     MEDIA_OPERATION_VIDEO_CREATE,
     MEDIA_OPERATION_VIDEO_EDIT,
+    MEDIA_SHAPE_GEMINI_NATIVE_OCR,
     MEDIA_SHAPE_GEMINI_TRANSCRIBE,
     MEDIA_SHAPE_GEMINI_TTS,
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL,
+    MEDIA_SHAPE_MISTRAL_OCR,
+    MEDIA_SHAPE_VISION_OCR_CHAT,
     MediaSurface,
     surface_for,
 )
@@ -319,6 +323,16 @@ DOOR_FIELDS: Mapping[str, tuple[DoorField, ...]] = {
         DoorField("negative_prompt", _STRING),
         DoorField("seed", _STRING),
     ),
+    MEDIA_OPERATION_OCR: (
+        DoorField("file", _FILE),
+        DoorField("document", {"type": "object"}),
+        DoorField("document_url", _STRING),
+        DoorField("image_url", _STRING),
+        DoorField("prompt", _STRING),
+        DoorField("pages", {"type": "array", "items": _INTEGER}),
+        DoorField("include_image_base64", _BOOLEAN),
+        DoorField("output_format", _STRING),
+    ),
 }
 
 #: The operations a schema is published for, in the rails' order.
@@ -346,6 +360,9 @@ GEMINI_NATIVE_FORWARDED: Mapping[str, frozenset[str]] = {
     MEDIA_SHAPE_GEMINI_TRANSCRIBE: frozenset(
         {"language", "response_format", "stream", "file"}
     ),
+    MEDIA_SHAPE_GEMINI_NATIVE_OCR: frozenset(
+        {"file", "document", "document_url", "image_url", "prompt", "output_format"}
+    ),
 }
 
 #: 8.14.0: what MCC's Mistral adapter sends, per wire shape. A Mistral image is
@@ -357,6 +374,25 @@ MISTRAL_IMAGE_TOOL_FORWARDED: Mapping[str, frozenset[str]] = {
     MEDIA_SHAPE_MISTRAL_IMAGE_TOOL: frozenset({"prompt"}),
 }
 
+#: 8.64.0: OCR wire shapes whose body MCC constructs from the door's fields.
+MISTRAL_OCR_FORWARDED: Mapping[str, frozenset[str]] = {
+    MEDIA_SHAPE_MISTRAL_OCR: frozenset(
+        {
+            "file",
+            "document",
+            "document_url",
+            "image_url",
+            "pages",
+            "include_image_base64",
+        }
+    ),
+}
+VISION_OCR_CHAT_FORWARDED: Mapping[str, frozenset[str]] = {
+    MEDIA_SHAPE_VISION_OCR_CHAT: frozenset(
+        {"file", "document", "document_url", "image_url", "prompt", "output_format"}
+    ),
+}
+
 #: Every shape whose body MCC CONSTRUCTS rather than forwards. A shape here is
 #: "translated": the fields it does not name are ``not forwarded by MCC``, a
 #: fact rather than a guess (IV.16), and the door's other fields are not
@@ -365,6 +401,8 @@ MISTRAL_IMAGE_TOOL_FORWARDED: Mapping[str, frozenset[str]] = {
 TRANSLATED_SHAPES: Mapping[str, frozenset[str]] = {
     **GEMINI_NATIVE_FORWARDED,
     **MISTRAL_IMAGE_TOOL_FORWARDED,
+    **MISTRAL_OCR_FORWARDED,
+    **VISION_OCR_CHAT_FORWARDED,
 }
 
 
