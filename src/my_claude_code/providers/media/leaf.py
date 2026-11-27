@@ -45,7 +45,12 @@ from my_claude_code.application.media.request import (
     MediaRequest,
     MediaResponse,
 )
+from my_claude_code.config.constants import (
+    MEDIA_APPROXIMATE_PARAM_MAPPING_DEFAULT,
+    MEDIA_PARAM_RECOVERY_MODE_DEFAULT,
+)
 from my_claude_code.config.credentials import mask_key_label
+from my_claude_code.config.media_overrides import current_media_overrides
 from my_claude_code.config.media_surfaces import (
     MEDIA_ENCODING_JSON,
     MEDIA_OPERATION_VIDEO_CREATE,
@@ -58,7 +63,13 @@ from my_claude_code.config.media_surfaces import (
     media_url,
     model_path,
     surface_for,
+    surface_key,
     surfaces_for,
+)
+from my_claude_code.config.settings import (
+    Settings,
+    configured_media_approximate_param_mapping,
+    configured_media_param_recovery_mode,
 )
 from my_claude_code.config.system_proxy import system_proxy_for
 from my_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -91,10 +102,17 @@ from my_claude_code.providers.raw_upstream import (
     emit,
     media_line,
 )
+from my_claude_code.providers.recovery import learned_fact_store
 from my_claude_code.providers.socks_deadline import bound_socks_handshake
 
 from .adapters import WireBody, build_wire_body
 from .param_refusal import note_param_refusal
+from .recovery import (
+    apply_media_preflight,
+    persist_media_recovery_facts,
+    retry_plan_on_media_failure,
+)
+from .translation import UPLOAD_TRANSLATABLE_OPERATIONS
 
 #: Upstream response headers carried onto a buffered media response. Only what
 #: the client or the log can use; never anything that could carry a secret.
@@ -121,8 +139,13 @@ def same_host(url: str, base_url: str) -> bool:
 def _surface_serves(surface: MediaSurface, request: MediaRequest) -> bool:
     if request.stream and not surface.stream:
         return False
-    # A file cannot be sent where the host documents JSON only.
-    if request.uploads and surface.encoding == MEDIA_ENCODING_JSON:
+    # A file cannot be sent where the host documents JSON only, unless the
+    # operation supports off-loop upload -> JSON data-URI encoding.
+    if (
+        request.uploads
+        and surface.encoding == MEDIA_ENCODING_JSON
+        and request.operation not in UPLOAD_TRANSLATABLE_OPERATIONS
+    ):
         return False
     # A format the client NAMED and the host does not document is a
     # format this host cannot produce: skipped uncharged, never
@@ -176,6 +199,9 @@ class MediaLeaf:
             [str, str, tuple[MediaSurface, ...]], ResolvedMediaEndpointLadder
         ]
         | None = None,
+        param_recovery_mode: str = MEDIA_PARAM_RECOVERY_MODE_DEFAULT,
+        approximate_param_mapping: bool = MEDIA_APPROXIMATE_PARAM_MAPPING_DEFAULT,
+        settings_getter: Callable[[], Settings] | None = None,
     ) -> None:
         self._provider_id = provider_id
         self._config = config
@@ -187,6 +213,9 @@ class MediaLeaf:
         self._surfaces = surfaces
         self._rate_limiter = rate_limiter
         self._endpoint_ladder = endpoint_ladder
+        self._param_recovery_mode = param_recovery_mode
+        self._approximate_param_mapping = approximate_param_mapping
+        self._settings_getter = settings_getter
         timeout = httpx.Timeout(
             config.http_read_timeout,
             connect=config.http_connect_timeout,
@@ -380,94 +409,212 @@ class MediaLeaf:
             await response.aread()
         return response
 
+    def _recovery_settings(self) -> tuple[str, bool]:
+        if self._settings_getter is not None:
+            settings = self._settings_getter()
+            return (
+                configured_media_param_recovery_mode(settings),
+                configured_media_approximate_param_mapping(settings),
+            )
+        return self._param_recovery_mode, self._approximate_param_mapping
+
     async def _execute(
         self, attempt: MediaAttempt, *, request_id: str | None
     ) -> AsyncIterator[MediaChunk]:
-        surface = self._surface(
-            attempt.request, model_ref=attempt.resolved.provider_model_ref
+        ladder = (
+            self._endpoint_ladder(
+                attempt.resolved.provider_model_ref,
+                attempt.request.operation,
+                self._surfaces,
+            )
+            if self._endpoint_ladder is not None and attempt.resolved.provider_model_ref
+            else None
         )
-        if surface is None:  # pragma: no cover - the gate runs first
+        if ladder is not None and ladder.winner is not None:
+            active_candidate = ladder.winner
+            active_surface: MediaSurface | None = active_candidate.surface
+            surface_source = active_candidate.source
+            is_pinned = (
+                active_candidate.source == "operator"
+                and active_candidate.detail == "pinned"
+            )
+        else:
+            active_surface = surface_for(self._surfaces, attempt.request.operation)
+            surface_source = "provider_default"
+            is_pinned = False
+        if active_surface is None:  # pragma: no cover - the gate runs first
             raise RuntimeError(
                 f"{self._provider_id} declares no {attempt.request.operation} surface"
             )
-        url = media_url(
-            self._config.base_url,
-            model_path(surface.path, attempt.resolved.provider_model),
+
+        mode, approximate_mapping = self._recovery_settings()
+        learned_facts = learned_fact_store().all_facts()
+        overrides = current_media_overrides()
+        current_attempt, preflight_adaptations = apply_media_preflight(
+            attempt,
+            active_surface,
+            mode=mode,
+            approximate_mapping=approximate_mapping,
+            learned_facts=learned_facts,
+            overrides=overrides,
         )
-        body = await build_wire_body(surface, attempt)
-        stream = bool(attempt.request.stream)
-        async with self._rate_limiter.concurrency_slot():
-            try:
-                response = await self._rate_limiter.execute_with_retry(
-                    self._send, url, body, stream, surface.auth_header
-                )
-            except Exception as error:
-                # 7.98.0: a refusal that names a request field is written
-                # down for the model's published request schema -- recorded
-                # only, and total, so this failure is classified, charged and
-                # routed exactly as it was (user decision 6 of 2026-10-16).
-                note_param_refusal(
-                    error,
-                    provider_id=self._provider_id,
-                    model_id=attempt.resolved.provider_model,
-                    surface=surface,
-                    request=attempt.request,
-                )
-                raise classify_provider_failure(
-                    error,
-                    provider_name=self._provider_id.upper(),
-                    read_timeout_s=self._config.http_read_timeout,
-                    request_id=request_id,
-                    mark_rate_limited=self._rate_limiter.extend_reactive_block,
-                    cooldown=self._config.rate_limit_cooldown(),
-                    mark_rate_limited_enabled=not self._config.routes_around_model,
-                ) from error
-            if attempt.request.operation == MEDIA_OPERATION_VIDEO_CREATE:
-                self._require_job_id(response)
-            if not stream:
-                answer = MediaResponse(
-                    status_code=response.status_code,
-                    content_type=response.headers.get(
-                        "content-type", "application/json"
-                    ),
-                    body=response.content,
-                    headers={
-                        name: response.headers[name]
-                        for name in _KEPT_HEADERS
-                        if name in response.headers
-                    },
-                )
-                if surface.shape in (
-                    MEDIA_SHAPE_GEMINI_TTS,
-                    MEDIA_SHAPE_GEMINI_TRANSCRIBE,
-                ):
-                    answer = await self._translated(surface, attempt, answer, body)
-                elif surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
-                    answer = await self._mistral_image_answer(
-                        attempt, answer, body, request_id=request_id
+        adaptations: list[str] = list(preflight_adaptations)
+        encoding_override: str | None = None
+        tried_shapes: set[tuple[str, str, str]] = {
+            (surface_key(active_surface), active_surface.shape, active_surface.path)
+        }
+        tried_encodings: set[str] = set()
+        tried_param_retry = False
+        switched_endpoint = False
+        pending_facts: list[tuple[str, object, str, str]] = []
+        stream = bool(current_attempt.request.stream)
+
+        while True:
+            url = media_url(
+                self._config.base_url,
+                model_path(
+                    active_surface.path, current_attempt.resolved.provider_model
+                ),
+            )
+            body = await build_wire_body(
+                active_surface,
+                current_attempt,
+                encoding_override=encoding_override,
+                approximate_mapping=approximate_mapping,
+            )
+            sent_encoding = (
+                MEDIA_ENCODING_JSON if body.multipart is None else "multipart"
+            )
+            tried_encodings.add(sent_encoding)
+            async with self._rate_limiter.concurrency_slot():
+                try:
+                    response = await self._rate_limiter.execute_with_retry(
+                        self._send, url, body, stream, active_surface.auth_header
                     )
-                elif attempt.request.inline_urls:
-                    answer = await self._inlined(answer)
-                # 8.8.0: a successful answer is a metadata line too, and never
-                # the body. It is the one place that can say "the host answered
-                # 200 with 1.3 MB of image/png", which is what an operator
-                # asking "did the media door work" needs.
-                if capture_enabled():
-                    for line in media_line(
-                        DOOR_MEDIA,
-                        status=answer.status_code,
-                        content_type=answer.content_type,
-                        nbytes=len(answer.body),
-                    ):
-                        emit(line)
-                yield answer
-                return
-            try:
-                async for raw in response.aiter_bytes():
-                    if raw:
-                        yield raw
-            finally:
-                await response.aclose()
+                except Exception as error:
+                    step = retry_plan_on_media_failure(
+                        error,
+                        surface=active_surface,
+                        is_pinned=is_pinned,
+                        candidate_ladder=ladder,
+                        tried_shapes=tried_shapes,
+                        mode=mode,
+                        approximate_mapping=approximate_mapping,
+                        current_body=current_attempt.request.body,
+                        attempt=current_attempt,
+                        tried_encodings=tried_encodings,
+                        tried_param_retry=tried_param_retry,
+                        sent_encoding=sent_encoding,
+                    )
+                    if step is not None:
+                        if step.kind == "endpoint":
+                            switched_endpoint = True
+                            active_surface = step.surface
+                            surface_source = "recovery"
+                            tried_shapes.add(
+                                (
+                                    surface_key(active_surface),
+                                    active_surface.shape,
+                                    active_surface.path,
+                                )
+                            )
+                            encoding_override = None
+                        elif step.kind == "encoding":
+                            encoding_override = step.encoding_override
+                        elif step.kind == "param":
+                            tried_param_retry = True
+                        current_attempt = dataclasses.replace(
+                            current_attempt,
+                            request=dataclasses.replace(
+                                current_attempt.request, body=step.body
+                            ),
+                        )
+                        adaptations.extend(step.adaptations)
+                        pending_facts.extend(step.learned_facts)
+                        continue
+                    # 7.98.0: a refusal that names a request field is written
+                    # down for the model's published request schema -- recorded
+                    # only, and total, so this failure is classified, charged and
+                    # routed exactly as it was (user decision 6 of 2026-10-16).
+                    note_param_refusal(
+                        error,
+                        provider_id=self._provider_id,
+                        model_id=current_attempt.resolved.provider_model,
+                        surface=active_surface,
+                        request=current_attempt.request,
+                    )
+                    raise classify_provider_failure(
+                        error,
+                        provider_name=self._provider_id.upper(),
+                        read_timeout_s=self._config.http_read_timeout,
+                        request_id=request_id,
+                        mark_rate_limited=self._rate_limiter.extend_reactive_block,
+                        cooldown=self._config.rate_limit_cooldown(),
+                        mark_rate_limited_enabled=not self._config.routes_around_model,
+                    ) from error
+
+            if current_attempt.request.operation == MEDIA_OPERATION_VIDEO_CREATE:
+                self._require_job_id(response)
+            persist_media_recovery_facts(
+                provider_id=self._provider_id,
+                model_id=current_attempt.resolved.provider_model,
+                operation=current_attempt.request.operation,
+                active_surface=active_surface,
+                switched_endpoint=switched_endpoint,
+                pending_facts=pending_facts,
+            )
+            break
+
+        all_adaptations = tuple(dict.fromkeys([*adaptations, *body.adaptations]))
+        used_surface_key = surface_key(active_surface)
+        if not stream:
+            answer = MediaResponse(
+                status_code=response.status_code,
+                content_type=response.headers.get("content-type", "application/json"),
+                body=response.content,
+                headers={
+                    name: response.headers[name]
+                    for name in _KEPT_HEADERS
+                    if name in response.headers
+                },
+                not_forwarded=body.not_forwarded,
+                adaptations=all_adaptations,
+                media_surface=used_surface_key,
+                media_surface_source=surface_source,
+            )
+            if active_surface.shape in (
+                MEDIA_SHAPE_GEMINI_TTS,
+                MEDIA_SHAPE_GEMINI_TRANSCRIBE,
+            ):
+                answer = await self._translated(
+                    active_surface, current_attempt, answer, body
+                )
+            elif active_surface.shape == MEDIA_SHAPE_MISTRAL_IMAGE_TOOL:
+                answer = await self._mistral_image_answer(
+                    current_attempt, answer, body, request_id=request_id
+                )
+            elif current_attempt.request.inline_urls:
+                answer = await self._inlined(answer)
+            # 8.8.0: a successful answer is a metadata line too, and never
+            # the body. It is the one place that can say "the host answered
+            # 200 with 1.3 MB of image/png", which is what an operator
+            # asking "did the media door work" needs.
+            if capture_enabled():
+                for line in media_line(
+                    DOOR_MEDIA,
+                    status=answer.status_code,
+                    content_type=answer.content_type,
+                    nbytes=len(answer.body),
+                ):
+                    emit(line)
+            yield answer
+            return
+        try:
+            async for raw in response.aiter_bytes():
+                if raw:
+                    yield raw
+        finally:
+            await response.aclose()
 
     async def _translated(
         self,
@@ -508,6 +655,9 @@ class MediaLeaf:
             usage=translated.usage,
             audio_seconds=translated.audio_seconds,
             not_forwarded=body.not_forwarded,
+            adaptations=answer.adaptations,
+            media_surface=answer.media_surface,
+            media_surface_source=answer.media_surface_source,
         )
 
     async def _mistral_image_answer(
@@ -575,6 +725,9 @@ class MediaLeaf:
             usage=parsed.usage,
             not_forwarded=body.not_forwarded,
             text=parsed.text,
+            adaptations=answer.adaptations,
+            media_surface=answer.media_surface,
+            media_surface_source=answer.media_surface_source,
         )
 
     async def _file_bytes(self, url: str, *, request_id: str | None) -> bytes:

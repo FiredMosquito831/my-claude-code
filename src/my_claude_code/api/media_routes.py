@@ -632,6 +632,17 @@ def _with_leaf_measures(outputs: MediaOutputs, response: MediaResponse) -> Media
         changes["audio_seconds"] = response.audio_seconds
     if response.not_forwarded:
         changes["not_forwarded"] = outputs.not_forwarded + response.not_forwarded
+    if response.adaptations:
+        changes["adaptations"] = tuple(
+            dict.fromkeys([*outputs.adaptations, *response.adaptations])
+        )
+    if outputs.media_surface is None and response.media_surface is not None:
+        changes["media_surface"] = response.media_surface
+    if (
+        outputs.media_surface_source is None
+        and response.media_surface_source is not None
+    ):
+        changes["media_surface_source"] = response.media_surface_source
     if outputs.text is None and response.text is not None:
         # 8.14.0: prose an answer carried that its shape has no field for (a
         # chat answer's ``message.content`` around the image tool call). It

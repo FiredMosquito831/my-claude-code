@@ -232,6 +232,11 @@ class MediaResponse:
     #: written to the request-log row's ``output_text`` and is never added to
     #: the client's JSON: an OpenAI Images answer has no field for it.
     text: str | None = None
+    #: Lossless or opt-in parameter/encoding/endpoint adaptations applied (8.62.0).
+    adaptations: tuple[str, ...] = ()
+    #: Wire surface key/shape and resolution source that served this response.
+    media_surface: str | None = None
+    media_surface_source: str | None = None
 
 
 #: What a media provider yields: one buffered response, or raw stream frames.

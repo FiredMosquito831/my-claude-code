@@ -297,15 +297,17 @@ def test_sdk_multipart_reencoded_as_json_for_json_only_host(
     assert request.headers["authorization"] == f"Bearer {OR_KEY}"
 
 
-def test_upload_skips_json_only_surface_uncharged(monkeypatch, tmp_path) -> None:
-    """A file cannot go where only JSON is documented: skipped, never charged."""
+def test_upload_translates_to_json_on_json_only_surface(monkeypatch, tmp_path) -> None:
+    """Uploads on JSON-only video surfaces encode off-loop as data: URIs (8.62.0)."""
+    import base64
+
     settings = _settings(
         monkeypatch,
         tmp_path,
         MODEL_VIDEO="open_router/google/veo-3.1",
         MODEL_VIDEO_FALLBACKS="gemini/veo-3.1-generate-preview",
     )
-    upstream = Upstream({("POST", GEMINI, GEMINI_VIDEOS): [_job("g-2", "processing")]})
+    upstream = Upstream({("POST", OPENROUTER, OR_VIDEOS): [_job("or-2", "pending")]})
     client, _registry = _client(settings, upstream)
     png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
     with client:
@@ -316,15 +318,20 @@ def test_upload_skips_json_only_surface_uncharged(monkeypatch, tmp_path) -> None
         )
     assert response.status_code == 200, response.text
     (request,) = upstream.seen
-    assert request.url.host == GEMINI
-    parts = _parts(request)
-    assert parts["input_reference"] == ("ref.png", png)
-    assert parts["model"][1] == b"veo-3.1-generate-preview"
-    assert parts["seconds"][1] == b"4"
+    assert request.url.host == OPENROUTER
+    assert request.headers["content-type"] == "application/json"
+    body = json.loads(request.content)
+    assert body == {
+        "prompt": "animate this",
+        "duration": 4,
+        "input_reference": f"data:image/png;base64,{base64.b64encode(png).decode()}",
+        "model": "google/veo-3.1",
+    }
     (row,) = _requests(tmp_path)
-    skipped, served = _attempts(tmp_path, row["id"])
-    assert (skipped["outcome"], skipped["error_kind"]) == ("skipped", "unsupported")
-    assert served["provider"] == "gemini"
+    served, unreached = _attempts(tmp_path, row["id"])
+    assert served["provider"] == "open_router"
+    assert served["outcome"] == "succeeded"
+    assert unreached["outcome"] == "skipped"
 
 
 def test_empty_rail_names_model_video(monkeypatch, tmp_path) -> None:

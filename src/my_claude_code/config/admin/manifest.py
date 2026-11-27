@@ -2599,6 +2599,43 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         ),
     ),
     ConfigFieldSpec(
+        "MEDIA_PARAM_RECOVERY_MODE",
+        "Media parameter recovery mode",
+        "deadlines",
+        "select",
+        settings_attr="media_param_recovery_mode",
+        default="lossless",
+        options=(
+            ConfigOptionSpec("lossless", "Lossless only (default)"),
+            ConfigOptionSpec("strip_optional", "Strip refused optional parameters"),
+            ConfigOptionSpec("off", "Off (record refusals only)"),
+        ),
+        affects_providers=False,
+        description=(
+            "How MCC reacts when a media host refuses a request parameter. "
+            "Lossless only strips semantic-preserving defaults (such as "
+            "response_format=b64_json) and swaps exact size/aspect pairs. "
+            "Strip optional also drops refused optional styling or quality "
+            "fields and retries once, never touching prompt or input files. "
+            "Off records learned refusals without retrying."
+        ),
+    ),
+    ConfigFieldSpec(
+        "MEDIA_APPROXIMATE_PARAM_MAPPING",
+        "Allow approximate media parameter mapping",
+        "deadlines",
+        "boolean",
+        settings_attr="media_approximate_param_mapping",
+        default="false",
+        affects_providers=False,
+        description=(
+            "On: non-exact pixel sizes (such as 1000x800) and out-of-enum "
+            "media values are rounded or clamped to the nearest value the "
+            "host accepts. Off (default): only exact bijective size/aspect "
+            "conversions are forwarded and unmatched values stay unguessed."
+        ),
+    ),
+    ConfigFieldSpec(
         "FALLBACK_END_CLEANLY_AFTER_COMMIT",
         "End a dead stream as a message, not an error",
         "deadlines",

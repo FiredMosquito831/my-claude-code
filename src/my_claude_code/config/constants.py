@@ -1682,3 +1682,8 @@ RC_REASONING_EFFORT_VALUES: tuple[str, ...] = (
     "max",
     "auto",
 )
+
+# Media parameter recovery & translation (8.62.0).
+MEDIA_PARAM_RECOVERY_MODE_DEFAULT = "lossless"
+MEDIA_PARAM_RECOVERY_MODES: tuple[str, ...] = ("lossless", "strip_optional", "off")
+MEDIA_APPROXIMATE_PARAM_MAPPING_DEFAULT = False

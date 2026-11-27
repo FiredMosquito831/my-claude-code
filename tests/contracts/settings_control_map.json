@@ -1076,8 +1076,16 @@
       "control": "field-MCP_MEDIA_APPS",
       "page": "coding_agents"
     },
+    "MEDIA_APPROXIMATE_PARAM_MAPPING": {
+      "control": "field-MEDIA_APPROXIMATE_PARAM_MAPPING",
+      "page": "limits"
+    },
     "MEDIA_FALLBACK_ON_UNDOWNLOADABLE": {
       "control": "field-MEDIA_FALLBACK_ON_UNDOWNLOADABLE",
+      "page": "limits"
+    },
+    "MEDIA_PARAM_RECOVERY_MODE": {
+      "control": "field-MEDIA_PARAM_RECOVERY_MODE",
       "page": "limits"
     },
     "MEDIA_STORE_ENABLED": {

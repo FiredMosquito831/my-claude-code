@@ -20,6 +20,7 @@ not sent, and is named in ``WireBody.not_forwarded`` for the request log.
 """
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +45,13 @@ from my_claude_code.core.gemini_native_media import (
 from my_claude_code.core.mistral_media import image_tool_request
 
 from .multipart import MultipartBody
+from .translation import (
+    data_uris_to_uploads,
+    has_decodable_data_uris,
+    translate_size_and_aspect,
+    upload_to_data_uri,
+    uploads_to_data_uris,
+)
 
 #: Speech fields the Gemini TTS translation consumes: the text, and the
 #: framing the leaf honours (a ``stream_format: "sse"`` never gets here).
@@ -68,16 +76,43 @@ class WireBody:
     encoded: bytes | None = None
     #: Client fields this shape has no exact place for, so not sent.
     not_forwarded: tuple[str, ...] = ()
+    #: Lossless or opt-in adaptations applied while building this body.
+    adaptations: tuple[str, ...] = ()
 
 
-def _openai_images_body(attempt: MediaAttempt) -> dict[str, Any]:
-    body = dict(attempt.request.body)
+def _openai_images_body(
+    attempt: MediaAttempt,
+    *,
+    surface: MediaSurface | None = None,
+    approximate_mapping: bool = False,
+) -> tuple[dict[str, Any], tuple[str, ...], tuple[str, ...]]:
+    raw_body = dict(attempt.request.body)
+    adaptations: tuple[str, ...] = ()
+    not_forwarded: tuple[str, ...] = ()
+    renames = dict(surface.renames) if surface is not None else {}
+    if "size" in renames and renames["size"] == "aspect_ratio":
+        raw_body, adaptations, not_forwarded = translate_size_and_aspect(
+            raw_body,
+            target_fields=("aspect_ratio", "resolution"),
+            approximate=approximate_mapping,
+        )
+    elif "aspect_ratio" in renames and renames["aspect_ratio"] == "size":
+        raw_body, adaptations, not_forwarded = translate_size_and_aspect(
+            raw_body,
+            target_fields=("size",),
+            approximate=approximate_mapping,
+        )
+    body = (
+        {renames.get(key, key): value for key, value in raw_body.items()}
+        if renames
+        else raw_body
+    )
     body["model"] = attempt.resolved.provider_model
     if attempt.request.stream:
         body["stream"] = True
     else:
         body.pop("stream", None)
-    return body
+    return body, adaptations, not_forwarded
 
 
 def _form_value(value: Any) -> str:
@@ -87,18 +122,24 @@ def _form_value(value: Any) -> str:
 
 
 def _openai_multipart(
-    attempt: MediaAttempt, renames: dict[str, str] | None = None
+    attempt: MediaAttempt,
+    renames: dict[str, str] | None = None,
+    *,
+    uploads: tuple[MediaUpload, ...] | None = None,
+    skip_fields: frozenset[str] = frozenset(),
 ) -> MultipartBody:
     fields: list[tuple[str, str]] = [("model", attempt.resolved.provider_model)]
     for name, value in attempt.request.body.items():
-        if name in {"model", "stream"}:
+        if name in {"model", "stream"} or name in skip_fields:
             continue
         values = value if isinstance(value, list) else [value]
         wire_name = name if renames is None else renames.get(name, name)
         fields.extend((wire_name, _form_value(item)) for item in values)
     if attempt.request.stream:
         fields.append(("stream", "true"))
-    return MultipartBody.build(fields, attempt.request.uploads)
+    return MultipartBody.build(
+        fields, attempt.request.uploads if uploads is None else uploads
+    )
 
 
 #: Form fields that are text by nature: never turned into numbers.
@@ -119,18 +160,25 @@ def _from_form(value: Any) -> Any:
     return value
 
 
-def _openai_videos_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody:
+def _openai_videos_body(
+    surface: MediaSurface,
+    attempt: MediaAttempt,
+    *,
+    encoding_override: str | None = None,
+) -> WireBody:
     """The client's create, in the host's declared encoding and field names.
 
-    A JSON-only host gets JSON; a form's values arrive as strings, so only
-    theirs are converted (a JSON client's types are kept as it sent them).
-    Any other host gets the client's own encoding.
+    A JSON-only host gets JSON (encoding spooled uploads off-loop as ``data:``
+    URIs); a form's values arrive as strings, so only theirs are converted (a
+    JSON client's types are kept as it sent them). Any other host gets the
+    client's own encoding.
     """
 
     request = attempt.request
     renames = dict(surface.renames)
+    effective_encoding = encoding_override or surface.encoding
     form = bool(request.uploads) or request.multipart
-    if surface.encoding != MEDIA_ENCODING_JSON and form:
+    if effective_encoding != MEDIA_ENCODING_JSON and form:
         return WireBody(multipart=_openai_multipart(attempt, renames))
     body: dict[str, Any] = {}
     for name, value in request.body.items():
@@ -138,6 +186,19 @@ def _openai_videos_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBod
             continue
         converted = _from_form(value) if form and name not in _TEXT_FIELDS else value
         body[renames.get(name, name)] = converted
+    adaptations: list[str] = []
+    if request.uploads and effective_encoding == MEDIA_ENCODING_JSON:
+        for upload in request.uploads:
+            field_name = renames.get(upload.field, upload.field)
+            if field_name not in body:
+                body[field_name] = upload_to_data_uri(upload)
+        adaptations.append("encoding:multipart->json")
+        body["model"] = attempt.resolved.provider_model
+        return WireBody(
+            json=body,
+            encoded=json.dumps(body).encode("utf-8"),
+            adaptations=tuple(adaptations),
+        )
     body["model"] = attempt.resolved.provider_model
     return WireBody(json=body)
 
@@ -228,25 +289,106 @@ def _mistral_image_body(attempt: MediaAttempt) -> WireBody:
     )
 
 
-async def build_wire_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody:
-    """``build_request_body``, off the loop when the body reads an upload whole."""
-
+def _needs_off_loop_encoding(
+    surface: MediaSurface,
+    attempt: MediaAttempt,
+    *,
+    encoding_override: str | None = None,
+) -> bool:
     if surface.shape == MEDIA_SHAPE_GEMINI_TRANSCRIBE:
-        return await asyncio.to_thread(build_request_body, surface, attempt)
-    return build_request_body(surface, attempt)
+        return True
+    effective_encoding = encoding_override or surface.encoding
+    if effective_encoding == MEDIA_ENCODING_JSON and bool(attempt.request.uploads):
+        return True
+    return (
+        effective_encoding == "multipart"
+        and not attempt.request.uploads
+        and has_decodable_data_uris(attempt.request.body)
+    )
 
 
-def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody:
+async def build_wire_body(
+    surface: MediaSurface,
+    attempt: MediaAttempt,
+    *,
+    encoding_override: str | None = None,
+    approximate_mapping: bool = False,
+) -> WireBody:
+    """``build_request_body``, off the loop when the body reads or decodes uploads."""
+
+    if _needs_off_loop_encoding(surface, attempt, encoding_override=encoding_override):
+        return await asyncio.to_thread(
+            build_request_body,
+            surface,
+            attempt,
+            encoding_override=encoding_override,
+            approximate_mapping=approximate_mapping,
+        )
+    return build_request_body(
+        surface,
+        attempt,
+        encoding_override=encoding_override,
+        approximate_mapping=approximate_mapping,
+    )
+
+
+def build_request_body(
+    surface: MediaSurface,
+    attempt: MediaAttempt,
+    *,
+    encoding_override: str | None = None,
+    approximate_mapping: bool = False,
+) -> WireBody:
     """The body for ``attempt`` on ``surface``'s wire shape.
 
-    A Gemini transcription reads its upload whole: call it through
-    ``build_wire_body``, which runs it off the loop.
+    Operations that read or base64-encode/decode uploads run off-loop when
+    called through :func:`build_wire_body`.
     """
 
+    effective_encoding = encoding_override or surface.encoding
     if surface.shape == MEDIA_SHAPE_OPENAI_IMAGES:
         if attempt.request.uploads:
-            return WireBody(multipart=_openai_multipart(attempt))
-        return WireBody(json=_openai_images_body(attempt))
+            if effective_encoding == MEDIA_ENCODING_JSON:
+                body, adaptations, not_forwarded = _openai_images_body(
+                    attempt,
+                    surface=surface,
+                    approximate_mapping=approximate_mapping,
+                )
+                if "images" not in body:
+                    body["images"] = uploads_to_data_uris(attempt.request.uploads)
+                return WireBody(
+                    json=body,
+                    encoded=json.dumps(body).encode("utf-8"),
+                    not_forwarded=not_forwarded,
+                    adaptations=(*adaptations, "encoding:multipart->json"),
+                )
+            renames = dict(surface.renames) or None
+            return WireBody(multipart=_openai_multipart(attempt, renames))
+        if effective_encoding == "multipart" and has_decodable_data_uris(
+            attempt.request.body
+        ):
+            decoded = data_uris_to_uploads(attempt.request.body.get("images", ()))
+            if decoded:
+                renames = dict(surface.renames) or None
+                return WireBody(
+                    multipart=_openai_multipart(
+                        attempt,
+                        renames,
+                        uploads=decoded,
+                        skip_fields=frozenset({"images"}),
+                    ),
+                    adaptations=("encoding:json->multipart",),
+                )
+        body, adaptations, not_forwarded = _openai_images_body(
+            attempt,
+            surface=surface,
+            approximate_mapping=approximate_mapping,
+        )
+        return WireBody(
+            json=body,
+            not_forwarded=not_forwarded,
+            adaptations=adaptations,
+        )
     if surface.shape == MEDIA_SHAPE_OPENAI_SPEECH:
         # The client spoke this shape too: its fields (``stream_format``
         # included), the rail's model.
@@ -254,10 +396,29 @@ def build_request_body(surface: MediaSurface, attempt: MediaAttempt) -> WireBody
         body["model"] = attempt.resolved.provider_model
         return WireBody(json=body)
     if surface.shape == MEDIA_SHAPE_OPENAI_TRANSCRIPTIONS:
+        if attempt.request.uploads and effective_encoding == MEDIA_ENCODING_JSON:
+            renames = dict(surface.renames)
+            body = {
+                renames.get(name, name): value
+                for name, value in attempt.request.body.items()
+                if name not in {"model", "stream"}
+            }
+            for upload in attempt.request.uploads:
+                field_name = renames.get(upload.field, upload.field)
+                if field_name not in body:
+                    body[field_name] = upload_to_data_uri(upload)
+            body["model"] = attempt.resolved.provider_model
+            return WireBody(
+                json=body,
+                encoded=json.dumps(body).encode("utf-8"),
+                adaptations=("encoding:multipart->json",),
+            )
         # Always an upload: the audio goes out as multipart, streamed.
         return WireBody(multipart=_openai_multipart(attempt))
     if surface.shape == MEDIA_SHAPE_OPENAI_VIDEOS:
-        return _openai_videos_body(surface, attempt)
+        return _openai_videos_body(
+            surface, attempt, encoding_override=encoding_override
+        )
     if surface.shape == MEDIA_SHAPE_GEMINI_TTS:
         return _gemini_speech_body(surface, attempt)
     if surface.shape == MEDIA_SHAPE_GEMINI_TRANSCRIBE:
