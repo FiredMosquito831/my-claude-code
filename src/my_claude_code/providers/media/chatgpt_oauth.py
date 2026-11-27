@@ -70,6 +70,7 @@ from my_claude_code.core.proxy_attribution import (
 from my_claude_code.core.upstream_ladder import note_response_head
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.chatgpt_oauth.credentials import (
+    CHATGPT_OAUTH_MANAGED_SOURCE_NAME,
     ChatGPTOAuthError,
     force_refresh_managed_chatgpt_oauth_credentials,
     load_chatgpt_oauth_credentials,
@@ -361,7 +362,8 @@ class ChatGPTOAuthMediaNode:
                 )
                 if (
                     response.status_code == 401
-                    and active_credentials.source_name == "fcc-managed"
+                    and active_credentials.source_name
+                    == CHATGPT_OAUTH_MANAGED_SOURCE_NAME
                 ):
                     await response.aclose()
                     try:
