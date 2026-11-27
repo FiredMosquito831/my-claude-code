@@ -31,6 +31,8 @@ from my_claude_code.application.marketplace import (
     marketplace_choice,
 )
 from my_claude_code.application.model_metadata import (
+    DeclaredModalities,
+    ProviderModelDeclaration,
     ProviderModelInfo,
     ResolvedResponseSurface,
     ResponseSurface,
@@ -103,9 +105,11 @@ from my_claude_code.providers.http import (
     maybe_await_aclose,
 )
 from my_claude_code.providers.model_listing import (
+    ModelListResponseError,
     extract_openai_model_ids,
     merge_model_list_pages,
     parse_openai_model_list,
+    record_with_declared,
     validate_model_list_page,
 )
 from my_claude_code.providers.proxy_keepalive import leg_pool_kwargs
@@ -160,7 +164,7 @@ from .marketplace import (
 from .messages_transport import MessagesTransport
 from .opencode_catalogue import STAND_IN_INPUT_SCHEMA, model_is_zero_cost
 from .opencode_identity import identity_wire_record
-from .profiles import OpenAIChatProfile, ReasoningWireField
+from .profiles import OpenAIChatProfile, OpenAIModelListing, ReasoningWireField
 from .prompt_cache import (
     apply_chat_prompt_cache_lifetime,
     chat_prompt_cache_choice,
@@ -673,6 +677,50 @@ class OpenAIChatProvider(BaseProvider):
         # on a fresh install left the provider with no models at all. The
         # parser logs the count and the ids; the records it did read are what
         # the sweep caches, so the sweep takes the record half.
+        primary_infos = self._parse_listing_payload(payload, listing)
+        if not listing.supplementary_listings:
+            return primary_infos
+
+        merged_by_id: dict[str, ProviderModelInfo] = {
+            info.model_id: info for info in primary_infos
+        }
+        for supplementary in listing.supplementary_listings:
+            try:
+                supp_payload = await self._fetch_listing_payload(supplementary)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug(
+                    "Supplementary model list skipped: provider={} path={} error={}",
+                    self._provider_name,
+                    supplementary.path,
+                    type(exc).__name__,
+                )
+                continue
+            try:
+                supp_infos = self._parse_listing_payload(supp_payload, supplementary)
+            except ModelListResponseError as exc:
+                logger.debug(
+                    "Supplementary model list empty or unreadable: provider={} path={} reason={}",
+                    self._provider_name,
+                    supplementary.path,
+                    exc.message,
+                )
+                continue
+            for raw_info in supp_infos:
+                tagged = _apply_listing_defaults(raw_info, supplementary)
+                existing = merged_by_id.get(tagged.model_id)
+                if existing is None:
+                    merged_by_id[tagged.model_id] = tagged
+                else:
+                    merged_by_id[tagged.model_id] = _merge_supplementary_info(
+                        existing, tagged
+                    )
+        return frozenset(merged_by_id.values())
+
+    def _parse_listing_payload(
+        self, payload: Any, listing: OpenAIModelListing
+    ) -> frozenset[ProviderModelInfo]:
         return parse_openai_model_list(
             payload,
             provider_name=self._provider_name,
@@ -695,12 +743,15 @@ class OpenAIChatProvider(BaseProvider):
 
     async def _fetch_models_payload(self) -> Any:
         """Fetch the profile-selected model-list endpoint once."""
-        listing = self._profile.model_listing
+        return await self._fetch_listing_payload(self._profile.model_listing)
+
+    async def _fetch_listing_payload(self, listing: OpenAIModelListing) -> Any:
+        """Fetch one declarative model-list endpoint."""
         path = listing.path
         if path is None:
             return await self.list_models_payload()
         if listing.pagination is not None:
-            return await self._fetch_paginated_models_payload(path)
+            return await self._fetch_paginated_models_payload(path, listing)
         if listing.query_params:
             return await self._client.get(
                 path,
@@ -709,9 +760,12 @@ class OpenAIChatProvider(BaseProvider):
             )
         return await self._client.get(path, cast_to=object)
 
-    async def _fetch_paginated_models_payload(self, path: str) -> Any:
+    async def _fetch_paginated_models_payload(
+        self, path: str, listing: OpenAIModelListing | None = None
+    ) -> Any:
         """Fetch one complete bounded model catalog."""
-        listing = self._profile.model_listing
+        if listing is None:
+            listing = self._profile.model_listing
         pagination = listing.pagination
         if pagination is None:
             raise RuntimeError("paginated model fetch requires a pagination policy")
@@ -2968,3 +3022,119 @@ class _OpenAIChatStreamRunner:
             self._input_tokens,
             log_raw_events=self._provider._config.log_raw_sse_events,
         )
+
+
+def _apply_listing_defaults(
+    info: ProviderModelInfo, listing: OpenAIModelListing
+) -> ProviderModelInfo:
+    """Tag a supplementary listing's row with default modalities/type when unset."""
+    default_modalities = (
+        DeclaredModalities(
+            inputs=listing.default_declared_modalities[0],
+            outputs=listing.default_declared_modalities[1],
+        )
+        if listing.default_declared_modalities is not None
+        else None
+    )
+    default_type = (
+        listing.default_model_type.strip().lower()
+        if isinstance(listing.default_model_type, str)
+        and listing.default_model_type.strip()
+        else None
+    )
+    if default_modalities is None and default_type is None:
+        return info
+    declared = info.declared or ProviderModelDeclaration()
+    modalities = (
+        declared.modalities if declared.modalities is not None else default_modalities
+    )
+    model_type = (
+        declared.model_type if declared.model_type is not None else default_type
+    )
+    if modalities == declared.modalities and model_type == declared.model_type:
+        return info
+    updated = replace(declared, modalities=modalities, model_type=model_type)
+    return record_with_declared(replace(info, declared=updated))
+
+
+def _merge_declarations(
+    primary: ProviderModelDeclaration | None,
+    supplementary: ProviderModelDeclaration | None,
+) -> ProviderModelDeclaration | None:
+    """Fill missing declaration fields from a supplementary listing without overwriting primary."""
+    if supplementary is None:
+        return primary
+    if primary is None:
+        return supplementary
+    endpoints: tuple[str, ...] | None = primary.endpoints
+    if supplementary.endpoints:
+        combined = sorted(set(primary.endpoints or ()) | set(supplementary.endpoints))
+        endpoints = tuple(combined)
+    return ProviderModelDeclaration(
+        modalities=primary.modalities
+        if primary.modalities is not None
+        else supplementary.modalities,
+        model_type=primary.model_type
+        if primary.model_type is not None
+        else supplementary.model_type,
+        endpoints=endpoints,
+        context_length=primary.context_length
+        if primary.context_length is not None
+        else supplementary.context_length,
+        max_output_tokens=primary.max_output_tokens
+        if primary.max_output_tokens is not None
+        else supplementary.max_output_tokens,
+        input_price=primary.input_price
+        if primary.input_price is not None
+        else supplementary.input_price,
+        output_price=primary.output_price
+        if primary.output_price is not None
+        else supplementary.output_price,
+        reasoning=primary.reasoning
+        if primary.reasoning is not None
+        else supplementary.reasoning,
+        tool_calls=primary.tool_calls
+        if primary.tool_calls is not None
+        else supplementary.tool_calls,
+        vision=primary.vision if primary.vision is not None else supplementary.vision,
+        published_at=primary.published_at
+        if primary.published_at is not None
+        else supplementary.published_at,
+        retires_at=primary.retires_at
+        if primary.retires_at is not None
+        else supplementary.retires_at,
+        knowledge_cutoff=primary.knowledge_cutoff
+        if primary.knowledge_cutoff is not None
+        else supplementary.knowledge_cutoff,
+        description=primary.description
+        if primary.description is not None
+        else supplementary.description,
+    )
+
+
+def _merge_supplementary_info(
+    primary: ProviderModelInfo, supplementary: ProviderModelInfo
+) -> ProviderModelInfo:
+    """Merge supplementary media info into an existing primary record non-destructively."""
+    merged_declared = _merge_declarations(primary.declared, supplementary.declared)
+    merged_published_row = (
+        primary.published_row
+        if primary.published_row is not None
+        else supplementary.published_row
+    )
+    merged = replace(
+        primary,
+        declared=merged_declared,
+        published_row=merged_published_row,
+        context_length=(
+            primary.context_length
+            if primary.context_length is not None
+            else supplementary.context_length
+        ),
+        max_output_tokens=(
+            primary.max_output_tokens
+            if primary.max_output_tokens is not None
+            else supplementary.max_output_tokens
+        ),
+    )
+    return record_with_declared(merged)

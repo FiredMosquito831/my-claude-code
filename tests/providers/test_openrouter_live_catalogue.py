@@ -141,6 +141,24 @@ def test_a_zero_limit_is_unknown_and_a_zero_price_is_free() -> None:
     assert model.input_price == 0.0
     assert model.modalities == DeclaredModalities(inputs=("text",), outputs=("image",))
     assert model.supports_tool_calls is False
+    assert model.supported_parameters == frozenset(
+        {"max_tokens", "seed", "temperature"}
+    )
+
+
+def test_audio_output_modality_is_preserved_in_live_model() -> None:
+    audio_row = {
+        "id": "acme/speech-1",
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["audio"],
+        },
+        "supported_parameters": ["seed"],
+    }
+    model = live_model_from_row(audio_row)
+    assert model is not None
+    assert model.modalities == DeclaredModalities(inputs=("text",), outputs=("audio",))
+    assert model.supported_parameters == frozenset({"seed"})
 
 
 def test_a_row_with_no_parameter_list_states_no_tools_and_no_reasoning() -> None:

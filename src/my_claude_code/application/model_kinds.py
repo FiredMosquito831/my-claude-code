@@ -257,6 +257,10 @@ KIND_WORDS: Mapping[str, frozenset[str]] = {
         frozenset({MediaRail.ASR.value}),
     ),
     **dict.fromkeys(
+        ("audio",),
+        frozenset({MediaRail.TTS.value, MediaRail.ASR.value}),
+    ),
+    **dict.fromkeys(
         (
             "embedding",
             "embeddings",

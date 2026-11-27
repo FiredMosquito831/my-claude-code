@@ -41,6 +41,11 @@ from my_claude_code.api.model_admin import (
     model_kind_payload,
 )
 from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
+from my_claude_code.application.media.capabilities import (
+    MediaCapabilityInputs,
+    MediaCapabilityProfile,
+    resolve_media_capability_profile,
+)
 from my_claude_code.application.media.executor import media_route_health_registry
 from my_claude_code.application.media.rails import rail_refs
 from my_claude_code.application.media.request import (
@@ -248,6 +253,9 @@ def _all_descriptors() -> tuple[dict[str, ProviderDescriptor], set[str]]:
 def request_schema_inputs(
     services: ApiServices,
     learned: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
 ) -> MediaSchemaInputs:
     """Bind a rail model's schema inputs from the runtime (7.98.0).
 
@@ -261,7 +269,88 @@ def request_schema_inputs(
         services.requests.cached_prefixed_model_infos(),
         operator=load_media_request_fields(),
         refreshed_at=services.admin.catalogue_refresh_status().get("last_refreshed_at"),
+        live=live,
+        litellm=litellm,
     )
+
+
+def ref_capability_profile(
+    model_ref: str,
+    descriptor: ProviderDescriptor | None,
+    inputs: MediaSchemaInputs,
+    *,
+    models_dev_entry: Mapping[str, Any] | None = None,
+    models_dev_as_of: str | None = None,
+) -> MediaCapabilityProfile:
+    """Resolve one rail model's :class:`MediaCapabilityProfile` from bound inputs."""
+
+    provider_id = parse_provider_type(model_ref)
+    model_id = parse_model_name(model_ref)
+    live_entry = None if inputs.live is None else inputs.live(provider_id, model_id)
+    litellm_entry = (
+        None if inputs.litellm is None else inputs.litellm(provider_id, model_id)
+    )
+    return resolve_media_capability_profile(
+        model_ref,
+        MediaCapabilityInputs(
+            provider_info=inputs.records.get(model_ref),
+            surfaces=() if descriptor is None else descriptor.media_surfaces,
+            openrouter_live=live_entry,
+            models_dev_entry=models_dev_entry,
+            litellm_entry=litellm_entry,
+            learned_facts=inputs.learned.get(model_ref, ()),
+            provider_list_as_of=inputs.records_as_of,
+            openrouter_live_as_of=(
+                None if inputs.live is None else inputs.live.fetched_at
+            ),
+            models_dev_as_of=models_dev_as_of,
+        ),
+    )
+
+
+def media_capability_summary(profile: MediaCapabilityProfile) -> dict[str, Any]:
+    """Serialize a :class:`MediaCapabilityProfile` for admin diagnostics."""
+
+    return {
+        "operations": sorted(profile.operations),
+        "sync_mode": profile.sync_mode,
+        "accepts_encodings": sorted(profile.accepts_encodings),
+        "supports_mask": profile.supports_mask,
+        "max_input_images": profile.max_input_images,
+        "accepted_sizes": (
+            None if profile.accepted_sizes is None else list(profile.accepted_sizes)
+        ),
+        "accepted_aspect_ratios": (
+            None
+            if profile.accepted_aspect_ratios is None
+            else list(profile.accepted_aspect_ratios)
+        ),
+        "accepted_resolutions": (
+            None
+            if profile.accepted_resolutions is None
+            else list(profile.accepted_resolutions)
+        ),
+        "accepted_durations": (
+            None
+            if profile.accepted_durations is None
+            else list(profile.accepted_durations)
+        ),
+        "accepted_formats": (
+            None if profile.accepted_formats is None else list(profile.accepted_formats)
+        ),
+        "accepted_voices": (
+            None if profile.accepted_voices is None else list(profile.accepted_voices)
+        ),
+        "supports_streaming": profile.supports_streaming,
+        "supported_generation_methods": sorted(profile.supported_generation_methods),
+        "supported_parameters": sorted(profile.supported_parameters),
+        "required_params": sorted(profile.required_params),
+        "refused_params": sorted(profile.refused_params),
+        "field_provenance": {
+            key: {"source": source, "as_of": as_of}
+            for key, (source, as_of) in sorted(profile.field_provenance.items())
+        },
+    }
 
 
 def ref_request_schemas(

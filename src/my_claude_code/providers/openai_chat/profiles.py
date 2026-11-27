@@ -199,6 +199,9 @@ class OpenAIModelListing:
     non_thinking_tag: str | None = None
     thinking_boolean_path: tuple[str, ...] | None = None
     pagination: OpenAIModelPagination | None = None
+    supplementary_listings: tuple[OpenAIModelListing, ...] = ()
+    default_declared_modalities: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+    default_model_type: str | None = None
 
 
 ReasoningWireField = Literal["reasoning_content", "reasoning"]
@@ -890,6 +893,22 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             path="/language-models",
             collection_field="models",
             aliases_field="aliases",
+            supplementary_listings=(
+                OpenAIModelListing(
+                    path="/image-generation-models",
+                    collection_field="models",
+                    aliases_field="aliases",
+                    default_declared_modalities=(("text",), ("image",)),
+                    default_model_type="image_generation",
+                ),
+                OpenAIModelListing(
+                    path="/video-generation-models",
+                    collection_field="models",
+                    aliases_field="aliases",
+                    default_declared_modalities=(("text",), ("video",)),
+                    default_model_type="video_generation",
+                ),
+            ),
         ),
     ),
     "together": OpenAIChatProfile(
@@ -947,6 +966,19 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         model_listing=OpenAIModelListing(
             path="/models",
             query_params=(("sub_type", "chat"),),
+            supplementary_listings=(
+                OpenAIModelListing(
+                    path="/models",
+                    query_params=(("sub_type", "text-to-image"),),
+                    default_declared_modalities=(("text",), ("image",)),
+                    default_model_type="text-to-image",
+                ),
+                OpenAIModelListing(
+                    path="/models",
+                    query_params=(("sub_type", "audio"),),
+                    default_model_type="audio",
+                ),
+            ),
         ),
     ),
     "nebius": OpenAIChatProfile(

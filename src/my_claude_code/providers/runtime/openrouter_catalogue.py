@@ -314,6 +314,7 @@ def _facts(row: Mapping[str, Any], slug: str, info: ProviderModelInfo) -> LiveMo
         cache_read_price=listed_price_per_million(rates.get("input_cache_read")),
         cache_write_price=listed_price_per_million(rates.get("input_cache_write")),
         reasoning_price=listed_price_per_million(rates.get("internal_reasoning")),
+        supported_parameters=published,
     )
 
 

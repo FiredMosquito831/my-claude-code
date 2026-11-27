@@ -64,9 +64,11 @@ Pure: no I/O, no clock unless asked, imports ``config`` and ``core`` only.
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from my_claude_code.application.litellm_model_map import LiteLLMCatalogue
 from my_claude_code.application.model_metadata import ProviderModelInfo
+from my_claude_code.application.openrouter_live import LiveCatalogue
 from my_claude_code.config.media_request_fields import (
     OPERATOR_ACCEPTED,
     OPERATOR_REFUSED,
@@ -90,6 +92,9 @@ from my_claude_code.config.media_surfaces import (
 )
 
 from .request import RAIL_OPERATIONS, MediaRail
+
+if TYPE_CHECKING:
+    from .capabilities import MediaCapabilityProfile
 
 JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -572,6 +577,7 @@ def request_schema(
     learned: Iterable[Mapping[str, Any]],
     supported_parameters: frozenset[str] | None = None,
     provider_list_as_of: str | None = None,
+    capability_profile: MediaCapabilityProfile | None = None,
 ) -> dict[str, Any]:
     """One model's request schema for one operation it serves.
 
@@ -582,11 +588,21 @@ def request_schema(
     """
 
     door = DOOR_FIELDS[operation]
+    effective_supported = (
+        supported_parameters
+        if supported_parameters is not None
+        else (
+            capability_profile.supported_parameters
+            if capability_profile is not None
+            and capability_profile.supported_parameters
+            else None
+        )
+    )
     rungs: list[dict[str, _Statement]] = [
         _operator_statements(operation, operator),
         _learned_statements(operation, learned),
         _declared_statements(operation, surface, door),
-        _listed_statements(door, supported_parameters, provider_list_as_of),
+        _listed_statements(door, effective_supported, provider_list_as_of),
     ]
     base_schema = {field.name: field.schema for field in door}
     door_said = {field.name: _door_statement(field) for field in door}
@@ -646,7 +662,7 @@ def request_schema(
             }
         )
     }
-    schema["x-mcc"] = {
+    x_mcc: dict[str, Any] = {
         "model": model_ref,
         "operation": operation,
         "encoding": (
@@ -665,6 +681,16 @@ def request_schema(
             for source, read, why in LADDER
         ],
     }
+    if capability_profile is not None:
+        x_mcc["capability_profile"] = {
+            "operations": sorted(capability_profile.operations),
+            "sync_mode": capability_profile.sync_mode,
+            "accepts_encodings": sorted(capability_profile.accepts_encodings),
+            "supported_generation_methods": sorted(
+                capability_profile.supported_generation_methods
+            ),
+        }
+    schema["x-mcc"] = x_mcc
     return schema
 
 
@@ -677,6 +703,7 @@ def request_schemas(
     learned: Sequence[Mapping[str, Any]],
     supported_parameters: frozenset[str] | None = None,
     provider_list_as_of: str | None = None,
+    capability_profile: MediaCapabilityProfile | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Every schema one rail model has, by operation, for the ones it serves.
 
@@ -700,6 +727,7 @@ def request_schemas(
             learned=learned,
             supported_parameters=supported_parameters,
             provider_list_as_of=provider_list_as_of,
+            capability_profile=capability_profile,
         )
     return schemas
 
@@ -721,6 +749,10 @@ class MediaSchemaInputs:
     records: Mapping[str, ProviderModelInfo]
     #: When the catalogue those records came from was read (ISO), if known.
     records_as_of: str | None = None
+    #: Optional OpenRouter live catalogue bound for capability enrichment.
+    live: LiveCatalogue | None = None
+    #: Optional LiteLLM catalogue bound for capability enrichment.
+    litellm: LiteLLMCatalogue | None = None
 
 
 def schema_inputs(
@@ -729,6 +761,8 @@ def schema_inputs(
     *,
     operator: MediaRequestFieldStatements,
     refreshed_at: object = None,
+    live: LiveCatalogue | None = None,
+    litellm: LiteLLMCatalogue | None = None,
 ) -> MediaSchemaInputs:
     """Bind the inputs; ``refreshed_at`` is the catalogue's epoch, if known."""
 
@@ -742,6 +776,8 @@ def schema_inputs(
         operator=operator,
         records={info.model_id: info for info in catalogue},
         records_as_of=as_of,
+        live=live,
+        litellm=litellm,
     )
 
 
@@ -750,6 +786,8 @@ def rail_model_schemas(
     surfaces: Sequence[MediaSurface] | None,
     rails: Iterable[MediaRail],
     inputs: MediaSchemaInputs,
+    *,
+    capability_profile: MediaCapabilityProfile | None = None,
 ) -> dict[str, dict[str, Any]]:
     """One rail model's schemas, for the operations its rails route.
 
@@ -771,6 +809,7 @@ def rail_model_schemas(
         learned=inputs.learned.get(model_ref, ()),
         supported_parameters=None if info is None else info.supported_parameters,
         provider_list_as_of=inputs.records_as_of,
+        capability_profile=capability_profile,
     )
 
 
