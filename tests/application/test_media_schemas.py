@@ -586,3 +586,49 @@ def test_no_model_name_branch() -> None:
         "gemini-",
     ):
         assert vendor not in lowered, vendor
+
+
+def test_optional_capability_profile_enriches_without_breaking_defaults() -> None:
+    from my_claude_code.application.media.capabilities import (
+        MediaCapabilityInputs,
+        resolve_media_capability_profile,
+    )
+    from my_claude_code.application.model_metadata import (
+        DeclaredModalities,
+        ProviderModelDeclaration,
+        ProviderModelInfo,
+    )
+
+    baseline = _schema(
+        image_generation_surface(), "image_generate", model_ref=AGNES_IMAGE
+    )
+    assert "capability_profile" not in baseline["x-mcc"]
+
+    profile = resolve_media_capability_profile(
+        AGNES_IMAGE,
+        MediaCapabilityInputs(
+            provider_info=ProviderModelInfo(
+                model_id="agnes-image-1",
+                supported_parameters=frozenset({"size", "n"}),
+                declared=ProviderModelDeclaration(
+                    modalities=DeclaredModalities(inputs=("text",), outputs=("image",))
+                ),
+            ),
+            surfaces=(image_generation_surface(),),
+        ),
+    )
+    enriched = request_schema(
+        model_ref=AGNES_IMAGE,
+        operation="image_generate",
+        surface=image_generation_surface(),
+        operator={},
+        learned=[],
+        capability_profile=profile,
+    )
+    assert _state(enriched, "size") == STATE_STATED
+    assert enriched["x-mcc"]["capability_profile"] == {
+        "operations": ["image_generate"],
+        "sync_mode": "sync",
+        "accepts_encodings": ["json"],
+        "supported_generation_methods": [],
+    }

@@ -828,3 +828,175 @@ def test_image_only_followup_user_turn_establishes_turn_boundary(
     )
     assert "extra_content" not in body["messages"][1]["tool_calls"][0]
     assert GEMINI_THOUGHT_SIGNATURE_SKIPPED not in notes
+
+
+@pytest.mark.asyncio
+async def test_gemini_native_models_enrichment_preserves_generation_methods():
+    from types import SimpleNamespace
+
+    import httpx
+
+    from my_claude_code.application.media.capabilities import (
+        MediaCapabilityInputs,
+        resolve_media_capability_profile,
+    )
+    from my_claude_code.application.model_kinds import resolve_model_kind
+    from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
+    from my_claude_code.core.model_ids import ResolutionTier
+
+    seen_requests: list[httpx.Request] = []
+
+    def transport_handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append(request)
+        if request.url.path == "/v1beta/models":
+            return httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "name": "models/gemini-2.5-flash",
+                            "inputTokenLimit": 1048576,
+                            "outputTokenLimit": 65536,
+                            "supportedGenerationMethods": [
+                                "generateContent",
+                                "predict",
+                            ],
+                        },
+                        {
+                            "name": "models/imagen-3.0-generate-002",
+                            "supportedGenerationMethods": ["predict"],
+                        },
+                        {
+                            "name": "models/veo-2.0-generate-001",
+                            "supportedGenerationMethods": ["predictLongRunning"],
+                        },
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    provider = GeminiProvider(
+        ProviderConfig(
+            api_key="test_gemini_key",
+            base_url=GEMINI_DEFAULT_BASE,
+            rate_limit=10,
+            rate_window=60,
+        ),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+    provider._client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(transport_handler)
+    )
+    provider._client.models.list = AsyncMock(
+        return_value=SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    id="gemini-2.5-flash", object="model", owned_by="google"
+                )
+            ]
+        )
+    )
+
+    infos = await provider.list_model_infos()
+    by_id = {info.model_id: info for info in infos}
+
+    assert set(by_id) == {
+        "gemini-2.5-flash",
+        "imagen-3.0-generate-002",
+        "veo-2.0-generate-001",
+    }
+    assert any(
+        req.url.path == "/v1beta/models"
+        and req.headers.get("x-goog-api-key") == "test_gemini_key"
+        for req in seen_requests
+    )
+
+    flash = by_id["gemini-2.5-flash"]
+    assert flash.context_length == 1048576
+    assert flash.max_output_tokens == 65536
+    # Chat compatibility: _generation_methods strips predict when generateContent is present.
+    assert flash.declared is not None
+    assert flash.declared.endpoints == ("generatecontent",)
+    # Media capability resolution still sees raw predict in published_row.
+    flash_profile = resolve_media_capability_profile(
+        "gemini/gemini-2.5-flash",
+        MediaCapabilityInputs(
+            provider_info=flash,
+            surfaces=PROVIDER_CATALOG["gemini"].media_surfaces,
+        ),
+    )
+    assert flash_profile.supported_generation_methods == frozenset(
+        {"generateContent", "predict"}
+    )
+    assert "image_generate" in flash_profile.operations
+
+    veo_profile = resolve_media_capability_profile(
+        "gemini/veo-2.0-generate-001",
+        MediaCapabilityInputs(
+            provider_info=by_id["veo-2.0-generate-001"],
+            surfaces=PROVIDER_CATALOG["gemini"].media_surfaces,
+        ),
+    )
+    assert veo_profile.supported_generation_methods == frozenset({"predictLongRunning"})
+    assert veo_profile.operations == frozenset({"video_create"})
+    assert veo_profile.sync_mode == "async_job"
+
+    # Native-only image/video models stay out of chat catalogues.
+    def kind_words(provider_id: str, model_id: str):
+        info = by_id.get(model_id)
+        if provider_id != "gemini" or info is None or info.declared is None:
+            return None, None
+        return info.declared.endpoints, ResolutionTier.PROVIDER_EXACT
+
+    def no_modalities(_provider_id: str, _model_id: str):
+        return None, None
+
+    veo_kind = resolve_model_kind(
+        "gemini/veo-2.0-generate-001",
+        modalities=no_modalities,
+        placements={},
+        kind_words=kind_words,
+    )
+    assert veo_kind.known and not veo_kind.chat_listable
+    assert veo_kind.offered_on("video")
+
+    imagen_kind = resolve_model_kind(
+        "gemini/imagen-3.0-generate-002",
+        modalities=no_modalities,
+        placements={},
+        kind_words=kind_words,
+    )
+    assert imagen_kind.known and not imagen_kind.chat_listable
+    assert imagen_kind.offered_on("image")
+
+
+@pytest.mark.asyncio
+async def test_gemini_native_models_404_gracefully_falls_back():
+    from types import SimpleNamespace
+
+    import httpx
+
+    provider = GeminiProvider(
+        ProviderConfig(
+            api_key="test_gemini_key",
+            base_url=GEMINI_DEFAULT_BASE,
+            rate_limit=10,
+            rate_window=60,
+        ),
+        rate_limiter=passthrough_rate_limiter(),
+    )
+    provider._client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _req: httpx.Response(404))
+    )
+    provider._client.models.list = AsyncMock(
+        return_value=SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    id="gemini-2.5-flash", object="model", owned_by="google"
+                )
+            ]
+        )
+    )
+
+    infos = await provider.list_model_infos()
+    assert {info.model_id for info in infos} == {"gemini-2.5-flash"}

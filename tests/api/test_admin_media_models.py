@@ -563,3 +563,38 @@ def test_forget_with_a_detail_retires_one_field_and_no_other(monkeypatch, tmp_pa
         "model_id": "google/veo-3.1",
         "fact_kind": "media_param_required",
     }
+
+
+def test_admin_media_capability_helpers(monkeypatch, tmp_path):
+    from my_claude_code.api.admin_media_routes import (
+        media_capability_summary,
+        ref_capability_profile,
+    )
+    from my_claude_code.application.media.schemas import schema_inputs
+    from my_claude_code.application.model_metadata import (
+        DeclaredModalities,
+        ProviderModelDeclaration,
+        ProviderModelInfo,
+    )
+    from my_claude_code.config.provider_catalog import PROVIDER_CATALOG
+
+    _settings(monkeypatch, tmp_path)
+    inputs = schema_inputs(
+        {},
+        [
+            ProviderModelInfo(
+                model_id=TOGETHER_IMAGE,
+                declared=ProviderModelDeclaration(
+                    modalities=DeclaredModalities(inputs=("text",), outputs=("image",))
+                ),
+            )
+        ],
+        operator=EMPTY_STATEMENTS,
+    )
+    profile = ref_capability_profile(
+        TOGETHER_IMAGE, PROVIDER_CATALOG["together"], inputs
+    )
+    summary = media_capability_summary(profile)
+    assert summary["operations"] == ["image_generate"]
+    assert summary["sync_mode"] == "sync"
+    assert summary["field_provenance"]["operations"]["source"] == "provider_list"

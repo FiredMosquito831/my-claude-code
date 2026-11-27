@@ -102,6 +102,9 @@ class LiveModel:
     #: ``YYYY-MM-DD``: the day OpenRouter listed it (its ``created``). Never a
     #: release date.
     listed_at: str | None = None
+    #: Gateway-published ``supported_parameters`` (e.g., ``seed``, ``aspect_ratio``),
+    #: read only by media capability discovery; chat never reads this field.
+    supported_parameters: frozenset[str] | None = None
 
     @property
     def feeds_ladder(self) -> bool:

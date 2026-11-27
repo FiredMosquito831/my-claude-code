@@ -1,9 +1,21 @@
 """Google AI Studio Gemini provider (OpenAI-compatible chat completions)."""
 
+import asyncio
+import json
+from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
+import httpx
+from loguru import logger
+
+from my_claude_code.application.model_metadata import (
+    ProviderModelDeclaration,
+    ProviderModelInfo,
+)
 from my_claude_code.config.credential_names import credential_fingerprint
+from my_claude_code.config.media_surfaces import GEMINI_API_KEY_HEADER
 from my_claude_code.core.anthropic import ReasoningReplayMode
 from my_claude_code.core.anthropic.models import MessagesRequest
 from my_claude_code.core.openai_responses import connection_id
@@ -15,6 +27,11 @@ from my_claude_code.core.reasoning import (
 from my_claude_code.providers.base import ProviderConfig
 from my_claude_code.providers.google_openai.signature_cache import (
     GOOGLE_THOUGHT_SIGNATURES,
+)
+from my_claude_code.providers.model_listing import (
+    declared_from_row,
+    published_row_text,
+    record_with_declared,
 )
 from my_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
@@ -113,6 +130,48 @@ class GeminiProvider(OpenAIChatProvider):
         ):
             self._tool_call_extra_content_by_id.pop(evicted[2], None)
 
+    async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
+        """Return primary OpenAI-compat models enriched with native ``/v1beta/models``."""
+        primary_infos = await super().list_model_infos()
+        native_payload = await self._fetch_native_models_payload()
+        if not isinstance(native_payload, Mapping):
+            return primary_infos
+        native_models = native_payload.get("models")
+        if not isinstance(native_models, list) or not native_models:
+            return primary_infos
+        return _merge_gemini_native_models(primary_infos, native_models)
+
+    async def _fetch_native_models_payload(self) -> Any:
+        """Fetch native Gemini ``/v1beta/models`` metadata; return ``None`` on error."""
+        http_client = getattr(self._client, "_client", None)
+        if not isinstance(http_client, httpx.AsyncClient):
+            return None
+        native_url = _gemini_native_models_url(self._base_url)
+        headers: dict[str, str] = {}
+        api_key = (
+            await self._api_key_provider()
+            if self._api_key_provider is not None
+            else self._api_key
+        )
+        if api_key:
+            headers[GEMINI_API_KEY_HEADER] = api_key
+        try:
+            response = await http_client.get(
+                native_url,
+                headers=headers,
+                params={"pageSize": "100"},
+            )
+            response.raise_for_status()
+            return response.json()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug(
+                "Gemini native model-list enrichment skipped: {}",
+                type(exc).__name__,
+            )
+            return None
+
     def _build_request_body(
         self,
         request: MessagesRequest,
@@ -142,6 +201,178 @@ class GeminiProvider(OpenAIChatProvider):
                 request.model
             ),
         )
+
+
+def _gemini_native_models_url(base_url: str) -> str:
+    """Derive the native ``.../models`` URL from Gemini's OpenAI-compat base URL."""
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/openai"):
+        normalized = normalized.removesuffix("/openai")
+    return f"{normalized}/models"
+
+
+def _normalize_gemini_native_id(name: Any) -> str | None:
+    if not isinstance(name, str):
+        return None
+    stripped = name.strip()
+    if not stripped:
+        return None
+    bare = stripped.removeprefix("models/")
+    return bare or None
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _merge_native_published_row(
+    existing_row: str | None, native_row: Mapping[str, Any]
+) -> str | None:
+    base: dict[str, Any] = {}
+    if existing_row:
+        try:
+            loaded = json.loads(existing_row)
+            if isinstance(loaded, dict):
+                base = loaded
+        except ValueError, TypeError:
+            base = {}
+    merged = dict(base)
+    for key in (
+        "name",
+        "displayName",
+        "description",
+        "inputTokenLimit",
+        "outputTokenLimit",
+        "supportedGenerationMethods",
+        "supported_generation_methods",
+        "temperature",
+        "topP",
+        "topK",
+        "maxTemperature",
+    ):
+        if key in native_row and (key not in merged or key.startswith("supported")):
+            merged[key] = native_row[key]
+    try:
+        return json.dumps(
+            merged, ensure_ascii=False, separators=(",", ":"), default=str
+        )
+    except Exception:
+        return existing_row
+
+
+def _merge_native_declared(
+    existing: ProviderModelDeclaration | None,
+    native_declared: ProviderModelDeclaration | None,
+) -> ProviderModelDeclaration | None:
+    if native_declared is None:
+        return existing
+    if existing is None:
+        return native_declared
+    endpoints = existing.endpoints
+    if native_declared.endpoints:
+        endpoints = tuple(
+            sorted(set(existing.endpoints or ()) | set(native_declared.endpoints))
+        )
+    return ProviderModelDeclaration(
+        modalities=existing.modalities
+        if existing.modalities is not None
+        else native_declared.modalities,
+        model_type=existing.model_type
+        if existing.model_type is not None
+        else native_declared.model_type,
+        endpoints=endpoints,
+        context_length=existing.context_length
+        if existing.context_length is not None
+        else native_declared.context_length,
+        max_output_tokens=existing.max_output_tokens
+        if existing.max_output_tokens is not None
+        else native_declared.max_output_tokens,
+        input_price=existing.input_price
+        if existing.input_price is not None
+        else native_declared.input_price,
+        output_price=existing.output_price
+        if existing.output_price is not None
+        else native_declared.output_price,
+        reasoning=existing.reasoning
+        if existing.reasoning is not None
+        else native_declared.reasoning,
+        tool_calls=existing.tool_calls
+        if existing.tool_calls is not None
+        else native_declared.tool_calls,
+        vision=existing.vision
+        if existing.vision is not None
+        else native_declared.vision,
+        published_at=existing.published_at
+        if existing.published_at is not None
+        else native_declared.published_at,
+        retires_at=existing.retires_at
+        if existing.retires_at is not None
+        else native_declared.retires_at,
+        knowledge_cutoff=existing.knowledge_cutoff
+        if existing.knowledge_cutoff is not None
+        else native_declared.knowledge_cutoff,
+        description=existing.description
+        if existing.description is not None
+        else native_declared.description,
+    )
+
+
+def _merge_gemini_native_models(
+    primary_infos: frozenset[ProviderModelInfo],
+    native_models: list[Any],
+) -> frozenset[ProviderModelInfo]:
+    by_id: dict[str, ProviderModelInfo] = {
+        info.model_id: info for info in primary_infos
+    }
+    for row in native_models:
+        if not isinstance(row, Mapping):
+            continue
+        bare_id = _normalize_gemini_native_id(row.get("name"))
+        if bare_id is None:
+            continue
+        native_declared = declared_from_row(row)
+        input_limit = _positive_int(row.get("inputTokenLimit"))
+        output_limit = _positive_int(row.get("outputTokenLimit"))
+
+        matched_key = (
+            bare_id
+            if bare_id in by_id
+            else (f"models/{bare_id}" if f"models/{bare_id}" in by_id else None)
+        )
+        if matched_key is not None:
+            existing = by_id[matched_key]
+            by_id[matched_key] = record_with_declared(
+                replace(
+                    existing,
+                    context_length=(
+                        existing.context_length
+                        if existing.context_length is not None
+                        else input_limit
+                    ),
+                    max_output_tokens=(
+                        existing.max_output_tokens
+                        if existing.max_output_tokens is not None
+                        else output_limit
+                    ),
+                    declared=_merge_native_declared(existing.declared, native_declared),
+                    published_row=_merge_native_published_row(
+                        existing.published_row, row
+                    ),
+                )
+            )
+        else:
+            by_id[bare_id] = record_with_declared(
+                ProviderModelInfo(
+                    model_id=bare_id,
+                    context_length=input_limit,
+                    max_output_tokens=output_limit,
+                    declared=native_declared,
+                    published_row=published_row_text(row),
+                )
+            )
+    return frozenset(by_id.values())
 
 
 __all__ = ["GeminiProvider"]
