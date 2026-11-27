@@ -19,8 +19,6 @@ Pure: no I/O, imports ``config`` and ``core``/``application`` only.
 Strictly ``IV.6``-compliant: zero model-name comparisons or vendor literals.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime

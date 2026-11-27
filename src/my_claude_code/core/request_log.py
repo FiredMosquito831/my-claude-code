@@ -4067,24 +4067,6 @@ class RequestLogStore:
                 }
                 if column not in columns:
                     raise
-
-    @staticmethod
-    def _ensure_media_job_columns(conn: sqlite3.Connection) -> None:
-        """Add dialect/poll/content columns to ``media_jobs`` created before 8.61.0."""
-        for column, ddl in _MEDIA_JOB_ADDED_COLUMNS:
-            columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
-            }
-            if column in columns:
-                continue
-            try:
-                conn.execute(ddl)
-            except sqlite3.OperationalError:
-                columns = {
-                    str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
-                }
-                if column not in columns:
-                    raise
         for index_sql in _ADDED_INDEXES:
             conn.execute(index_sql)
 
@@ -6679,24 +6661,6 @@ class RequestLogStore:
                     raise
 
     @staticmethod
-    def _ensure_media_job_columns(conn: sqlite3.Connection) -> None:
-        """Add dialect/poll/content columns to ``media_jobs`` created before 8.61.0."""
-        for column, ddl in _MEDIA_JOB_ADDED_COLUMNS:
-            columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
-            }
-            if column in columns:
-                continue
-            try:
-                conn.execute(ddl)
-            except sqlite3.OperationalError:
-                columns = {
-                    str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
-                }
-                if column not in columns:
-                    raise
-
-    @staticmethod
     def _ensure_rollup_counter_columns(conn: sqlite3.Connection) -> None:
         """Add a rollup counter declared after the table shipped.
 
@@ -7204,24 +7168,6 @@ class RequestLogStore:
                 columns = {
                     str(row[1])
                     for row in conn.execute("PRAGMA table_info(server_sessions)")
-                }
-                if column not in columns:
-                    raise
-
-    @staticmethod
-    def _ensure_media_job_columns(conn: sqlite3.Connection) -> None:
-        """Add dialect/poll/content columns to ``media_jobs`` created before 8.61.0."""
-        for column, ddl in _MEDIA_JOB_ADDED_COLUMNS:
-            columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
-            }
-            if column in columns:
-                continue
-            try:
-                conn.execute(ddl)
-            except sqlite3.OperationalError:
-                columns = {
-                    str(row[1]) for row in conn.execute("PRAGMA table_info(media_jobs)")
                 }
                 if column not in columns:
                     raise
