@@ -1,7 +1,5 @@
 """Contract & wheel packaging tests for the bundled ``mcc-media`` skill."""
 
-from __future__ import annotations
-
 import ast
 import os
 import shutil

@@ -8,8 +8,6 @@ without touching disk, and applies/updates/removes/reverts atomically with
 foreign-directory adoption and drift protection.
 """
 
-from __future__ import annotations
-
 import contextlib
 import hashlib
 import importlib.metadata

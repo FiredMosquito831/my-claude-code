@@ -1,7 +1,5 @@
 """Tests for ``mcc-apps skill-*`` CLI subcommands."""
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from pathlib import Path
 

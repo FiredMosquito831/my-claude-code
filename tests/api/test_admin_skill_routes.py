@@ -1,7 +1,5 @@
 """Tests for ``GET /admin/api/skills`` and ``POST /admin/api/skills/{target_id}/{plan,apply}``."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

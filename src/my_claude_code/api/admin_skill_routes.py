@@ -7,8 +7,6 @@ Three loopback-only routes matching the Desktop apps preview-then-apply pattern:
 ``POST /admin/api/skills/{target_id}/apply``  execute install/update/remove/revert
 """
 
-from __future__ import annotations
-
 import asyncio
 import os
 from typing import Any, Literal

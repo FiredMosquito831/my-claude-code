@@ -4,8 +4,6 @@ Uses Python's standard library only so the skill folder runs standalone in any
 coding-agent environment without installing extra packages.
 """
 
-from __future__ import annotations
-
 import argparse
 import base64
 import importlib.util

@@ -14,8 +14,6 @@ R14 precedence:
 4. MCC loopback defaults (``127.0.0.1:8082``).
 """
 
-from __future__ import annotations
-
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass

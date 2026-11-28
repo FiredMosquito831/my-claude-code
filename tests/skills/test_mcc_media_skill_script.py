@@ -1,7 +1,5 @@
 """Unit and fake-server integration tests for ``skills/mcc-media/scripts/``."""
 
-from __future__ import annotations
-
 import base64
 import importlib.util
 import json
