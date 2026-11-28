@@ -281,7 +281,7 @@ SKILL_TARGETS: tuple[SkillTargetSpec, ...] = (
         summary="Kimi Code's user skills directory (also scans ~/.agents/skills/).",
         display_path=f"~/.kimi/skills/{MCC_SKILL_NAME}",
         rungs=(
-            SkillPathRung(env_var="KIMI_CODE_HOME", parts=("skills", MCC_SKILL_NAME)),
+            SkillPathRung(env_var="KIMI_SHARE_DIR", parts=("skills", MCC_SKILL_NAME)),
             SkillPathRung(parts=(".kimi", "skills", MCC_SKILL_NAME)),
         ),
         harness_ids=("kimi_code",),
