@@ -791,3 +791,130 @@ def forget_mcp_record(subject: str, *, path: Path | None = None) -> None:
     updated[MCP_RECORD_KEY] = entries
     write_json_document_atomically(record_path, updated)
     _harden(record_path)
+
+
+# --------------------------------------------------------------------------
+# MCC's managed agent skill installs (8.73.0)
+# --------------------------------------------------------------------------
+
+#: Top-level key of the side record holding MCC's managed skill installs.
+SKILL_RECORD_KEY = "skills"
+
+
+@dataclass(frozen=True, slots=True)
+class SkillRecord:
+    """What MCC installed into one coding agent's skill directory."""
+
+    target_id: str
+    install_dir: str
+    skill_name: str
+    version: str
+    file_hashes: Mapping[str, str]
+    backup_dir: str = ""
+    created_dirs: tuple[str, ...] = ()
+    installed_at: str = ""
+
+    def as_payload(self) -> dict[str, object]:
+        return {
+            "target_id": self.target_id,
+            "install_dir": self.install_dir,
+            "skill_name": self.skill_name,
+            "version": self.version,
+            "file_hashes": dict(self.file_hashes),
+            "backup_dir": self.backup_dir,
+            "created_dirs": list(self.created_dirs),
+            "installed_at": self.installed_at,
+        }
+
+
+def _skill_records(record: Mapping[str, object]) -> dict[str, object]:
+    return _string_keyed(record.get(SKILL_RECORD_KEY)) or {}
+
+
+def _skill_record_from_payload(
+    target_id: str, payload: Mapping[str, object]
+) -> SkillRecord | None:
+    raw_hashes = _string_keyed(payload.get("file_hashes"))
+    if raw_hashes is None:
+        return None
+    file_hashes = {k: str(v) for k, v in raw_hashes.items()}
+    return SkillRecord(
+        target_id=str(payload.get("target_id", target_id)),
+        install_dir=str(payload.get("install_dir", "")),
+        skill_name=str(payload.get("skill_name", "")),
+        version=str(payload.get("version", "")),
+        file_hashes=file_hashes,
+        backup_dir=str(payload.get("backup_dir", "")),
+        created_dirs=tuple(str(item) for item in _items(payload, "created_dirs")),
+        installed_at=str(payload.get("installed_at", "")),
+    )
+
+
+def write_skill_record(entry: SkillRecord, *, path: Path | None = None) -> Path:
+    """Record a managed skill installation atomically inside restore-record.json."""
+
+    record_path = path if path is not None else restore_record_path()
+    record = _load_record(record_path)
+    entries = _skill_records(record)
+    stamped = entry
+    if not entry.installed_at:
+        stamped = SkillRecord(
+            target_id=entry.target_id,
+            install_dir=entry.install_dir,
+            skill_name=entry.skill_name,
+            version=entry.version,
+            file_hashes=dict(entry.file_hashes),
+            backup_dir=entry.backup_dir,
+            created_dirs=entry.created_dirs,
+            installed_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
+    entries[entry.target_id] = stamped.as_payload()
+    updated = dict(record)
+    updated[SKILL_RECORD_KEY] = entries
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_document_atomically(record_path, updated)
+    _harden(record_path)
+    return record_path
+
+
+def read_skill_record(
+    target_id: str, *, path: Path | None = None
+) -> SkillRecord | None:
+    """Return the managed skill record for one target, or None."""
+
+    record_path = path if path is not None else restore_record_path()
+    payload = _string_keyed(_skill_records(_load_record(record_path)).get(target_id))
+    if payload is None:
+        return None
+    return _skill_record_from_payload(target_id, payload)
+
+
+def read_all_skill_records(*, path: Path | None = None) -> dict[str, SkillRecord]:
+    """Return every managed skill record keyed by target_id."""
+
+    record_path = path if path is not None else restore_record_path()
+    raw = _skill_records(_load_record(record_path))
+    result: dict[str, SkillRecord] = {}
+    for target_id, value in raw.items():
+        payload = _string_keyed(value)
+        if payload is None:
+            continue
+        parsed = _skill_record_from_payload(target_id, payload)
+        if parsed is not None:
+            result[target_id] = parsed
+    return result
+
+
+def forget_skill_record(target_id: str, *, path: Path | None = None) -> None:
+    """Drop one target's managed skill record."""
+
+    record_path = path if path is not None else restore_record_path()
+    record = _load_record(record_path)
+    entries = _skill_records(record)
+    if target_id not in entries:
+        return
+    del entries[target_id]
+    updated = dict(record)
+    updated[SKILL_RECORD_KEY] = entries
+    write_json_document_atomically(record_path, updated)
+    _harden(record_path)
