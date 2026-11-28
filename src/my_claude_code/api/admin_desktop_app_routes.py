@@ -34,6 +34,7 @@ Every route is loopback-and-local-Origin only, through the same
 """
 
 import asyncio
+import contextlib
 import os
 import sys
 from typing import Any
@@ -561,6 +562,7 @@ async def undo_desktop_app(
     payload: DesktopUndoPayload,
     request: Request,
     settings: Settings = Depends(get_settings),
+    services: ApiServices = Depends(get_services),
 ):
     """Remove MCC's keys, and on request put back the values MCC replaced."""
 
@@ -584,9 +586,20 @@ async def undo_desktop_app(
         }
 
     try:
-        return await asyncio.to_thread(run)
+        answer = await asyncio.to_thread(run)
     except DesktopApplyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if answer.get("removed_mcp_server") and spec.id in {
+        "codex_desktop",
+        "opencode_desktop",
+    }:
+        with contextlib.suppress(Exception):
+            await services.admin.reload_providers(
+                reason="desktop mcp removed",
+                sweep=False,
+                rebuild_provider_ids=frozenset(),
+            )
+    return answer
 
 
 def _require_mcp(spec: DesktopAppSpec) -> None:
@@ -641,6 +654,7 @@ async def set_desktop_app_mcp(
     app_id: str,
     payload: DesktopMcpPayload,
     request: Request,
+    services: ApiServices = Depends(get_services),
 ):
     """Add MCC's media server to the app's own file, or take it out again.
 
@@ -669,6 +683,14 @@ async def set_desktop_app_mcp(
         }
 
     try:
-        return await asyncio.to_thread(run)
+        answer = await asyncio.to_thread(run)
     except DesktopApplyError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if answer.get("changed") and spec.id in {"codex_desktop", "opencode_desktop"}:
+        with contextlib.suppress(Exception):
+            await services.admin.reload_providers(
+                reason="desktop mcp updated",
+                sweep=False,
+                rebuild_provider_ids=frozenset(),
+            )
+    return answer

@@ -1765,6 +1765,9 @@ MOVED_VIEWS = {
     # the onboarding mediaTools rail count to 5.
     "model_config": "MEDIA_RAILS adds the OCR rail",
     "get_started": "onboarding mediaTools step reflects 5 rails",
+    # 8.74.0 (PR 39): Coding agents gains 3-state MCP mode controls, Agent Skill
+    # controls, and shared skill panel.
+    "coding_agents": "PR 39 adds 3-state MCP modes and mcc-media Agent Skill UI",
 }
 
 #: The base-written per-view digests. Recorded by running THIS harness against
@@ -12504,6 +12507,22 @@ RETIRED_COMMAND_ROW = re.compile(
 )
 
 
+SKILL_CONTROL_HOST = re.compile(
+    r'<div class="skill-control" data-skill-app="[^"]+" hidden=""></div>'
+)
+
+
+def _without_skill_control_hosts(dom):
+    if isinstance(dom, list):
+        return [_without_skill_control_hosts(entry) for entry in dom]
+    return SKILL_CONTROL_HOST.sub("", dom)
+
+
+def _count_skill_control_hosts(dom) -> int:
+    parts = dom if isinstance(dom, list) else [dom]
+    return sum(len(SKILL_CONTROL_HOST.findall(part)) for part in parts)
+
+
 def _without_retired_commands(dom):
     """Strip the retired command rows from one HTML string or a list of them.
 
@@ -13123,9 +13142,13 @@ def test_jsdom_coding_agents_filter_empty_query_is_the_base_trees_page_exactly(
     # command rows, which this release stops drawing. The exclusion is stated
     # as a count on both sides, so it can never quietly match nothing.
     base_without_legacy = _without_retired_commands(baseline["dom"]["children"])
-    mine_without_legacy = _without_retired_commands(dom["children"])
+    mine_without_legacy = _without_skill_control_hosts(
+        _without_retired_commands(dom["children"])
+    )
     assert _count_retired_command_rows(baseline["dom"]["children"]) > 0
     assert _count_retired_command_rows(dom["children"]) == 0
+    assert _count_skill_control_hosts(baseline["dom"]["children"]) == 0
+    assert _count_skill_control_hosts(dom["children"]) > 0
     assert mine_without_legacy == base_without_legacy
 
 
@@ -13446,9 +13469,11 @@ def test_jsdom_not_yet_card_is_the_only_thing_this_release_added(
     # normalised out on both sides with a count on each.
     assert _count_retired_command_rows(baseline["dom"]["children"]) > 0
     assert _count_retired_command_rows(not_yet_card["dom"]["children"]) == 0
-    assert _without_retired_commands(not_yet_card["dom"]["children"]) == (
-        _without_retired_commands(baseline["dom"]["children"])
-    )
+    assert _count_skill_control_hosts(baseline["dom"]["children"]) == 0
+    assert _count_skill_control_hosts(not_yet_card["dom"]["children"]) > 0
+    assert _without_skill_control_hosts(
+        _without_retired_commands(not_yet_card["dom"]["children"])
+    ) == (_without_retired_commands(baseline["dom"]["children"]))
     assert [
         {"id": card["id"], "title": card["title"]} for card in not_yet_card["cards"]
     ] == baseline["cards"]

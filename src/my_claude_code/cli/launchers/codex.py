@@ -21,6 +21,7 @@ from my_claude_code.config.atomic_json import (
 )
 from my_claude_code.config.mcp_media import (
     codex_config_arguments,
+    has_permanent_mcp_entry,
     mcp_media_command,
     mcp_media_on,
 )
@@ -135,6 +136,8 @@ def codex_mcp_config_args(settings: Settings, environ: Mapping[str, str]) -> lis
     """
 
     if not mcp_media_on(settings.mcp_media_apps, HARNESS_ID):
+        return []
+    if has_permanent_mcp_entry(HARNESS_ID, environ=environ):
         return []
     command = mcp_media_command()
     if command is None:

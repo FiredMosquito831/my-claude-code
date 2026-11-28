@@ -2959,15 +2959,19 @@ substitution.
 
 **Editor integrations** work the same way — Claude Code and Codex in VS Code, or Claude Code through JetBrains ACP. Point them at the proxy address and they behave normally.
 
-### Media tools for an agent: the MCC media server (7.99.0)
+### Media tools for an agent: the MCC media server (7.99.0 · 3-state modes & Skill in 8.74.0)
 
-An agent learns that MCC serves pictures, speech, transcripts and video from MCC's
-media server, `mcc-mcp`, and from nothing else: MCC never adds a tool to a request on
-its own. Add it to one agent at a time on the **Coding agents** page: each card has an
-**Add MCP server** button, and **Remove MCP server** puts back exactly what was there.
-The buttons write `MCP_MEDIA_APPS`, a comma list of app ids (`claude`, `codex`,
-`opencode`, `opencode2`, `kilo`, `crush`, `qwen_code`, `gemini_cli`, `claude_desktop`;
-empty, the default, adds it nowhere), which is also on that page.
+An agent learns that MCC serves pictures, speech, transcripts, video, and OCR from MCC's
+media server, `mcc-mcp`, or from the **mcc-media** Agent Skill (`~/.agents/skills/`, folder **mcc-media**),
+and from nothing else: MCC never adds a tool to a request on its own.
+On the **Coding agents** page (or with `mcc-apps mcp-list`, `mcc-apps mcp-status`,
+`mcc-apps mcp-mode`, `mcc-apps mcp-remove`, and `mcc-apps skill-install`), each agent
+selects one mutually exclusive mode: **Off**, **Launch only** (`MCP_MEDIA_APPS`, a comma
+list of app ids `claude`, `codex`, `opencode`, `opencode2`, `kilo`, `crush`, `qwen_code`,
+`gemini_cli`, `claude_desktop`), or **Permanent (user config)** with diff preview, one-time
+`.mcc-backup`, `409` foreign conflict protection, and **Remove & Restore**.
+When a permanent entry is present, `mcc-claude` and `mcc-codex` suppress duplicate launch-time
+injection automatically while preserving Codex's `supports_search_tool: false` fix.
 
 | With the button on | What MCC changes, and only that |
 |---|---|

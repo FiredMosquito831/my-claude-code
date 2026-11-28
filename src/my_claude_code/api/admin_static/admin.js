@@ -133,6 +133,11 @@ const state = {
   // Null until the Coding agents view is opened: the probe stats every marker
   // path on the machine, which is not work to do on a page nobody looked at.
   desktopApps: null,
+  mcpMedia: null,
+  skills: null,
+  skillTargetMessages: {},
+  mcpModeDiffState: null,
+  skillPlanModalState: null,
   // What the last Configure or Undo said, per app id. A write is followed by
   // a reload, which rebuilds the card and would otherwise discard the one
   // sentence telling the user what just happened to their file.
@@ -29714,6 +29719,7 @@ async function loadHarnesses() {
   // server card. Its own request and its own failure: the cards above are
   // complete without it, and fill their button in when it lands.
   await loadMcpMedia();
+  await loadSkills();
 }
 
 function renderHarnesses(errorMessage) {
@@ -29732,6 +29738,7 @@ function renderHarnesses(errorMessage) {
   (state.harnesses || []).forEach((harness) => {
     const card = harnessCard(harness);
     card.append(mcpMediaControlHost(harness.id));
+    card.append(skillControlHost(harness.id));
     // 7.102.0: the Install button, filled from /admin/api/agent-installs.
     card.append(agentInstallHost(harness.id));
     list.append(card);
@@ -29752,6 +29759,7 @@ function renderHarnesses(errorMessage) {
     list.append(notYetCard(entry));
   });
   renderMcpMediaControls();
+  renderSkillControls();
   renderAgentInstallControls();
   syncRoutePauseUi();
   // 7.113.3: a re-render (an Install finishing, a tier save) rebuilds the
@@ -30103,10 +30111,12 @@ function renderDesktopApps(errorMessage) {
     // the fallback below MCC's own document), or why there is none yet.
     const fileControl = desktopMcpSection(app);
     if (fileControl) card.append(fileControl);
+    card.append(skillControlHost(app.id));
     card.append(agentInstallHost(app.id));
     list.append(card);
   });
   renderMcpMediaControls();
+  renderSkillControls();
   renderAgentInstallControls();
   // 7.113.3: see renderHarnesses -- the same query survives the re-render.
   applyCodingAgentsFilter();
@@ -30723,54 +30733,769 @@ function mcpMediaParagraph(className, text) {
   return paragraph;
 }
 
+function isPermanentOn(app) {
+  if (!app) return false;
+  return (
+    app.permanent_state === "configured" ||
+    app.permanent_state === "drifted" ||
+    app.mode === "permanent" ||
+    app.mode === "both"
+  );
+}
+
+function effectiveMcpMode(app) {
+  if (!app) return "off";
+  if (app.mode) return app.mode;
+  if (app.on && isPermanentOn(app)) return "both";
+  if (isPermanentOn(app)) return "permanent";
+  return app.on ? "launch" : "off";
+}
+
 function fillMcpMediaControl(host, app) {
   host.textContent = "";
   host.hidden = !app;
   if (!app) return;
-  if (app.support !== "button") {
-    host.append(
-      mcpMediaParagraph(
-        "mcp-media-state",
-        MCP_MEDIA_SUPPORT_LABELS[app.support] || "MCP server: not available",
+  if (!app.permanent_supported) {
+    if (app.support !== "button") {
+      host.append(
+        mcpMediaParagraph(
+          "mcp-media-state",
+          MCP_MEDIA_SUPPORT_LABELS[app.support] || "MCP server: not available",
+        ),
+      );
+      if (app.note) host.append(mcpMediaParagraph("mcp-media-note", app.note));
+      return;
+    }
+    const media = state.mcpMedia || {};
+    const line = document.createElement("p");
+    line.className = "mcp-media-state";
+    const pill = document.createElement("span");
+    pill.className = app.on ? "status-pill ok" : "status-pill";
+    pill.textContent = app.on ? "MCP server added" : "No MCP server";
+    line.append(
+      pill,
+      document.createTextNode(
+        app.on
+          ? " This agent is offered MCC's media tools."
+          : " This agent is not offered MCC's media tools.",
       ),
     );
+    host.append(line);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = app.on
+      ? "secondary-button mcp-media-button"
+      : "primary-button mcp-media-button";
+    button.dataset.mcpApp = app.app_id;
+    button.dataset.mcpAction = app.on ? "remove" : "add";
+    button.textContent = app.on ? "Remove MCP server" : "Add MCP server";
+    if (!app.on && media.installed === false) {
+      button.disabled = true;
+      button.title = "mcc-mcp is not installed beside MCC. Reinstall or update MCC.";
+    }
+    button.addEventListener("click", () => toggleMcpMedia(app, button));
+    host.append(button);
+
+    if (app.pending) host.append(mcpMediaParagraph("mcp-media-pending", app.pending));
+    if (app.asks) host.append(mcpMediaParagraph("mcp-media-note", app.asks));
     if (app.note) host.append(mcpMediaParagraph("mcp-media-note", app.note));
     return;
   }
+
   const media = state.mcpMedia || {};
+  const mode = effectiveMcpMode(app);
+  const permOn = isPermanentOn(app);
+  const targetId = app.permanent_target_id || app.app_id;
   const line = document.createElement("p");
   line.className = "mcp-media-state";
   const pill = document.createElement("span");
-  pill.className = app.on ? "status-pill ok" : "status-pill";
-  pill.textContent = app.on ? "MCP server added" : "No MCP server";
-  line.append(
-    pill,
-    document.createTextNode(
-      app.on
-        ? " This agent is offered MCC's media tools."
-        : " This agent is not offered MCC's media tools.",
-    ),
-  );
+  pill.className =
+    mode === "both"
+      ? "status-pill warn"
+      : mode === "launch" || mode === "permanent"
+        ? "status-pill ok"
+        : "status-pill";
+  pill.textContent =
+    mode === "off" ? "No MCP server" : "MCP server added";
+  let statusDetail = " Off — MCC's media tools are not offered to this agent.";
+  if (mode === "launch") {
+    statusDetail = " Launch only — injected per run via MCC's launcher.";
+  } else if (mode === "permanent") {
+    statusDetail = ` Permanent (user config) — written to ${app.permanent_display_path || "your config"}.`;
+  } else if (mode === "both") {
+    statusDetail =
+      " Launch + Permanent — permanent config is active; launch injection is suppressed cleanly.";
+  }
+  line.append(pill, document.createTextNode(statusDetail));
   host.append(line);
 
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = app.on
-    ? "secondary-button mcp-media-button"
-    : "primary-button mcp-media-button";
-  button.dataset.mcpApp = app.app_id;
-  button.dataset.mcpAction = app.on ? "remove" : "add";
-  button.textContent = app.on ? "Remove MCP server" : "Add MCP server";
-  if (!app.on && media.installed === false) {
-    button.disabled = true;
-    button.title = "mcc-mcp is not installed beside MCC. Reinstall or update MCC.";
-  }
-  button.addEventListener("click", () => toggleMcpMedia(app, button));
-  host.append(button);
+  const modeRow = document.createElement("div");
+  modeRow.className = "mcp-mode-row";
+  const group = document.createElement("div");
+  group.className = "mcp-mode-group";
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", `${app.display_name} MCP server mode`);
 
+  const choices = [
+    { id: "off", label: "Off" },
+    ...(app.support === "button" ? [{ id: "launch", label: "Launch only" }] : []),
+    { id: "permanent", label: "Permanent (user config)" },
+  ];
+  choices.forEach((choice) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    const isActive =
+      choice.id === mode || (choice.id === "permanent" && mode === "both");
+    btn.className = isActive ? "mcp-mode-btn active" : "mcp-mode-btn";
+    btn.dataset.mcpApp = app.app_id;
+    btn.dataset.mcpMode = choice.id;
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+    btn.textContent = choice.label;
+    if (choice.id !== "off" && media.installed === false) {
+      btn.disabled = true;
+      btn.title = "mcc-mcp is not installed beside MCC. Reinstall or update MCC.";
+    }
+    btn.addEventListener("click", () => selectMcpMediaMode(app, choice.id, btn));
+    group.append(btn);
+  });
+  modeRow.append(group);
+
+  const actions = document.createElement("div");
+  actions.className = "mcp-mode-actions";
+  const diffBtn = document.createElement("button");
+  diffBtn.type = "button";
+  diffBtn.className = "secondary-button mcp-media-button";
+  diffBtn.dataset.role = "mcp-mode-diff";
+  diffBtn.dataset.mcpApp = app.app_id;
+  diffBtn.textContent = permOn ? "Diff" : "Preview diff";
+  diffBtn.addEventListener("click", () =>
+    openMcpModeDiffModal({
+      app,
+      targetId,
+      add: true,
+      targetMode: mode === "permanent" || mode === "both" ? null : "permanent",
+    }),
+  );
+  actions.append(diffBtn);
+
+  if (permOn || app.restorable) {
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "secondary-button mcp-media-button";
+    removeBtn.dataset.role = "mcp-mode-remove-restore";
+    removeBtn.dataset.mcpApp = app.app_id;
+    removeBtn.textContent = "Remove & Restore";
+    removeBtn.addEventListener("click", () =>
+      openMcpModeDiffModal({
+        app,
+        targetId,
+        add: false,
+        targetMode: "off",
+        preferRestore: true,
+      }),
+    );
+    actions.append(removeBtn);
+  }
+  modeRow.append(actions);
+  host.append(modeRow);
+
+  if (app.conflict_warning) {
+    host.append(mcpMediaParagraph("mcp-media-pending", app.conflict_warning));
+  } else if (app.permanent_state === "foreign") {
+    host.append(
+      mcpMediaParagraph(
+        "mcp-media-pending",
+        `Foreign mcc_media entry detected in ${app.permanent_display_path || "user config"}; MCC will not overwrite or remove it.`,
+      ),
+    );
+  } else if (app.permanent_state === "unreadable" || app.permanent_state === "managed") {
+    host.append(
+      mcpMediaParagraph(
+        "mcp-media-pending",
+        app.permanent_reason || "User config cannot be edited safely by MCC.",
+      ),
+    );
+  } else if (app.permanent_state === "drifted") {
+    host.append(
+      mcpMediaParagraph(
+        "mcp-media-pending",
+        "Permanent user config differs from MCC's current mcc_media entry. Press Diff to inspect or update it.",
+      ),
+    );
+  }
+  if (app.permanent_display_path) {
+    const backupNote = app.permanent_backup_path
+      ? ` (backup: ${app.permanent_backup_path})`
+      : "";
+    host.append(
+      mcpMediaParagraph(
+        "mcp-media-note",
+        `User config: ${app.permanent_display_path}${backupNote}`,
+      ),
+    );
+  }
   if (app.pending) host.append(mcpMediaParagraph("mcp-media-pending", app.pending));
   if (app.asks) host.append(mcpMediaParagraph("mcp-media-note", app.asks));
   if (app.note) host.append(mcpMediaParagraph("mcp-media-note", app.note));
+}
+
+async function selectMcpMediaMode(app, targetMode, button) {
+  const current = effectiveMcpMode(app);
+  const permOn = isPermanentOn(app);
+  const targetId = app.permanent_target_id || app.app_id;
+  if (
+    targetMode === current &&
+    !(targetMode === "permanent" && (app.permanent_state === "drifted" || app.permanent_state === "foreign"))
+  ) {
+    return;
+  }
+  if (targetMode === "permanent") {
+    await openMcpModeDiffModal({ app, targetId, add: true, targetMode: "permanent" });
+    return;
+  }
+  if (permOn) {
+    await openMcpModeDiffModal({
+      app,
+      targetId,
+      add: false,
+      targetMode,
+      preferRestore: false,
+    });
+    return;
+  }
+  button.disabled = true;
+  try {
+    await applyMcpMediaMode({ appId: app.app_id, mode: targetMode, undoMode: "keys_only" });
+  } catch (error) {
+    button.disabled = false;
+    showMessage(error.message, "error");
+  }
+}
+
+async function applyMcpMediaMode({ appId, mode, undoMode }) {
+  const result = await api("/admin/api/mcp-media/mode", {
+    method: "POST",
+    body: JSON.stringify({
+      app: appId,
+      mode,
+      undo_mode: undoMode || "keys_only",
+    }),
+  });
+  state.mcpMedia = result;
+  syncMcpMediaField(result.apps_value);
+  renderMcpMediaCard();
+  renderMcpMediaControls();
+  showMessage(result.message || "Saved MCP mode.", "ok");
+  const desktopCard = Array.from(
+    document.querySelectorAll("[data-desktop-app]"),
+  ).some((card) => card.dataset.desktopApp === appId);
+  if (desktopCard) {
+    loadDesktopApps().catch((error) => showMessage(error.message, "error"));
+  }
+  return result;
+}
+
+async function openMcpModeDiffModal({ app, targetId, add, targetMode, preferRestore = false }) {
+  const modal = byId("mcpModeDiffModal");
+  const title = byId("mcpModeDiffTitle");
+  const pathEl = byId("mcpModeDiffPath");
+  const body = byId("mcpModeDiffBody");
+  const restoreWrap = byId("mcpModeDiffConfirmRestoreWrap");
+  const restoreCheck = byId("mcpModeDiffRestoreCheck");
+  const confirmBtn = byId("mcpModeDiffConfirm");
+
+  state.mcpModeDiffState = {
+    app,
+    targetId,
+    add: Boolean(add),
+    targetMode,
+    undoMode: preferRestore ? "restore" : "keys_only",
+  };
+  title.textContent = add
+    ? `${app.display_name}: preview permanent MCP config`
+    : `${app.display_name}: remove permanent MCP config`;
+  pathEl.textContent = app.permanent_display_path || targetId;
+  restoreCheck.checked = Boolean(preferRestore);
+  restoreWrap.hidden = Boolean(add);
+  confirmBtn.disabled = true;
+  body.textContent = "";
+  body.append(mcpMediaParagraph("mcp-media-note", "Planning diff…"));
+  modal.hidden = false;
+  await refreshMcpModeDiffPlan();
+}
+
+async function refreshMcpModeDiffPlan() {
+  const ctx = state.mcpModeDiffState;
+  if (!ctx) return;
+  const pathEl = byId("mcpModeDiffPath");
+  const body = byId("mcpModeDiffBody");
+  const restoreWrap = byId("mcpModeDiffConfirmRestoreWrap");
+  const confirmBtn = byId("mcpModeDiffConfirm");
+  body.textContent = "";
+  try {
+    const plan = await api(
+      `/admin/api/mcp-media/permanent/${encodeURIComponent(ctx.targetId)}/plan`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          add: ctx.add,
+          mode: ctx.undoMode,
+        }),
+      },
+    );
+    ctx.lastPlan = plan;
+    pathEl.textContent = plan.document_path || ctx.app.permanent_display_path || ctx.targetId;
+    restoreWrap.hidden = ctx.add || !plan.restorable;
+    if (plan.backup_path && plan.backup_exists) {
+      body.append(
+        mcpMediaParagraph("mcp-media-note", `Backup kept at: ${plan.backup_path}`),
+      );
+    } else if (ctx.add && !plan.no_op && !plan.will_create_file) {
+      body.append(
+        mcpMediaParagraph(
+          "mcp-media-note",
+          "First write copies your existing file to a sibling .mcc-backup once.",
+        ),
+      );
+    }
+    const diffPre = document.createElement("pre");
+    diffPre.className = "mcp-mode-diff-pre";
+    diffPre.textContent =
+      plan.diff ||
+      (plan.no_op ? "No file changes needed." : "(No unified diff returned.)");
+    body.append(diffPre);
+    confirmBtn.disabled = Boolean(plan.no_op && !ctx.targetMode);
+    confirmBtn.textContent = ctx.add
+      ? "Write permanent config"
+      : ctx.undoMode === "restore"
+        ? "Remove & Restore"
+        : "Remove MCC entry";
+  } catch (error) {
+    restoreWrap.hidden = true;
+    body.append(mcpMediaParagraph("mcp-media-pending", error.message));
+    confirmBtn.disabled = true;
+  }
+}
+
+function closeMcpModeDiffModal() {
+  byId("mcpModeDiffModal").hidden = true;
+  state.mcpModeDiffState = null;
+}
+
+async function confirmMcpModeDiffModal() {
+  const ctx = state.mcpModeDiffState;
+  if (!ctx) return;
+  const confirmBtn = byId("mcpModeDiffConfirm");
+  confirmBtn.disabled = true;
+  try {
+    if (ctx.targetMode) {
+      await applyMcpMediaMode({
+        appId: ctx.app.app_id,
+        mode: ctx.targetMode,
+        undoMode: ctx.undoMode,
+      });
+    } else {
+      const res = await api(
+        `/admin/api/mcp-media/permanent/${encodeURIComponent(ctx.targetId)}/apply`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            add: ctx.add,
+            mode: ctx.undoMode,
+          }),
+        },
+      );
+      state.mcpMedia = res;
+      syncMcpMediaField(res.apps_value);
+      renderMcpMediaCard();
+      renderMcpMediaControls();
+      loadDesktopApps().catch(() => {});
+      showMessage(res.message || "Updated permanent MCP config.", "ok");
+    }
+    closeMcpModeDiffModal();
+  } catch (error) {
+    confirmBtn.disabled = false;
+    showMessage(error.message, "error");
+  }
+}
+
+const DESKTOP_SKILL_ALIASES = {
+  claude_desktop: "claude",
+  codex_desktop: "codex",
+  opencode_desktop: "opencode",
+  commandcode: "commandcode_cli",
+  goose_desktop: "goose",
+  crush_desktop: "crush",
+  kimi_desktop: "kimi_code",
+  qwen_desktop: "qwen_code",
+  antigravity: "antigravity",
+};
+
+async function loadSkills() {
+  try {
+    state.skills = await api("/admin/api/skills");
+  } catch (error) {
+    state.skills = { error: error.message, targets: [] };
+  }
+  renderMcpMediaCard();
+  renderSkillControls();
+}
+
+function skillTargetById(targetId) {
+  const targets = (state.skills && state.skills.targets) || [];
+  return targets.find((target) => target.id === targetId) || null;
+}
+
+function skillTargetForApp(appId) {
+  const targets = (state.skills && state.skills.targets) || [];
+  const aliased = DESKTOP_SKILL_ALIASES[appId] || appId;
+  return (
+    targets.find((target) => target.id === appId) ||
+    targets.find((target) => target.id === aliased) ||
+    targets.find(
+      (target) =>
+        target.id !== "shared_agents" &&
+        Array.isArray(target.harness_ids) &&
+        target.harness_ids.includes(appId),
+    ) ||
+    targets.find(
+      (target) =>
+        Array.isArray(target.harness_ids) && target.harness_ids.includes(appId),
+    ) ||
+    null
+  );
+}
+
+function skillControlHost(appId) {
+  const host = document.createElement("div");
+  host.className = "skill-control";
+  host.dataset.skillApp = appId;
+  host.hidden = true;
+  return host;
+}
+
+function renderSkillControls() {
+  document.querySelectorAll(".skill-control").forEach((host) => {
+    fillSkillControl(host, skillTargetForApp(host.dataset.skillApp), host.dataset.skillApp);
+  });
+  applyCodingAgentsFilter();
+}
+
+function skillStateLabel(target) {
+  if (!target) return "Not installed";
+  if (target.state === "foreign") return "Foreign conflict";
+  if (target.state === "drifted") return "Skill drifted";
+  if (target.update_available) return "Update available";
+  if (target.installed) return "Skill installed";
+  return "Not installed";
+}
+
+function skillStatePillClass(target) {
+  if (!target || !target.installed) {
+    return target && target.state === "foreign" ? "status-pill warn" : "status-pill";
+  }
+  if (target.state === "drifted" || target.state === "foreign" || target.update_available) {
+    return "status-pill warn";
+  }
+  return "status-pill ok";
+}
+
+function createSkillActionButtons(target, { installLabel = "Install skill" } = {}) {
+  const row = document.createElement("div");
+  row.className = "skill-control-actions";
+  const addAction = (label, action, primary = false) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = primary
+      ? "primary-button mcp-media-button"
+      : "secondary-button mcp-media-button";
+    btn.dataset.skillTarget = target.id;
+    btn.dataset.skillAction = action;
+    btn.textContent = label;
+    btn.addEventListener("click", () =>
+      openSkillPlanModal({
+        target,
+        action,
+      }),
+    );
+    row.append(btn);
+  };
+  if (!target.installed) {
+    addAction(installLabel, "install", true);
+  } else {
+    if (target.update_available) addAction("Update skill", "update", true);
+    addAction("Preview diff", target.update_available ? "update" : "install", false);
+    if (target.revertable) addAction("Revert", "revert", false);
+    addAction("Remove skill", "remove", false);
+  }
+  return row;
+}
+
+function fillSkillControl(host, target, appId) {
+  host.textContent = "";
+  host.hidden = !target;
+  if (!target) return;
+
+  const header = document.createElement("p");
+  header.className = "skill-control-header";
+  const pill = document.createElement("span");
+  pill.className = skillStatePillClass(target);
+  pill.textContent = skillStateLabel(target);
+  const versionSuffix = target.installed_version ? ` (v${target.installed_version})` : "";
+  const sharedSuffix =
+    target.aliases_shared_agents && target.id !== "agents"
+      ? " — shares ~/.agents/skills/mcc-media"
+      : "";
+  header.append(
+    pill,
+    document.createTextNode(` Agent Skill${versionSuffix}${sharedSuffix}`),
+  );
+  host.append(header);
+  host.append(
+    mcpMediaParagraph(
+      "mcp-media-note",
+      `Skill dir: ${target.display_path || target.install_dir}`,
+    ),
+  );
+  if (target.warning) {
+    host.append(mcpMediaParagraph("mcp-media-pending", target.warning));
+  }
+  host.append(createSkillActionButtons(target));
+  const msg = state.skillTargetMessages && state.skillTargetMessages[target.id];
+  if (msg) {
+    host.append(mcpMediaParagraph("desktop-app-status", `${appId === target.id ? "" : `${target.display_name}: `}${msg}`));
+  }
+}
+
+async function openSkillPlanModal({ target, action }) {
+  const modal = byId("skillPlanModal");
+  const title = byId("skillPlanTitle");
+  const pathEl = byId("skillPlanPath");
+  const body = byId("skillPlanBody");
+  const flagsWrap = byId("skillPlanFlagsWrap");
+  const forceCheck = byId("skillPlanForceCheck");
+  const adoptCheck = byId("skillPlanAdoptCheck");
+  const confirmBtn = byId("skillPlanConfirm");
+
+  state.skillPlanModalState = {
+    target,
+    action,
+    force: false,
+    adopt: false,
+  };
+  title.textContent = `${target.display_name}: ${action} mcc-media skill`;
+  pathEl.textContent = target.display_path || target.install_dir || target.id;
+  forceCheck.checked = false;
+  adoptCheck.checked = false;
+  flagsWrap.hidden = true;
+  confirmBtn.disabled = true;
+  body.textContent = "";
+  body.append(mcpMediaParagraph("mcp-media-note", "Planning skill changes…"));
+  modal.hidden = false;
+  await refreshSkillPlan();
+}
+
+async function refreshSkillPlan() {
+  const ctx = state.skillPlanModalState;
+  if (!ctx) return;
+  const body = byId("skillPlanBody");
+  const pathEl = byId("skillPlanPath");
+  const flagsWrap = byId("skillPlanFlagsWrap");
+  const confirmBtn = byId("skillPlanConfirm");
+  body.textContent = "";
+  try {
+    const plan = await api(
+      `/admin/api/skills/${encodeURIComponent(ctx.target.id)}/plan`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          action: ctx.action,
+          force: ctx.force,
+          adopt: ctx.adopt,
+        }),
+      },
+    );
+    ctx.lastPlan = plan;
+    pathEl.textContent = plan.install_dir || ctx.target.display_path || ctx.target.id;
+    const needsFlags =
+      Boolean(plan.warning) ||
+      ctx.target.foreign ||
+      ctx.target.drifted ||
+      plan.state === "foreign" ||
+      plan.state === "drifted";
+    flagsWrap.hidden = !needsFlags || ctx.action === "revert";
+
+    if (plan.warning) {
+      body.append(mcpMediaParagraph("mcp-media-pending", plan.warning));
+    }
+    if (plan.backup_dir) {
+      body.append(
+        mcpMediaParagraph("mcp-media-note", `Backup dir: ${plan.backup_dir}`),
+      );
+    }
+    const lines = [];
+    (plan.files_to_create || []).forEach((f) => lines.push(`+ ${f}`));
+    (plan.files_to_update || []).forEach((f) => lines.push(`~ ${f}`));
+    (plan.files_to_delete || []).forEach((f) => lines.push(`- ${f}`));
+    const pre = document.createElement("pre");
+    pre.className = "mcp-mode-diff-pre";
+    pre.textContent = lines.length
+      ? lines.join("\n")
+      : plan.no_op
+        ? "No file changes (already matches or blocked by warning)."
+        : "No file edits listed.";
+    body.append(pre);
+    confirmBtn.disabled = Boolean(plan.no_op);
+    confirmBtn.textContent =
+      ctx.action === "remove"
+        ? "Remove skill"
+        : ctx.action === "revert"
+          ? "Revert skill"
+          : ctx.action === "update"
+            ? "Update skill"
+            : "Install skill";
+  } catch (error) {
+    body.append(mcpMediaParagraph("mcp-media-pending", error.message));
+    confirmBtn.disabled = true;
+  }
+}
+
+function closeSkillPlanModal() {
+  byId("skillPlanModal").hidden = true;
+  state.skillPlanModalState = null;
+}
+
+async function confirmSkillPlanModal() {
+  const ctx = state.skillPlanModalState;
+  if (!ctx) return;
+  const confirmBtn = byId("skillPlanConfirm");
+  confirmBtn.disabled = true;
+  try {
+    const res = await api(
+      `/admin/api/skills/${encodeURIComponent(ctx.target.id)}/apply`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          action: ctx.action,
+          force: ctx.force,
+          adopt: ctx.adopt,
+        }),
+      },
+    );
+    state.skillTargetMessages[ctx.target.id] = res.changed
+      ? `${ctx.action} applied (${res.install_dir}).`
+      : "No changes written.";
+    closeSkillPlanModal();
+    await loadSkills();
+    showMessage(state.skillTargetMessages[ctx.target.id], "ok");
+  } catch (error) {
+    confirmBtn.disabled = false;
+    showMessage(error.message, "error");
+  }
+}
+
+function initMcpModeAndSkillDialogs() {
+  const mcpModal = byId("mcpModeDiffModal");
+  dialogKit({ modal: mcpModal, close: closeMcpModeDiffModal });
+  byId("mcpModeDiffClose").addEventListener("click", closeMcpModeDiffModal);
+  byId("mcpModeDiffCancel").addEventListener("click", closeMcpModeDiffModal);
+  byId("mcpModeDiffConfirm").addEventListener("click", confirmMcpModeDiffModal);
+  byId("mcpModeDiffRestoreCheck").addEventListener("change", (event) => {
+    if (!state.mcpModeDiffState) return;
+    state.mcpModeDiffState.undoMode = event.target.checked ? "restore" : "keys_only";
+    refreshMcpModeDiffPlan();
+  });
+
+  const skillModal = byId("skillPlanModal");
+  dialogKit({ modal: skillModal, close: closeSkillPlanModal });
+  byId("skillPlanClose").addEventListener("click", closeSkillPlanModal);
+  byId("skillPlanCancel").addEventListener("click", closeSkillPlanModal);
+  byId("skillPlanConfirm").addEventListener("click", confirmSkillPlanModal);
+  byId("skillPlanForceCheck").addEventListener("change", (event) => {
+    if (!state.skillPlanModalState) return;
+    state.skillPlanModalState.force = Boolean(event.target.checked);
+    refreshSkillPlan();
+  });
+  byId("skillPlanAdoptCheck").addEventListener("change", (event) => {
+    if (!state.skillPlanModalState) return;
+    state.skillPlanModalState.adopt = Boolean(event.target.checked);
+    refreshSkillPlan();
+  });
+}
+
+function renderSharedSkillPanel() {
+  const panel = document.createElement("div");
+  panel.className = "skill-media-panel";
+  const skillState = state.skills;
+  if (!skillState) return panel;
+  if (skillState.error) {
+    panel.append(
+      mcpMediaParagraph(
+        "mcp-media-pending",
+        `Could not read Agent Skill state: ${skillState.error}`,
+      ),
+    );
+    return panel;
+  }
+  const bundle = skillState.skill || {};
+  const shared = skillTargetById("shared_agents") || skillTargetById("agents");
+  const titleLine = document.createElement("p");
+  titleLine.className = "mcp-media-state";
+  const pill = document.createElement("span");
+  pill.className = skillStatePillClass(shared);
+  pill.textContent = shared ? skillStateLabel(shared) : "Not installed";
+  const fileCount = Array.isArray(bundle.files) ? bundle.files.length : 0;
+  titleLine.append(
+    pill,
+    document.createTextNode(
+      ` Shared mcc-media Agent Skill (~/.agents/skills/mcc-media · v${bundle.version || "8.74.0"} · ${fileCount} files, ${formatToolBytes(bundle.total_bytes)})`,
+    ),
+  );
+  panel.append(titleLine);
+
+  if (shared) {
+    if (shared.warning) {
+      panel.append(mcpMediaParagraph("mcp-media-pending", shared.warning));
+    }
+    panel.append(
+      createSkillActionButtons(shared, { installLabel: "Install Shared Skill" }),
+    );
+  }
+  const scriptPath = shared && shared.install_dir
+    ? `${shared.install_dir}/scripts/mcc_media.py`
+    : "~/.agents/skills/mcc-media/scripts/mcc_media.py";
+  const copyCmd = `python "${scriptPath}" models`;
+  const copyRow = document.createElement("div");
+  copyRow.className = "skill-copy-row";
+  const copyPre = document.createElement("pre");
+  copyPre.className = "skill-copy-pre";
+  copyPre.textContent = copyCmd;
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "secondary-button mcp-media-button";
+  copyBtn.textContent = "Copy CLI line";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(copyCmd);
+        showMessage("Copied skill CLI command.", "ok");
+      } else {
+        showMessage(copyCmd, "ok");
+      }
+    } catch (_) {
+      showMessage(copyCmd, "ok");
+    }
+  });
+  copyRow.append(copyPre, copyBtn);
+  panel.append(copyRow);
+  panel.append(
+    mcpMediaParagraph(
+      "mcp-media-note",
+      "Reads MCC_BASE_URL and ANTHROPIC_AUTH_TOKEN from MCC settings; outputs honor MCC_MEDIA_OUTPUT_DIR, and inline previews honor MCC_MCP_INLINE_IMAGES.",
+    ),
+  );
+  return panel;
 }
 
 async function toggleMcpMedia(app, button) {
@@ -30857,6 +31582,19 @@ function renderMcpMediaCard() {
         : "Added to no agent yet. Press Add MCP server on an agent's card.",
     ),
   );
+  const permTargets = (media.permanent_targets || []).filter(
+    (t) => t.state === "configured" || t.state === "drifted",
+  );
+  if (Array.isArray(media.permanent_targets)) {
+    body.append(
+      mcpMediaParagraph(
+        "mcp-media-note",
+        permTargets.length
+          ? `Permanent user configs (${permTargets.length}): ${permTargets.map((t) => t.display_name).join(", ")}.`
+          : "Permanent user configs: none active yet.",
+      ),
+    );
+  }
   // 7.100.0: the apps whose own file can carry it, written from their cards
   // under Desktop apps (plan first, one-time backup, Undo).
   const files = media.desktop_files || [];
@@ -30920,6 +31658,14 @@ function renderMcpMediaCard() {
     json.className = "mcp-media-copy";
     json.textContent = media.copy_json;
     body.append(json);
+  }
+
+  if (
+    state.skills &&
+    (state.skills.error ||
+      (Array.isArray(state.skills.targets) && state.skills.targets.length > 0))
+  ) {
+    body.append(renderSharedSkillPanel());
   }
 }
 
@@ -43449,6 +44195,8 @@ const DASHBOARD_DIALOG_IDS = [
   "reqDetailModal",
   "providerDetailModal",
   "rcTunnelModal",
+  "mcpModeDiffModal",
+  "skillPlanModal",
 ];
 
 /* Everything Tab may reach inside an open dialog, in document order.
@@ -43967,6 +44715,7 @@ byId("providerDetailClose").addEventListener("click", closeProviderDetail);
 dialogKit({ modal: byId("providerDetailModal"), close: closeProviderDetail });
 byId("rcTunnelClose").addEventListener("click", closeRcTunnelOverlay);
 dialogKit({ modal: byId("rcTunnelModal"), close: closeRcTunnelOverlay });
+initMcpModeAndSkillDialogs();
 byId("reqRawExportToggle").addEventListener("click", toggleRawExportPanel);
 byId("reqRawExportDownload").addEventListener("click", () => {
   runRawRequestExport();

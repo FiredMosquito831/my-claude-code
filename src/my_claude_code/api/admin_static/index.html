@@ -6505,79 +6505,63 @@ TAVILY_CHUNKS_PER_SOURCE=3</code></pre>
                   is marked. The <strong>Models</strong> page has a filter chip per kind.
                 </p>
 
-                <h3 id="guide-media-mcp">Let a coding agent make media itself (MCP)</h3>
+                <h3 id="guide-media-mcp">Let a coding agent make media itself (MCP &amp; Agent Skill)</h3>
                 <p>
-                  <strong>Since 7.99.0.</strong> An agent does not know MCC serves
-                  pictures, speech, transcripts and video unless something tells it.
+                  <strong>Since 7.99.0 (3-state MCP modes &amp; Agent Skill since 8.74.0).</strong> An agent does not know MCC serves
+                  pictures, speech, transcripts, video and OCR unless something tells it.
                   MCC's media server, <code>mcc-mcp</code>, is that something: a small
                   program installed with MCC that an agent starts over MCP and that offers
                   one tool per media rail you filled in on <strong>Model Config</strong>
                   &mdash; <code>generate_image</code>, <code>edit_image</code>,
                   <code>speak</code>, <code>transcribe</code>,
                   <code>translate_audio</code>, <code>create_video</code> with
-                  <code>get_video</code> &mdash; plus <code>media_status</code>, which is
+                  <code>get_video</code>, and <code>ocr_document</code> &mdash; plus <code>media_status</code>, which is
                   free and says what is configured. Every field a tool takes comes from
                   the rail's own models (the same lists as <code>/v1/media/models</code>),
                   labelled with which models take, need or refuse it.
                 </p>
                 <p>
-                  <strong>Add it per agent.</strong> Open <strong>Coding agents</strong> and
-                  press <em>Add MCP server</em> on the agent's card; <em>Remove MCP
-                  server</em> takes it out and puts back exactly what was there. MCC writes
-                  it only where it already writes: the launch line of
-                  <code>mcc-claude</code> (its own <code>--mcp-config=</code> file) and
-                  <code>mcc-codex</code> (<code>-c</code> settings for that launch), the
-                  config layers it owns for OpenCode, OpenCode 2, Kilo, Crush, Qwen Code and
-                  Gemini CLI, and its own Claude Desktop document &mdash; never your own
-                  <code>~/.claude.json</code>, <code>config.toml</code> or
-                  <code>opencode.json</code>. The agent's next session lists the tools.
-                  Claude Desktop needs its card under <em>Desktop apps</em> configured, and
-                  one relaunch. Gemini CLI starts MCP servers only in a folder you trusted.
+                  <strong>Choose a mode per agent (Off · Launch only · Permanent).</strong> Open <strong>Coding agents</strong> and
+                  pick one mutually exclusive mode on an agent's card (or run
+                  <code>mcc-apps mcp-mode</code> / <code>mcc-apps mcp-list</code> from your shell):
+                  <strong>Off</strong> offers no media tools;
+                  <strong>Launch only</strong> injects <code>mcc-mcp</code> only when started through MCC's launcher
+                  (<code>mcc-claude</code> <code>--mcp-config=</code>, <code>mcc-codex</code> <code>-c</code>, or MCC's isolated OpenCode/Crush/Qwen/Gemini/Kilo layers);
+                  <strong>Permanent (user config)</strong> shows a diff preview first, writes a one-time <code>.mcc-backup</code>, and adds <code>mcc_media</code> to the agent's own user config so plain <code>claude</code>, <code>codex</code>, <code>opencode</code>, <code>gemini</code>, <code>qwen</code>, <code>crush</code>, <code>openclaw</code>, or desktop apps see it everywhere.
+                  While a permanent entry is present, <code>mcc-claude</code> and <code>mcc-codex</code> suppress duplicate launch injection automatically, and Codex keeps <code>supports_search_tool: false</code> so its model sees every media tool.
+                  Press <em>Remove &amp; Restore</em> (or <code>mcc-apps mcp-remove --restore</code>) to take MCC's keys back out or restore your original values; an unowned entry raises a <code>409</code> conflict guard unless explicitly overwritten.
                 </p>
                 <p>
-                  <strong>What it costs, and who asks.</strong> Each agent that has the
+                  <strong>Install the shared Agent Skill (<strong>mcc-media</strong>).</strong>
+                  Agents that support Agent Skills can also invoke MCC's stdlib script
+                  <code>mcc_media.py</code> cleanly from <code>~/.agents/skills/</code> (folder <strong>mcc-media</strong>) or per-agent skill folders.
+                  The <strong>MCC media server</strong> card manages the shared skill bundle
+                  (<code>/admin/api/skills</code>), and every compatible card exposes <em>Install</em>, <em>Update</em>, <em>Preview Diff</em>, <em>Revert</em>, and <em>Remove</em> (CLI: <code>mcc-apps skill-list</code>, <code>mcc-apps skill-install</code>, <code>mcc-apps skill-remove</code>).
+                </p>
+                <p>
+                  <strong>What it costs, and who asks.</strong> Each agent that has the MCP
                   server sends its tool list with every request &mdash; a few KB, shown on
                   the <em>MCC media server</em> card &mdash; built once per session, so it
                   stays byte for byte the same from turn to turn and the prompt cache
                   keeps its prefix. The tools that spend money are never marked
                   read-only, so an agent that asks before a tool asks before these; for
-                  OpenCode and Kilo, which do not ask by default, MCC's own config layer
-                  turns their <em>ask</em> on for those tools. MCC adds no limit of its own.
+                  OpenCode and Kilo, which do not ask by default, MCC turns their <em>ask</em> on for those tools. MCC adds no limit of its own.
                 </p>
                 <p>
-                  <strong>Where results go.</strong> Files are saved in the folder the agent
-                  is working in (Claude Desktop, which has none: the
+                  <strong>Where results go, and environment variables.</strong> Files are saved in the folder the agent
+                  is working in (or <code>MCC_MEDIA_OUTPUT_DIR</code>, and for Claude Desktop the
                   <code>mcp-media</code> folder of MCC's configuration folder), never over
-                  an existing file; the agent can name another folder. Pictures are also
-                  shown to the model; speech and video are given as paths. A video tool
+                  an existing file. Pictures are also shown to the model (controllable via <code>MCC_MCP_INLINE_IMAGES</code>); speech and video are given as paths. A video tool
                   returns a job id at once, and <code>get_video</code> saves it when it is
-                  done. A call the agent stops waiting for still finishes and is listed by
-                  <code>media_status</code> &mdash; the provider bills it either way. The
-                  server reads MCC's address and token from MCC's own settings, so no app
-                  file carries the token, and it talks only to MCC: a picture a provider
-                  answers with a link is downloaded by MCC through that provider's proxy.
-                  For an app MCC does not launch, the card has a line to copy.
+                  done. Both <code>mcc-mcp</code> and the skill read <code>MCC_BASE_URL</code> and your proxy token from MCC's own settings, so no app
+                  file carries the token, and calls talk only to MCC.
                 </p>
                 <p>
-                  <strong>In your own app files (7.100.0).</strong> An app you start from
-                  its own icon reads its MCP servers from <em>your</em> file, which the
-                  buttons above never touch. The cards under <em>Desktop apps</em> have
-                  the same <em>Add MCP server</em> / <em>Remove MCP server</em> button for
-                  that file: Codex desktop (and plain <code>codex</code>) in
-                  <code>~/.codex/config.toml</code> as <code>[mcp_servers.mcc_media]</code>,
-                  OpenCode desktop (and plain <code>opencode</code>) in
-                  <code>opencode.json</code> as <code>mcp.mcc_media</code> plus OpenCode's
-                  own <em>ask</em> for the tools that spend money, Command Code in
-                  <code>~/.commandcode/mcp.json</code>. The first press shows the change and
-                  a <em>Write it</em> button &mdash; nothing is written before you press it
-                  &mdash; the first write takes a one-time backup beside the file, and
-                  <em>Remove MCP server</em> or the card's <em>Undo</em> gives the file back
-                  byte for byte. An <code>mcc_media</code> entry MCC did not add is left
-                  alone and the card says so. Claude Desktop's card has it as a
-                  <em>fallback</em> for <code>claude_desktop_config.json</code>, where the
-                  app gives a tool 60 seconds: press it only if a relaunch did not bring the
-                  tools from MCC's own document. VS Code and Roo Code: not measured yet.
-                  Restart the app after a change.
+                  <strong>API routes &amp; Desktop apps.</strong> Dashboard changes flow through
+                  <code>/admin/api/mcp-media/mode</code>,
+                  <code>/admin/api/mcp-media/permanent/&lt;target_id&gt;/plan</code>, and
+                  <code>/admin/api/mcp-media/permanent/&lt;target_id&gt;/apply</code>, sharing the exact config records with
+                  Codex (<code>~/.codex/config.toml</code>), OpenCode (<code>opencode.json</code>), Command Code (<code>~/.commandcode/mcp.json</code>), and Claude Desktop (<code>claude_desktop_config.json</code> fallback). Restart the app after a permanent change.
                 </p>
 
                 <h3 id="guide-images">Images, and what they cost</h3>
@@ -9014,6 +8998,82 @@ EXA_API_KEY_ROTATION=failover</code></pre>
             <button id="rcTunnelClose" class="secondary-button" type="button">Close</button>
           </div>
           <div id="rcTunnelBody" class="provider-detail-body"></div>
+        </div>
+      </div>
+
+      <!-- 8.74.0: Diff-first confirmation modal for Permanent (user config) MCP
+           writes, updates, and Remove & Restore. -->
+      <div
+        id="mcpModeDiffModal"
+        class="requests-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="mcpModeDiffTitle"
+        hidden
+      >
+        <div class="requests-modal-card cc-review-card">
+          <div class="requests-modal-header">
+            <h3 id="mcpModeDiffTitle">Review MCP server change</h3>
+            <button id="mcpModeDiffClose" class="secondary-button" type="button">
+              Close
+            </button>
+          </div>
+          <p id="mcpModeDiffPath" class="cc-review-path"></p>
+          <div id="mcpModeDiffBody" class="cc-review-body"></div>
+          <div id="mcpModeDiffConfirmRestoreWrap" class="mcp-mode-flag-row" hidden>
+            <label class="checkbox-label">
+              <input id="mcpModeDiffRestoreCheck" type="checkbox" />
+              <span>Restore the exact original values saved before MCC's first edit</span>
+            </label>
+          </div>
+          <div class="cc-review-actions">
+            <button id="mcpModeDiffCancel" class="secondary-button" type="button">
+              Cancel
+            </button>
+            <button id="mcpModeDiffConfirm" class="primary-button" type="button">
+              Apply
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 8.74.0: Plan & diff modal for installing, updating, reverting, or
+           removing the mcc-media Agent Skill. -->
+      <div
+        id="skillPlanModal"
+        class="requests-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skillPlanTitle"
+        hidden
+      >
+        <div class="requests-modal-card cc-review-card">
+          <div class="requests-modal-header">
+            <h3 id="skillPlanTitle">Review MCC media skill</h3>
+            <button id="skillPlanClose" class="secondary-button" type="button">
+              Close
+            </button>
+          </div>
+          <p id="skillPlanPath" class="cc-review-path"></p>
+          <div id="skillPlanBody" class="cc-review-body"></div>
+          <div id="skillPlanFlagsWrap" class="mcp-mode-flag-row" hidden>
+            <label class="checkbox-label">
+              <input id="skillPlanForceCheck" type="checkbox" />
+              <span>Overwrite drifted or unowned files (force)</span>
+            </label>
+            <label class="checkbox-label">
+              <input id="skillPlanAdoptCheck" type="checkbox" />
+              <span>Adopt foreign files into MCC management (adopt)</span>
+            </label>
+          </div>
+          <div class="cc-review-actions">
+            <button id="skillPlanCancel" class="secondary-button" type="button">
+              Cancel
+            </button>
+            <button id="skillPlanConfirm" class="primary-button" type="button">
+              Apply
+            </button>
+          </div>
         </div>
       </div>
 

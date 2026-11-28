@@ -37,6 +37,7 @@ from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
 DESKTOP_APPS_PATH = "/admin/api/desktop-apps"
+MCP_MEDIA_PATH = "/admin/api/mcp-media"
 SKILLS_PATH = "/admin/api/skills"
 
 #: Long enough for the server to walk the resolution ladder once, which is what
@@ -361,6 +362,147 @@ def _run_skill_action(
             print(f"Backed up previous directory to {backup}")
 
 
+def _mcp_media_payload() -> dict[str, Any]:
+    payload = _call("GET", MCP_MEDIA_PATH)
+    apps = payload.get("apps") if isinstance(payload, dict) else None
+    if not isinstance(apps, list):
+        raise AppsCommandError("the server returned no MCP media app list")
+    return payload
+
+
+def _find_mcp_app(app_id: str) -> dict[str, Any]:
+    payload = _mcp_media_payload()
+    for entry in payload["apps"]:
+        if entry.get("app_id") == app_id:
+            return entry
+    known = ", ".join(sorted(str(entry.get("app_id")) for entry in payload["apps"]))
+    raise AppsCommandError(f"unknown MCP app: {app_id}. Known: {known}")
+
+
+def _print_mcp_list() -> None:
+    payload = _mcp_media_payload()
+    installed = payload.get("installed")
+    status_word = "installed" if installed else "not installed"
+    tools = payload.get("tools") or []
+    print(f"mcc-mcp: {status_word} ({len(tools)} tools)")
+    print()
+    apps = payload["apps"]
+    width = max((len(str(entry.get("app_id", ""))) for entry in apps), default=0)
+    for entry in apps:
+        mode = entry.get("mode", "off")
+        perm = entry.get("permanent_state", "absent")
+        if entry.get("permanent_supported"):
+            perm_text = f"permanent={perm}"
+        else:
+            perm_text = "permanent=unsupported"
+        launch_text = (
+            ("launch=on" if entry.get("launch_on") else "launch=off")
+            if entry.get("launch_supported")
+            else "launch=unsupported"
+        )
+        print(
+            f"{entry.get('app_id', '')!s:<{width}}  {mode:<9}  ({launch_text}, {perm_text})"
+        )
+    print()
+    print(
+        "mcc-apps mcp-status <app> for details, mcp-mode <app> <off|launch|permanent> to switch."
+    )
+
+
+def _print_mcp_status(app_id: str) -> None:
+    entry = _find_mcp_app(app_id)
+    print(f"{entry.get('display_name')} ({entry.get('app_id')})")
+    print(f"  mode          {entry.get('mode', 'off')}")
+    print(f"  supported     {', '.join(entry.get('supported_modes') or ['off'])}")
+    if entry.get("launch_supported"):
+        print(f"  launch-only   {'on' if entry.get('launch_on') else 'off'}")
+    else:
+        print("  launch-only   unsupported")
+    if entry.get("permanent_supported"):
+        print(f"  permanent     {entry.get('permanent_state', 'absent')}")
+        if path := entry.get("permanent_path") or entry.get("permanent_display_path"):
+            print(f"  config file   {path}")
+        if entry.get("permanent_backup_exists"):
+            print(f"  backup        {entry.get('permanent_backup_path')}")
+        if shared := entry.get("permanent_shared_with"):
+            print(f"  shared with   {', '.join(shared)}")
+    else:
+        print(f"  permanent     unsupported ({entry.get('permanent_reason', '')})")
+    if warning := entry.get("conflict_warning"):
+        print(f"  warning       {warning}")
+    if note := entry.get("note"):
+        print(f"  note          {note}")
+
+
+def _print_permanent_plan(plan: dict[str, Any]) -> None:
+    if plan.get("no_op"):
+        print("Already in the requested permanent MCP state. Nothing to do.")
+        return
+    print(f"--- {plan.get('document_path')}")
+    print(plan.get("diff") or "(no change to this document)")
+    if plan.get("will_create_file"):
+        print("-> Creates a new config file (removed again when switched off).")
+    elif plan.get("removes_file"):
+        print("-> Removes the empty config file MCC created.")
+    elif plan.get("add"):
+        if plan.get("backup_exists"):
+            print(f"-> One-time backup already at {plan.get('backup_path')}.")
+        elif backup := plan.get("backup_path"):
+            print(f"-> Takes a one-time backup at {backup}.")
+    if ask_keys := plan.get("ask_keys"):
+        print(f"-> Sets ask permissions for: {', '.join(ask_keys)}")
+
+
+def _run_mcp_mode(
+    app_id: str,
+    mode: str,
+    *,
+    preview: bool,
+    restore: bool,
+) -> None:
+    entry = _find_mcp_app(app_id)
+    undo_mode = "restore" if restore else "keys_only"
+    supported = entry.get("supported_modes") or ["off"]
+    if mode not in supported:
+        reason = (
+            entry.get("permanent_reason") or f"{app_id} does not support mode {mode!r}."
+        )
+        raise AppsCommandError(reason)
+    if preview:
+        target_id = entry.get("permanent_target_id") or app_id
+        perm_state = entry.get("permanent_state", "absent")
+        if mode == "permanent":
+            plan = _call(
+                "POST",
+                f"{MCP_MEDIA_PATH}/permanent/{target_id}/plan",
+                {"add": True, "mode": undo_mode},
+            )
+            _print_permanent_plan(plan)
+            if entry.get("launch_on"):
+                print("-> Also clears Launch-only mode to prevent duplicate injection.")
+            return
+        if entry.get("permanent_supported") and perm_state in (
+            "configured",
+            "drifted",
+            "foreign",
+        ):
+            plan = _call(
+                "POST",
+                f"{MCP_MEDIA_PATH}/permanent/{target_id}/plan",
+                {"add": False, "mode": undo_mode},
+            )
+            _print_permanent_plan(plan)
+        print(f"Would set MCP mode for {app_id} to {mode}.")
+        return
+
+    result = _call(
+        "POST",
+        f"{MCP_MEDIA_PATH}/mode",
+        {"app": app_id, "mode": mode, "undo_mode": undo_mode},
+    )
+    print(result.get("message") or f"MCP mode for {app_id} set to {mode}.")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mcc-apps",
@@ -451,6 +593,40 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="remove even if installed files were modified locally",
     )
+
+    subcommands.add_parser("mcp-list", help="every coding agent and its MCP mode")
+
+    mcp_status = subcommands.add_parser(
+        "mcp-status", help="one agent's MCP mode in detail"
+    )
+    mcp_status.add_argument("app")
+
+    mcp_mode = subcommands.add_parser(
+        "mcp-mode", help="switch an agent between off, launch, and permanent MCP"
+    )
+    mcp_mode.add_argument("app")
+    mcp_mode.add_argument("mode", choices=("off", "launch", "permanent"))
+    mcp_mode.add_argument(
+        "--preview", action="store_true", help="show planned diff and write nothing"
+    )
+    mcp_mode.add_argument(
+        "--restore",
+        action="store_true",
+        help="require exact byte-for-byte restore when removing permanent config",
+    )
+
+    mcp_remove = subcommands.add_parser(
+        "mcp-remove", help="turn MCP off and remove any MCC permanent entry"
+    )
+    mcp_remove.add_argument("app")
+    mcp_remove.add_argument(
+        "--preview", action="store_true", help="show planned diff and write nothing"
+    )
+    mcp_remove.add_argument(
+        "--restore",
+        action="store_true",
+        help="require exact byte-for-byte restore when removing permanent config",
+    )
     return parser
 
 
@@ -500,6 +676,24 @@ def apps_command(argv: Sequence[str] | None = None) -> None:
                     "remove",
                     preview=args.preview,
                     force=args.force,
+                )
+            case "mcp-list":
+                _print_mcp_list()
+            case "mcp-status":
+                _print_mcp_status(args.app)
+            case "mcp-mode":
+                _run_mcp_mode(
+                    args.app,
+                    args.mode,
+                    preview=args.preview,
+                    restore=args.restore,
+                )
+            case "mcp-remove":
+                _run_mcp_mode(
+                    args.app,
+                    "off",
+                    preview=args.preview,
+                    restore=args.restore,
                 )
     except AppsCommandError as exc:
         print(f"mcc-apps: {exc}", file=sys.stderr)

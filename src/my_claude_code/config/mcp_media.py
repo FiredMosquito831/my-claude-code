@@ -37,12 +37,20 @@ import json
 import os
 import shutil
 import sys
+import tomllib
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from my_claude_code.config.document_codecs import (
+    DocumentFormat,
+    DocumentFormatError,
+    parse_document,
+    yaml_mapping_at,
+    yaml_root_is_sequence,
+)
 from my_claude_code.config.paths import mcp_media_output_dir
 
 #: The name every app shows the server under. One spelling everywhere, so an
@@ -156,6 +164,9 @@ class McpMediaShape(StrEnum):
     #: in Command Code's ``~/.commandcode/mcp.json`` (its bundled 1.65.0
     #: documentation, ``reference/mcp.md``, "Config schema").
     COMMANDCODE_MCP = "commandcode_mcp"
+    #: ``mcp.servers.<name> = {enabled: true, transport: "stdio", command, args}``
+    #: in OpenClaw's ``openclaw.json`` (``tests/fixtures/schemas/openclaw.schema.json``).
+    OPENCLAW_MCP = "openclaw_mcp"
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +347,33 @@ MCP_MEDIA_APP_TABLE: tuple[McpMediaApp, ...] = (
         "Aider",
         McpMediaSupport.NO_MCP,
         note="Aider has no MCP client, so there is nothing to add.",
+    ),
+    McpMediaApp(
+        "openclaw",
+        "OpenClaw",
+        McpMediaSupport.OWN_FILE_LATER,
+        note=(
+            "OpenClaw reads MCP servers from your own openclaw.json under "
+            "mcp.servers; use Permanent mode or the mcc-media skill."
+        ),
+    ),
+    McpMediaApp(
+        "hermes",
+        "Hermes Agent",
+        McpMediaSupport.NOT_MEASURED,
+        note=(
+            "Hermes config.yaml MCP server schema is not verified in repo "
+            "fixtures yet; use the mcc-media skill."
+        ),
+    ),
+    McpMediaApp(
+        "antigravity",
+        "Antigravity",
+        McpMediaSupport.NOT_MEASURED,
+        note=(
+            "Antigravity stdio mcp_config.json schema is not verified in repo "
+            "fixtures yet; use the mcc-media skill."
+        ),
     ),
 )
 
@@ -564,8 +602,31 @@ def desktop_file_entry(
     match shape:
         case McpMediaShape.OPENCODE_MCP:
             return _opencode_entry(app_id, command, environ)
-        case McpMediaShape.COMMANDCODE_MCP:
+        case McpMediaShape.CLAUDE_MCP_CONFIG:
             entry: dict[str, Any] = {
+                "type": "stdio",
+                "command": command,
+                "args": server_arguments(app_id, out_dir=out_dir),
+            }
+            env = server_environment(environ)
+            if env:
+                entry["env"] = env
+            return entry
+        case McpMediaShape.CRUSH_MCP:
+            return _crush_entry(app_id, command, environ)
+        case McpMediaShape.OPENCLAW_MCP:
+            entry = {
+                "enabled": True,
+                "transport": "stdio",
+                "command": command,
+                "args": server_arguments(app_id, out_dir=out_dir),
+            }
+            env = server_environment(environ)
+            if env:
+                entry["env"] = env
+            return entry
+        case McpMediaShape.COMMANDCODE_MCP:
+            entry = {
                 "transport": "stdio",
                 "enabled": True,
                 "command": command,
@@ -743,12 +804,518 @@ def mcp_media_document(
         McpMediaShape.CODEX_CONFIG_ARGS,
     ):
         return document
+    if app.shape is McpMediaShape.CODEX_CONFIG_ARGS:
+        # Codex needs supports_search_tool=false whether mcc_media is injected at
+        # launch time OR configured permanently in ~/.codex/config.toml.
+        if has_permanent_mcp_entry(app_id, environ=environ):
+            return codex_catalogue_without_tool_search(document)
+        if not mcp_media_on(apps_value, app_id):
+            return document
+        resolved = command if command is not None else mcp_media_command()
+        if not resolved:
+            return document
+        return codex_catalogue_without_tool_search(document)
     if not mcp_media_on(apps_value, app_id):
         return document
     resolved = command if command is not None else mcp_media_command()
     if not resolved:
         return document
-    if app.shape is McpMediaShape.CODEX_CONFIG_ARGS:
-        return codex_catalogue_without_tool_search(document)
     assert app.shape is not None
     return with_mcp_media_block(app.shape, app_id, document, resolved, environ)
+
+
+# -- verified permanent user-config MCP targets --------------------------------
+
+
+_PLATFORM_DIR_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "APPDATA",
+        "LOCALAPPDATA",
+        "XDG_CONFIG_HOME",
+        "HOME",
+        "USERPROFILE",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PermanentMcpPathRung:
+    """One candidate path rule for resolving a user's global MCP config file."""
+
+    env_vars: tuple[str, ...] = ()
+    parts: tuple[str, ...] = ()
+    platforms: tuple[str, ...] = ()
+    #: When an env var directly names a file (e.g. ``OPENCLAW_CONFIG_PATH``).
+    is_file_path: bool = False
+    #: When an env var may point to a directory or a ``.json`` file
+    #: (e.g. ``CRUSH_GLOBAL_CONFIG``).
+    allow_file_parent: bool = False
+
+    def applies_to(self, platform: str) -> bool:
+        return not self.platforms or platform in self.platforms
+
+
+@dataclass(frozen=True, slots=True)
+class PermanentMcpTargetSpec:
+    """Declarative specification for one permanent user-config MCP target."""
+
+    target_id: str
+    display_name: str
+    document_format: DocumentFormat | None = None
+    rungs: tuple[PermanentMcpPathRung, ...] = ()
+    display_path: str = ""
+    servers_key: tuple[str, ...] = ()
+    shape: McpMediaShape | None = None
+    ask_map_key: tuple[str, ...] = ()
+    needs_out_dir: bool = False
+    permanent_supported: bool = True
+    unsupported_reason: str = ""
+    shared_with: tuple[str, ...] = ()
+    desktop_app_id: str = ""
+    record_subject: str = ""
+    entry_app_id: str = ""
+    asks: str = ""
+    note: str = ""
+    backup_suffix: str = ".mcc-backup"
+
+    @property
+    def effective_record_subject(self) -> str:
+        return self.record_subject or self.target_id
+
+    @property
+    def effective_entry_app_id(self) -> str:
+        return self.entry_app_id or self.target_id
+
+    @property
+    def entry_key_path(self) -> tuple[str, ...]:
+        return (*self.servers_key, MCP_MEDIA_SERVER_NAME)
+
+    @property
+    def entry_key_label(self) -> str:
+        return ".".join(self.entry_key_path)
+
+
+_CODEX_PERMANENT_RUNGS: tuple[PermanentMcpPathRung, ...] = (
+    PermanentMcpPathRung(env_vars=("CODEX_HOME",), parts=("config.toml",)),
+    PermanentMcpPathRung(
+        env_vars=("HOME", "USERPROFILE"), parts=(".codex", "config.toml")
+    ),
+)
+
+_OPENCODE_PERMANENT_RUNGS: tuple[PermanentMcpPathRung, ...] = (
+    PermanentMcpPathRung(env_vars=("OPENCODE_CONFIG_DIR",), parts=("opencode.json",)),
+    PermanentMcpPathRung(
+        env_vars=("XDG_CONFIG_HOME",), parts=("opencode", "opencode.json")
+    ),
+    PermanentMcpPathRung(
+        env_vars=("HOME", "USERPROFILE"), parts=(".config", "opencode", "opencode.json")
+    ),
+)
+
+_CLAUDE_DESKTOP_PERMANENT_RUNGS: tuple[PermanentMcpPathRung, ...] = (
+    PermanentMcpPathRung(
+        env_vars=("CLAUDE_USER_DATA_DIR",), parts=("claude_desktop_config.json",)
+    ),
+    PermanentMcpPathRung(
+        env_vars=("LOCALAPPDATA",),
+        parts=("Claude-3p", "claude_desktop_config.json"),
+        platforms=("win32",),
+    ),
+    PermanentMcpPathRung(
+        env_vars=("HOME", "USERPROFILE"),
+        parts=(
+            "Library",
+            "Application Support",
+            "Claude-3p",
+            "claude_desktop_config.json",
+        ),
+        platforms=("darwin",),
+    ),
+    PermanentMcpPathRung(
+        env_vars=("HOME", "USERPROFILE"),
+        parts=(".config", "Claude-3p", "claude_desktop_config.json"),
+        platforms=("linux",),
+    ),
+)
+
+
+MCP_PERMANENT_TARGETS: tuple[PermanentMcpTargetSpec, ...] = (
+    PermanentMcpTargetSpec(
+        target_id="claude",
+        display_name="Claude Code",
+        document_format=DocumentFormat.JSON,
+        rungs=(
+            PermanentMcpPathRung(
+                env_vars=("CLAUDE_CONFIG_DIR",), parts=(".claude.json",)
+            ),
+            PermanentMcpPathRung(
+                env_vars=("HOME", "USERPROFILE"), parts=(".claude.json",)
+            ),
+        ),
+        display_path="~/.claude.json",
+        servers_key=("mcpServers",),
+        shape=McpMediaShape.CLAUDE_MCP_CONFIG,
+        asks="Claude Code asks before it runs an MCP tool you have not allowed.",
+        note="Written to ~/.claude.json under mcpServers.mcc_media.",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="codex",
+        display_name="Codex CLI",
+        document_format=DocumentFormat.TOML,
+        rungs=_CODEX_PERMANENT_RUNGS,
+        display_path="~/.codex/config.toml",
+        servers_key=("mcp_servers",),
+        shape=McpMediaShape.MCP_SERVERS,
+        shared_with=("codex_desktop",),
+        desktop_app_id="codex_desktop",
+        record_subject="codex_desktop",
+        entry_app_id="codex_desktop",
+        asks=(
+            "Codex asks before each media tool that spends money: none of them "
+            "is marked read-only."
+        ),
+        note=(
+            "Shared with Codex desktop (~/.codex/config.toml). Never sets "
+            "required = true so a missing mcc-mcp cannot block Codex startup."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="opencode",
+        display_name="OpenCode",
+        document_format=DocumentFormat.JSON,
+        rungs=_OPENCODE_PERMANENT_RUNGS,
+        display_path="~/.config/opencode/opencode.json",
+        servers_key=("mcp",),
+        shape=McpMediaShape.OPENCODE_MCP,
+        ask_map_key=("permission",),
+        shared_with=("opencode2", "opencode_desktop"),
+        desktop_app_id="opencode_desktop",
+        record_subject="opencode_desktop",
+        entry_app_id="opencode_desktop",
+        asks=(
+            "OpenCode does not ask before a tool by default, so MCC sets ask "
+            "for spending media tools in permission."
+        ),
+        note="Shared with OpenCode 2 and OpenCode desktop.",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="opencode2",
+        display_name="OpenCode 2",
+        document_format=DocumentFormat.JSON,
+        rungs=_OPENCODE_PERMANENT_RUNGS,
+        display_path="~/.config/opencode/opencode.json",
+        servers_key=("mcp",),
+        shape=McpMediaShape.OPENCODE_MCP,
+        ask_map_key=("permission",),
+        shared_with=("opencode", "opencode_desktop"),
+        desktop_app_id="opencode_desktop",
+        record_subject="opencode_desktop",
+        entry_app_id="opencode_desktop",
+        asks=(
+            "OpenCode does not ask before a tool by default, so MCC sets ask "
+            "for spending media tools in permission."
+        ),
+        note="Shared with OpenCode and OpenCode desktop.",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="kilo",
+        display_name="Kilo CLI",
+        permanent_supported=False,
+        unsupported_reason=(
+            "Kilo CLI's global user MCP file path is not verified in repo "
+            "fixtures yet; use Launch-only mode or the mcc-media skill."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="crush",
+        display_name="Crush",
+        document_format=DocumentFormat.JSON,
+        rungs=(
+            PermanentMcpPathRung(
+                env_vars=("CRUSH_GLOBAL_CONFIG",),
+                parts=("crush.json",),
+                allow_file_parent=True,
+            ),
+            PermanentMcpPathRung(
+                env_vars=("XDG_CONFIG_HOME",), parts=("crush", "crush.json")
+            ),
+            PermanentMcpPathRung(
+                env_vars=("HOME", "USERPROFILE"),
+                parts=(".config", "crush", "crush.json"),
+            ),
+        ),
+        display_path="~/.config/crush/crush.json",
+        servers_key=("mcp",),
+        shape=McpMediaShape.CRUSH_MCP,
+        asks="Crush asks before it runs a tool you have not allowed.",
+        note="Written to crush.json under mcp.mcc_media (crush.schema.json).",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="qwen_code",
+        display_name="Qwen Code",
+        document_format=DocumentFormat.JSON,
+        rungs=(
+            PermanentMcpPathRung(
+                env_vars=("HOME", "USERPROFILE"), parts=(".qwen", "settings.json")
+            ),
+        ),
+        display_path="~/.qwen/settings.json",
+        servers_key=("mcpServers",),
+        shape=McpMediaShape.MCP_SERVERS,
+        asks="Qwen Code asks before an MCP tool: MCC never marks the server trusted.",
+        note="Written to ~/.qwen/settings.json under mcpServers.mcc_media.",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="gemini_cli",
+        display_name="Gemini CLI",
+        document_format=DocumentFormat.JSON,
+        rungs=(
+            PermanentMcpPathRung(
+                env_vars=("HOME", "USERPROFILE"), parts=(".gemini", "settings.json")
+            ),
+        ),
+        display_path="~/.gemini/settings.json",
+        servers_key=("mcpServers",),
+        shape=McpMediaShape.MCP_SERVERS,
+        asks="Gemini CLI asks before an MCP tool: MCC never marks the server trusted.",
+        note="Written to ~/.gemini/settings.json under mcpServers.mcc_media.",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="commandcode_cli",
+        display_name="Command Code",
+        document_format=DocumentFormat.JSON,
+        rungs=(
+            PermanentMcpPathRung(
+                env_vars=("HOME", "USERPROFILE"), parts=(".commandcode", "mcp.json")
+            ),
+        ),
+        display_path="~/.commandcode/mcp.json",
+        servers_key=("mcpServers",),
+        shape=McpMediaShape.COMMANDCODE_MCP,
+        shared_with=("commandcode",),
+        desktop_app_id="commandcode",
+        record_subject="commandcode",
+        entry_app_id="commandcode",
+        asks=(
+            "Command Code asks before an MCP tool unless you run it in yolo "
+            "mode or have allowed that tool."
+        ),
+        note="Shared with the Command Code card under Desktop apps.",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="openclaw",
+        display_name="OpenClaw",
+        document_format=DocumentFormat.JSON,
+        rungs=(
+            PermanentMcpPathRung(env_vars=("OPENCLAW_CONFIG_PATH",), is_file_path=True),
+            PermanentMcpPathRung(
+                env_vars=("OPENCLAW_STATE_DIR",), parts=("openclaw.json",)
+            ),
+            PermanentMcpPathRung(
+                env_vars=("OPENCLAW_HOME",), parts=(".openclaw", "openclaw.json")
+            ),
+            PermanentMcpPathRung(
+                env_vars=("HOME", "USERPROFILE"), parts=(".openclaw", "openclaw.json")
+            ),
+        ),
+        display_path="~/.openclaw/openclaw.json",
+        servers_key=("mcp", "servers"),
+        shape=McpMediaShape.OPENCLAW_MCP,
+        asks="OpenClaw enforces its own MCP tool approval rules.",
+        note="Written to openclaw.json under mcp.servers.mcc_media (openclaw.schema.json).",
+    ),
+    PermanentMcpTargetSpec(
+        target_id="claude_desktop",
+        display_name="Claude Desktop",
+        document_format=DocumentFormat.JSON,
+        rungs=_CLAUDE_DESKTOP_PERMANENT_RUNGS,
+        display_path="%LOCALAPPDATA%\\Claude-3p\\claude_desktop_config.json",
+        servers_key=("mcpServers",),
+        shape=McpMediaShape.MCP_SERVERS,
+        needs_out_dir=True,
+        desktop_app_id="claude_desktop",
+        record_subject="claude_desktop",
+        entry_app_id="claude_desktop",
+        asks="Claude Desktop asks before each tool: MCC writes no tool policy.",
+        note=(
+            "Fallback config (60 s tool limit) in claude_desktop_config.json; "
+            "primary is managedMcpServers when Launch-only/Configure is active."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="kimi_code",
+        display_name="Kimi Code",
+        permanent_supported=False,
+        unsupported_reason=(
+            "Kimi Code's global MCP config file schema is not verified in repo "
+            "fixtures yet; use the mcc-media skill."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="goose",
+        display_name="Goose",
+        permanent_supported=False,
+        unsupported_reason=(
+            "Goose's stdio extension schema in config.yaml is not verified in "
+            "repo fixtures yet; use the mcc-media skill."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="cline_cli",
+        display_name="Cline CLI",
+        permanent_supported=False,
+        unsupported_reason=(
+            "Cline CLI's standalone MCP config schema is not verified in repo "
+            "fixtures yet; use the mcc-media skill."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="droid",
+        display_name="Droid",
+        permanent_supported=False,
+        unsupported_reason=(
+            "Factory Droid's global MCP config schema is not verified in repo "
+            "fixtures yet; use the mcc-media skill."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="hermes",
+        display_name="Hermes Agent",
+        permanent_supported=False,
+        unsupported_reason=(
+            "Hermes config.yaml MCP server schema is not verified in repo "
+            "fixtures yet; use the mcc-media skill."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="antigravity",
+        display_name="Antigravity",
+        permanent_supported=False,
+        unsupported_reason=(
+            "Antigravity's stdio mcp_config.json schema is not verified in "
+            "repo fixtures yet; use the mcc-media skill."
+        ),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="pi",
+        display_name="Pi",
+        permanent_supported=False,
+        unsupported_reason=("Pi has no built-in MCP client; use the mcc-media skill."),
+    ),
+    PermanentMcpTargetSpec(
+        target_id="aider",
+        display_name="Aider",
+        permanent_supported=False,
+        unsupported_reason="Aider has no MCP client.",
+    ),
+)
+
+_PERMANENT_BY_ID: dict[str, PermanentMcpTargetSpec] = {
+    spec.target_id: spec for spec in MCP_PERMANENT_TARGETS
+}
+
+
+def permanent_mcp_target(target_id: str) -> PermanentMcpTargetSpec | None:
+    """Return one permanent MCP target spec by id, or ``None`` if unknown."""
+
+    return _PERMANENT_BY_ID.get(target_id)
+
+
+def _resolve_rung(
+    rung: PermanentMcpPathRung, env: Mapping[str, str]
+) -> tuple[Path | None, bool]:
+    for name in rung.env_vars:
+        raw = (env.get(name) or "").strip()
+        if not raw:
+            continue
+        directed = name.upper() not in _PLATFORM_DIR_ENV_VARS
+        base = Path(raw).expanduser()
+        if rung.is_file_path:
+            return base.absolute(), directed
+        if rung.allow_file_parent and base.suffix.lower() == ".json":
+            return base.absolute(), directed
+        return base.joinpath(*rung.parts).absolute(), directed
+    return None, False
+
+
+def resolve_permanent_mcp_path(
+    spec: PermanentMcpTargetSpec,
+    env: Mapping[str, str] | None = None,
+    *,
+    platform: str | None = None,
+    fallback_to_home: bool = True,
+) -> Path | None:
+    """Resolve the permanent MCP config file path for ``spec``."""
+
+    if not spec.permanent_supported or not spec.rungs:
+        return None
+    source_env = os.environ if env is None else env
+    plat = sys.platform if platform is None else platform
+    applicable = [rung for rung in spec.rungs if rung.applies_to(plat)]
+    resolved = [(rung, *_resolve_rung(rung, source_env)) for rung in applicable]
+
+    for _rung, path, directed in resolved:
+        if path is not None and directed:
+            return path
+    for _rung, path, _directed in resolved:
+        if path is not None and path.exists():
+            return path
+    for _rung, path, _directed in resolved:
+        if path is not None:
+            return path
+    if not fallback_to_home:
+        return None
+    for rung in applicable:
+        if not rung.is_file_path:
+            return Path.home().joinpath(*rung.parts).absolute()
+    return None
+
+
+def _read_mapping_at(
+    text: str, document_format: DocumentFormat, key_path: tuple[str, ...]
+) -> tuple[object, bool]:
+    if not text.strip():
+        return None, False
+    if document_format is DocumentFormat.YAML:
+        if yaml_root_is_sequence(text):
+            return None, False
+        doc: object = yaml_mapping_at(text, ())
+    elif document_format is DocumentFormat.TOML:
+        doc = tomllib.loads(text)
+    else:
+        doc = parse_document(text, document_format)
+    node: object = doc
+    for key in key_path:
+        if not isinstance(node, Mapping) or key not in node:
+            return None, False
+        node = node.get(key)
+    return node, True
+
+
+def has_permanent_mcp_entry(
+    app_id: str,
+    *,
+    environ: Mapping[str, str] | None = None,
+    platform: str | None = None,
+) -> bool:
+    """Return True if ``app_id``'s global user config already defines ``mcc_media``.
+
+    Detects both MCC-managed and user-authored ``mcc_media`` entries so
+    launchers avoid duplicate injection and Codex keeps ``tool_search`` off.
+    """
+
+    spec = permanent_mcp_target(app_id)
+    if spec is None or not spec.permanent_supported or spec.document_format is None:
+        return False
+    source_env = os.environ if environ is None else environ
+    path = resolve_permanent_mcp_path(
+        spec, source_env, platform=platform, fallback_to_home=False
+    )
+    if path is None or not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+        _, present = _read_mapping_at(text, spec.document_format, spec.entry_key_path)
+    except OSError, ValueError, tomllib.TOMLDecodeError, DocumentFormatError:
+        return False
+    return present

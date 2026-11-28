@@ -286,6 +286,9 @@ def test_with_both_features_off_every_view_is_the_base_tree(
         # 8.64.0: Unified OCR rail (PR-M5) updates GET_STARTED_STATUS.mediaTools
         # for the 5th OCR rail.
         "get_started",
+        # 8.74.0 (PR 39): Coding Agents cards gain 3-state MCP mode controls,
+        # the shared ~/.agents/skills/mcc-media panel, and per-card Skill buttons.
+        "coding_agents",
     }
     base = baseline["views"]
     mine = design_system_off["views"]

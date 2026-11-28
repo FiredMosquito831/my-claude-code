@@ -662,6 +662,9 @@ def test_every_view_the_base_tree_had_is_byte_identical(usage_views) -> None:
         "web_search",
         "get_started",
         "model_config",
+        # 8.74.0 (PR 39): Coding Agents cards gain 3-state MCP mode controls,
+        # shared ~/.agents/skills/mcc-media panel, and per-card Skill controls.
+        "coding_agents",
     }
 
     # 8.53.0 adds `remote_control`; no pre-existing view was removed.
