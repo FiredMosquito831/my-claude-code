@@ -67,17 +67,28 @@ MCP_MEDIA_CONFIG_DIR_ENV = "MCC_CONFIG_DIR"
 #: provider's link itself (full IP masking). Sent by ``mcc-mcp`` only; a
 #: request without it is answered exactly as before.
 MCP_MEDIA_INLINE_IMAGES_HEADER = "x-mcc-inline-images"
+#: Fallback output directory for ``mcc-mcp`` when ``--out`` is not passed.
+MCC_MEDIA_OUTPUT_DIR_ENV = "MCC_MEDIA_OUTPUT_DIR"
+#: Set to ``"0"`` / ``"false"`` to suppress inline ``ImageContent`` previews in ``mcc-mcp``.
+MCC_MCP_INLINE_IMAGES_ENV = "MCC_MCP_INLINE_IMAGES"
+#: Optional explicit base URL override (e.g. HTTPS reverse proxy) for ``mcc-mcp``.
+MCC_BASE_URL_ENV = "MCC_BASE_URL"
 
 # -- the tools, by name ----------------------------------------------------------
 
 TOOL_MEDIA_STATUS = "media_status"
 TOOL_GENERATE_IMAGE = "generate_image"
 TOOL_EDIT_IMAGE = "edit_image"
+TOOL_CREATE_IMAGE_VARIATION = "create_image_variation"
 TOOL_SPEAK = "speak"
+TOOL_LIST_VOICES = "list_voices"
 TOOL_TRANSCRIBE = "transcribe"
 TOOL_TRANSLATE_AUDIO = "translate_audio"
 TOOL_CREATE_VIDEO = "create_video"
+TOOL_EDIT_VIDEO = "edit_video"
 TOOL_GET_VIDEO = "get_video"
+TOOL_LIST_VIDEOS = "list_videos"
+TOOL_DELETE_VIDEO = "delete_video"
 TOOL_OCR_DOCUMENT = "ocr_document"
 
 #: Tools a provider bills. Never marked read-only, so an app that asks before a
@@ -85,14 +96,23 @@ TOOL_OCR_DOCUMENT = "ocr_document"
 MCP_MEDIA_SPENDING_TOOLS: tuple[str, ...] = (
     TOOL_GENERATE_IMAGE,
     TOOL_EDIT_IMAGE,
+    TOOL_CREATE_IMAGE_VARIATION,
     TOOL_SPEAK,
     TOOL_TRANSCRIBE,
     TOOL_TRANSLATE_AUDIO,
     TOOL_CREATE_VIDEO,
+    TOOL_EDIT_VIDEO,
     TOOL_OCR_DOCUMENT,
 )
-#: Tools that spend nothing: what is configured, and a video job's state.
-MCP_MEDIA_FREE_TOOLS: tuple[str, ...] = (TOOL_MEDIA_STATUS, TOOL_GET_VIDEO)
+#: Tools that spend nothing: status, discovery, and non-destructive video reads.
+MCP_MEDIA_FREE_TOOLS: tuple[str, ...] = (
+    TOOL_MEDIA_STATUS,
+    TOOL_LIST_VOICES,
+    TOOL_GET_VIDEO,
+    TOOL_LIST_VIDEOS,
+)
+#: Tools that either spend money or delete a job: OpenCode/Kilo ask before them.
+MCP_MEDIA_ASK_TOOLS: tuple[str, ...] = (*MCP_MEDIA_SPENDING_TOOLS, TOOL_DELETE_VIDEO)
 
 
 class McpMediaSupport(StrEnum):
@@ -609,11 +629,11 @@ def _mcp_servers_entry(
 def opencode_permission_keys() -> tuple[str, ...]:
     """The OpenCode/Kilo permission keys MCC sets to ``ask`` (decision 8).
 
-    OpenCode names an MCP tool ``<server>_<tool>``; only the tools that spend
-    money are named, so ``media_status`` and ``get_video`` stay free to call.
+    OpenCode names an MCP tool ``<server>_<tool>``; every spending or
+    destructive tool is named, so read-only discovery and status stay free.
     """
 
-    return tuple(f"{MCP_MEDIA_SERVER_NAME}_{tool}" for tool in MCP_MEDIA_SPENDING_TOOLS)
+    return tuple(f"{MCP_MEDIA_SERVER_NAME}_{tool}" for tool in MCP_MEDIA_ASK_TOOLS)
 
 
 def with_mcp_media_block(

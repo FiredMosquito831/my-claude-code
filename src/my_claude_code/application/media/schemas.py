@@ -97,7 +97,7 @@ from my_claude_code.config.media_surfaces import (
     MEDIA_SHAPE_NIM_RIVA_GRPC,
     MEDIA_SHAPE_VISION_OCR_CHAT,
     MediaSurface,
-    surface_for,
+    effective_surfaces_for,
 )
 
 from .request import RAIL_OPERATIONS, MediaRail
@@ -809,9 +809,10 @@ def request_schemas(
     for operation in operations:
         if operation not in DOOR_FIELDS or operation in schemas:
             continue
-        surface = surface_for(tuple(surfaces), operation)
-        if surface is None:
+        effective = effective_surfaces_for(tuple(surfaces), operation)
+        if not effective:
             continue
+        surface = effective[0]
         schemas[operation] = request_schema(
             model_ref=model_ref,
             operation=operation,

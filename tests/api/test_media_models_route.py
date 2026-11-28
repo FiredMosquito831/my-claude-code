@@ -152,3 +152,31 @@ def test_an_install_with_no_media_rail_lists_nothing(monkeypatch, tmp_path):
 
     assert payload["data"] == []
     assert [rail["models"] for rail in payload["rails"]] == [[], [], [], [], []]
+
+
+def test_catalogue_publishes_capabilities_and_discovery_endpoints(
+    monkeypatch, tmp_path
+) -> None:
+    learned_fact_store().record(
+        "together",
+        "black-forest-labs/FLUX.1-schnell",
+        "media_param_enum",
+        ["1024x1024", "512x512"],
+        detail="image_generate:size",
+        evidence="stated sizes",
+    )
+    client = TestClient(create_test_app(_settings(monkeypatch, tmp_path)))
+
+    payload = _get(client).json()
+
+    together_gen = payload["data"][0]["operations"]["image_generate"]
+    assert "capabilities" in together_gen
+    assert together_gen["capabilities"]["accepted_sizes"] == ["1024x1024", "512x512"]
+    assert together_gen["capabilities"]["supports_streaming"] is False
+
+    rails = {rail["rail"]: rail for rail in payload["rails"]}
+    assert rails["tts"]["operations"]["speech"]["voices_endpoint"] == "/v1/audio/voices"
+    assert rails["video"]["operations"]["video_create"]["jobs_endpoint"] == "/v1/videos"
+    assert (
+        rails["video"]["operations"]["video_create"]["delete_endpoint"] == "/v1/videos"
+    )
