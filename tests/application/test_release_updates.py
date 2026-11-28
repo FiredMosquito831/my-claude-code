@@ -1120,7 +1120,9 @@ def test_sweep_skips_when_live_update_lock_is_held(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda: live)
     monkeypatch.setattr(release_updates, "_stage_dir", lambda: stage_dir)
 
-    live_payload = json.dumps({"pid": os.getpid(), "started_at": "2026-11-28T00:00:00Z"})
+    live_payload = json.dumps(
+        {"pid": os.getpid(), "started_at": "2026-11-28T00:00:00Z"}
+    )
 
     stage_lock = stage_dir / update_progress.UPDATE_LOCK_FILENAME
     stage_lock.write_text(live_payload, encoding="utf-8")

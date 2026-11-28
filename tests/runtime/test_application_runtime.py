@@ -1066,7 +1066,9 @@ async def test_startup_overlaps_prewarm_and_reuses_settled_proxy_chains(
         prewarm_started.set()
 
     def fake_settle_proxy_chains():
-        assert prewarm_started.wait(timeout=2.0), "prewarm should start before or alongside disk setup"
+        assert prewarm_started.wait(timeout=2.0), (
+            "prewarm should start before or alongside disk setup"
+        )
         events.append("settle_proxy_chains")
         return chains_sentinel
 

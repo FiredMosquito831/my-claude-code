@@ -2597,7 +2597,7 @@ async def test_onboarding_state_gathers_subchecks_concurrently(
     from my_claude_code.api import admin_routes
 
     _set_home(monkeypatch, tmp_path)
-    settings = Settings(_env_file=None)
+    settings = Settings()
     entered = 0
     all_entered = asyncio.Event()
 
@@ -2623,9 +2623,7 @@ async def test_onboarding_state_gathers_subchecks_concurrently(
     monkeypatch.setattr(admin_routes, "_claude_settings_configured", fake_claude)
     monkeypatch.setattr(admin_routes, "_onboarding_request_log", fake_log)
     monkeypatch.setattr(admin_routes, "_onboarding_harness_usage", fake_usage)
-    monkeypatch.setattr(
-        admin_routes, "detect_onboarding_agents", lambda **_kwargs: []
-    )
+    monkeypatch.setattr(admin_routes, "detect_onboarding_agents", lambda **_kwargs: [])
 
     state, request_log = await admin_routes._build_onboarding_state(settings)
     assert entered == 3
@@ -2665,7 +2663,10 @@ def test_admin_config_gathers_subcalls_and_reuses_values(monkeypatch, tmp_path) 
         return real_recent_surfaces()
 
     def slow_load_value_state():
-        nonlocal entered_top_level_value_state, value_state_calls, calls_during_route_status
+        nonlocal \
+            entered_top_level_value_state, \
+            value_state_calls, \
+            calls_during_route_status
         should_wait = False
         with gate_lock:
             value_state_calls += 1

@@ -480,9 +480,7 @@ class ApplicationRuntime:
             # it overlaps with disk/store startup work, and await completion
             # before finalizing readiness (install_listener).
             state.mark("prewarm")
-            prewarm_task = asyncio.create_task(
-                asyncio.to_thread(prewarm_heavy_imports)
-            )
+            prewarm_task = asyncio.create_task(asyncio.to_thread(prewarm_heavy_imports))
             state.mark("learned-facts")
             self._load_learned_facts()
             # 8.19.0: the Google thought-signature cache, read here for the

@@ -1646,7 +1646,11 @@ Write-Host ('STAGED_REASON=' + $staged.Reason)
     script = tmp_path / f"husk-import-{edition}.ps1"
     script.write_text(
         _function_harness(
-            ("Get-ToolEnvironmentProblem", "Test-StagedEnvironment", "Convert-OutputLine"),
+            (
+                "Get-ToolEnvironmentProblem",
+                "Test-StagedEnvironment",
+                "Convert-OutputLine",
+            ),
             body,
         ),
         encoding="utf-8",

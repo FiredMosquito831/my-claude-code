@@ -2171,8 +2171,12 @@ enter_update_lock() {
     # helper-alive gate -- because the alternative is a crashed installer
     # locking the machine out of updating for the rest of the day.
     [ "$dry_run" -eq 1 ] && return 0
+    command -v mkdir >/dev/null 2>&1 || return 0
     lock_file=$(update_lock_path)
-    mkdir -p "$(dirname "$lock_file")" 2>/dev/null || return 2
+    lock_dir=${lock_file%/*}
+    [ "$lock_dir" = "$lock_file" ] && lock_dir="."
+    [ -n "$lock_dir" ] || lock_dir="/"
+    mkdir -p "$lock_dir" 2>/dev/null || return 2
     lock_attempt=0
     while [ "$lock_attempt" -lt 2 ]; do
         lock_attempt=$((lock_attempt + 1))
@@ -2230,7 +2234,9 @@ write_lock_unavailable_notice() {
     # caller exits 1 -- nothing was installed, and saying so with exit 0 is
     # how the false notice hid a dead update path.
     unavailable_lock=$(update_lock_path)
-    unavailable_dir=$(dirname "$unavailable_lock")
+    unavailable_dir=${unavailable_lock%/*}
+    [ "$unavailable_dir" = "$unavailable_lock" ] && unavailable_dir="."
+    [ -n "$unavailable_dir" ] || unavailable_dir="/"
     unavailable_me=$(id -un 2>/dev/null || printf 'this user')
     {
         printf '\nThe update lock could not be taken, and no running update holds it.\n'
@@ -2289,9 +2295,12 @@ exit_update_lock() {
 
 enter_tools_root_update_lock() {
     [ "$dry_run" -eq 1 ] && return 0
+    command -v mkdir >/dev/null 2>&1 || return 0
     tools_root_arg=${1:-}
     [ -n "$tools_root_arg" ] || return 0
-    tools_aside_parent=$(dirname "$tools_root_arg")
+    tools_aside_parent=${tools_root_arg%/*}
+    [ "$tools_aside_parent" = "$tools_root_arg" ] && tools_aside_parent="."
+    [ -n "$tools_aside_parent" ] || tools_aside_parent="/"
     [ -n "$tools_aside_parent" ] || return 0
     tools_update_lock_file="$tools_aside_parent/.mcc-update.lock"
     mkdir -p "$tools_aside_parent" 2>/dev/null || return 2
