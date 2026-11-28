@@ -22,7 +22,7 @@ from my_claude_code.application.catalogues import serialise
 from my_claude_code.config import mcp_media
 from my_claude_code.config.harnesses import harness_specs
 from my_claude_code.config.mcp_media import (
-    MCP_MEDIA_SPENDING_TOOLS,
+    MCP_MEDIA_ASK_TOOLS,
     McpMediaShape,
     mcp_media_document,
     with_mcp_media_block,
@@ -94,7 +94,7 @@ def test_on_only_the_named_apps_documents_change(tmp_path: Path) -> None:
     }
     # Decision 8: OpenCode does not ask by default, so MCC's layer does.
     assert opencode["permission"] == {
-        f"mcc_media_{tool}": "ask" for tool in MCP_MEDIA_SPENDING_TOOLS
+        f"mcc_media_{tool}": "ask" for tool in MCP_MEDIA_ASK_TOOLS
     }
     # Everything else in the document is what it was.
     without = {k: v for k, v in opencode.items() if k not in {"mcp", "permission"}}

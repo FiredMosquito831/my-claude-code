@@ -28,10 +28,12 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from my_claude_code.config.env_files import env_file_override
+from my_claude_code.config.mcp_media import MCC_BASE_URL_ENV
 from my_claude_code.config.paths import config_dir_path
 from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import Settings, get_settings
@@ -80,6 +82,15 @@ def _source(settings: Settings, key: str, environ: Mapping[str, str]) -> str:
     return "default"
 
 
+def _validated_base_url(raw: str) -> str:
+    parsed = urlsplit(raw.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(
+            f"{MCC_BASE_URL_ENV} must be an http:// or https:// URL with a host."
+        )
+    return raw.strip().rstrip("/")
+
+
 def resolve_address(
     environ: Mapping[str, str], settings: Settings | None = None
 ) -> tuple[MccAddress, str]:
@@ -91,18 +102,30 @@ def resolve_address(
     """
 
     resolved = settings if settings is not None else get_settings()
-    updates: dict[str, Any] = {}
-    port_text = env_file_override(resolved.model_config, "PORT")
-    if port_text is not None and port_text.strip().isdigit():
-        updates["port"] = int(port_text.strip())
-    host_text = env_file_override(resolved.model_config, "HOST")
-    if host_text is not None and host_text.strip():
-        updates["host"] = host_text.strip()
-    effective = resolved.model_copy(update=updates) if updates else resolved
+    env_file_base = env_file_override(resolved.model_config, MCC_BASE_URL_ENV)
+    raw_base_url = (
+        env_file_base
+        if env_file_base is not None and env_file_base.strip()
+        else environ.get(MCC_BASE_URL_ENV)
+    )
+    if raw_base_url and raw_base_url.strip():
+        root = _validated_base_url(raw_base_url)
+        port_source = MCC_BASE_URL_ENV
+    else:
+        updates: dict[str, Any] = {}
+        port_text = env_file_override(resolved.model_config, "PORT")
+        if port_text is not None and port_text.strip().isdigit():
+            updates["port"] = int(port_text.strip())
+        host_text = env_file_override(resolved.model_config, "HOST")
+        if host_text is not None and host_text.strip():
+            updates["host"] = host_text.strip()
+        effective = resolved.model_copy(update=updates) if updates else resolved
+        root = local_proxy_root_url(effective)
+        port_source = _source(resolved, "PORT", environ)
     token = (resolved.anthropic_auth_token or "").strip()
     address = MccAddress(
-        root=local_proxy_root_url(effective),
-        port_source=_source(resolved, "PORT", environ),
+        root=root,
+        port_source=port_source,
         config_dir=str(config_dir_path()),
         token_set=bool(token),
     )
@@ -151,6 +174,11 @@ class MccClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.address = address
+        parsed = urlsplit(address.root)
+        self._base_path = parsed.path.rstrip("/")
+        client_base_url = (
+            f"{parsed.scheme}://{parsed.netloc}" if self._base_path else address.root
+        )
         headers = {
             HARNESS_HEADER: app_id,
             "user-agent": f"mcc-mcp/{mcc_version()}",
@@ -158,7 +186,7 @@ class MccClient:
         if token:
             headers["authorization"] = f"Bearer {token}"
         self._client = httpx.AsyncClient(
-            base_url=address.root,
+            base_url=client_base_url,
             headers=headers,
             # An explicit transport: httpx then reads no proxy variable for
             # this client (risk R8, loopback only).
@@ -201,10 +229,11 @@ class MccClient:
                 for name, value in form.items()
             ]
             form = None
+        target = f"{self._base_path}{path}" if self._base_path else path
         try:
             response = await self._client.request(
                 method,
-                path,
+                target,
                 json=json_body,
                 data=form,
                 files=parts or None,

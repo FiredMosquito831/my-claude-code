@@ -379,6 +379,119 @@ def media_capability_summary(profile: MediaCapabilityProfile) -> dict[str, Any]:
     }
 
 
+_OPERATION_CAPABILITY_KEYS: Mapping[str, tuple[str, ...]] = {
+    MEDIA_OPERATION_IMAGE_GENERATE: (
+        "accepted_sizes",
+        "accepted_aspect_ratios",
+        "accepted_resolutions",
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_IMAGE_EDIT: (
+        "supports_mask",
+        "max_input_images",
+        "accepted_sizes",
+        "accepted_aspect_ratios",
+        "accepted_resolutions",
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_IMAGE_VARIATION: (
+        "accepted_sizes",
+        "accepted_aspect_ratios",
+        "accepted_resolutions",
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_SPEECH: (
+        "accepted_voices",
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_TRANSCRIBE: (
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_TRANSLATE: (
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_VIDEO_CREATE: (
+        "max_input_images",
+        "accepted_sizes",
+        "accepted_aspect_ratios",
+        "accepted_resolutions",
+        "accepted_durations",
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_VIDEO_EDIT: (
+        "max_input_images",
+        "accepted_sizes",
+        "accepted_aspect_ratios",
+        "accepted_resolutions",
+        "accepted_durations",
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+    MEDIA_OPERATION_OCR: (
+        "accepted_formats",
+        "supports_streaming",
+        "required_params",
+        "refused_params",
+        "supported_parameters",
+    ),
+}
+
+
+def _operation_capabilities(
+    profile: MediaCapabilityProfile, operation: str
+) -> dict[str, Any]:
+    """Concise per-operation subset of :func:`media_capability_summary`."""
+
+    summary = media_capability_summary(profile)
+    keys = _OPERATION_CAPABILITY_KEYS.get(
+        operation,
+        (
+            "supports_streaming",
+            "required_params",
+            "refused_params",
+            "supported_parameters",
+        ),
+    )
+    filtered: dict[str, Any] = {}
+    for key in keys:
+        value = summary.get(key)
+        if value is None or value == []:
+            continue
+        filtered[key] = value
+    return filtered
+
+
 #: Learned fact kinds surfaced on the Media Models inspector.
 MEDIA_FACT_KINDS: frozenset[str] = frozenset(
     {
@@ -785,16 +898,19 @@ def media_request_catalogue(
 
     schemas: dict[str, dict[str, dict[str, Any]]] = {}
     for ref, entry in entries.items():
+        descriptor = descriptors.get(entry["provider"])
         schemas[ref] = ref_request_schemas(
             ref,
-            descriptors.get(entry["provider"]),
+            descriptor,
             rails_placed[ref],
             schema,
         )
+        cap_profile = ref_capability_profile(ref, descriptor, schema)
         entry["operations"] = {
             operation: {
                 "endpoint": endpoints.get(operation),
                 "request_schema": request,
+                "capabilities": _operation_capabilities(cap_profile, operation),
             }
             for operation, request in schemas[ref].items()
         }
@@ -802,19 +918,31 @@ def media_request_catalogue(
     rails: list[dict[str, Any]] = []
     for rail, order in rail_orders:
         on_rail = [(ref, schemas[ref]) for ref in order]
+        rail_operations: dict[str, dict[str, Any]] = {}
+        for operation in RAIL_OPERATIONS[rail]:
+            op_entry: dict[str, Any] = {
+                "endpoint": endpoints.get(operation),
+                **field_acceptance(operation, on_rail),
+            }
+            if operation == MEDIA_OPERATION_SPEECH and endpoints.get("audio_voices"):
+                op_entry["voices_endpoint"] = endpoints["audio_voices"]
+            if operation == MEDIA_OPERATION_VIDEO_CREATE:
+                if endpoints.get(MEDIA_OPERATION_VIDEO_RETRIEVE):
+                    op_entry["jobs_endpoint"] = endpoints[
+                        MEDIA_OPERATION_VIDEO_RETRIEVE
+                    ]
+                if endpoints.get(MEDIA_OPERATION_VIDEO_DELETE):
+                    op_entry["delete_endpoint"] = endpoints[
+                        MEDIA_OPERATION_VIDEO_DELETE
+                    ]
+            rail_operations[operation] = op_entry
         rails.append(
             {
                 "rail": rail.value,
                 "label": RAIL_SETTINGS[rail].label,
                 "model_env": RAIL_SETTINGS[rail].model_env,
                 "models": order,
-                "operations": {
-                    operation: {
-                        "endpoint": endpoints.get(operation),
-                        **field_acceptance(operation, on_rail),
-                    }
-                    for operation in RAIL_OPERATIONS[rail]
-                },
+                "operations": rail_operations,
             }
         )
     return {"object": "list", "data": list(entries.values()), "rails": rails}
