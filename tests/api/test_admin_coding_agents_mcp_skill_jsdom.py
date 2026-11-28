@@ -29,6 +29,11 @@ def _run_pr39_jsdom_scenario() -> dict:
             pytest.fail("MCC_CI=1 and node is not on PATH.")
         pytest.skip("node is not on PATH")
 
+    if not (NODE_MODULES / "jsdom" / "package.json").is_file():
+        if ON_CI:
+            pytest.fail("MCC_CI=1 and jsdom is not installed.")
+        pytest.skip("jsdom is not installed")
+
     script = r"""
 import fs from "node:fs";
 import path from "node:path";
@@ -443,7 +448,10 @@ process.exit(0);
     finally:
         script_path.unlink(missing_ok=True)
     if result.returncode != 0:
-        if "Cannot find package 'jsdom'" in result.stderr:
+        if (
+            "Cannot find package 'jsdom'" in result.stderr
+            or "Cannot find module" in result.stderr
+        ):
             if ON_CI:
                 pytest.fail(f"MCC_CI=1 and jsdom missing: {result.stderr}")
             pytest.skip("jsdom is not installed")

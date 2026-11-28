@@ -18,3 +18,7 @@ tests/fixtures/desktop_shell/** -text
 # comes back, so a checkout that rewrote LF to CRLF would move every cell.
 tests/fixtures/ddg/** -text
 tests/fixtures/extraction/** -text
+
+# Bundled Agent Skill markdown/scripts keep LF in every checkout (checked by
+# test_skill_bundle_wheel.py on Windows and Linux runners alike).
+skills/** text eol=lf
