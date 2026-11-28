@@ -1421,6 +1421,10 @@ const ROUTES = {
   },
   "/admin/api/onboarding": { dismissed: true, complete: true, steps: [] },
   "/admin/api/mcp-media": MCP_MEDIA_STATE,
+  "/admin/api/skills": {
+    skill: { name: "mcc-media", version: "8.74.0", files: ["SKILL.md"], total_bytes: 512 },
+    targets: [],
+  },
   "/admin/api/providers/local-status": { providers: [] },
   "/admin/api/config/validate": { valid: true, errors: [] },
   "/admin/api/version": { current: "5.47.1" },

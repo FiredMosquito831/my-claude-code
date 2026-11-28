@@ -811,6 +811,37 @@ does a refused proxy token (or any other refusal before the route runs) on `/v1/
 (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`) keep `{"detail": ...}` unchanged; the
 Gemini routes answer in Google's shape as before.
 
+## 3-state MCP modes and the Shared Agent Skill (8.74.0)
+
+Each supported agent on **Coding agents** exposes one mutually exclusive MCP
+mode (`off`, `launch`, or `permanent`) plus direct user-config inspection and
+restore:
+
+- **Off:** No `mcc_media` entry is injected at launch or written to your user config.
+- **Launch only:** Injected when started through `mcc-*` launchers (`mcc-claude`,
+  `mcc-codex`, `mcc-opencode`, `mcc-opencode2`, `mcc-kilo`, `mcc-crush`, `mcc-qwen`,
+  `mcc-gemini`, and MCC's Claude Desktop config document).
+- **Permanent (user config):** Shown with a unified diff first via
+  `POST /admin/api/mcp-media/permanent/<target_id>/plan`, backed up once to
+  `.mcc-backup`, and written into the agent's own user config (`~/.claude.json`,
+  `~/.codex/config.toml`, `opencode.json`, `~/.commandcode/mcp.json`,
+  `~/.gemini/settings.json`, `~/.qwen/settings.json`, `~/.config/crush/crush.json`,
+  `~/.openclaw/openclaw.json`, or `claude_desktop_config.json`) via
+  `POST /admin/api/mcp-media/mode` or
+  `POST /admin/api/mcp-media/permanent/<target_id>/apply`. While a permanent entry
+  is active, `mcc-claude` and `mcc-codex` skip launch-time duplicate injection
+  automatically, and Codex keeps `supports_search_tool: false` when either mode is on.
+- **Foreign conflict protection & Undo:** An unowned `mcc_media` entry returns `409`
+  unless overwritten explicitly; `mcc-apps mcp-remove --restore` (or **Remove & Restore**
+  in the dashboard) removes MCC's keys or restores your original values cleanly.
+- **CLI inspection & switching:** `mcc-apps mcp-list`, `mcc-apps mcp-status <app>`,
+  `mcc-apps mcp-mode <app> <off|launch|permanent> [--preview] [--restore]`, and
+  `mcc-apps mcp-remove <app> [--preview] [--restore]`.
+- **Shared Agent Skill (mcc-media):** Installed via `/admin/api/skills` or
+  `mcc-apps skill-install` into `~/.agents/skills/` (folder **mcc-media**, and per-agent skill
+  directories) so agents invoke `scripts/mcc_media.py` directly using
+  `MCC_BASE_URL`, `MCC_MEDIA_OUTPUT_DIR`, and `MCC_MCP_INLINE_IMAGES` conventions.
+
 ## Codex
 
 - **Images you attach to a Codex turn** (`codex -i shot.png`, or a pasted image) work through MCC

@@ -455,6 +455,8 @@ provider chain, fetch extractor/SSRF guards, and schema-on-error feedback:
 - **Goose (`config.yaml`):** `extensions.mcc_websearch: {type: streamable_http, uri: "http://127.0.0.1:8082/v1/mcp/websearch", headers: {Authorization: "Bearer YOUR_TOKEN"}}`
 - **Claude Code (`.mcp.json`):** `{"mcpServers": {"mcc_websearch": {"type": "http", "url": "http://127.0.0.1:8082/v1/mcp/websearch", "headers": {"Authorization": "Bearer YOUR_TOKEN"}}}}` (while native single-tool and mixed client + `web_search` / `web_fetch` turns on `POST /v1/messages` work out of the box).
 
+For MCC's local stdio media tools (`mcc-mcp`) and the **mcc-media** Agent Skill, switch any agent between `off`, `launch`, and `permanent` user config from **Coding agents** (`POST /admin/api/mcp-media/mode`) or via `mcc-apps mcp-mode`, `mcc-apps mcp-list`, and `mcc-apps skill-install` ([Media guide](MEDIA.md#3-state-mcp-modes-and-the-shared-agent-skill-8740)).
+
 See [Multi-door agent search & HTTP MCP](WEB-SEARCH.md#multi-door-and-http-mcp).
 
 ### Errors

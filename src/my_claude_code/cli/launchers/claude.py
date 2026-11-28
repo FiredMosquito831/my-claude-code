@@ -12,6 +12,7 @@ from my_claude_code.cli.harnesses.registry import resolve_harness_binary, spec_f
 from my_claude_code.config.atomic_json import write_json_document_atomically_if_changed
 from my_claude_code.config.mcp_media import (
     claude_mcp_config_document,
+    has_permanent_mcp_entry,
     mcp_media_command,
     mcp_media_on,
 )
@@ -144,6 +145,8 @@ def claude_mcp_config(settings: Settings, environ: Mapping[str, str]) -> str | N
     """
 
     if not mcp_media_on(settings.mcp_media_apps, HARNESS_ID):
+        return None
+    if has_permanent_mcp_entry(HARNESS_ID, environ=environ):
         return None
     command = mcp_media_command()
     if command is None:

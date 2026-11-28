@@ -10,7 +10,7 @@ license: AGPL-3.0-or-later AND MIT
 compatibility: Requires a running MCC proxy and Python 3.10+ (standard library only).
 metadata:
   author: my-claude-code
-  version: "8.73.0"
+  version: "8.74.0"
 ---
 
 # MCC Media Skill (`mcc-media`)
