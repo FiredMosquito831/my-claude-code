@@ -757,7 +757,7 @@ def test_the_startup_path_is_what_calls_configure_proxy_rotation() -> None:
     source = inspect.getsource(application)
     assert "configure_proxy_rotation(" in source
     assert source.index("configure_proxy_rotation(\n") < source.index(
-        "arm_health_from_store)"
+        "to_thread(arm_health_from_store"
     )
 
 

@@ -1086,3 +1086,56 @@ def test_the_bundled_installer_is_looked_for_beside_the_package(tmp_path) -> Non
     # answer None rather than hand back a path that is not there.
     assert found is None or found.is_file()
     assert release_updates._bundled_installer("not-an-installer") is None
+
+
+def test_sweep_skips_when_live_update_lock_is_held(monkeypatch, tmp_path) -> None:
+    """Sweeping previous/staging aside directories must skip while an installer holds a live update lock."""
+
+    import json
+
+    tools_root = tmp_path / "uv" / "tools"
+    live = tools_root / "my-claude-code"
+    live.mkdir(parents=True)
+    stale_prev = (
+        tmp_path
+        / "uv"
+        / update_progress.PREVIOUS_ENV_DIRNAME
+        / "20260101-000000"
+        / "my-claude-code"
+    )
+    stale_prev.mkdir(parents=True)
+    (stale_prev / "marker.txt").write_text("previous", encoding="utf-8")
+    latest_prev = (
+        tmp_path
+        / "uv"
+        / update_progress.PREVIOUS_ENV_DIRNAME
+        / "20260102-000000"
+        / "my-claude-code"
+    )
+    latest_prev.mkdir(parents=True)
+    (latest_prev / "marker.txt").write_text("latest", encoding="utf-8")
+
+    stage_dir = tmp_path / "config" / "updates"
+    stage_dir.mkdir(parents=True)
+    monkeypatch.setattr(release_updates, "_installed_tool_dir", lambda: live)
+    monkeypatch.setattr(release_updates, "_stage_dir", lambda: stage_dir)
+
+    live_payload = json.dumps(
+        {"pid": os.getpid(), "started_at": "2026-11-28T00:00:00Z"}
+    )
+
+    stage_lock = stage_dir / update_progress.UPDATE_LOCK_FILENAME
+    stage_lock.write_text(live_payload, encoding="utf-8")
+    assert release_updates.sweep_superseded_environments() is None
+    assert stale_prev.exists()
+
+    stage_lock.unlink()
+    tools_lock = tools_root.parent / update_progress.TOOLS_UPDATE_LOCK_FILENAME
+    tools_lock.write_text(live_payload, encoding="utf-8")
+    assert release_updates.sweep_superseded_environments() is None
+    assert stale_prev.exists()
+
+    tools_lock.unlink()
+    release_updates.sweep_superseded_environments()
+    assert not stale_prev.exists()
+    assert latest_prev.exists()

@@ -583,7 +583,7 @@ def test_admin_static_model_combobox_preserves_custom_slugs_and_none_semantics()
     assert "You can still enter a custom slug." in script
     assert 'input.dataset.fieldType === "optional_model"' in script
     assert 'return "";' in script
-    assert "await hydrateModelOptions();" in script
+    assert "hydrateModelOptions()" in script
     assert "Model fields remain editable" in script
     assert "result.failed_providers || []" in script
     assert '"warn"' in script
@@ -2584,3 +2584,119 @@ def test_a_designs_stylesheet_and_shell_are_served_from_their_own_route(
             # The factory key the loader looks up, so this proves the right
             # FILE answered rather than a 200 from some fallback.
             assert "MCCDesignShells" in body, name
+
+
+@pytest.mark.asyncio
+async def test_onboarding_state_gathers_subchecks_concurrently(
+    monkeypatch, tmp_path
+) -> None:
+    """_build_onboarding_state overlaps settings, log, and harness usage checks."""
+
+    import asyncio
+
+    from my_claude_code.api import admin_routes
+
+    _set_home(monkeypatch, tmp_path)
+    settings = Settings()
+    entered = 0
+    all_entered = asyncio.Event()
+
+    async def _enter() -> None:
+        nonlocal entered
+        entered += 1
+        if entered == 3:
+            all_entered.set()
+        await asyncio.wait_for(all_entered.wait(), timeout=2.0)
+
+    async def fake_claude(_settings: Settings) -> bool:
+        await _enter()
+        return True
+
+    async def fake_log(_settings: Settings) -> dict:
+        await _enter()
+        return {"enabled": True, "total": 1, "last": None}
+
+    async def fake_usage(_settings: Settings) -> dict[str, int]:
+        await _enter()
+        return {"claude": 1}
+
+    monkeypatch.setattr(admin_routes, "_claude_settings_configured", fake_claude)
+    monkeypatch.setattr(admin_routes, "_onboarding_request_log", fake_log)
+    monkeypatch.setattr(admin_routes, "_onboarding_harness_usage", fake_usage)
+    monkeypatch.setattr(admin_routes, "detect_onboarding_agents", lambda **_kwargs: [])
+
+    state, request_log = await admin_routes._build_onboarding_state(settings)
+    assert entered == 3
+    assert request_log["total"] == 1
+    assert state is not None
+
+
+def test_admin_config_gathers_subcalls_and_reuses_values(monkeypatch, tmp_path) -> None:
+    """get_admin_config runs _config_response, recent_wire_surfaces, and load_value_state concurrently and reuses values."""
+
+    import threading
+
+    from my_claude_code.api import admin_routes
+
+    _set_home(monkeypatch, tmp_path)
+    app = create_test_app()
+    services = app.state.services
+    real_config_response = admin_routes._config_response
+    real_load_value_state = admin_routes.load_value_state
+    real_recent_surfaces = services.admin.recent_wire_surfaces
+    real_route_status = admin_routes._route_status
+
+    barrier = threading.Barrier(3, timeout=2.0)
+    gate_lock = threading.Lock()
+    entered_top_level_value_state = False
+    value_state_calls = 0
+    in_route_status = False
+    calls_during_route_status = 0
+    route_status_received_values: list[bool] = []
+
+    def slow_config_response():
+        barrier.wait()
+        return real_config_response()
+
+    def slow_recent_surfaces():
+        barrier.wait()
+        return real_recent_surfaces()
+
+    def slow_load_value_state():
+        nonlocal \
+            entered_top_level_value_state, \
+            value_state_calls, \
+            calls_during_route_status
+        should_wait = False
+        with gate_lock:
+            value_state_calls += 1
+            if in_route_status:
+                calls_during_route_status += 1
+            elif not entered_top_level_value_state:
+                entered_top_level_value_state = True
+                should_wait = True
+        if should_wait:
+            barrier.wait()
+        return real_load_value_state()
+
+    async def tracked_route_status(payload, services_arg, *, values=None):
+        nonlocal in_route_status
+        route_status_received_values.append(values is not None)
+        in_route_status = True
+        try:
+            return await real_route_status(payload, services_arg, values=values)
+        finally:
+            in_route_status = False
+
+    monkeypatch.setattr(admin_routes, "_config_response", slow_config_response)
+    monkeypatch.setattr(services.admin, "recent_wire_surfaces", slow_recent_surfaces)
+    monkeypatch.setattr(admin_routes, "load_value_state", slow_load_value_state)
+    monkeypatch.setattr(admin_routes, "_route_status", tracked_route_status)
+
+    with _local_client(app) as client:
+        response = client.get("/admin/api/config")
+
+    assert response.status_code == 200
+    assert value_state_calls >= 1
+    assert route_status_received_values == [True]
+    assert calls_during_route_status == 0

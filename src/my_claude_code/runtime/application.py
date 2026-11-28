@@ -463,6 +463,7 @@ class ApplicationRuntime:
             return
         logger.info("Starting Claude Code Proxy...")
         state = startup_state()
+        prewarm_task: asyncio.Task[None] | None = None
         try:
             # First of everything, and deliberately: the instrument that
             # measures how long the rest of this start holds the loop has to be
@@ -475,13 +476,11 @@ class ApplicationRuntime:
             # requests, and a request can arrive the instant the listener is up.
             self._start_stall_watchdog()
             warn_if_process_auth_token(self.settings)
-            # Before the first sweep and before the first request: a provider
-            # built during the sweep asks the store for its memory, and a
-            # memory handed out empty would re-pay every 400 this proxy has
-            # already paid for.
-            # First, and on a worker thread. See ``PREWARM_MODULES``.
+            # Start heavy module prewarming concurrently on a worker thread so
+            # it overlaps with disk/store startup work, and await completion
+            # before finalizing readiness (install_listener).
             state.mark("prewarm")
-            await asyncio.to_thread(prewarm_heavy_imports)
+            prewarm_task = asyncio.create_task(asyncio.to_thread(prewarm_heavy_imports))
             state.mark("learned-facts")
             self._load_learned_facts()
             # 8.19.0: the Google thought-signature cache, read here for the
@@ -499,7 +498,7 @@ class ApplicationRuntime:
             # broken file. A file that stays unreadable is said in this log,
             # and a provider whose chain has Direct fallback off is refused
             # rather than built to dial from this computer (7.78.8).
-            await asyncio.to_thread(settle_proxy_chains)
+            settled_chains = await asyncio.to_thread(settle_proxy_chains)
             # The single most expensive stage on a real config -- it probes
             # every configured provider over the network. It used to run
             # before the listener existed, which is most of why a start looked
@@ -538,24 +537,13 @@ class ApplicationRuntime:
                 ),
             )
             state.mark("proxy-refusals")
-            await asyncio.to_thread(arm_refusals_from_store)
-            # And the other half of the same argument. A reachability bench is
-            # process-lifetime state too, and since 7.19.0 an address that
-            # failed comes back only after a check that PASSES -- so a restart
-            # that forgot the benches would put every dead proxy back into
-            # rotation and charge the operator a connect timeout each to
-            # rediscover them.
-            await asyncio.to_thread(arm_health_from_store)
-            # The speed ledger (7.54.0): measurements, not verdicts, so a
-            # missing or damaged file is simply an empty history.
-            await asyncio.to_thread(load_speed)
-            # And the third: a feed fetch is memory, so one that was running
-            # when this process's predecessor stopped would otherwise be
-            # reported as still running for ever. This reads the record it left
-            # and reports it as interrupted -- with its counters, and with the
-            # addresses it had already found, which the sweep writes as it goes
-            # rather than only at the end.
-            await asyncio.to_thread(recover_fetch_job)
+            await asyncio.gather(
+                asyncio.to_thread(arm_refusals_from_store, settled_chains),
+                asyncio.to_thread(arm_health_from_store, settled_chains),
+                asyncio.to_thread(load_speed),
+                asyncio.to_thread(recover_fetch_job),
+            )
+            await prewarm_task
             install_listener()
             self._proxy_check_timer.start()
             self._proxy_health_timer.start()
@@ -567,7 +555,7 @@ class ApplicationRuntime:
             # thing. One write, once -- a store already converted comes back
             # with nothing to do. See ``config.proxy_feed_legacy``.
             state.mark("proxy-feeds")
-            await asyncio.to_thread(migrate_proxy_feeds)
+            await asyncio.to_thread(migrate_proxy_feeds, store=settled_chains)
             self._proxy_feed_timer.start()
             SOURCE_SCHEDULE.attach(self._proxy_source_timer.rearm)
             self._proxy_source_timer.start()
@@ -617,9 +605,17 @@ class ApplicationRuntime:
                 )
             self._started = True
         except asyncio.CancelledError:
+            if prewarm_task is not None and not prewarm_task.done():
+                prewarm_task.cancel()
+                with suppress(BaseException):
+                    await prewarm_task
             await self.close()
             raise
         except Exception as exc:
+            if prewarm_task is not None and not prewarm_task.done():
+                prewarm_task.cancel()
+                with suppress(BaseException):
+                    await prewarm_task
             logger.error(
                 "Startup failed:\n{}",
                 startup_failure_message(self.settings, exc),

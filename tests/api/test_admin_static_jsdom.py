@@ -16029,3 +16029,15 @@ def test_jsdom_remote_control_page(remote_control_ui: dict) -> None:
     assert tm["tunnelPosts"] == [
         {"path": "/admin/api/rc/tunnel/start", "body": {"mode": "tailscale_local"}}
     ]
+
+
+def test_jsdom_sidebar_nav_paints_synchronously_and_boots_parallel(
+    rendered: dict,
+) -> None:
+    boot = rendered["bootImmediate"]
+    assert boot is not None
+    assert boot["navButtonsBeforeFetch"] == len(rendered["navLabels"])
+    assert boot["navButtonsBeforeFetch"] > 0
+    assert "/admin/api/onboarding" in boot["firstFetchesBeforeResolve"]
+    assert "/admin/api/config-dir" in boot["firstFetchesBeforeResolve"]
+    assert "/admin/api/config" in boot["firstFetchesBeforeResolve"]

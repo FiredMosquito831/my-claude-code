@@ -964,7 +964,10 @@ async def _pool_key_health(
 
 
 async def _route_status(
-    payload: Mapping[str, Any], services: ApiServices
+    payload: Mapping[str, Any],
+    services: ApiServices,
+    *,
+    values: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Which rail providers cannot serve now, and when settings last changed.
 
@@ -976,9 +979,11 @@ async def _route_status(
     health = await _pool_key_health(
         services, [str(entry.get("provider_id") or "") for entry in provider_status]
     )
-    values = await asyncio.to_thread(load_value_state)
+    resolved_values = (
+        values if values is not None else await asyncio.to_thread(load_value_state)
+    )
     problems = await asyncio.to_thread(
-        credential_problems, provider_status, values, health.get
+        credential_problems, provider_status, resolved_values, health.get
     )
     managed = (payload.get("paths") or {}).get("managed")
     return {
@@ -993,8 +998,11 @@ async def get_admin_config(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    payload = _config_response()
-    recent_surfaces = await asyncio.to_thread(services.admin.recent_wire_surfaces)
+    payload, recent_surfaces, values = await asyncio.gather(
+        asyncio.to_thread(_config_response),
+        asyncio.to_thread(services.admin.recent_wire_surfaces),
+        asyncio.to_thread(load_value_state),
+    )
     _attach_provider_status_endpoints(
         payload,
         cached_models=services.admin.cached_model_ids(),
@@ -1002,7 +1010,7 @@ async def get_admin_config(
         learned=services.admin.learned_facts_by_model(),
         unlabeled_by_provider=recent_surfaces.get("unlabeled_by_provider"),
     )
-    payload["route_status"] = await _route_status(payload, services)
+    payload["route_status"] = await _route_status(payload, services, values=values)
     return payload
 
 
@@ -1797,10 +1805,12 @@ async def _onboarding_harness_usage(settings: Settings) -> dict[str, int]:
 async def _build_onboarding_state(
     settings: Settings,
 ) -> tuple[OnboardingState, dict[str, Any]]:
-    claude_settings_configured = await _claude_settings_configured(settings)
-    request_log = await _onboarding_request_log(settings)
+    claude_settings_configured, request_log, usage = await asyncio.gather(
+        _claude_settings_configured(settings),
+        _onboarding_request_log(settings),
+        _onboarding_harness_usage(settings),
+    )
     has_requests = request_log["total"] > 0
-    usage = await _onboarding_harness_usage(settings)
     # Off the event loop: the desktop probes stat a dozen directories and read
     # the registry, which is exactly what every other probe on this page does
     # in a thread.

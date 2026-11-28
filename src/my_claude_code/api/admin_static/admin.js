@@ -801,13 +801,66 @@ function kickDashboardPollers() {
   requestsPoller.now();
 }
 
+function applySavedDashboardControls(savedState) {
+  if (!savedState || typeof savedState !== "object") {
+    paintWindowControls("req");
+    return;
+  }
+  if (savedState.autoRefresh != null && byId("reqAutoRefresh")) {
+    byId("reqAutoRefresh").checked = Boolean(savedState.autoRefresh);
+  }
+  if (savedState.autoRefreshInterval && byId("reqAutoRefreshInterval")) {
+    byId("reqAutoRefreshInterval").value = String(savedState.autoRefreshInterval);
+  }
+  if (savedState.inflightInterval != null && byId("reqInflightInterval")) {
+    const select = byId("reqInflightInterval");
+    const value = String(savedState.inflightInterval);
+    if (Array.from(select.options).some((option) => option.value === value)) {
+      select.value = value;
+    }
+  }
+  if (savedState.inflightCollapsed) setInflightCollapsed(true);
+  if (savedState.webSearchStatsPeriod) {
+    state.webSearchStatsPeriod = savedState.webSearchStatsPeriod;
+    const periodSelect = byId("webSearchStatsPeriod");
+    if (periodSelect) periodSelect.value = savedState.webSearchStatsPeriod;
+  }
+  if (savedState.reqFilters) restoreReqFilters(savedState.reqFilters);
+  else paintWindowControls("req");
+  if (savedState.reqOffset) {
+    reqState.offset = Number(savedState.reqOffset) || 0;
+  }
+}
+
 async function load() {
   showMessage("Loading admin config");
   state.loading = true;
   try {
-    await loadOnboarding().catch((error) => showMessage(error.message, "error"));
-    await loadConfigDir().catch((error) => showMessage(error.message, "error"));
-    await loadDashboardState();
+    // Paint the navigation rail and initial viewer appearance synchronously
+    // before any network round-trip so the left sidebar is immediately visible
+    // even while onboarding/config queries run on the backend.
+    const initialSavedState = restoreDashboardState();
+    if (initialSavedState?.activeView && !state.userNavigated) {
+      state.activeView = initialSavedState.activeView;
+    }
+    applySavedDashboardControls(initialSavedState);
+    applyAppearance(resolveAppearance());
+    renderAppearanceCard();
+    renderNav({ skipViewLoads: true });
+
+    const onboardingPromise = loadOnboarding().catch((error) => {
+      showMessage(error.message, "error");
+      return null;
+    });
+    const configDirPromise = loadConfigDir().catch((error) => {
+      showMessage(error.message, "error");
+      return null;
+    });
+    await loadDashboardState({
+      onboardingPromise,
+      savedState: initialSavedState,
+    });
+    await configDirPromise;
   } finally {
     state.loading = false;
   }
@@ -819,12 +872,19 @@ async function load() {
   if (state.activeView === "usage" && byId("usageLayoutRoot")) paintUsageView();
 }
 
-async function loadDashboardState() {
-  // Read the persisted state after the first await: at the very start of load()
-  // (during initial script execution) the browser can still be settling
-  // localStorage and a synchronous read returns an empty object. Yielding to
-  // the event loop first makes the read reliable.
-  const savedState = restoreDashboardState();
+async function loadDashboardState({
+  onboardingPromise = null,
+  savedState: initialSavedState = null,
+} = {}) {
+  const configPromise = api("/admin/api/config");
+  const [config] = await Promise.all(
+    onboardingPromise ? [configPromise, onboardingPromise] : [configPromise],
+  );
+  // Read persisted state after the first await as well in case storage settled
+  // asynchronously during initial script execution.
+  const latestSaved = restoreDashboardState();
+  const savedState =
+    latestSaved && Object.keys(latestSaved).length ? latestSaved : initialSavedState;
   if (
     state.onboarding &&
     !state.onboarding.dismissed &&
@@ -832,35 +892,10 @@ async function loadDashboardState() {
     !state.userNavigated
   ) {
     state.activeView = "get_started";
-  } else if (savedState?.activeView) {
+  } else if (savedState?.activeView && !state.userNavigated) {
     state.activeView = savedState.activeView;
   }
-  if (savedState?.autoRefresh != null && byId("reqAutoRefresh")) {
-    byId("reqAutoRefresh").checked = Boolean(savedState.autoRefresh);
-  }
-  if (savedState?.autoRefreshInterval && byId("reqAutoRefreshInterval")) {
-    byId("reqAutoRefreshInterval").value = String(savedState.autoRefreshInterval);
-  }
-  if (savedState?.inflightInterval != null && byId("reqInflightInterval")) {
-    const select = byId("reqInflightInterval");
-    const value = String(savedState.inflightInterval);
-    if (Array.from(select.options).some((option) => option.value === value)) {
-      select.value = value;
-    }
-  }
-  if (savedState?.inflightCollapsed) setInflightCollapsed(true);
-  if (savedState?.webSearchStatsPeriod) {
-    state.webSearchStatsPeriod = savedState.webSearchStatsPeriod;
-    const periodSelect = byId("webSearchStatsPeriod");
-    if (periodSelect) periodSelect.value = savedState.webSearchStatsPeriod;
-  }
-  // Restore the analytics filters and page so a refresh continues the same query.
-  if (savedState?.reqFilters) restoreReqFilters(savedState.reqFilters);
-  else paintWindowControls("req");
-  if (savedState?.reqOffset) {
-    reqState.offset = Number(savedState.reqOffset) || 0;
-  }
-  const config = await api("/admin/api/config");
+  applySavedDashboardControls(savedState);
   state.config = config;
   state.fields = adoptConfigFields(config.fields);
   // 8.1.0: the machine's appearance defaults were in that payload, so the
@@ -876,7 +911,7 @@ async function loadDashboardState() {
       .map((provider) => provider.credential_env)
       .filter(Boolean),
   );
-  renderNav();
+  renderNav({ skipOnboardingReload: Boolean(onboardingPromise) });
   // 7.110.0: whether the marketplace page belongs in the sidebar. Its own
   // small request, not awaited: a failure leaves the link hidden.
   refreshMarketplaceNav();
@@ -890,22 +925,26 @@ async function loadDashboardState() {
   syncRoutePauseUi();
   renderMessagingAuthNotice(config.messaging_auth_open);
   renderWebSearchProviders();
-  await loadCustomProviders();
   byId("configPath").textContent = config.paths.managed;
-  await hydrateModelOptions();
   // No `validate(false)` here: its answer was discarded, and it cost a full
   // settings prepare on the server's event loop on every page load. Validate
   // and Save still validate exactly as before.
-  await refreshLocalStatus();
+  const secondaryResults = await Promise.allSettled([
+    loadCustomProviders(),
+    hydrateModelOptions(),
+    refreshLocalStatus(),
+    loadVersionInfo(),
+    loadDesktopState(),
+    loadHarnesses(),
+    loadDesktopApps(),
+    loadOtherServers(),
+    loadRtkState(),
+    loadClaudeSettings(),
+  ]);
   updateDirtyState();
-  showMessage("");
-  await loadVersionInfo();
-  await loadDesktopState();
-  await loadHarnesses();
-  await loadDesktopApps();
-  await loadOtherServers();
-  await loadRtkState();
-  await loadClaudeSettings();
+  if (byId("messageArea")?.textContent === "Loading admin config") {
+    showMessage("");
+  }
   initClaudeConnectCopyButtons();
   // A restored "on" auto-refresh must actually start polling.
   updateRequestAutoRefresh();
@@ -917,6 +956,12 @@ async function loadDashboardState() {
   // before any of them had answered (the onboarding answer comes first in
   // load()), so it repaints here rather than waiting for the next visit.
   if (state.activeView === "get_started") renderOnboarding();
+  const failedSecondary = secondaryResults.find(
+    (result) => result.status === "rejected",
+  );
+  if (failedSecondary) {
+    throw failedSecondary.reason;
+  }
 }
 
 /** The settings map for a freshly fetched config payload.
@@ -939,7 +984,7 @@ function adoptConfigFields(fields) {
   return next;
 }
 
-function renderNav() {
+function renderNav(options = {}) {
   const nav = byId("sectionNav");
   nav.innerHTML = "";
   VIEW_GROUPS.forEach((view, index) => {
@@ -971,11 +1016,18 @@ function renderNav() {
     });
     nav.appendChild(button);
   });
-  setActiveView(state.activeView, { scroll: false });
+  setActiveView(state.activeView, {
+    scroll: false,
+    skipViewLoads: Boolean(options?.skipViewLoads),
+    skipOnboardingReload: Boolean(options?.skipOnboardingReload),
+  });
   setInflightBadge(inflightState.badge);
 }
 
-function setActiveView(viewId, { scroll = false } = {}) {
+function setActiveView(
+  viewId,
+  { scroll = false, skipViewLoads = false, skipOnboardingReload = false } = {},
+) {
   const activeView =
     VIEW_GROUPS.find((view) => view.id === viewId) || VIEW_GROUPS[0];
   state.activeView = activeView.id;
@@ -1042,11 +1094,11 @@ function setActiveView(viewId, { scroll = false } = {}) {
     }),
   );
 
-  if (activeView.id === "get_started") {
+  if (!skipViewLoads && !skipOnboardingReload && activeView.id === "get_started") {
     loadOnboarding().catch((error) => showMessage(error.message, "error"));
   }
 
-  if (activeView.id === "limits") {
+  if (!skipViewLoads && activeView.id === "limits") {
     loadLoopLag().catch(() => {
       // A readout is not a reason to interrupt somebody editing limits: the
       // card keeps whatever it last said, and says so.
@@ -1056,11 +1108,11 @@ function setActiveView(viewId, { scroll = false } = {}) {
     });
   }
 
-  if (activeView.id === "web_search") {
+  if (!skipViewLoads && activeView.id === "web_search") {
     loadWebSearchAnalytics().catch((error) => showMessage(error.message, "error"));
   }
 
-  if (activeView.id === "claude") {
+  if (!skipViewLoads && activeView.id === "claude") {
     loadClaudeSettings().catch((error) => showMessage(error.message, "error"));
     loadClaudeConfig().catch((error) => showMessage(error.message, "error"));
     // Wiring at startup alone is not enough: the view is hidden then, and a
@@ -1074,10 +1126,12 @@ function setActiveView(viewId, { scroll = false } = {}) {
 
   // The in-flight reading is every 10 s away from the panel and at the chosen
   // interval beside it, so a change of view re-arms it on the new cadence.
-  inflightPoller.restart();
-  pollLeadership.announceNeed();
+  if (!skipViewLoads) {
+    inflightPoller.restart();
+    pollLeadership.announceNeed();
+  }
 
-  if (activeView.id === "usage") {
+  if (!skipViewLoads && activeView.id === "usage") {
     // 8.3.0: paints from payloads already in memory; 8.4.0 adds the one local
     // GET. 8.6.0 arms the automatic refresh -- and only here, so the poller
     // exists only while this page is the one on screen. `createPoller` returns
@@ -1087,7 +1141,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
     usagePoller.restart();
   }
 
-  if (activeView.id === "requests") {
+  if (!skipViewLoads && activeView.id === "requests") {
     loadRequestsView().catch((error) => showMessage(error.message, "error"));
     // The view was just read in full; the next auto-refresh is an interval on.
     requestsPoller.restart();
@@ -33731,11 +33785,6 @@ byId("getStartedDismissButton").addEventListener("click", () => {
   });
 });
 
-load().catch((error) => {
-  showMessage(error.message, "error");
-});
-
-
 /* --------------------------------------------------------------------- */
 /* Requests / analytics view                                             */
 /* --------------------------------------------------------------------- */
@@ -53261,3 +53310,7 @@ function initRemoteControlPanel() {
     });
   }
 }
+
+load().catch((error) => {
+  showMessage(error.message, "error");
+});
