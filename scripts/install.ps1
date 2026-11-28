@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string] $Version = "",
     [switch] $VoiceNim,
     [switch] $VoiceLocal,
@@ -183,6 +183,9 @@ $script:UpdateLockUnavailable = $false
 # not start (Confirm-RestartedServer). The install may have happened; the run
 # still ends with exit 1, because the server it is for is not the one serving.
 $script:PortHeldByAnother = $false
+$script:PostVerifyError = ""
+$script:ToolsUpdateLockPath = ""
+$script:HoldsToolsUpdateLock = $false
 # 7.103.1: the server this run started (Start-RestartedServer), what the
 # liveness gate ended on (Confirm-RestartedServer: answered, not-serving,
 # exited, ceiling, port-taken), the interpreter pid it saw answering, and why
@@ -1583,12 +1586,20 @@ function Invoke-PrecompileBytecode {
         if ([string]::IsNullOrWhiteSpace($toolDir)) {
             return
         }
-        $sitePackages = Join-Path $toolDir "Lib\site-packages\my_claude_code"
+        $sitePackagesRoot = Join-Path $toolDir "Lib\site-packages"
+        $sitePackages = Join-Path $sitePackagesRoot "my_claude_code"
         $python = Join-Path $toolDir "Scripts\python.exe"
         if (-not (Test-Path -LiteralPath $sitePackages)) { return }
         if (-not (Test-Path -LiteralPath $python)) { return }
+        $compileTargets = @($sitePackages)
+        foreach ($dep in @("loguru", "fastapi", "pydantic", "httpx", "uvicorn", "openai")) {
+            $depPath = Join-Path $sitePackagesRoot $dep
+            if (Test-Path -LiteralPath $depPath) {
+                $compileTargets += $depPath
+            }
+        }
         Write-Host "Precompiling My Claude Code (saves a few seconds on the next start)..."
-        & $python -m compileall -q $sitePackages *> $null
+        & $python -m compileall -q $compileTargets *> $null
     }
     catch {
         # An optimisation, never a requirement.
@@ -2181,7 +2192,8 @@ function Test-StagedEnvironment {
         $versionOut = (& $stagedServer --version 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
         $versionCode = $LASTEXITCODE
         Write-InstallLog ('Staged --version said "' + $versionOut + '" (exit ' + $versionCode + ').')
-        $importOut = (& $stagedPython -c "import my_claude_code" 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
+        $importProbe = "import loguru; assert hasattr(loguru, 'logger'); import my_claude_code; import my_claude_code.cli.entrypoints; import my_claude_code.cli.desktop_entrypoint"
+        $importOut = (& $stagedPython -c $importProbe 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
         $importCode = $LASTEXITCODE
         Write-InstallLog ("Staged import exited with " + $importCode + ".")
         if ($importOut) { Write-InstallLog $importOut }
@@ -2756,7 +2768,8 @@ function Get-ToolEnvironmentProblem {
 
     if (-not (Test-Path -LiteralPath $ToolDir -PathType Container)) { return "" }
     $problems = @()
-    if (-not (Test-Path -LiteralPath (Join-Path $ToolDir "Scripts\python.exe") -PathType Leaf)) {
+    $pythonExe = Join-Path $ToolDir "Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
         $problems += "it has no Scripts\python.exe"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $ToolDir "uv-receipt.toml") -PathType Leaf)) {
@@ -2778,6 +2791,57 @@ function Get-ToolEnvironmentProblem {
         }
         finally {
             $ErrorActionPreference = $previousPreference
+        }
+    }
+    if ($problems.Count -eq 0) {
+        # Only invoke python.exe when it is a real PE executable (mocked unit
+        # tests touch 3-14 byte placeholder files).
+        $isRunnablePe = $false
+        try {
+            $fs = [System.IO.File]::OpenRead($pythonExe)
+            try {
+                if ($fs.Length -ge 64) {
+                    $dos = New-Object byte[] 64
+                    $read = $fs.Read($dos, 0, 64)
+                    if ($read -eq 64 -and $dos[0] -eq 0x4D -and $dos[1] -eq 0x5A) {
+                        $peOffset = [System.BitConverter]::ToInt32($dos, 0x3C)
+                        if ($peOffset -ge 64 -and ($peOffset + 4) -le $fs.Length) {
+                            $fs.Seek($peOffset, [System.IO.SeekOrigin]::Begin) | Out-Null
+                            $sig = New-Object byte[] 4
+                            if ($fs.Read($sig, 0, 4) -eq 4 -and $sig[0] -eq 0x50 -and $sig[1] -eq 0x45 -and $sig[2] -eq 0x00 -and $sig[3] -eq 0x00) {
+                                $isRunnablePe = $true
+                            }
+                        }
+                    }
+                }
+            }
+            finally {
+                $fs.Dispose()
+            }
+        }
+        catch {
+        }
+        if ($isRunnablePe) {
+            $importProbe = "import loguru; assert hasattr(loguru, 'logger'); import my_claude_code; import my_claude_code.cli.entrypoints; import my_claude_code.cli.desktop_entrypoint"
+            $previousPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $importOut = (& $pythonExe -c $importProbe 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
+                if ($LASTEXITCODE -ne 0) {
+                    if ($importOut) {
+                        $problems += "critical Python imports failed ($importOut)"
+                    }
+                    else {
+                        $problems += "critical Python imports failed (exit $LASTEXITCODE)"
+                    }
+                }
+            }
+            catch {
+                $problems += "critical Python imports failed ($($_.Exception.Message))"
+            }
+            finally {
+                $ErrorActionPreference = $previousPreference
+            }
         }
     }
     return ($problems -join "; ")
@@ -3366,9 +3430,8 @@ function Enter-UpdateLock {
         }
     }
     catch {
-        # No updates directory means no lock and no receipt. An install that
-        # cannot coordinate still installs; it just says so.
-        return $true
+        $script:UpdateLockUnavailable = $true
+        return $false
     }
     for ($attempt = 0; $attempt -lt 2; $attempt++) {
         try {
@@ -3467,6 +3530,72 @@ function Exit-UpdateLock {
     if (-not $script:HoldsUpdateLock) { return }
     $script:HoldsUpdateLock = $false
     try { Remove-Item -LiteralPath $script:UpdateLockPath -Force -ErrorAction SilentlyContinue } catch { }
+}
+
+function Enter-ToolsRootUpdateLock {
+    <#
+        .SYNOPSIS
+        Take the companion lock alongside ``.mcc-staging`` / ``.mcc-previous``
+        so installs with different ``MCC_CONFIG_DIR`` values and startup
+        housekeeping sweeps coordinate around the shared uv tools root.
+    #>
+    param([string] $ToolsRoot)
+
+    if ($DryRun -or [string]::IsNullOrWhiteSpace($ToolsRoot)) { return $true }
+    $asideParent = Split-Path -Parent $ToolsRoot
+    if ([string]::IsNullOrWhiteSpace($asideParent)) { return $true }
+    $lockPath = Join-Path $asideParent ".mcc-update.lock"
+    $script:ToolsUpdateLockPath = $lockPath
+    try {
+        if (-not (Test-Path -LiteralPath $asideParent)) {
+            New-Item -ItemType Directory -Path $asideParent -Force | Out-Null
+        }
+    }
+    catch {
+        $script:UpdateLockUnavailable = $true
+        return $false
+    }
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $stream = [System.IO.File]::Open($lockPath, 'CreateNew', 'Write', 'None')
+            try {
+                $record = [ordered]@{
+                    pid             = $PID
+                    started_at      = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                    started_display = (Get-Date).ToString('HH:mm:ss')
+                    source          = 'install.ps1'
+                }
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes(($record | ConvertTo-Json -Compress))
+                $stream.Write($bytes, 0, $bytes.Length)
+            }
+            finally {
+                $stream.Dispose()
+            }
+            $script:HoldsToolsUpdateLock = $true
+            return $true
+        }
+        catch {
+        }
+        $owner = Read-UpdateLockOwner -Path $lockPath
+        if (Test-UpdateLockOwnerAlive -Owner $owner) {
+            $script:UpdateLockOwner = $owner
+            return $false
+        }
+        try { Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    $script:UpdateLockOwner = (Read-UpdateLockOwner -Path $lockPath)
+    if (-not (Test-UpdateLockOwnerAlive -Owner $script:UpdateLockOwner)) {
+        $script:UpdateLockUnavailable = $true
+    }
+    return $false
+}
+
+function Exit-ToolsRootUpdateLock {
+    <# .SYNOPSIS Release the tools-root companion lock if this process took it. #>
+
+    if (-not $script:HoldsToolsUpdateLock) { return }
+    $script:HoldsToolsUpdateLock = $false
+    try { Remove-Item -LiteralPath $script:ToolsUpdateLockPath -Force -ErrorAction SilentlyContinue } catch { }
 }
 
 function Write-WatchingInsteadNotice {
@@ -5803,7 +5932,11 @@ function New-DesktopShortcut {
 }
 
 function Configure-AndConfirmMyClaudeCode {
-    param([Parameter(Mandatory = $true)] [string] $ExpectedVersion)
+    param(
+        [Parameter(Mandatory = $true)] [string] $ExpectedVersion,
+        [string] $ToolDir = "",
+        [switch] $ThrowOnFailure
+    )
 
     if ($DryRun) {
         Write-Host "+ uv tool update-shell"
@@ -5873,6 +6006,9 @@ function Configure-AndConfirmMyClaudeCode {
         Write-Host ""
         Write-Host "Installed, but these commands are missing: $($missingCommands -join ', ')"
         Write-Host "Close the mcc-claude window(s) and re-run the install command."
+        if ($ThrowOnFailure) {
+            throw "Installed, but these commands are missing: $($missingCommands -join ', ')"
+        }
         exit 1
     }
 
@@ -5881,6 +6017,51 @@ function Configure-AndConfirmMyClaudeCode {
     $installedVersion = Invoke-NativeCapture -FilePath $installedCommands["mcc-server"] -Arguments @("--version")
     if ($installedVersion -ne "my-claude-code $ExpectedVersion") {
         throw "Expected my-claude-code $ExpectedVersion; found: $installedVersion"
+    }
+
+    if ($ToolDir) {
+        $installedPython = Join-Path $ToolDir "Scripts\python.exe"
+        if (Test-Path -LiteralPath $installedPython -PathType Leaf) {
+            $isRunnablePe = $false
+            try {
+                $fs = [System.IO.File]::OpenRead($installedPython)
+                try {
+                    if ($fs.Length -ge 64) {
+                        $dos = New-Object byte[] 64
+                        if ($fs.Read($dos, 0, 64) -eq 64 -and $dos[0] -eq 0x4D -and $dos[1] -eq 0x5A) {
+                            $peOffset = [System.BitConverter]::ToInt32($dos, 0x3C)
+                            if ($peOffset -ge 64 -and ($peOffset + 4) -le $fs.Length) {
+                                $fs.Seek($peOffset, [System.IO.SeekOrigin]::Begin) | Out-Null
+                                $sig = New-Object byte[] 4
+                                if ($fs.Read($sig, 0, 4) -eq 4 -and $sig[0] -eq 0x50 -and $sig[1] -eq 0x45 -and $sig[2] -eq 0x00 -and $sig[3] -eq 0x00) {
+                                    $isRunnablePe = $true
+                                }
+                            }
+                        }
+                    }
+                }
+                finally {
+                    $fs.Dispose()
+                }
+            }
+            catch {
+            }
+            if ($isRunnablePe) {
+                $importProbe = "import loguru; assert hasattr(loguru, 'logger'); import my_claude_code; import my_claude_code.cli.entrypoints; import my_claude_code.cli.desktop_entrypoint"
+                $previousPreference = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    $importOut = (& $installedPython -c $importProbe 2>&1 | ForEach-Object { Convert-OutputLine $_ } | Out-String).Trim()
+                    $importCode = $LASTEXITCODE
+                }
+                finally {
+                    $ErrorActionPreference = $previousPreference
+                }
+                if ($importCode -ne 0) {
+                    throw "Critical Python imports failed ($importOut)"
+                }
+            }
+        }
     }
 }
 
@@ -6492,6 +6673,14 @@ if (-not $DryRun) {
     $script:RunStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $BrokenEnvironmentFound = $false
     if ($toolsRoot) {
+        if (-not (Enter-ToolsRootUpdateLock -ToolsRoot $toolsRoot)) {
+            if ($script:UpdateLockUnavailable) {
+                Write-UpdateLockUnavailableNotice -Owner $script:UpdateLockOwner
+                exit 1
+            }
+            Write-WatchingInsteadNotice -Owner $script:UpdateLockOwner
+            exit 0
+        }
         # The end-of-run sweep (the `finally` at the bottom) works on this root,
         # whichever way the run ends.
         $script:SweepToolsRoot = $toolsRoot
@@ -6790,27 +6979,43 @@ if ($script:RenamedWhileRunning) {
     # same vocabulary the deferred helper uses, so a window watching this file
     # shows the same sequence whichever installer is running.
     Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
-    Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion
-
-    if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
-    Enable-RtkForAgents
-    New-DesktopShortcut
-
-    Write-Host ""
-    Write-Host "My Claude Code $InstalledVersion is installed and verified."
-    Write-Host "New sessions and restarted servers use the new version."
-    Write-Host "Already-open windows keep running the previous version until they are"
-    Write-Host "closed or restarted."
-    if ($script:ShimsKeptInPlace.Count -gt 0) {
-        # Not a failure and not a warning to act on: the launcher is a stub that
-        # runs the interpreter in the canonical tool directory, which now holds
-        # the new install, so these commands already run the new code.
-        Write-Host ""
-        Write-Host "These launchers were locked and kept the file they had:"
-        Write-Host "  $($script:ShimsKeptInPlace -join ', ')"
-        Write-Host "These keep working and will refresh on the next install."
+    try {
+        Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion -ToolDir $StagedToolDir -ThrowOnFailure
     }
-    Write-MccCommandReference
+    catch {
+        $script:PostVerifyError = $_.Exception.Message
+        $script:PortHeldByAnother = $false
+        Write-Host ""
+        Write-Host "Verification failed: $($script:PostVerifyError)"
+        Write-InstallLog ("Post-install verification failed: " + $script:PostVerifyError)
+        if (-not $script:StagedSwapped) {
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'failed' -Message $script:PostVerifyError
+            throw
+        }
+    }
+
+    if (-not $script:PostVerifyError) {
+        if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
+        Enable-RtkForAgents
+        New-DesktopShortcut
+
+        Write-Host ""
+        Write-Host "My Claude Code $InstalledVersion is installed and verified."
+        Write-Host "New sessions and restarted servers use the new version."
+        Write-Host "Already-open windows keep running the previous version until they are"
+        Write-Host "closed or restarted."
+        if ($script:ShimsKeptInPlace.Count -gt 0) {
+            # Not a failure and not a warning to act on: the launcher is a stub that
+            # runs the interpreter in the canonical tool directory, which now holds
+            # the new install, so these commands already run the new code.
+            Write-Host ""
+            Write-Host "These launchers were locked and kept the file they had:"
+            Write-Host "  $($script:ShimsKeptInPlace -join ', ')"
+            Write-Host "These keep working and will refresh on the next install."
+        }
+        Write-MccCommandReference
+    }
 }
 elseif ($script:Deferred) {
     Write-Host ""
@@ -6833,15 +7038,31 @@ elseif ($DryRun) {
 else {
     Write-Step "Configuring PATH and verifying My Claude Code"
     Write-InstallProgress -Stage 'verifying' -Message 'Checking that every command is in place.'
-    Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion
+    try {
+        Configure-AndConfirmMyClaudeCode -ExpectedVersion $InstalledVersion -ToolDir $StagedToolDir -ThrowOnFailure
+    }
+    catch {
+        $script:PostVerifyError = $_.Exception.Message
+        $script:PortHeldByAnother = $false
+        Write-Host ""
+        Write-Host "Verification failed: $($script:PostVerifyError)"
+        Write-InstallLog ("Post-install verification failed: " + $script:PostVerifyError)
+        if (-not $script:StagedSwapped) {
+            $script:InstallProgressRestarted = $false
+            Write-InstallProgress -Stage 'failed' -Message $script:PostVerifyError
+            throw
+        }
+    }
 
-    if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
-    Enable-RtkForAgents
-    New-DesktopShortcut
+    if (-not $script:PostVerifyError) {
+        if (-not $script:PrecompiledBeforeSwap) { Invoke-PrecompileBytecode -UvPath (Resolve-UvPath -Purpose "precompiling") }
+        Enable-RtkForAgents
+        New-DesktopShortcut
 
-    Write-Host ""
-    Write-Host "My Claude Code $InstalledVersion is installed and verified."
-    Write-MccCommandReference
+        Write-Host ""
+        Write-Host "My Claude Code $InstalledVersion is installed and verified."
+        Write-MccCommandReference
+    }
 }
 
 # The terminal record. Every branch above ends here, so whichever way the
@@ -6853,7 +7074,7 @@ else {
 # `failed` with the child's exit code and the last lines it wrote when it never
 # does. "The install exited 0" is not success -- on 2026-09-11 two installs
 # exited 0 fifteen minutes apart with the user's server down through both.
-if ($script:NoStartRequested) {
+if ($script:NoStartRequested -and (-not $script:PostVerifyError)) {
     Write-Host ""
     Write-Host "Nothing was stopped and no server was started: -NoStart (or MCC_INSTALL_NO_START=1)."
     Write-Host "Start one with: mcc-server"
@@ -6863,19 +7084,19 @@ elseif ($script:StagedSwapped) {
     # The staged path already stopped the one server this install is for and
     # swapped the environment. What is left is the start, the health gate, and
     # the rollback the previous environment was kept for.
-    if (-not $MayStart) {
+    if ((-not $script:PostVerifyError) -and (-not $MayStart)) {
         $message = if ($StopMessage) { $StopMessage } else { "My Claude Code $InstalledVersion is installed. Start the server with: mcc-server" }
         Write-Host ""
         Write-Host $message
         $script:InstallProgressRestarted = $false
         Write-InstallProgress -Stage 'done' -Message $message
     }
-    elseif (-not $ServerLauncher) {
+    elseif ((-not $script:PostVerifyError) -and (-not $ServerLauncher)) {
         $message = "The server was not restarted: mcc-server was not found after the install."
         Write-Host $message
         Write-InstallProgress -Stage 'failed' -Message $message
     }
-    elseif (($null -ne $StartedServer) -and (Confirm-RestartedServer -Child $StartedServer -InstalledVersion $InstalledVersion -HealthUrl $HealthUrl -Port $Address.Port -RollbackAvailable)) {
+    elseif ((-not $script:PostVerifyError) -and ($null -ne $StartedServer) -and (Confirm-RestartedServer -Child $StartedServer -InstalledVersion $InstalledVersion -HealthUrl $HealthUrl -Port $Address.Port -RollbackAvailable)) {
         # Nothing is deleted until the new server answers, so the copy being
         # swept is never the one a rollback would have needed -- and the sweep
         # itself is out of the outage window, which is why it is here and not
@@ -6898,7 +7119,11 @@ elseif ($script:StagedSwapped) {
         # =====================================================================
         $didNot = "never answered"
         $rollingMessage = 'The new version did not answer, so the previous one is being put back.'
-        if ($script:StartGateOutcome -eq 'not-serving') {
+        if ($script:PostVerifyError) {
+            $didNot = "failed verification ($($script:PostVerifyError))"
+            $rollingMessage = 'The new version failed verification, so the previous one is being put back.'
+        }
+        elseif ($script:StartGateOutcome -eq 'not-serving') {
             $didNot = "could not serve requests (only /health answered)"
             $rollingMessage = 'The new version answered /health but could not serve, so the previous one is being put back.'
         }
@@ -6936,7 +7161,7 @@ elseif ($script:StagedSwapped) {
             -PreviousDir $script:StagedPreviousDir `
             -UvPath $StagedUvPath
         $restartedPrevious = $false
-        if ($restored) {
+        if ($restored -and $MayStart -and $ServerLauncher) {
             $startOut = Join-Path (Join-Path (Get-MccConfigDir) "updates") ("server-start-rollback-" + $script:StagedStamp + ".log")
             $startErr = Join-Path (Join-Path (Get-MccConfigDir) "updates") ("server-start-rollback-" + $script:StagedStamp + ".err.log")
             try {
@@ -6958,6 +7183,9 @@ elseif ($script:StagedSwapped) {
         }
         $message = if ($restored -and $restartedPrevious) {
             "The new version was installed but $didNot, so the previous version was put back and is answering on port $($Address.Port)."
+        }
+        elseif ($restored -and (-not ($MayStart -and $ServerLauncher))) {
+            "The new version was installed but $didNot, so the previous version was put back."
         }
         elseif ($restored) {
             "The new version was installed but $didNot, so the previous version was put back, but it could not be started either."
@@ -7003,6 +7231,9 @@ else {
 if ($script:PortHeldByAnother) {
     exit 1
 }
+if ($script:PostVerifyError) {
+    exit 1
+}
 
 }
 finally {
@@ -7016,5 +7247,6 @@ finally {
     if ((-not $DryRun) -and $script:SweepToolsRoot) {
         Remove-UpdateLeftover -ToolsRoot $script:SweepToolsRoot -KeepPrefix $script:RunStamp -Keep $PreviousEnvsKept
     }
+    Exit-ToolsRootUpdateLock
     Exit-UpdateLock
 }

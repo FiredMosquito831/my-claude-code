@@ -1929,7 +1929,9 @@ def _unparseable(resolved_path: Path, reason: str) -> ProxyChains:
     return ProxyChains(unreadable=f"cannot be parsed: it {reason}")
 
 
-def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
+def migrate_proxy_feeds(
+    path: Path | None = None, *, store: ProxyChains | None = None
+) -> tuple[str, ...]:
     """Write a pre-7.18.0 feed list back in the new shape, once.
 
     Called on server startup. The conversion itself happens on **every** read
@@ -1947,12 +1949,15 @@ def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
     a far better outcome than a server refusing to boot over a read-only file.
     """
 
+    if store is not None and not store.unreadable and not store.migrated_feed_ids:
+        return ()
+
     try:
         with PROXY_CHAINS_WRITE_LOCK:
-            store = load_proxy_chains(path)
-            if not store.migrated_feed_ids:
+            loaded = load_proxy_chains(path)
+            if not loaded.migrated_feed_ids:
                 return ()
-            save_proxy_chains(store, path)
+            save_proxy_chains(loaded, path)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("PROXY FEEDS: could not rewrite the feed list: {}", exc)
         return ()
@@ -1961,10 +1966,10 @@ def migrate_proxy_feeds(path: Path | None = None) -> tuple[str, ...]:
         "PROXY FEEDS: converted {} built-in feed(s) to custom entries, still "
         "switched on: {}. MCC no longer ships any feed of its own; these are "
         "now yours to edit or remove on the Proxying page.",
-        len(store.migrated_feed_ids),
-        ", ".join(store.migrated_feed_ids),
+        len(loaded.migrated_feed_ids),
+        ", ".join(loaded.migrated_feed_ids),
     )
-    return store.migrated_feed_ids
+    return loaded.migrated_feed_ids
 
 
 class ProxyChainsUnreadableError(OSError):

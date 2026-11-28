@@ -5158,6 +5158,15 @@ try {
   process.exit(0);
 }
 
+const bootImmediate = !scenario
+  ? {
+      navButtonsBeforeFetch: window.document.querySelectorAll(
+        "#sectionNav .nav-link",
+      ).length,
+      firstFetchesBeforeResolve: fetchCalls.slice(),
+    }
+  : null;
+
 window.document.dispatchEvent(
   new window.Event("DOMContentLoaded", { bubbles: true }),
 );
@@ -16783,6 +16792,7 @@ console.log(
       anthropicOAuthCard,
       anthropicOAuthSignInLabel,
       anthropicOAuthWarning,
+      bootImmediate,
       fetched: Array.from(new Set(fetchCalls)).sort(),
     },
     null,

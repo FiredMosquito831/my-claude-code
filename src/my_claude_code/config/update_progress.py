@@ -222,6 +222,7 @@ EPISODE_MARKER_MESSAGE = "An update started."
 #: two installs wrote over each other's environment on 2026-09-09 and how the
 #: helper's whole record was erased on 2026-09-11.
 UPDATE_LOCK_FILENAME = "update.lock"
+TOOLS_UPDATE_LOCK_FILENAME = ".mcc-update.lock"
 
 INSTALLING_MESSAGE = "Installing the new version."
 INSTALL_DONE_MESSAGE = "The new version is installed."
@@ -245,6 +246,29 @@ def update_lock_path() -> Path:
     """Where both update paths take the one exclusive lock."""
 
     return config_dir_path() / UPDATE_STAGE_DIRNAME / UPDATE_LOCK_FILENAME
+
+
+def tools_update_lock_path(tool_dir: Path) -> Path:
+    """Companion update lock beside ``.mcc-staging`` and ``.mcc-previous``."""
+
+    return tool_dir.parent.parent / TOOLS_UPDATE_LOCK_FILENAME
+
+
+def is_update_lock_active(
+    lock_path: Path | None = None, *, tool_dir: Path | None = None
+) -> bool:
+    """Whether an installer currently holds a live update lock.
+
+    Checks both the config-dir lock (``update.lock``) and, when ``tool_dir`` is
+    known, the tools-root companion lock (``.mcc-update.lock``) so a startup
+    sweep or second installer using a different ``MCC_CONFIG_DIR`` still sees
+    the active install.
+    """
+
+    candidates = [update_lock_path() if lock_path is None else lock_path]
+    if tool_dir is not None:
+        candidates.append(tools_update_lock_path(tool_dir))
+    return any(lock_owner_is_alive(read_update_lock(path)) for path in candidates)
 
 
 def read_update_lock(path: Path | None = None) -> dict[str, Any] | None:

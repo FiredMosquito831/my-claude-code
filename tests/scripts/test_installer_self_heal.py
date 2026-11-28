@@ -1588,3 +1588,115 @@ def test_the_control_without_the_listener_check_the_swap_runs_under_a_live_serve
     assert (
         "is still listening although the stop reported it free" not in completed.stdout
     )
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_post_swap_verification_failure_triggers_rollback_on_full_run(
+    edition: str, executable: str, full_run: FullRun
+) -> None:
+    """If post-swap verification fails after swapping, roll back to the previous env."""
+
+    _require(executable)
+    full_run.install(OLD_VERSION)
+    completed = full_run.run(executable, FAKE_VERSION_FAILS_FOR=NEW_VERSION)
+    out = completed.stdout
+
+    assert completed.returncode == 1, out + completed.stderr
+    assert "Verification failed:" in out, out
+    assert "The new version failed verification" in out or "was put back" in out, out
+    assert (full_run.canonical() / "VERSION").read_text(encoding="utf-8") == OLD_VERSION
+    assert full_run.started_versions() == [NEW_VERSION, OLD_VERSION]
+    progress = (full_run.config / "updates" / "progress.json").read_text(
+        encoding="utf-8"
+    )
+    assert '"recovered"' in progress
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_namespace_husk_loguru_detected_by_problem_and_staged_check(
+    edition: str, executable: str, tmp_path: Path
+) -> None:
+    """Real Python environments with a namespace-package husk (missing loguru.logger) must fail both checks."""
+
+    import venv
+
+    _require(executable)
+    env_dir = tmp_path / "tools" / "my-claude-code"
+    venv.EnvBuilder(with_pip=False).create(env_dir)
+    # Remove any accidentally inherited packages; inject empty namespace husk for loguru.
+    site_packages = env_dir / "Lib" / "site-packages"
+    (site_packages / "loguru").mkdir(parents=True, exist_ok=True)
+    scripts = env_dir / "Scripts"
+    python_exe = scripts / "python.exe"
+    assert python_exe.is_file()
+    # Provide a runnable exe as mcc-server.exe so Test-StagedEnvironment reaches the Python import probe.
+    shutil.copyfile(python_exe, scripts / "mcc-server.exe")
+    (env_dir / "uv-receipt.toml").write_text(
+        '[tool]\nrequirements = [{ name = "my-claude-code" }]\nentrypoints = []\n',
+        encoding="utf-8",
+    )
+
+    body = f"""
+$problem = Get-ToolEnvironmentProblem -ToolDir '{env_dir}'
+Write-Host ('PROBLEM=' + $problem)
+$staged = Test-StagedEnvironment -StagingEnv '{env_dir}' -ExpectedVersion ''
+Write-Host ('STAGED_OK=' + $staged.Ok)
+Write-Host ('STAGED_REASON=' + $staged.Reason)
+"""
+    script = tmp_path / f"husk-import-{edition}.ps1"
+    script.write_text(
+        _function_harness(
+            ("Get-ToolEnvironmentProblem", "Test-StagedEnvironment", "Convert-OutputLine"),
+            body,
+        ),
+        encoding="utf-8",
+    )
+    completed = _run_ps(executable, script)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "PROBLEM=" in completed.stdout
+    problem_line = next(
+        line for line in completed.stdout.splitlines() if line.startswith("PROBLEM=")
+    )
+    assert problem_line != "PROBLEM=", completed.stdout
+    assert "STAGED_OK=False" in completed.stdout, completed.stdout
+
+
+@pytest.mark.parametrize(("edition", "executable"), EDITIONS, ids=lambda v: v)
+def test_enter_update_lock_flags_uncreatable_lock_directory(
+    edition: str, executable: str, tmp_path: Path
+) -> None:
+    """When updates directory creation fails, Enter-UpdateLock sets UpdateLockUnavailable instead of throwing silently."""
+
+    _require(executable)
+    blocking_file = tmp_path / "config-is-a-file"
+    blocking_file.write_text("blocker", encoding="utf-8")
+
+    body = f"""
+$script:UpdateLockPath = ""
+$script:HoldsUpdateLock = $false
+$script:UpdateLockOwner = $null
+$script:UpdateLockUnavailable = $false
+function Get-MccConfigDir {{ return '{blocking_file}' }}
+$entered = Enter-UpdateLock
+Write-Host ('ENTERED=' + $entered)
+Write-Host ('UNAVAILABLE=' + $script:UpdateLockUnavailable)
+"""
+    script = tmp_path / f"lock-uncreatable-{edition}.ps1"
+    script.write_text(
+        _function_harness(
+            (
+                "Enter-UpdateLock",
+                "Get-UpdateLockPath",
+                "Read-UpdateLockOwner",
+                "Test-UpdateLockOwnerAlive",
+            ),
+            body,
+        ),
+        encoding="utf-8",
+    )
+    completed = _run_ps(executable, script)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "ENTERED=False" in completed.stdout, completed.stdout
+    assert "UNAVAILABLE=True" in completed.stdout, completed.stdout

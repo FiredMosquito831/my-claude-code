@@ -99,6 +99,10 @@ restart_report_available=0
 # a dashboard-triggered one shared nothing: they wrote the same receipt, into
 # the same tool directory, with no coordination at all.
 holds_update_lock=0
+holds_tools_update_lock=0
+tools_update_lock_file=""
+post_verify_error=""
+staged_swapped=0
 # 6.73.0's two extra receipt fields. `null` means "this episode has not decided
 # yet", which is what a reader shows nothing for.
 install_progress_restarted=null
@@ -341,6 +345,7 @@ cleanup() {
     fi
     # Then the lock: every other path out of this script is an exit, and a
     # lock that outlives its owner locks the machine out of updating.
+    exit_tools_root_update_lock
     exit_update_lock
     if [ -n "$temporary_script" ] && [ -e "$temporary_script" ]; then
         rm -f "$temporary_script"
@@ -1205,7 +1210,7 @@ verify_staged_environment() {
         return 1
     }
     write_install_log "Staged --version said \"$verify_version_output\"."
-    verify_import_output=$("$staged_python" -c 'import my_claude_code' 2>&1) || {
+    verify_import_output=$("$staged_python" -c "import loguru; assert hasattr(loguru, 'logger'); import my_claude_code; import my_claude_code.cli.entrypoints; import my_claude_code.cli.desktop_entrypoint" 2>&1) || {
         verify_reason="The staged version could not import itself: $verify_import_output"
         return 1
     }
@@ -1402,6 +1407,11 @@ tool_environment_problem() {
         problem_name=$(basename "$problem_dir")
         if "$uv_bin" tool list 2>&1 | grep -F "malformed tool \`$problem_name\`" >/dev/null 2>&1; then
             tool_problem="uv tool list reports it as malformed"
+        fi
+    fi
+    if [ -z "$tool_problem" ] && [ -x "$problem_dir/bin/python" ]; then
+        if ! "$problem_dir/bin/python" -c "import loguru; assert hasattr(loguru, 'logger'); import my_claude_code; import my_claude_code.cli.entrypoints; import my_claude_code.cli.desktop_entrypoint" >/dev/null 2>&1; then
+            tool_problem="critical Python imports failed"
         fi
     fi
     return 0
@@ -1851,9 +1861,25 @@ configure_and_verify_my_claude_code() {
         :
     else
         status=$?
-        fail "Could not determine the uv tool bin directory (exit code $status)."
+        verify_err="Could not determine the uv tool bin directory (exit code $status)."
+        if [ "${staged_swapped:-0}" -eq 1 ]; then
+            post_verify_error="$verify_err"
+            write_install_log "Post-install verification failed: $post_verify_error"
+            return 0
+        fi
+        command -v write_install_progress >/dev/null 2>&1 && write_install_progress failed "$verify_err"
+        fail "$verify_err"
     fi
-    [ -n "$tool_bin" ] || fail "uv returned an empty tool bin directory."
+    if [ -z "$tool_bin" ]; then
+        verify_err="uv returned an empty tool bin directory."
+        if [ "${staged_swapped:-0}" -eq 1 ]; then
+            post_verify_error="$verify_err"
+            write_install_log "Post-install verification failed: $post_verify_error"
+            return 0
+        fi
+        command -v write_install_progress >/dev/null 2>&1 && write_install_progress failed "$verify_err"
+        fail "$verify_err"
+    fi
 
     # The PATH the USER's next shell will search, captured BEFORE this script
     # puts the tool bin directory at the front of its own. Without this the
@@ -1912,19 +1938,53 @@ configure_and_verify_my_claude_code() {
     done
     if [ -n "$missing_commands" ]; then
         printf 'Installed, but these commands are missing: %s\n' "$missing_commands" >&2
+        verify_err="Installed, but these commands are missing: $missing_commands"
+        if [ "${staged_swapped:-0}" -eq 1 ]; then
+            post_verify_error="$verify_err"
+            write_install_log "Post-install verification failed: $post_verify_error"
+            return 0
+        fi
+        command -v write_install_progress >/dev/null 2>&1 && write_install_progress failed "$verify_err"
         fail "Re-run the install command."
     fi
     warn_about_shadowing_programs "$tool_bin" "$shadowed_commands"
 
     print_command "$tool_bin/mcc-server" --version
-    if installed_version=$("$tool_bin/mcc-server" --version); then
+    if installed_version=$("$tool_bin/mcc-server" --version 2>&1); then
         printf '%s\n' "$installed_version"
     else
         status=$?
-        fail "My Claude Code version verification failed with exit code $status."
+        verify_err="My Claude Code version verification failed with exit code $status."
+        if [ "${staged_swapped:-0}" -eq 1 ]; then
+            post_verify_error="$verify_err"
+            write_install_log "Post-install verification failed: $post_verify_error"
+            return 0
+        fi
+        command -v write_install_progress >/dev/null 2>&1 && write_install_progress failed "$verify_err"
+        fail "$verify_err"
     fi
-    [ "$installed_version" = "my-claude-code $MCC_VERSION" ] ||
-        fail "Expected my-claude-code $MCC_VERSION; found: $installed_version"
+    if [ "$installed_version" != "my-claude-code $MCC_VERSION" ]; then
+        verify_err="Expected my-claude-code $MCC_VERSION; found: $installed_version"
+        if [ "${staged_swapped:-0}" -eq 1 ]; then
+            post_verify_error="$verify_err"
+            write_install_log "Post-install verification failed: $post_verify_error"
+            return 0
+        fi
+        command -v write_install_progress >/dev/null 2>&1 && write_install_progress failed "$verify_err"
+        fail "$verify_err"
+    fi
+    if [ -n "${staged_tool_dir:-}" ] && [ -x "$staged_tool_dir/bin/python" ]; then
+        if ! verify_import_out=$("$staged_tool_dir/bin/python" -c "import loguru; assert hasattr(loguru, 'logger'); import my_claude_code; import my_claude_code.cli.entrypoints; import my_claude_code.cli.desktop_entrypoint" 2>&1); then
+            verify_err="Critical Python imports failed ($verify_import_out)"
+            if [ "${staged_swapped:-0}" -eq 1 ]; then
+                post_verify_error="$verify_err"
+                write_install_log "Post-install verification failed: $post_verify_error"
+                return 0
+            fi
+            command -v write_install_progress >/dev/null 2>&1 && write_install_progress failed "$verify_err"
+            fail "$verify_err"
+        fi
+    fi
 }
 
 warn_about_shadowing_programs() {
@@ -2112,7 +2172,7 @@ enter_update_lock() {
     # locking the machine out of updating for the rest of the day.
     [ "$dry_run" -eq 1 ] && return 0
     lock_file=$(update_lock_path)
-    mkdir -p "$(dirname "$lock_file")" 2>/dev/null || return 0
+    mkdir -p "$(dirname "$lock_file")" 2>/dev/null || return 2
     lock_attempt=0
     while [ "$lock_attempt" -lt 2 ]; do
         lock_attempt=$((lock_attempt + 1))
@@ -2225,6 +2285,47 @@ exit_update_lock() {
     [ "${holds_update_lock:-0}" -eq 1 ] || return 0
     holds_update_lock=0
     rm -f "$(update_lock_path)" 2>/dev/null || true
+}
+
+enter_tools_root_update_lock() {
+    [ "$dry_run" -eq 1 ] && return 0
+    tools_root_arg=${1:-}
+    [ -n "$tools_root_arg" ] || return 0
+    tools_aside_parent=$(dirname "$tools_root_arg")
+    [ -n "$tools_aside_parent" ] || return 0
+    tools_update_lock_file="$tools_aside_parent/.mcc-update.lock"
+    mkdir -p "$tools_aside_parent" 2>/dev/null || return 2
+    tools_lock_attempt=0
+    while [ "$tools_lock_attempt" -lt 2 ]; do
+        tools_lock_attempt=$((tools_lock_attempt + 1))
+        if (
+            set -C
+            printf '{"pid":%s,"started_at":%s,"started_display":"%s","source":"install.sh"}' \
+                "$$" \
+                "$(date -u +%s 2>/dev/null || printf '0')" \
+                "$(date +%H:%M:%S 2>/dev/null || printf '')" \
+                > "$tools_update_lock_file"
+        ) 2>/dev/null; then
+            holds_tools_update_lock=1
+            return 0
+        fi
+        tools_lock_owner_pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*"\{0,1\}\([^",}]*\)"\{0,1\}.*/\1/p' "$tools_update_lock_file" 2>/dev/null | head -n 1)
+        case "$tools_lock_owner_pid" in
+            ''|*[!0-9]*) tools_lock_owner_pid=0 ;;
+        esac
+        if [ "$tools_lock_owner_pid" -gt 0 ] && [ "$tools_lock_owner_pid" -ne "$$" ] \
+            && kill -0 "$tools_lock_owner_pid" 2>/dev/null; then
+            return 1
+        fi
+        rm -f "$tools_update_lock_file" 2>/dev/null || true
+    done
+    return 2
+}
+
+exit_tools_root_update_lock() {
+    [ "${holds_tools_update_lock:-0}" -eq 1 ] || return 0
+    holds_tools_update_lock=0
+    [ -n "${tools_update_lock_file:-}" ] && rm -f "$tools_update_lock_file" 2>/dev/null || true
 }
 
 write_watching_instead_notice() {
@@ -3697,7 +3798,20 @@ staged_server_started=0
 
 if [ "$dry_run" -ne 1 ]; then
     staged_tools_root=$(uv_tools_root) || staged_tools_root=""
-    [ -n "$staged_tools_root" ] && staged_tool_dir="$staged_tools_root/$PACKAGE_ENV_DIRNAME"
+    if [ -n "$staged_tools_root" ]; then
+        staged_tool_dir="$staged_tools_root/$PACKAGE_ENV_DIRNAME"
+        if enter_tools_root_update_lock "$staged_tools_root"; then
+            :
+        else
+            tools_lock_status=$?
+            if [ "$tools_lock_status" -eq 2 ]; then
+                write_lock_unavailable_notice
+                exit 1
+            fi
+            write_watching_instead_notice
+            exit 0
+        fi
+    fi
     staged_bin_dir=$("$uv_bin" tool dir --bin 2>/dev/null | head -n 1) || staged_bin_dir=""
     # The end-of-run sweep (cleanup, on every exit) works on this root.
     leftover_sweep_root=$staged_tools_root
@@ -3917,6 +4031,7 @@ step "Configuring PATH and verifying My Claude Code"
 write_install_progress verifying "Checking that every command is in place."
 configure_and_verify_my_claude_code
 
+if [ -z "$post_verify_error" ]; then
 [ "$precompiled_before_swap" -eq 1 ] || precompile_bytecode
 enable_rtk_for_agents
 create_desktop_shortcut
@@ -3969,6 +4084,9 @@ else
         printf 'yourself to pick up this version: mcc-server\n'
     fi
 fi
+else
+    printf '\nVerification failed: %s\n' "$post_verify_error" >&2
+fi
 
 # The terminal record. Whichever way the install went, the receipt stops
 # saying "installing" and the helper-alive gate reopens for everyone else.
@@ -3978,7 +4096,7 @@ fi
 # `failed` with the child's exit code and the last lines it wrote when it never
 # does. "The install exited 0" is not success -- on 2026-09-11 two installs
 # exited 0 fifteen minutes apart with the user's server down through both.
-if [ "$no_start_requested" -eq 1 ]; then
+if [ "$no_start_requested" -eq 1 ] && [ -z "$post_verify_error" ]; then
     printf '\n'
     printf 'Nothing was stopped and no server was started: --no-start (or MCC_INSTALL_NO_START=1).\n'
     printf 'Start one with: mcc-server\n'
@@ -3993,35 +4111,43 @@ elif [ "$staged_swapped" -eq 1 ]; then
     # not start" -- the new version is fine and stays, so that is never a
     # rollback; anything else is the rollback it always was.
     staged_confirm=1
-    if [ "$stage_may_start" -eq 1 ] && [ "$staged_server_started" -eq 1 ]; then
+    if [ -z "$post_verify_error" ] && [ "$stage_may_start" -eq 1 ] && [ "$staged_server_started" -eq 1 ]; then
         if confirm_restarted_server "$restart_health_url" 1; then
             staged_confirm=0
         else
             staged_confirm=$?
         fi
     fi
-    if [ "$stage_may_start" -ne 1 ]; then
-        restart_message=${stop_message:-"My Claude Code $MCC_VERSION is installed. Start the server with: mcc-server"}
-        printf '\n%s\n' "$restart_message"
-        install_progress_restarted=false
-        if [ "$port_held_by_another" -eq 1 ]; then
-            write_install_progress failed "$restart_message"
-        else
-            write_install_progress done "$restart_message"
-        fi
-    elif [ "$staged_confirm" -eq 0 ]; then
-        # Nothing is deleted until the new server answers, so the copy being
-        # swept is never the one a rollback would have needed -- and the sweep
-        # itself is out of the outage window, which is why it is here and not
-        # beside the swap.
-        rm -rf -- "$staging_dir" 2>/dev/null || true
-        remove_stale_previous_environment "$(update_aside_root "$staged_tools_root" "$PREVIOUS_ENV_DIRNAME")"
-    elif [ "$staged_confirm" -eq 2 ]; then
-        # The new version is in place and was never the problem; the previous
-        # one stays aside for the ordinary sweep. confirm_restarted_server has
-        # said why nothing serves this port and written the terminal record.
-        rm -rf -- "$staging_dir" 2>/dev/null || true
+    staged_needs_rollback=0
+    if [ -n "$post_verify_error" ]; then
+        staged_needs_rollback=1
     else
+        if [ "$stage_may_start" -ne 1 ]; then
+            restart_message=${stop_message:-"My Claude Code $MCC_VERSION is installed. Start the server with: mcc-server"}
+            printf '\n%s\n' "$restart_message"
+            install_progress_restarted=false
+            if [ "$port_held_by_another" -eq 1 ]; then
+                write_install_progress failed "$restart_message"
+            else
+                write_install_progress done "$restart_message"
+            fi
+        elif [ "$staged_confirm" -eq 0 ]; then
+            # Nothing is deleted until the new server answers, so the copy being
+            # swept is never the one a rollback would have needed -- and the sweep
+            # itself is out of the outage window, which is why it is here and not
+            # beside the swap.
+            rm -rf -- "$staging_dir" 2>/dev/null || true
+            remove_stale_previous_environment "$(update_aside_root "$staged_tools_root" "$PREVIOUS_ENV_DIRNAME")"
+        elif [ "$staged_confirm" -eq 2 ]; then
+            # The new version is in place and was never the problem; the previous
+            # one stays aside for the ordinary sweep. confirm_restarted_server has
+            # said why nothing serves this port and written the terminal record.
+            rm -rf -- "$staging_dir" 2>/dev/null || true
+        else
+            staged_needs_rollback=1
+        fi
+    fi
+    if [ "$staged_needs_rollback" -eq 1 ]; then
         # =====================================================================
         # ROLLBACK. The new version is installed and does not answer, so put
         # the one that did back and start THAT. This is the reason the old
@@ -4029,7 +4155,10 @@ elif [ "$staged_swapped" -eq 1 ]; then
         # =====================================================================
         rollback_did_not="never answered"
         rollback_rolling="The new version did not answer, so the previous one is being put back."
-        if [ "$start_gate_outcome" = "not-serving" ]; then
+        if [ -n "$post_verify_error" ]; then
+            rollback_did_not="failed verification ($post_verify_error)"
+            rollback_rolling="The new version failed verification, so the previous one is being put back."
+        elif [ "$start_gate_outcome" = "not-serving" ]; then
             rollback_did_not="could not serve requests (only /health answered)"
             rollback_rolling="The new version answered /health but could not serve, so the previous one is being put back."
         fi
@@ -4061,22 +4190,27 @@ elif [ "$staged_swapped" -eq 1 ]; then
         fi
         rollback_started=0
         if restore_previous_environment "$staged_tool_dir"; then
-            rollback_log="$(mcc_config_dir)/updates/server-start-rollback-$staged_stamp.log"
-            start_server_detached "$restart_launcher" "$rollback_log"
-            write_install_log "Started the previous version's mcc-server, pid $started_server_pid."
-            # The same liveness gate as the new server's: a previous version
-            # that is slow to open its log is starting, not failed.
-            wait_for_started_server "$restart_health_url" "$started_server_pid" "The previous version"
-            if [ "$start_gate_outcome" = "answered" ]; then
-                rollback_started=1
-            elif [ "$start_gate_outcome" = "ceiling" ]; then
-                stop_started_server "$started_server_pid"
-                write_install_log "$stop_started_message"
+            if [ "$stage_may_start" -eq 1 ] && [ -n "${restart_launcher:-}" ]; then
+                rollback_log="$(mcc_config_dir)/updates/server-start-rollback-$staged_stamp.log"
+                start_server_detached "$restart_launcher" "$rollback_log"
+                write_install_log "Started the previous version's mcc-server, pid $started_server_pid."
+                # The same liveness gate as the new server's: a previous version
+                # that is slow to open its log is starting, not failed.
+                wait_for_started_server "$restart_health_url" "$started_server_pid" "The previous version"
+                if [ "$start_gate_outcome" = "answered" ]; then
+                    rollback_started=1
+                elif [ "$start_gate_outcome" = "ceiling" ]; then
+                    stop_started_server "$started_server_pid"
+                    write_install_log "$stop_started_message"
+                fi
             fi
             restart_message="The new version was installed but $rollback_did_not, so the previous version was put back"
             if [ "$rollback_started" -eq 1 ]; then
                 restart_message="$restart_message and is answering on port $server_port."
                 install_progress_restarted=true
+            elif [ "$stage_may_start" -ne 1 ] || [ -z "${restart_launcher:-}" ]; then
+                restart_message="$restart_message."
+                install_progress_restarted=false
             else
                 restart_message="$restart_message, but it could not be started either."
                 install_progress_restarted=false
@@ -4114,5 +4248,8 @@ fi
 # an exit 0 here was how another user's server got reported as this install's
 # success.
 if [ "$port_held_by_another" -eq 1 ]; then
+    exit 1
+fi
+if [ -n "$post_verify_error" ]; then
     exit 1
 fi

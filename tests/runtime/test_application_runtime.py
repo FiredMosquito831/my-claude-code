@@ -1036,3 +1036,82 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
     assert "plans_directory" not in manager_constructor.call_args.kwargs
 
     assert await runtime.close() is True
+
+
+@pytest.mark.asyncio
+async def test_startup_overlaps_prewarm_and_reuses_settled_proxy_chains(
+    monkeypatch, tmp_path
+) -> None:
+    """ApplicationRuntime.start overlaps prewarm_heavy_imports, runs proxy arms in parallel, and reuses settled_chains."""
+
+    import threading
+
+    import my_claude_code.runtime.application as app_mod
+
+    monkeypatch.setenv("MCC_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
+    runtime = ApplicationRuntime(manager, transcriber=None)
+
+    events: list[str] = []
+    prewarm_started = threading.Event()
+    chains_sentinel = object()
+    refusal_stores: list[object] = []
+    health_stores: list[object] = []
+    feed_stores: list[object] = []
+    arm_barrier = threading.Barrier(2, timeout=2.0)
+
+    def fake_prewarm() -> None:
+        events.append("prewarm.start")
+        prewarm_started.set()
+
+    def fake_settle_proxy_chains():
+        assert prewarm_started.wait(timeout=2.0), "prewarm should start before or alongside disk setup"
+        events.append("settle_proxy_chains")
+        return chains_sentinel
+
+    def fake_arm_refusals(store=None):
+        refusal_stores.append(store)
+        arm_barrier.wait()
+
+    def fake_arm_health(store=None):
+        health_stores.append(store)
+        arm_barrier.wait()
+
+    def fake_migrate_proxy_feeds(path=None, *, store=None):
+        feed_stores.append(store)
+
+    def fake_install_listener():
+        events.append("install_listener")
+
+    async def noop_async(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(app_mod, "prewarm_heavy_imports", fake_prewarm)
+    monkeypatch.setattr(app_mod, "settle_proxy_chains", fake_settle_proxy_chains)
+    monkeypatch.setattr(app_mod, "arm_refusals_from_store", fake_arm_refusals)
+    monkeypatch.setattr(app_mod, "arm_health_from_store", fake_arm_health)
+    monkeypatch.setattr(app_mod, "load_speed", lambda: None)
+    monkeypatch.setattr(app_mod, "recover_fetch_job", lambda: None)
+    monkeypatch.setattr(app_mod, "migrate_proxy_feeds", fake_migrate_proxy_feeds)
+    monkeypatch.setattr(app_mod, "install_listener", fake_install_listener)
+    monkeypatch.setattr(manager, "load_stored_catalogue", lambda: None)
+    monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
+    monkeypatch.setattr(runtime, "_start_loop_heartbeat", lambda: None)
+    monkeypatch.setattr(runtime, "_start_stall_watchdog", lambda: None)
+    monkeypatch.setattr(runtime, "_load_learned_facts", lambda: None)
+    monkeypatch.setattr(runtime, "_register_cost_backfill_pricer", lambda: None)
+    monkeypatch.setattr(runtime, "_start_messaging_if_configured", noop_async)
+    monkeypatch.setattr(runtime, "_validate_configured_models_best_effort", noop_async)
+    monkeypatch.setattr(runtime, "_report_stale_desktop_app", noop_async)
+    monkeypatch.setattr(runtime._proxy_runners, "start_enabled", lambda: None)
+
+    await runtime.start()
+    try:
+        assert "prewarm.start" in events
+        assert events.index("prewarm.start") < events.index("install_listener")
+        assert refusal_stores == [chains_sentinel]
+        assert health_stores == [chains_sentinel]
+        assert feed_stores == [chains_sentinel]
+    finally:
+        await runtime.close()

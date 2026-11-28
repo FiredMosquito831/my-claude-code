@@ -130,6 +130,8 @@ const BROKEN_SHIM_MARKERS: &[&str] = &[
     "no tools installed",
     "modulenotfounderror",
     "no module named",
+    "importerror",
+    "cannot import name",
 ];
 
 /// Whether this stderr is a broken shim rather than a program complaining.
@@ -1210,6 +1212,21 @@ mod tests {
         // The newer uv trampoline spelling, which continues past `script path`.
         assert!(looks_like_a_broken_shim(
             "error: failed to canonicalize base path"
+        ));
+    }
+
+    #[test]
+    fn an_import_error_or_namespace_husk_is_a_broken_shim() {
+        assert!(looks_like_a_broken_shim(
+            "Traceback (most recent call last):\n  File \"<frozen runpy>\", \
+             line 198, in _run_module_as_main\nImportError: cannot import name \
+             'logger' from 'loguru' (unknown location)"
+        ));
+        assert!(looks_like_a_broken_shim(
+            "ImportError: cannot import name 'logger' from 'loguru' (unknown location)"
+        ));
+        assert!(!looks_like_a_broken_shim(
+            "Traceback (most recent call last)"
         ));
     }
 

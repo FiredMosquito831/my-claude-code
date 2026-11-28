@@ -85,11 +85,13 @@ from my_claude_code.config.update_progress import (
     PREVIOUS_ENV_DIRNAME,
     PREVIOUS_ENVS_KEPT,
     STAGING_ENV_DIRNAME,
+    UPDATE_LOCK_FILENAME,
     UPDATE_PROGRESS_FILENAME,
     UPDATE_PROGRESS_STAGE_ORDER,
     UPDATE_PROGRESS_STAGES,
     UPDATE_STAGE_DIRNAME,
     active_update,
+    is_update_lock_active,
     read_update_progress,
     update_progress_path,
 )
@@ -531,6 +533,15 @@ def sweep_superseded_environments(stage_dir: Path | None = None) -> str | None:
     """
 
     tool_dir = _installed_tool_dir()
+    resolved_stage_dir = stage_dir if stage_dir is not None else _stage_dir()
+    if is_update_lock_active(
+        resolved_stage_dir / UPDATE_LOCK_FILENAME,
+        tool_dir=tool_dir,
+    ):
+        logger.debug(
+            "Skipping update housekeeping sweep while an active update lock is held."
+        )
+        return None
     done: list[str] = []
     previous_root = _aside_root(PREVIOUS_ENV_DIRNAME, tool_dir)
     if tool_dir is not None and previous_root is not None:
@@ -586,9 +597,7 @@ def sweep_superseded_environments(stage_dir: Path | None = None) -> str | None:
         if abandoned:
             done.append(f"removed {abandoned} abandoned staging environment(s)")
     transcripts = sorted(
-        (stage_dir if stage_dir is not None else _stage_dir()).glob(
-            f"{INSTALL_LOG_PREFIX}*{INSTALL_LOG_SUFFIX}"
-        ),
+        resolved_stage_dir.glob(f"{INSTALL_LOG_PREFIX}*{INSTALL_LOG_SUFFIX}"),
         key=lambda path: path.name,
         reverse=True,
     )
