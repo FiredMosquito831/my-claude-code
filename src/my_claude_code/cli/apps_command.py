@@ -37,6 +37,7 @@ from my_claude_code.config.server_urls import local_proxy_root_url
 from my_claude_code.config.settings import get_settings
 
 DESKTOP_APPS_PATH = "/admin/api/desktop-apps"
+SKILLS_PATH = "/admin/api/skills"
 
 #: Long enough for the server to walk the resolution ladder once, which is what
 #: a plan costs. Sized against the same measurement
@@ -55,6 +56,15 @@ STATE_LABELS: dict[str, str] = {
     "unreadable": "config file will not parse",
     "credential_unresolved": "written, but the credential cannot resolve",
     "removed_by_app": "the application removed MCC's configuration",
+}
+
+SKILL_STATE_LABELS: dict[str, str] = {
+    "absent": "not installed",
+    "installed": "installed",
+    "update_available": "update available",
+    "drifted": "modified on disk (drifted)",
+    "foreign": "existing unmanaged directory (foreign)",
+    "revertable": "removed (backup available to revert)",
 }
 
 
@@ -226,6 +236,131 @@ def _undo(app_id: str, *, restore: bool) -> None:
         )
 
 
+def _skills_payload() -> dict[str, Any]:
+    payload = _call("GET", SKILLS_PATH)
+    targets = payload.get("targets") if isinstance(payload, dict) else None
+    if not isinstance(targets, list):
+        raise AppsCommandError("the server returned no skill target list")
+    return payload
+
+
+def _find_skill_target(target_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = _skills_payload()
+    targets = payload["targets"]
+    for entry in targets:
+        if entry.get("id") == target_id:
+            return payload.get("skill") or {}, entry
+    known = ", ".join(sorted(str(entry.get("id")) for entry in targets))
+    raise AppsCommandError(f"unknown skill target: {target_id}. Known: {known}")
+
+
+def _skill_state_label(entry: dict[str, Any]) -> str:
+    state = str(entry.get("state", ""))
+    return SKILL_STATE_LABELS.get(state, state or "unknown")
+
+
+def _print_skill_list() -> None:
+    payload = _skills_payload()
+    skill = payload.get("skill") or {}
+    targets = payload["targets"]
+    print(
+        f"Bundled skill: {skill.get('name', 'mcc-media')} "
+        f"v{skill.get('version', '?')} "
+        f"({len(skill.get('files', []))} files, {skill.get('total_bytes', 0)} bytes)"
+    )
+    print()
+    width = max((len(str(entry.get("id", ""))) for entry in targets), default=0)
+    for entry in targets:
+        notes: list[str] = []
+        if entry.get("aliases_shared_agents"):
+            notes.append("aliases shared ~/.agents/skills")
+        elif entry.get("also_reads_shared_agents"):
+            notes.append("also scans ~/.agents/skills")
+        suffix = f"  [{'; '.join(notes)}]" if notes else ""
+        print(f"{entry.get('id', '')!s:<{width}}  {_skill_state_label(entry)}{suffix}")
+    print()
+    print(
+        "mcc-apps skill-status <target> for details, skill-install <target> to install."
+    )
+
+
+def _print_skill_status(target_id: str) -> None:
+    skill, entry = _find_skill_target(target_id)
+    print(f"{entry.get('display_name')} ({entry.get('id')})")
+    print(
+        f"  skill         {skill.get('name', 'mcc-media')} v{skill.get('version', '?')}"
+    )
+    print(f"  state         {_skill_state_label(entry)}")
+    print(f"  install dir   {entry.get('install_dir')}")
+    if entry.get("installed_version"):
+        print(f"  installed ver {entry.get('installed_version')}")
+    if entry.get("backup_dir"):
+        print(f"  backup dir    {entry.get('backup_dir')}")
+    if shared := entry.get("shared_with"):
+        print(f"  shared with   {', '.join(shared)}")
+    if entry.get("aliases_shared_agents"):
+        print("  alias note    aliases shared ~/.agents/skills/ unless overridden")
+    elif entry.get("also_reads_shared_agents"):
+        print("  shared note   also scans ~/.agents/skills/")
+    if warning := entry.get("warning"):
+        print(f"  warning       {warning}")
+
+
+def _print_skill_plan(plan: dict[str, Any]) -> None:
+    if plan.get("no_op"):
+        print(plan.get("warning") or "Nothing to change.")
+        return
+    print(f"Action: {plan.get('action')} -> {plan.get('install_dir')}")
+    if files := plan.get("files_to_create"):
+        for rel in files:
+            print(f"  + {rel}")
+    if files := plan.get("files_to_update"):
+        for rel in files:
+            print(f"  ~ {rel}")
+    if files := plan.get("files_to_delete"):
+        for rel in files:
+            print(f"  - {rel}")
+    if backup := plan.get("backup_dir"):
+        print(f"Backup dir: {backup}")
+    if warning := plan.get("warning"):
+        print(f"Note: {warning}")
+
+
+def _run_skill_action(
+    target_id: str,
+    action: str,
+    *,
+    preview: bool,
+    force: bool = False,
+    adopt: bool = False,
+) -> None:
+    _find_skill_target(target_id)
+    body: dict[str, object] = {
+        "action": action,
+        "force": force,
+        "adopt": adopt,
+    }
+    plan = _call("POST", f"{SKILLS_PATH}/{target_id}/plan", body)
+    _print_skill_plan(plan)
+    if preview:
+        return
+    result = _call("POST", f"{SKILLS_PATH}/{target_id}/apply", body)
+    if not result.get("changed"):
+        print("No change.")
+        return
+    if action == "revert":
+        if result.get("restored_from_backup"):
+            print(f"Restored original folder to {result.get('install_dir')}")
+        else:
+            print(f"Removed MCC-installed skill files from {result.get('install_dir')}")
+    elif action == "remove":
+        print(f"Removed skill from {result.get('install_dir')}")
+    else:
+        print(f"Installed skill into {result.get('install_dir')}")
+        if backup := result.get("backup_dir"):
+            print(f"Backed up previous directory to {backup}")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mcc-apps",
@@ -252,6 +387,70 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also put back the values MCC replaced",
     )
+
+    subcommands.add_parser("skill-list", help="every skill target and its state")
+
+    skill_status = subcommands.add_parser(
+        "skill-status", help="one skill target in detail"
+    )
+    skill_status.add_argument("target")
+
+    skill_install = subcommands.add_parser(
+        "skill-install", help="install the bundled mcc-media skill"
+    )
+    skill_install.add_argument("target")
+    skill_install.add_argument(
+        "--preview", action="store_true", help="show planned changes and write nothing"
+    )
+    skill_install.add_argument(
+        "--adopt",
+        action="store_true",
+        help="back up an existing unmanaged directory before installing",
+    )
+    skill_install.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite locally modified (drifted) skill files after backing up",
+    )
+
+    skill_update = subcommands.add_parser(
+        "skill-update", help="update an installed mcc-media skill"
+    )
+    skill_update.add_argument("target")
+    skill_update.add_argument(
+        "--preview", action="store_true", help="show planned changes and write nothing"
+    )
+    skill_update.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite locally modified (drifted) skill files after backing up",
+    )
+
+    skill_revert = subcommands.add_parser(
+        "skill-revert", help="restore an adopted backup or remove MCC-installed files"
+    )
+    skill_revert.add_argument("target")
+    skill_revert.add_argument(
+        "--preview", action="store_true", help="show planned changes and write nothing"
+    )
+    skill_revert.add_argument(
+        "--force",
+        action="store_true",
+        help="revert even if installed files were modified locally",
+    )
+
+    skill_remove = subcommands.add_parser(
+        "skill-remove", help="remove MCC-installed mcc-media skill files"
+    )
+    skill_remove.add_argument("target")
+    skill_remove.add_argument(
+        "--preview", action="store_true", help="show planned changes and write nothing"
+    )
+    skill_remove.add_argument(
+        "--force",
+        action="store_true",
+        help="remove even if installed files were modified locally",
+    )
     return parser
 
 
@@ -269,6 +468,39 @@ def apps_command(argv: Sequence[str] | None = None) -> None:
                 _configure(args.app, preview=args.preview)
             case "undo":
                 _undo(args.app, restore=args.restore)
+            case "skill-list":
+                _print_skill_list()
+            case "skill-status":
+                _print_skill_status(args.target)
+            case "skill-install":
+                _run_skill_action(
+                    args.target,
+                    "install",
+                    preview=args.preview,
+                    force=args.force,
+                    adopt=args.adopt,
+                )
+            case "skill-update":
+                _run_skill_action(
+                    args.target,
+                    "update",
+                    preview=args.preview,
+                    force=args.force,
+                )
+            case "skill-revert":
+                _run_skill_action(
+                    args.target,
+                    "revert",
+                    preview=args.preview,
+                    force=args.force,
+                )
+            case "skill-remove":
+                _run_skill_action(
+                    args.target,
+                    "remove",
+                    preview=args.preview,
+                    force=args.force,
+                )
     except AppsCommandError as exc:
         print(f"mcc-apps: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

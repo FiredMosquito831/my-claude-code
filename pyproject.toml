@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "my-claude-code"
-version = "8.72.0"
+version = "8.73.0"
 description = "Local multi-provider LLM proxy, model router and control plane for Claude Code, Codex, OpenCode, Gemini CLI and other AI coding agents: 60 providers, fallback routing, credential health, a native web-search tool proxy, and analytics with cost provenance"
 readme = "README.md"
 license = "AGPL-3.0-or-later AND MIT"
@@ -163,6 +163,15 @@ packages = ["src/my_claude_code"]
 "docs/MEDIA.md" = "my_claude_code/docs_bundle/MEDIA.md"
 "docs/CLAUDE-CODE-CONFIG.md" = "my_claude_code/docs_bundle/CLAUDE-CODE-CONFIG.md"
 "docs/ANTHROPIC-SUBSCRIPTION.md" = "my_claude_code/docs_bundle/ANTHROPIC-SUBSCRIPTION.md"
+# Bundled mcc-media agent skill (v8.73.0). Kept in sync by SKILL_BUNDLE_FILES
+# in src/my_claude_code/config/skill_apply.py; tests/config/test_skill_bundle_wheel.py
+# verifies every file is shipped inside the built wheel.
+"skills/mcc-media/SKILL.md" = "my_claude_code/skills_bundle/mcc-media/SKILL.md"
+"skills/mcc-media/scripts/_mcc_env.py" = "my_claude_code/skills_bundle/mcc-media/scripts/_mcc_env.py"
+"skills/mcc-media/scripts/mcc_media.py" = "my_claude_code/skills_bundle/mcc-media/scripts/mcc_media.py"
+"skills/mcc-media/references/models-and-capabilities.md" = "my_claude_code/skills_bundle/mcc-media/references/models-and-capabilities.md"
+"skills/mcc-media/references/endpoints-and-payloads.md" = "my_claude_code/skills_bundle/mcc-media/references/endpoints-and-payloads.md"
+"skills/mcc-media/references/troubleshooting.md" = "my_claude_code/skills_bundle/mcc-media/references/troubleshooting.md"
 
 [tool.uv]
 required-version = ">=0.11.0"
